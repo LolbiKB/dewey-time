@@ -1,13 +1,11 @@
 import { useState, useMemo } from 'react'
-import { useUsers, useDeleteUser } from '@/hooks/use-users'
+import { useUsers } from '@/hooks/use-users'
 import { UserDataTable } from '@/components/users/data-table'
 import { columns } from './columns'
 import { SyncStatusDialog } from '@/components/users/sync-status-dialog'
 import { RegisterDialog } from '@/components/users/register-dialog'
-import { EditUserDialog } from '@/components/users/edit-user-dialog'
 import { ChangeStatusDialog } from '@/components/users/change-status-dialog'
 import { EnrollBiometricDialog } from '@/components/users/enroll-biometric-dialog'
-import { useUserModal } from '@/hooks/use-user-modal'
 import type { UserEntry } from '@/services/user-service'
 import {
   Select,
@@ -29,8 +27,6 @@ export function Users() {
   const [registerEmployee, setRegisterEmployee] = useState<UserEntry | null>(null)
   const [changeStatusUser, setChangeStatusUser] = useState<UserEntry | null>(null)
   const [enrollBiometricUser, setEnrollBiometricUser] = useState<UserEntry | null>(null)
-  const userModal = useUserModal()
-
   const { data, isLoading, isFetching, refetch } = useUsers({
     page,
     limit: 20,
@@ -43,15 +39,6 @@ export function Users() {
     return data?.data?.filter(user => user.status === 'compromised').length || 0
   }, [data])
 
-  const deleteUser = useDeleteUser()
-
-  const handleDelete = (user: UserEntry) => {
-    if (!user.id) return
-    if (confirm(`Are you sure you want to delete ${user.name}?`)) {
-      deleteUser.mutate(user.id)
-    }
-  }
-
   const handleViewSyncStatus = (user: UserEntry) => {
     if (!user.id) return
     setSyncStatusUser(user)
@@ -60,11 +47,6 @@ export function Users() {
   const handleEnrollBiometric = (user: UserEntry) => {
     if (!user.id) return
     setEnrollBiometricUser(user)
-  }
-
-  const handleEdit = (user: UserEntry) => {
-    if (!user.id) return
-    userModal.openEdit(user.id)
   }
 
   const handleRegister = (user: UserEntry) => {
@@ -136,10 +118,8 @@ export function Users() {
           </div>
         }
         meta={{
-          onDelete: handleDelete,
           onViewSyncStatus: handleViewSyncStatus,
           onEnrollBiometric: handleEnrollBiometric,
-          onEdit: handleEdit,
           onRegister: handleRegister,
           onChangeStatus: handleChangeStatus,
         }}
@@ -155,16 +135,6 @@ export function Users() {
         employee={registerEmployee}
         open={!!registerEmployee}
         onOpenChange={(open) => !open && setRegisterEmployee(null)}
-      />
-
-      <EditUserDialog
-        userId={userModal.selectedUserId || null}
-        open={userModal.isOpen && userModal.mode === 'edit'}
-        onOpenChange={() => userModal.close()}
-        onSuccess={() => {
-          userModal.close()
-          refetch()
-        }}
       />
 
       <ChangeStatusDialog

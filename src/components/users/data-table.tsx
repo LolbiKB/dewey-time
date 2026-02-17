@@ -8,10 +8,8 @@ import type {
 } from '@/services/user-service'
 
 interface UserTableMeta {
-  onDelete?: (user: UserEntry) => void
   onViewSyncStatus?: (user: UserEntry) => void
   onEnrollBiometric?: (user: UserEntry) => void
-  onEdit?: (user: UserEntry) => void
   onRegister?: (user: UserEntry) => void
   onChangeStatus?: (user: UserEntry) => void
 }

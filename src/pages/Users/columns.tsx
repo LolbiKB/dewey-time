@@ -176,15 +176,6 @@ export const columns: ColumnDef<UserEntry>[] = [
                   <CircleDot className="mr-2 h-4 w-4" />
                   Change Status
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => meta?.onEdit?.(user)}>
-                  Edit
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="text-destructive"
-                  onClick={() => meta?.onDelete?.(user)}
-                >
-                  Delete
-                </DropdownMenuItem>
               </>
             ) : (
               <DropdownMenuItem onClick={() => meta?.onRegister?.(user)}>
