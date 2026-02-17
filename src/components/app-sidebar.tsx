@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Home, Clock, Users, Smartphone, ChevronRight } from "lucide-react"
+import { Home, Clock, Users, ChevronRight } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
 import {

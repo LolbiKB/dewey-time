@@ -30,8 +30,8 @@ export function AttendanceLogDataTable({
   filters,
   onFiltersChange,
   onRefresh,
-  onExportLogs,
-  isExporting = false,
+  onExportLogs: _onExportLogs,
+  isExporting: _isExporting = false,
 }: AttendanceLogDataTableProps) {
   return (
     <GenericDataTable

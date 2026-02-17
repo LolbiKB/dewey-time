@@ -4,7 +4,6 @@ import {
   fetchAttendanceLogs,
   exportAttendanceLogs,
   type AttendanceLogFilters,
-  type AttendanceLogsResponse,
 } from '@/services/attendance-log-service'
 
 /**

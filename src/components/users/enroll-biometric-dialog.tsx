@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -22,10 +22,163 @@ import {
   Loader2,
   Wifi,
   WifiOff,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Radio,
+  Send,
+  ArrowLeft,
 } from 'lucide-react'
-import { useUserBiometrics, useSyncStatus, useStartEnrollment } from '@/hooks/use-users'
+import {
+  useUserBiometrics,
+  useSyncStatus,
+  useStartEnrollment,
+  useEnrollmentCommandStatus,
+} from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
 import { cn } from '@/lib/utils'
+
+// ---------------------------------------------------------------------------
+// Error code mapping from ZKTeco ENROLL_FP protocol
+// ---------------------------------------------------------------------------
+const ENROLL_ERROR_CODES: Record<string, { label: string; description: string }> = {
+  '0': { label: 'Success', description: 'Enrollment completed successfully.' },
+  '2': { label: 'Already Exists', description: 'A template already exists for this finger. Use overwrite to replace.' },
+  '4': { label: 'Bad Quality', description: 'The captured template quality was too low. Please try again.' },
+  '5': { label: 'Duplicate', description: 'This fingerprint matches another user in the device database.' },
+  '6': { label: 'Cancelled', description: 'The user pressed ESC or cancelled on the device.' },
+  '7': { label: 'Device Busy', description: 'The device is busy with another operation. Try again later.' },
+}
+
+function parseEnrollError(errorMessage: string | null | undefined): {
+  code: string | null
+  label: string
+  description: string
+} {
+  if (!errorMessage)
+    return { code: null, label: 'Unknown Error', description: 'The command failed with no error details.' }
+
+  const match = errorMessage.match(/error code:\s*(\d+)/i)
+  if (match) {
+    const code = match[1]
+    const mapped = ENROLL_ERROR_CODES[code]
+    if (mapped) return { code, ...mapped }
+    return { code, label: `Error Code ${code}`, description: errorMessage }
+  }
+
+  return { code: null, label: 'Failed', description: errorMessage }
+}
+
+// ---------------------------------------------------------------------------
+// Enrollment phases
+// ---------------------------------------------------------------------------
+type EnrollPhase = 'idle' | 'queued' | 'enrolling' | 'success' | 'failed'
+
+function getPhase(commandStatus: string | undefined | null, isPending: boolean): EnrollPhase {
+  if (isPending) return 'queued'
+  if (!commandStatus) return 'idle'
+  switch (commandStatus) {
+    case 'pending': return 'queued'
+    case 'sent': return 'enrolling'
+    case 'success': return 'success'
+    case 'failed': return 'failed'
+    default: return 'idle'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase step indicator
+// ---------------------------------------------------------------------------
+const STEPS: { phase: EnrollPhase; label: string; icon: typeof Clock }[] = [
+  { phase: 'queued', label: 'Command Queued', icon: Clock },
+  { phase: 'enrolling', label: 'Enrolling on Device', icon: Radio },
+  { phase: 'success', label: 'Template Received', icon: CheckCircle2 },
+]
+
+function PhaseSteps({ currentPhase }: { currentPhase: EnrollPhase }) {
+  const phaseOrder: EnrollPhase[] = ['queued', 'enrolling', 'success']
+  const currentIdx = phaseOrder.indexOf(currentPhase)
+  const isFailed = currentPhase === 'failed'
+
+  return (
+    <div className="flex items-center gap-1">
+      {STEPS.map((step, idx) => {
+        const isCompleted = !isFailed && (currentIdx > idx || (currentPhase === 'success' && currentIdx === idx))
+        const isCurrent = !isCompleted && currentPhase === step.phase
+        const isFailedStep = isFailed && idx === Math.max(currentIdx, 1)
+        const Icon = step.icon
+
+        return (
+          <div key={step.phase} className="flex items-center gap-1">
+            {idx > 0 && (
+              <div
+                className={cn(
+                  'h-px w-6',
+                  isCompleted ? 'bg-green-500' : isFailed && idx <= Math.max(currentIdx, 1) ? 'bg-red-300' : 'bg-border',
+                )}
+              />
+            )}
+            <div className="flex flex-col items-center gap-0.5">
+              <div
+                className={cn(
+                  'flex h-7 w-7 items-center justify-center rounded-full border transition-all',
+                  isCompleted && 'border-green-500 bg-green-50 text-green-600',
+                  isCurrent && !isFailed && 'border-blue-500 bg-blue-50 text-blue-600 ring-2 ring-blue-200',
+                  isFailedStep && 'border-red-500 bg-red-50 text-red-600 ring-2 ring-red-200',
+                  !isCompleted && !isCurrent && !isFailedStep && 'border-border text-muted-foreground',
+                )}
+              >
+                {isCompleted ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : isCurrent && !isFailed ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : isFailedStep ? (
+                  <XCircle className="h-3.5 w-3.5" />
+                ) : (
+                  <Icon className="h-3.5 w-3.5" />
+                )}
+              </div>
+              <span
+                className={cn(
+                  'text-[9px] leading-tight text-center max-w-[60px]',
+                  (isCompleted || isCurrent) && !isFailed && 'font-medium text-foreground',
+                  isFailedStep && 'font-medium text-red-600',
+                  !isCompleted && !isCurrent && !isFailedStep && 'text-muted-foreground',
+                )}
+              >
+                {step.label}
+              </span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Elapsed timer
+// ---------------------------------------------------------------------------
+function ElapsedTimer({ since }: { since: string }) {
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    const start = new Date(since).getTime()
+    const update = () => setElapsed(Math.floor((Date.now() - start) / 1000))
+    update()
+    const interval = setInterval(update, 1000)
+    return () => clearInterval(interval)
+  }, [since])
+
+  const minutes = Math.floor(elapsed / 60)
+  const seconds = elapsed % 60
+
+  return (
+    <p className="text-center text-[10px] text-muted-foreground">
+      Elapsed: {minutes > 0 ? `${minutes}m ` : ''}{seconds}s
+    </p>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -48,6 +201,13 @@ export function EnrollBiometricDialog({
 
   const [biometricType, setBiometricType] = useState<'fingerprint' | 'face'>('fingerprint')
   const [deviceSn, setDeviceSn] = useState<string>('')
+  const [activeCommandId, setActiveCommandId] = useState<number | null>(null)
+
+  // Poll active enrollment command
+  const { data: commandData } = useEnrollmentCommandStatus(
+    activeCommandId,
+    user?.id || '',
+  )
 
   const biometrics = bioData?.data || []
   const syncStatus = syncData?.data || []
@@ -60,8 +220,17 @@ export function EnrollBiometricDialog({
   const hasFingerprint = biometrics.some((b) => b.type === 'fingerprint')
   const hasFace = biometrics.some((b) => b.type === 'face')
 
-  const handleStartEnrollment = () => {
+  // Derive enrollment phase
+  const phase = getPhase(commandData?.status, startEnrollment.isPending)
+  const isTerminal = phase === 'success' || phase === 'failed'
+  const isInProgress = phase === 'queued' || phase === 'enrolling'
+
+  // Parse error details for failed enrollments
+  const errorInfo = phase === 'failed' ? parseEnrollError(commandData?.error_message) : null
+
+  const handleStartEnrollment = useCallback(() => {
     if (!user?.id || !deviceSn) return
+    setActiveCommandId(null)
     startEnrollment.mutate(
       {
         userId: user.id,
@@ -69,11 +238,31 @@ export function EnrollBiometricDialog({
         biometricType,
         fingerId: biometricType === 'fingerprint' ? 0 : undefined,
       },
-      { onSuccess: () => { } },
+      {
+        onSuccess: (result) => {
+          setActiveCommandId(result.commandId)
+        },
+      },
     )
-  }
+  }, [user?.id, deviceSn, biometricType, startEnrollment])
+
+  const handleReset = useCallback(() => {
+    setActiveCommandId(null)
+    startEnrollment.reset()
+  }, [startEnrollment])
+
+  // Reset enrollment state when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setActiveCommandId(null)
+      startEnrollment.reset()
+    }
+  }, [open])
 
   if (!user) return null
+
+  const showForm = phase === 'idle'
+  const showProgress = !showForm
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -126,115 +315,228 @@ export function EnrollBiometricDialog({
             )}
           </div>
 
-          {/* ── Enrollment form ── */}
-          <div className="space-y-4 border-t pt-4">
-            <h4 className="text-sm font-medium">New Enrollment</h4>
+          {/* ── Enrollment Form (idle state) ── */}
+          {showForm && (
+            <div className="space-y-4 border-t pt-4">
+              <h4 className="text-sm font-medium">New Enrollment</h4>
 
-            {/* Biometric Type */}
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setBiometricType('fingerprint')}
-                className={cn(
-                  'flex items-center gap-2 rounded-lg border p-3 transition-all text-left',
-                  biometricType === 'fingerprint'
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                    : 'border-border hover:border-muted-foreground/30',
-                )}
-              >
-                <Fingerprint className="h-5 w-5 shrink-0" />
-                <div>
-                  <div className="text-sm font-medium">Fingerprint</div>
-                  <div className="text-[10px] text-muted-foreground">
-                    {hasFingerprint ? 'Enrolled' : 'Not enrolled'}
+              {/* Biometric Type */}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setBiometricType('fingerprint')}
+                  className={cn(
+                    'flex items-center gap-2 rounded-lg border p-3 transition-all text-left',
+                    biometricType === 'fingerprint'
+                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                      : 'border-border hover:border-muted-foreground/30',
+                  )}
+                >
+                  <Fingerprint className="h-5 w-5 shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">Fingerprint</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {hasFingerprint ? 'Enrolled' : 'Not enrolled'}
+                    </div>
                   </div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setBiometricType('face')}
-                className={cn(
-                  'flex items-center gap-2 rounded-lg border p-3 transition-all text-left',
-                  biometricType === 'face'
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                    : 'border-border hover:border-muted-foreground/30',
-                )}
-              >
-                <ScanFace className="h-5 w-5 shrink-0" />
-                <div>
-                  <div className="text-sm font-medium">Face</div>
-                  <div className="text-[10px] text-muted-foreground">
-                    {hasFace ? 'Enrolled' : 'Not enrolled'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBiometricType('face')}
+                  className={cn(
+                    'flex items-center gap-2 rounded-lg border p-3 transition-all text-left',
+                    biometricType === 'face'
+                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                      : 'border-border hover:border-muted-foreground/30',
+                  )}
+                >
+                  <ScanFace className="h-5 w-5 shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">Face</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {hasFace ? 'Enrolled' : 'Not enrolled'}
+                    </div>
                   </div>
-                </div>
-              </button>
-            </div>
+                </button>
+              </div>
 
-            {/* Overwrite warning */}
-            {((biometricType === 'fingerprint' && hasFingerprint) ||
-              (biometricType === 'face' && hasFace)) && (
-                <p className="text-[11px] text-yellow-600">
-                  Already enrolled — re-enrolling will overwrite the existing {biometricType}.
-                </p>
-              )}
+              {/* Overwrite warning */}
+              {((biometricType === 'fingerprint' && hasFingerprint) ||
+                (biometricType === 'face' && hasFace)) && (
+                  <p className="text-[11px] text-yellow-600">
+                    Already enrolled — re-enrolling will overwrite the existing {biometricType}.
+                  </p>
+                )}
 
-            {/* Device selection */}
-            <div className="space-y-1.5">
-              <Label className="text-xs">Device</Label>
-              {onlineDevices.length === 0 ? (
-                <div className="flex items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                  <WifiOff className="h-4 w-4" />
-                  No online devices available
-                </div>
-              ) : (
-                <Select value={deviceSn} onValueChange={setDeviceSn}>
-                  <SelectTrigger className="h-9">
-                    <SelectValue placeholder="Select a device…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {onlineDevices.map((s) => (
-                      <SelectItem key={s.device_sn} value={s.device_sn}>
-                        <span className="flex items-center gap-2">
-                          <Wifi className="h-3 w-3 text-green-600" />
-                          {s.devices?.name || s.device_sn}
-                          <span className="text-muted-foreground text-[10px]">
-                            {s.devices?.name ? s.device_sn : ''}
+              {/* Device selection */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Device</Label>
+                {onlineDevices.length === 0 ? (
+                  <div className="flex items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                    <WifiOff className="h-4 w-4" />
+                    No online devices available
+                  </div>
+                ) : (
+                  <Select value={deviceSn} onValueChange={setDeviceSn}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Select a device…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {onlineDevices.map((s) => (
+                        <SelectItem key={s.device_sn} value={s.device_sn}>
+                          <span className="flex items-center gap-2">
+                            <Wifi className="h-3 w-3 text-green-600" />
+                            {s.devices?.name || s.device_sn}
+                            <span className="text-muted-foreground text-[10px]">
+                              {s.devices?.name ? s.device_sn : ''}
+                            </span>
                           </span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              {/* Enrollment info */}
+              <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                <p>
+                  <strong>How it works:</strong> A command will be sent to the device.
+                  When the device picks it up, it will prompt the user to{' '}
+                  {biometricType === 'fingerprint' ? 'place their finger on the sensor' : 'look at the camera'}.
+                </p>
+                <p>
+                  The user must be physically at the device for enrollment to succeed.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Enrollment Progress (after starting) ── */}
+          {showProgress && (
+            <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium">
+                  {biometricType === 'fingerprint' ? 'Fingerprint' : 'Face'} Enrollment
+                </h4>
+                <Badge variant="outline" className="text-[10px]">
+                  {deviceSn}
+                </Badge>
+              </div>
+
+              {/* Phase stepper */}
+              <div className="flex justify-center py-2">
+                <PhaseSteps currentPhase={phase} />
+              </div>
+
+              {/* Phase-specific content */}
+              <div className="rounded-lg border p-4">
+                {phase === 'queued' && (
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
+                      <Send className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Command Queued</p>
+                      <p className="text-xs text-muted-foreground">
+                        Waiting for the device to pick up the enrollment command…
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {phase === 'enrolling' && (
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
+                      <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Enrolling on Device</p>
+                      <p className="text-xs text-muted-foreground">
+                        {biometricType === 'fingerprint'
+                          ? 'The user should place their finger on the sensor when prompted…'
+                          : 'The user should look at the camera when prompted…'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {phase === 'success' && (
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-50">
+                      <CheckCircle2 className="h-5 w-5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-green-700">Enrollment Successful</p>
+                      <p className="text-xs text-muted-foreground">
+                        {biometricType === 'fingerprint' ? 'Fingerprint' : 'Face'} template has been captured
+                        and stored in the cloud.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {phase === 'failed' && errorInfo && (
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50">
+                      <XCircle className="h-5 w-5 text-red-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-red-700">{errorInfo.label}</p>
+                      <p className="text-xs text-muted-foreground">{errorInfo.description}</p>
+                      {errorInfo.code && (
+                        <p className="mt-1 text-[10px] text-muted-foreground/70">
+                          Error code: {errorInfo.code}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Elapsed time for in-progress states */}
+              {isInProgress && commandData?.created_at && (
+                <ElapsedTimer since={commandData.created_at} />
               )}
             </div>
+          )}
 
-            {/* Enrollment info */}
-            <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-              <p>
-                <strong>How it works:</strong> A command will be sent to the device.
-                When the device picks it up, it will prompt the user to{' '}
-                {biometricType === 'fingerprint' ? 'place their finger on the sensor' : 'look at the camera'}.
-              </p>
-              <p>
-                The user must be physically at the device for enrollment to succeed.
-              </p>
-            </div>
-          </div>
-
-          {/* ── Action ── */}
+          {/* ── Actions ── */}
           <div className="flex justify-end gap-2 border-t pt-4">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
-            <Button
-              onClick={handleStartEnrollment}
-              disabled={!deviceSn || startEnrollment.isPending || onlineDevices.length === 0}
-            >
-              {startEnrollment.isPending && (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              )}
-              Start Enrollment
-            </Button>
+            {showForm && (
+              <>
+                <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                  Close
+                </Button>
+                <Button
+                  onClick={handleStartEnrollment}
+                  disabled={!deviceSn || startEnrollment.isPending || onlineDevices.length === 0}
+                >
+                  {startEnrollment.isPending && (
+                    <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                  )}
+                  Start Enrollment
+                </Button>
+              </>
+            )}
+
+            {isInProgress && (
+              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                Close (enrollment continues)
+              </Button>
+            )}
+
+            {isTerminal && (
+              <>
+                <Button variant="ghost" size="sm" onClick={handleReset}>
+                  <ArrowLeft className="h-3.5 w-3.5 mr-1" />
+                  Enroll Another
+                </Button>
+                <Button onClick={() => onOpenChange(false)}>
+                  Done
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </DialogContent>

@@ -347,6 +347,20 @@ export class UserService {
   }
 
   /**
+   * Get a single command's status by ID (for enrollment polling)
+   */
+  static async getCommandStatus(commandId: number): Promise<CommandQueueEntry | null> {
+    const { data, error } = await supabase
+      .from('command_queue')
+      .select('*')
+      .eq('id', commandId)
+      .single()
+
+    if (error || !data) return null
+    return data as CommandQueueEntry
+  }
+
+  /**
    * Start biometric enrollment on a device (queues ENROLL_FP / ENROLL_FACE command)
    */
   static async startEnrollment(

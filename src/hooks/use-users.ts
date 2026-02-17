@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { UserService, type UserFilters, type UserEntry } from '@/services/user-service'
 import { toast } from 'sonner'
@@ -142,13 +143,47 @@ export function useStartEnrollment() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
-      const label = variables.biometricType === 'fingerprint' ? 'Fingerprint' : 'Face'
-      toast.success(`${label} enrollment sent to device`)
     },
     onError: (error: Error) => {
       toast.error(`Enrollment failed: ${error.message}`)
     },
   })
+}
+
+// Hook: Poll a single command's status (for enrollment progress)
+export function useEnrollmentCommandStatus(
+  commandId: number | null,
+  userId: string,
+) {
+  const queryClient = useQueryClient()
+
+  const query = useQuery({
+    queryKey: ['command', commandId] as const,
+    queryFn: () => UserService.getCommandStatus(commandId!),
+    enabled: !!commandId,
+    refetchInterval: (q) => {
+      const status = q.state.data?.status
+      // Stop polling once terminal
+      if (status === 'success' || status === 'failed') return false
+      return 2000 // Poll every 2 seconds while in-flight
+    },
+  })
+
+  // Invalidate related queries once when enrollment reaches a terminal success state
+  const didInvalidate = useRef(false)
+  useEffect(() => {
+    if (query.data?.status === 'success' && !didInvalidate.current) {
+      didInvalidate.current = true
+      queryClient.invalidateQueries({ queryKey: userKeys.biometrics(userId) })
+      queryClient.invalidateQueries({ queryKey: userKeys.lists() })
+    }
+    // Reset when commandId changes (new enrollment)
+    if (!commandId) {
+      didInvalidate.current = false
+    }
+  }, [query.data?.status, commandId, userId, queryClient])
+
+  return query
 }
 
 // Hook: Clear pending commands for a device
