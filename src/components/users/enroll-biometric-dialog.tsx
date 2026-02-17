@@ -28,6 +28,7 @@ import {
   Radio,
   Send,
   ArrowLeft,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   useUserBiometrics,
@@ -415,14 +416,26 @@ export function EnrollBiometricDialog({
 
               {/* Overwrite warning */}
               {biometricType === 'fingerprint' && enrolledFingers.has(fingerId) && (
-                <p className="text-[11px] text-yellow-600">
-                  This finger is already enrolled — re-enrolling will overwrite the existing template.
-                </p>
+                <div className="flex items-start gap-2.5 rounded-lg border border-yellow-300 bg-yellow-50 p-3">
+                  <AlertTriangle className="h-4 w-4 text-yellow-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-medium text-yellow-800">Overwrite existing template</p>
+                    <p className="text-[11px] text-yellow-700 mt-0.5">
+                      {FINGER_LABELS[fingerId]} is already enrolled. This will replace the current template.
+                    </p>
+                  </div>
+                </div>
               )}
               {biometricType === 'face' && hasFace && (
-                <p className="text-[11px] text-yellow-600">
-                  Already enrolled — re-enrolling will overwrite the existing face template.
-                </p>
+                <div className="flex items-start gap-2.5 rounded-lg border border-yellow-300 bg-yellow-50 p-3">
+                  <AlertTriangle className="h-4 w-4 text-yellow-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-medium text-yellow-800">Overwrite existing template</p>
+                    <p className="text-[11px] text-yellow-700 mt-0.5">
+                      Face is already enrolled. This will replace the current template.
+                    </p>
+                  </div>
+                </div>
               )}
 
               {/* Device selection */}
@@ -455,17 +468,6 @@ export function EnrollBiometricDialog({
                 )}
               </div>
 
-              {/* Enrollment info */}
-              <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-                <p>
-                  <strong>How it works:</strong> A command will be sent to the device.
-                  When the device picks it up, it will prompt the user to{' '}
-                  {biometricType === 'fingerprint' ? 'place their finger on the sensor' : 'look at the camera'}.
-                </p>
-                <p>
-                  The user must be physically at the device for enrollment to succeed.
-                </p>
-              </div>
             </div>
           )}
 
