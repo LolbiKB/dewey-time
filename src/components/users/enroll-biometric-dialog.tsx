@@ -92,8 +92,9 @@ function parseEnrollError(errorMessage: string | null | undefined): {
 // ---------------------------------------------------------------------------
 type EnrollPhase = 'idle' | 'queued' | 'enrolling' | 'success' | 'failed'
 
-function getPhase(commandStatus: string | undefined | null, isPending: boolean): EnrollPhase {
+function getPhase(commandStatus: string | undefined | null, isPending: boolean, hasActiveCommand: boolean): EnrollPhase {
   if (isPending) return 'queued'
+  if (hasActiveCommand && !commandStatus) return 'queued' // waiting for first poll
   if (!commandStatus) return 'idle'
   switch (commandStatus) {
     case 'pending': return 'queued'
@@ -246,7 +247,7 @@ export function EnrollBiometricDialog({
   )
 
   // Derive enrollment phase
-  const phase = getPhase(commandData?.status, startEnrollment.isPending)
+  const phase = getPhase(commandData?.status, startEnrollment.isPending, !!activeCommandId)
   const isTerminal = phase === 'success' || phase === 'failed'
   const isInProgress = phase === 'queued' || phase === 'enrolling'
 
