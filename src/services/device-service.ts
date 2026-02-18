@@ -127,6 +127,45 @@ export class DeviceService {
   }
 
   /**
+   * Queue a command for a device (REBOOT, INFO, CHECK, LOG, SET OPTION, etc.)
+   * The device picks it up on its next getrequest poll.
+   */
+  static async queueDeviceCommand(
+    deviceSn: string,
+    commandType: string,
+    commandBody: string
+  ): Promise<{ id: number; command: string }> {
+    // Get next command ID (use max existing ID + 1 for this device)
+    const { data: lastCmd } = await supabase
+      .from('command_queue')
+      .select('id')
+      .eq('device_sn', deviceSn)
+      .order('id', { ascending: false })
+      .limit(1)
+      .single()
+
+    const nextId = (lastCmd?.id || 0) + 1
+    const command = `C:${nextId}:${commandBody}`
+
+    const { data, error } = await supabase
+      .from('command_queue')
+      .insert({
+        device_sn: deviceSn,
+        command,
+        command_type: commandType,
+        status: 'pending',
+      })
+      .select('id, command')
+      .single()
+
+    if (error) {
+      throw new Error(`Failed to queue command: ${error.message}`)
+    }
+
+    return data!
+  }
+
+  /**
    * Set a device as master
    */
   static async setMasterDevice(serialNumber: string): Promise<void> {

@@ -4,8 +4,15 @@ import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { createDeviceColumns } from '@/components/devices/columns'
 import { DeviceDataTable } from '@/components/devices/data-table'
-import { useDevices, useSetMasterDevice } from '@/hooks/use-devices'
+import { useDevices, useSetMasterDevice, useDeviceCommand } from '@/hooks/use-devices'
 import type { DeviceFilters } from '@/services/device-service'
+
+const COMMAND_LABELS: Record<string, string> = {
+  reboot: 'Reboot',
+  info: 'Info request',
+  check: 'Force sync',
+  log: 'Push new logs',
+}
 
 export function Devices() {
   const [filters, setFilters] = useState<DeviceFilters>({
@@ -21,6 +28,9 @@ export function Devices() {
   // Set master device mutation
   const setMasterMutation = useSetMasterDevice()
 
+  // Device command mutation
+  const deviceCommandMutation = useDeviceCommand()
+
   // Handle set master
   const handleSetMaster = async (serialNumber: string) => {
     try {
@@ -31,6 +41,29 @@ export function Devices() {
     } catch (err) {
       toast.error('Error', {
         description: 'Failed to set master device. Please try again.',
+      })
+    }
+  }
+
+  // Handle device command
+  const handleDeviceCommand = async (
+    serialNumber: string,
+    commandType: string,
+    commandBody: string
+  ) => {
+    const label = COMMAND_LABELS[commandType] || commandType
+    try {
+      await deviceCommandMutation.mutateAsync({
+        deviceSn: serialNumber,
+        commandType,
+        commandBody,
+      })
+      toast.success(`${label} queued`, {
+        description: `Command sent to ${serialNumber}. Will execute on next poll.`,
+      })
+    } catch (err) {
+      toast.error('Error', {
+        description: `Failed to queue ${label} for ${serialNumber}.`,
       })
     }
   }
@@ -54,6 +87,7 @@ export function Devices() {
         currentStatusFilter: filters.status,
         currentMasterFilter: filters.is_master?.toString(),
         onSetMaster: handleSetMaster,
+        onDeviceCommand: handleDeviceCommand,
       }),
     [filters]
   )

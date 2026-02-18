@@ -20,8 +20,24 @@ export function useSetMasterDevice() {
   return useMutation({
     mutationFn: (serialNumber: string) => DeviceService.setMasterDevice(serialNumber),
     onSuccess: () => {
-      // Invalidate devices query to refetch data
       queryClient.invalidateQueries({ queryKey: ['devices'] })
     },
+  })
+}
+
+/**
+ * Hook to queue a device command (REBOOT, INFO, CHECK, LOG, etc.)
+ */
+export function useDeviceCommand() {
+  return useMutation({
+    mutationFn: ({
+      deviceSn,
+      commandType,
+      commandBody,
+    }: {
+      deviceSn: string
+      commandType: string
+      commandBody: string
+    }) => DeviceService.queueDeviceCommand(deviceSn, commandType, commandBody),
   })
 }

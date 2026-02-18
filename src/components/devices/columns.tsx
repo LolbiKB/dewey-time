@@ -2,7 +2,14 @@ import { format, parseISO } from 'date-fns'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Check } from 'lucide-react'
+import { Check, MoreHorizontal, RotateCcw, Info, RefreshCw, Send } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   SelectFilterHeader,
   TwoLineTextCell,
@@ -15,6 +22,7 @@ interface CreateDeviceColumnsProps {
   currentStatusFilter?: string
   currentMasterFilter?: string
   onSetMaster?: (serialNumber: string) => void
+  onDeviceCommand?: (serialNumber: string, commandType: string, commandBody: string) => void
 }
 
 // Status options for filter
@@ -35,6 +43,7 @@ export function createDeviceColumns({
   currentStatusFilter,
   currentMasterFilter,
   onSetMaster,
+  onDeviceCommand,
 }: CreateDeviceColumnsProps): ColumnDef<DeviceEntry>[] {
   return [
     {
@@ -158,29 +167,56 @@ export function createDeviceColumns({
         const isMaster = row.getValue('is_master') as boolean
         const serialNumber = row.getValue('serial_number') as string
 
-        if (isMaster) {
-          return (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled
-              className="gap-2"
-            >
-              <Check className="h-4 w-4" />
-              Current Master
-            </Button>
-          )
-        }
-
         return (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onSetMaster?.(serialNumber)}
-            className="gap-2"
-          >
-            Set as Master
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <MoreHorizontal className="h-4 w-4" />
+                <span className="sr-only">Open menu</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {!isMaster && (
+                <DropdownMenuItem onClick={() => onSetMaster?.(serialNumber)}>
+                  <Check className="mr-2 h-4 w-4" />
+                  Set as Master
+                </DropdownMenuItem>
+              )}
+              {isMaster && (
+                <DropdownMenuItem disabled>
+                  <Check className="mr-2 h-4 w-4" />
+                  Current Master
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => onDeviceCommand?.(serialNumber, 'info', 'INFO')}
+              >
+                <Info className="mr-2 h-4 w-4" />
+                Request Info
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onDeviceCommand?.(serialNumber, 'check', 'CHECK')}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Force Sync
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onDeviceCommand?.(serialNumber, 'log', 'LOG')}
+              >
+                <Send className="mr-2 h-4 w-4" />
+                Push New Logs
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => onDeviceCommand?.(serialNumber, 'reboot', 'REBOOT')}
+                className="text-destructive focus:text-destructive"
+              >
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Reboot Device
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )
       },
     },
