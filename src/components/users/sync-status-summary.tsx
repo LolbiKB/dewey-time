@@ -42,12 +42,12 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
           <TooltipTrigger asChild>
             <Badge
               className={`gap-1.5 cursor-help ${isFullySynced
-                  ? 'bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950 dark:text-green-400'
-                  : hasIssues
-                    ? 'bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-950 dark:text-red-400'
-                    : partial > 0
-                      ? 'bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400'
-                      : 'bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300'
+                ? 'bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950 dark:text-green-400'
+                : hasIssues
+                  ? 'bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-950 dark:text-red-400'
+                  : partial > 0
+                    ? 'bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400'
+                    : 'bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300'
                 }`}
             >
               {isFullySynced && <Check className="h-3 w-3" />}
