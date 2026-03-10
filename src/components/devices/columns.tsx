@@ -12,6 +12,7 @@ import {
   History,
   Wifi,
   WifiOff,
+  Crown,
   Edit
 } from 'lucide-react'
 import {
