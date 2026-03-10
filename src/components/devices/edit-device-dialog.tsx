@@ -127,10 +127,10 @@ export function EditDeviceDialog({
               </div>
             ) : (
               <Select value={location} onValueChange={setLocation}>
-                <SelectTrigger id="location">
+                <SelectTrigger id="location" className="w-full">
                   <SelectValue placeholder="Select a branch" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-60 overflow-y-auto">
                   {branches.map((branch) => (
                     <SelectItem key={branch.value} value={branch.value}>
                       {branch.label}
