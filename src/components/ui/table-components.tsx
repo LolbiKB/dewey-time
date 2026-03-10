@@ -15,7 +15,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { X, ChevronsUpDown } from "lucide-react"
+import { X, ChevronsUpDown, Server } from "lucide-react"
 
 // ========================================
 // HEADER COMPONENTS (Filters)
@@ -253,6 +253,37 @@ export function UserCell({
           <span className="text-sm text-muted-foreground">{secondaryText}</span>
         )}
       </div>
+    </div>
+  )
+}
+
+interface DeviceCellProps {
+  name?: string | null
+  location?: string | null
+  isMaster?: boolean
+}
+
+export function DeviceCell({
+  name,
+  location,
+  isMaster,
+}: DeviceCellProps) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
+        <Server className="h-4 w-4 text-primary" />
+      </div>
+      <div className="flex flex-col">
+        <span className="font-medium">{name || 'Unnamed Device'}</span>
+        {location && (
+          <span className="text-sm text-muted-foreground">{location}</span>
+        )}
+      </div>
+      {isMaster && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800 shadow-sm shrink-0">
+          Master
+        </span>
+      )}
     </div>
   )
 }

@@ -27,6 +27,12 @@ export interface AttendanceLogEntry {
     name?: string
     location?: string
   }
+  users?: {
+    id: string
+    name: string
+    frappe_employee_id?: string
+    pin: string
+  }
 }
 
 // API Response
@@ -95,12 +101,35 @@ export async function fetchAttendanceLogs(
     throw new Error(`Failed to fetch attendance logs: ${error.message}`)
   }
 
+  // Fetch users to join with attendance logs
+  const pins = [...new Set((data || []).map(log => log.user_pin).filter(Boolean))]
+  let usersData: Record<string, { id: string; name: string; frappe_employee_id?: string; pin: string }> = {}
+  
+  if (pins.length > 0) {
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, name, frappe_employee_id, pin')
+      .in('pin', pins)
+    
+    if (users) {
+      users.forEach(user => {
+        usersData[user.pin] = user
+      })
+    }
+  }
+
+  // Join user data with attendance logs
+  const dataWithUsers = (data || []).map(log => ({
+    ...log,
+    users: usersData[log.user_pin] || null
+  }))
+
   const total = count || 0
   const totalPages = Math.ceil(total / limit)
 
   return {
     success: true,
-    data: data || [],
+    data: dataWithUsers || [],
     meta: {
       total,
       page,

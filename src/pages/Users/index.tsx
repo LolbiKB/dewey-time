@@ -21,6 +21,7 @@ import { AlertCircle } from 'lucide-react'
 
 export function Users() {
   const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(20)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'compromised' | 'archived' | 'all'>('all')
   const [syncStatusUser, setSyncStatusUser] = useState<UserEntry | null>(null)
@@ -29,7 +30,7 @@ export function Users() {
   const [enrollBiometricUser, setEnrollBiometricUser] = useState<UserEntry | null>(null)
   const { data, isLoading, isFetching, refetch } = useUsers({
     page,
-    limit: 20,
+    limit,
     search: search || undefined,
     status: statusFilter === 'all' ? undefined : statusFilter,
   })
@@ -85,16 +86,18 @@ export function Users() {
       <UserDataTable
         columns={columns}
         data={data?.data || []}
+        tableMeta={data?.meta}
         loading={isLoading}
         isFetching={isFetching}
         filters={{
           page,
-          limit: 20,
+          limit,
           search: search || undefined,
           status: statusFilter === 'all' ? undefined : statusFilter,
         }}
         onFiltersChange={(newFilters) => {
           if (newFilters.page !== undefined) setPage(newFilters.page)
+          if (newFilters.limit !== undefined) setLimit(newFilters.limit)
           if (newFilters.search !== undefined) setSearch(newFilters.search)
         }}
         onRefresh={() => refetch()}

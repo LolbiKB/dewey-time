@@ -29,8 +29,8 @@ export function useAttendanceLogManagement(filters: AttendanceLogFilters) {
   } = useQuery({
     queryKey: attendanceLogQueryKeys.list(filters),
     queryFn: () => fetchAttendanceLogs(filters),
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    gcTime: 1000 * 60 * 10, // 10 minutes
+    staleTime: 30000, // 30 seconds
+    gcTime: 1000 * 60 * 5, // 5 minutes
     retry: 2,
   })
 

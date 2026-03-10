@@ -13,6 +13,7 @@ export const userKeys = {
   syncStatus: (id: string) => [...userKeys.detail(id), 'sync-status'] as const,
   commandQueue: (id: string) => [...userKeys.detail(id), 'command-queue'] as const,
   biometrics: (id: string) => [...userKeys.detail(id), 'biometrics'] as const,
+  driftStatus: (id: string) => [...userKeys.detail(id), 'drift-status'] as const,
 }
 
 // Hook: Fetch users with filters
@@ -20,7 +21,9 @@ export function useUsers(filters: UserFilters = {}) {
   return useQuery({
     queryKey: userKeys.list(filters),
     queryFn: () => UserService.getFrappeEmployees(filters),
-    staleTime: 30000, // 30 seconds
+    staleTime: 1000 * 60 * 2, // 2 minutes - user data doesn't change frequently
+    gcTime: 1000 * 60 * 5, // 5 minutes
+    retry: 2,
   })
 }
 
@@ -87,6 +90,16 @@ export function useUserBiometrics(userId: string) {
     queryKey: userKeys.biometrics(userId),
     queryFn: () => UserService.getUserBiometrics(userId),
     enabled: !!userId,
+  })
+}
+
+// Hook: Get drift status for a user
+export function useDriftStatus(userId: string) {
+  return useQuery({
+    queryKey: userKeys.driftStatus(userId),
+    queryFn: () => UserService.getDriftStatus(userId),
+    enabled: !!userId,
+    refetchInterval: 10000, // Auto-refresh every 10 seconds
   })
 }
 

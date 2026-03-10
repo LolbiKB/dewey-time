@@ -27,6 +27,8 @@ export interface DeviceEntry {
   name?: string
   location?: string
   is_master: boolean
+  is_registrar?: boolean
+  registrar_capabilities?: string[]
   last_seen?: string
   registration_data?: string
   created_at: string
@@ -165,6 +167,66 @@ export class DeviceService {
     return data!
   }
 
+  // Command filters interface
+  static async getDeviceCommands(
+    deviceSn: string,
+    options: {
+      page?: number
+      limit?: number
+      status?: 'pending' | 'sent' | 'success' | 'failed' | 'all'
+      commandType?: 'sync' | 'device' | 'all'
+    } = {}
+  ) {
+    const page = options.page || 1
+    const limit = options.limit || 20
+    const from = (page - 1) * limit
+    const to = from + limit - 1
+
+    let query = supabase
+      .from('command_queue')
+      .select('*', { count: 'exact' })
+      .eq('device_sn', deviceSn)
+
+    // Apply status filter
+    if (options.status && options.status !== 'all') {
+      query = query.eq('status', options.status)
+    }
+
+    // Apply command type filter
+    if (options.commandType && options.commandType !== 'all') {
+      if (options.commandType === 'sync') {
+        query = query.in('command_type', ['sync_user', 'enroll_fingerprint', 'enroll_face', 'upload_photo', 'delete_user'])
+      } else if (options.commandType === 'device') {
+        query = query.in('command_type', ['reboot', 'info', 'check', 'log', 'clear_data'])
+      }
+    }
+
+    // Apply pagination
+    query = query.order('created_at', { ascending: false }).range(from, to)
+
+    const { data, error, count } = await query
+
+    if (error) {
+      throw new Error(`Failed to fetch device commands: ${error.message}`)
+    }
+
+    const total = count || 0
+    const totalPages = Math.ceil(total / limit)
+
+    return {
+      success: true,
+      data: data || [],
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    }
+  }
+
   /**
    * Set a device as master
    */
@@ -188,6 +250,103 @@ export class DeviceService {
     if (updateError) {
       throw new Error(`Failed to set master device: ${updateError.message}`)
     }
+  }
+
+  /**
+   * Get a single device by serial number
+   */
+  static async getDevice(serialNumber: string): Promise<DeviceEntry | null> {
+    const { data, error } = await supabase
+      .from('devices')
+      .select('*')
+      .eq('serial_number', serialNumber)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') return null // No rows returned
+      throw new Error(`Failed to fetch device: ${error.message}`)
+    }
+
+    if (!data) return null
+
+    const lastSeenMinutes = data.last_seen
+      ? Math.floor((Date.now() - new Date(data.last_seen).getTime()) / 60000)
+      : null
+
+    return {
+      ...data,
+      status: lastSeenMinutes !== null && lastSeenMinutes < 5 ? 'online' : 'offline',
+      last_seen_minutes: lastSeenMinutes,
+    } as DeviceEntry
+  }
+
+  /**
+   * Retry a failed command by resetting it to pending
+   */
+  static async retryCommand(commandId: number): Promise<void> {
+    const { error } = await supabase
+      .from('command_queue')
+      .update({
+        status: 'pending',
+        retry_count: 0,
+        next_retry_at: null,
+      })
+      .eq('id', commandId)
+      .eq('status', 'failed')
+
+    if (error) {
+      throw new Error(`Failed to retry command: ${error.message}`)
+    }
+  }
+
+  /**
+   * Clear a specific command from the queue
+   */
+  static async clearCommand(deviceSn: string, commandId: number): Promise<void> {
+    const { error } = await supabase
+      .from('command_queue')
+      .delete()
+      .eq('id', commandId)
+      .eq('device_sn', deviceSn)
+
+    if (error) {
+      throw new Error(`Failed to clear command: ${error.message}`)
+    }
+  }
+
+  /**
+   * Update device configuration fields
+   */
+  static async updateDevice(
+    serialNumber: string,
+    updates: {
+      name?: string
+      location?: string
+      is_registrar?: boolean
+      registrar_capabilities?: string[]
+    }
+  ): Promise<DeviceEntry> {
+    const { data, error } = await supabase
+      .from('devices')
+      .update(updates)
+      .eq('serial_number', serialNumber)
+      .select('*')
+      .single()
+
+    if (error) {
+      throw new Error(`Failed to update device: ${error.message}`)
+    }
+
+    // Calculate derived fields
+    const lastSeenMinutes = data.last_seen
+      ? Math.floor((Date.now() - new Date(data.last_seen).getTime()) / 60000)
+      : null
+
+    return {
+      ...data,
+      status: lastSeenMinutes !== null && lastSeenMinutes < 5 ? 'online' : 'offline',
+      last_seen_minutes: lastSeenMinutes,
+    } as DeviceEntry
   }
 }
 

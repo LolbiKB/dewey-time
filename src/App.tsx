@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 1000 * 60 * 2, // 2 minutes
       gcTime: 1000 * 60 * 5, // 5 minutes
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
       retry: 2,
     },
   },
@@ -42,9 +42,9 @@ const routeTitles: Record<string, string> = {
 function AppContent() {
   const location = useLocation()
   const pageTitle = routeTitles[location.pathname] || 'Dashboard'
-  const { user, isAdmin, loading, signOut } = useAuth()
+  const { user, isAdmin, loading, isAdminLoading, signOut } = useAuth()
 
-  // Show loading spinner while checking auth
+  // Show loading spinner while checking initial auth
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -56,6 +56,15 @@ function AppContent() {
   // Show login page if not authenticated
   if (!user) {
     return <LoginPage />
+  }
+
+  // Show loading spinner while checking admin status (prevents Access Denied flash)
+  if (isAdminLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
   }
 
   // Show access denied if not admin

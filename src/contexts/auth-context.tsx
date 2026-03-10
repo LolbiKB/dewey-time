@@ -7,6 +7,7 @@ interface AuthContextType {
   session: Session | null
   isAdmin: boolean
   loading: boolean
+  isAdminLoading: boolean
   signInWithGoogle: () => Promise<void>
   signOut: () => Promise<void>
 }
@@ -45,11 +46,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [isAdminLoading, setIsAdminLoading] = useState(true)
 
   // Check admin status separately (non-blocking)
   const checkAndSetAdminStatus = async (session: Session | null) => {
     if (!session?.user?.email) {
       setIsAdmin(false)
+      setIsAdminLoading(false)
       return
     }
 
@@ -58,6 +61,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsAdmin(adminStatus)
     } catch (error) {
       setIsAdmin(false)
+    } finally {
+      setIsAdminLoading(false)
     }
   }
 
@@ -97,6 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Check admin status asynchronously (don't block)
         if (session) {
           checkAndSetAdminStatus(session)
+        } else {
+          setIsAdminLoading(false)
         }
       } catch (error) {
         if (mounted) {
@@ -120,6 +127,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         checkAndSetAdminStatus(session)
       } else {
         setIsAdmin(false)
+        setIsAdminLoading(false)
       }
     })
 
@@ -151,6 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         session,
         isAdmin,
         loading,
+        isAdminLoading,
         signInWithGoogle,
         signOut,
       }}

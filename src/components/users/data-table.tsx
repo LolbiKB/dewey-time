@@ -1,6 +1,7 @@
 import type { ColumnDef } from '@tanstack/react-table'
 import {
   GenericDataTable,
+  type BaseTableMeta,
 } from '@/components/ui/generic-data-table'
 import type {
   UserEntry,
@@ -18,6 +19,7 @@ interface UserDataTableProps {
   columns: ColumnDef<UserEntry, any>[]
   data: UserEntry[]
   meta?: UserTableMeta
+  tableMeta?: BaseTableMeta
   loading?: boolean
   isFetching?: boolean
   filters: UserFilters
@@ -30,6 +32,7 @@ export function UserDataTable({
   columns,
   data,
   meta,
+  tableMeta,
   loading,
   isFetching,
   filters,
@@ -41,6 +44,7 @@ export function UserDataTable({
     <GenericDataTable
       columns={columns}
       data={data}
+      meta={tableMeta}
       loading={loading || isFetching}
       filters={filters}
       onFiltersChange={onFiltersChange}

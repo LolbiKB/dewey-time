@@ -4,8 +4,9 @@ import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { createDeviceColumns } from '@/components/devices/columns'
 import { DeviceDataTable } from '@/components/devices/data-table'
-import { useDevices, useSetMasterDevice, useDeviceCommand } from '@/hooks/use-devices'
-import type { DeviceFilters } from '@/services/device-service'
+import { useDevices, useSetMasterDevice, useDeviceCommand, useUpdateDevice } from '@/hooks/use-devices'
+import { EditDeviceDialog } from '@/components/devices/edit-device-dialog'
+import type { DeviceFilters, DeviceEntry } from '@/services/device-service'
 
 const COMMAND_LABELS: Record<string, string> = {
   reboot: 'Reboot',
@@ -14,6 +15,7 @@ const COMMAND_LABELS: Record<string, string> = {
   log: 'Push new logs',
 }
 
+import { CommandHistoryDialog } from '@/components/devices/command-history-dialog'
 export function Devices() {
   const [filters, setFilters] = useState<DeviceFilters>({
     page: 1,
@@ -30,6 +32,14 @@ export function Devices() {
 
   // Device command mutation
   const deviceCommandMutation = useDeviceCommand()
+
+  // Update device mutation
+  const updateDeviceMutation = useUpdateDevice()
+
+  const [historyDevice, setHistoryDevice] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [editDevice, setEditDevice] = useState<DeviceEntry | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
 
   // Handle set master
   const handleSetMaster = async (serialNumber: string) => {
@@ -68,6 +78,35 @@ export function Devices() {
     }
   }
 
+  // Handle edit device
+  const handleEditDevice = (device: DeviceEntry) => {
+    setEditDevice(device)
+    setEditOpen(true)
+  }
+
+  // Handle update device
+  const handleUpdateDevice = async (
+    serialNumber: string,
+    updates: {
+      name?: string
+      location?: string
+      is_registrar?: boolean
+      registrar_capabilities?: string[]
+    }
+  ) => {
+    try {
+      await updateDeviceMutation.mutateAsync({ serialNumber, updates })
+      toast.success('Device updated', {
+        description: `Device ${serialNumber} configuration updated successfully.`,
+      })
+    } catch (err) {
+      toast.error('Error', {
+        description: 'Failed to update device. Please try again.',
+      })
+      throw err
+    }
+  }
+
   // Column definitions with filter callbacks
   const columns = useMemo(
     () =>
@@ -78,16 +117,14 @@ export function Devices() {
             status: (status as 'online' | 'offline') || undefined,
             page: 1,
           })),
-        onFilterByMaster: (isMaster) =>
-          setFilters((prev) => ({
-            ...prev,
-            is_master: isMaster === 'true' ? true : isMaster === 'false' ? false : undefined,
-            page: 1,
-          })),
         currentStatusFilter: filters.status,
-        currentMasterFilter: filters.is_master?.toString(),
         onSetMaster: handleSetMaster,
         onDeviceCommand: handleDeviceCommand,
+        onShowHistory: (sn: string) => {
+          setHistoryDevice(sn)
+          setHistoryOpen(true)
+        },
+        onEdit: handleEditDevice,
       }),
     [filters]
   )
@@ -122,6 +159,14 @@ export function Devices() {
         filters={filters}
         onFiltersChange={setFilters}
         onRefresh={refetch}
+      />
+      <CommandHistoryDialog deviceSn={historyDevice} open={historyOpen} onOpenChange={setHistoryOpen} />
+      <EditDeviceDialog
+        device={editDevice}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSave={handleUpdateDevice}
+        isSaving={updateDeviceMutation.isPending}
       />
     </div>
   )

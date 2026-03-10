@@ -56,6 +56,8 @@ export interface SyncStatusEntry {
     name?: string
     location?: string
     last_seen?: string
+    is_registrar?: boolean
+    registrar_capabilities?: string[]
   }
 }
 
@@ -93,6 +95,7 @@ export interface SyncStatusSummary {
   not_synced: number
   syncing: number
   failed: number
+  drifted: number
 }
 
 // API Responses
@@ -117,6 +120,22 @@ export interface SyncStatusResponse {
 export interface CommandQueueResponse {
   success: boolean
   data: CommandQueueEntry[]
+}
+
+// Drift Status Entry (from user_device_sync_status table)
+export interface DriftStatusEntry {
+  device_sn: string
+  expected_state: 'synced' | 'deleted'
+  actual_state: 'not_synced' | 'syncing' | 'synced' | 'failed' | 'drift_detected' | 'unknown'
+  drift_detected_at?: string
+  last_sync_attempt?: string
+  last_successful_sync?: string
+  error_message?: string
+}
+
+export interface DriftStatusResponse {
+  success: boolean
+  data: DriftStatusEntry[]
 }
 
 // Biometric Entry (from user_biometrics table)
@@ -427,10 +446,11 @@ export class UserService {
    * A device is "synced" when it has the user data AND all the biometrics
    * (fingerprints/face) that are enrolled in the bridge database.
    * "partial" means the user data is on the device but biometrics are missing.
+   * "drifted" means expected_state !== actual_state in user_device_sync_status.
    */
   static async getUserSyncSummary(userId: string): Promise<SyncStatusSummary> {
-    // Parallel queries: devices, sync flags, biometric counts, commands
-    const [devicesRes, syncRes, biometricsRes, failedRes, pendingRes] = await Promise.all([
+    // Parallel queries: devices, sync flags, biometric counts, commands, drift status
+    const [devicesRes, syncRes, biometricsRes, failedRes, pendingRes, driftRes] = await Promise.all([
       supabase.from('devices').select('serial_number'),
       supabase.from('device_sync_status')
         .select('device_sn, has_user, has_fingerprint, has_face')
@@ -446,6 +466,9 @@ export class UserService {
         .select('device_sn')
         .eq('related_user_id', userId)
         .in('status', ['pending', 'sent']),
+      supabase.from('user_device_sync_status')
+        .select('device_sn, expected_state, actual_state, drift_detected_at')
+        .eq('user_id', userId),
     ])
 
     if (devicesRes.error) throw devicesRes.error
@@ -468,18 +491,29 @@ export class UserService {
     const syncingDevices = new Set(
       (pendingRes.data || []).map(cmd => cmd.device_sn)
     )
+    
+    // Build drift map from user_device_sync_status
+    const driftMap = new Map(
+      (driftRes.data || [])
+        .filter(d => d.expected_state !== d.actual_state)
+        .map(d => [d.device_sn, d])
+    )
 
     const total = devicesRes.data?.length || 0
     let synced = 0
     let partial = 0
     let failed = 0
     let syncing = 0
+    let drifted = 0
 
     for (const device of devicesRes.data || []) {
       const sn = device.serial_number
       const sync = syncMap.get(sn)
+      const hasDrift = driftMap.has(sn)
 
-      if (failedDevices.has(sn)) {
+      if (hasDrift) {
+        drifted++
+      } else if (failedDevices.has(sn)) {
         failed++
       } else if (syncingDevices.has(sn)) {
         syncing++
@@ -499,9 +533,29 @@ export class UserService {
       total_devices: total,
       synced,
       partial,
-      not_synced: total - synced - partial - syncing - failed,
+      not_synced: total - synced - partial - syncing - failed - drifted,
       syncing,
       failed,
+      drifted,
+    }
+  }
+
+  /**
+   * Get drift status for a user across all devices
+   * Returns devices where expected_state !== actual_state
+   */
+  static async getDriftStatus(userId: string): Promise<DriftStatusResponse> {
+    const { data, error } = await supabase
+      .from('user_device_sync_status')
+      .select('device_sn, expected_state, actual_state, drift_detected_at, last_sync_attempt, last_successful_sync, error_message')
+      .eq('user_id', userId)
+      .neq('expected_state', 'actual_state')
+
+    if (error) throw error
+
+    return {
+      success: true,
+      data: data || [],
     }
   }
 

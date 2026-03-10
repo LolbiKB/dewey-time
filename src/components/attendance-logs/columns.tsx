@@ -1,9 +1,16 @@
 import { format, parseISO } from 'date-fns'
 import type { ColumnDef } from '@tanstack/react-table'
+import { Badge } from '@/components/ui/badge'
+import { 
+  Fingerprint, 
+  ScanFace, 
+  KeyRound,
+  Monitor,
+  MapPin,
+} from 'lucide-react'
 import {
   SelectFilterHeader,
   DateFilterHeader,
-  TwoLineTextCell,
 } from '@/components/ui/table-components'
 import type { AttendanceLogEntry } from '@/services/attendance-log-service'
 
@@ -17,21 +24,6 @@ interface CreateAttendanceLogColumnsProps {
   currentVerifyTypeFilter?: string
   currentDateFilter?: Date
   availableDevices?: Array<{ value: string; label: string }>
-}
-
-// Verify type mapping
-const VERIFY_TYPES: Record<number, string> = {
-  0: 'Password',
-  1: 'Fingerprint',
-  15: 'Face',
-  255: 'Other',
-}
-
-// Status mapping
-const STATUS_TYPES: Record<number, string> = {
-  0: 'Check-In',
-  1: 'Check-Out',
-  255: 'Unknown',
 }
 
 export function createAttendanceLogColumns({
@@ -61,11 +53,36 @@ export function createAttendanceLogColumns({
       cell: ({ row }) => {
         const timestamp = parseISO(row.getValue('check_time'))
         return (
-          <TwoLineTextCell
-            mainText={format(timestamp, 'MMM d, yyyy')}
-            secondaryText={format(timestamp, 'h:mm a')}
-            mainClassName="font-medium"
-          />
+          <div className="flex flex-col">
+            <span className="font-medium">{format(timestamp, 'MMM d, yyyy')}</span>
+            <span className="text-sm text-muted-foreground">{format(timestamp, 'h:mm a')}</span>
+          </div>
+        )
+      },
+    },
+    {
+      id: 'user',
+      accessorKey: 'user_pin',
+      header: 'User',
+      cell: ({ row }) => {
+        const pin = row.getValue('user_pin') as string
+        const user = row.original.users
+        return (
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
+              <KeyRound className="h-4 w-4 text-primary" />
+            </div>
+            <div className="flex flex-col">
+              {user?.name ? (
+                <>
+                  <span className="font-medium">{user.name}</span>
+                  <span className="text-sm text-muted-foreground">{user.frappe_employee_id || `PIN: ${pin}`}</span>
+                </>
+              ) : (
+                <code className="font-mono font-medium">{pin}</code>
+              )}
+            </div>
+          </div>
         )
       },
     },
@@ -84,26 +101,28 @@ export function createAttendanceLogColumns({
         : 'Device',
       cell: ({ row }) => {
         const device = row.original.devices
+        const sn = row.getValue('device_sn') as string
+        const deviceName = device?.name || sn
+        const deviceDisplay = device?.location && device?.location !== device?.name 
+          ? `${deviceName} (${device.location})`
+          : deviceName
         return (
-          <div className="space-y-1">
-            <div className="font-mono font-medium">{row.getValue('device_sn')}</div>
-            {device?.name && (
-              <div className="text-sm text-muted-foreground">{device.name}</div>
-            )}
-            {device?.location && (
-              <div className="text-xs text-muted-foreground">{device.location}</div>
-            )}
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
+              <Monitor className="h-4 w-4 text-primary" />
+            </div>
+            <div className="flex flex-col">
+              <span className="font-medium flex items-center gap-1">
+                {deviceDisplay}
+                {device?.location && device?.location !== device?.name && (
+                  <MapPin className="h-3 w-3 text-muted-foreground" />
+                )}
+              </span>
+              <span className="text-sm text-muted-foreground">{sn}</span>
+            </div>
           </div>
         )
       },
-    },
-    {
-      id: 'user_pin',
-      accessorKey: 'user_pin',
-      header: 'User PIN',
-      cell: ({ row }) => (
-        <div className="font-mono font-medium">{row.getValue('user_pin')}</div>
-      ),
     },
     {
       id: 'verify_type',
@@ -124,8 +143,19 @@ export function createAttendanceLogColumns({
         : 'Verify Type',
       cell: ({ row }) => {
         const type = row.getValue('verify_type') as number
-        const label = VERIFY_TYPES[type] || `Type ${type}`
-        return <span className="text-sm text-muted-foreground">{label}</span>
+        const config = {
+          0: { label: 'Password', className: 'bg-gray-100 text-gray-800', icon: KeyRound },
+          1: { label: 'Fingerprint', className: 'bg-blue-100 text-blue-800', icon: Fingerprint },
+          15: { label: 'Face', className: 'bg-purple-100 text-purple-800', icon: ScanFace },
+          255: { label: 'Other', className: 'bg-slate-100 text-slate-800', icon: KeyRound },
+        }
+        const { label, className, icon: Icon } = config[type] || config[255]
+        return (
+          <Badge className={`${className} border-transparent pointer-events-none`}>
+            <Icon className="h-3 w-3 mr-1" />
+            {label}
+          </Badge>
+        )
       },
     },
     {
@@ -147,8 +177,17 @@ export function createAttendanceLogColumns({
         : 'Status',
       cell: ({ row }) => {
         const status = row.getValue('status') as number
-        const label = STATUS_TYPES[status] || `Status ${status}`
-        return <span className="text-sm text-muted-foreground">{label}</span>
+        const config = {
+          0: { label: 'Check-In', className: 'bg-green-100 text-green-800' },
+          1: { label: 'Check-Out', className: 'bg-amber-100 text-amber-800' },
+          255: { label: 'Unknown', className: 'bg-gray-100 text-gray-800' },
+        }
+        const { label, className } = config[status] || config[255]
+        return (
+          <Badge className={`${className} border-transparent pointer-events-none`}>
+            {label}
+          </Badge>
+        )
       },
     },
   ]

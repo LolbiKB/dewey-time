@@ -29,8 +29,8 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
     )
   }
 
-  const { total_devices, synced, partial, not_synced, syncing, failed } = summary
-  const hasIssues = failed > 0
+  const { total_devices, synced, partial, not_synced, syncing, failed, drifted } = summary
+  const hasIssues = failed > 0 || drifted > 0
   const isFullySynced = synced === total_devices && total_devices > 0
   const isSyncing = syncing > 0
 
@@ -43,17 +43,20 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
             <Badge
               className={`gap-1.5 cursor-help ${isFullySynced
                 ? 'bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950 dark:text-green-400'
-                : hasIssues
-                  ? 'bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-950 dark:text-red-400'
-                  : partial > 0
-                    ? 'bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400'
-                    : 'bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300'
+                : drifted > 0
+                  ? 'bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-950 dark:text-orange-400'
+                  : hasIssues
+                    ? 'bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-950 dark:text-red-400'
+                    : partial > 0
+                      ? 'bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-400'
+                      : 'bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300'
                 }`}
             >
               {isFullySynced && <Check className="h-3 w-3" />}
-              {hasIssues && <AlertTriangle className="h-3 w-3" />}
-              {isSyncing && !hasIssues && <Loader2 className="h-3 w-3 animate-spin" />}
-              {!isFullySynced && !hasIssues && !isSyncing && <X className="h-3 w-3" />}
+              {drifted > 0 && <AlertTriangle className="h-3 w-3" />}
+              {hasIssues && drifted === 0 && <AlertTriangle className="h-3 w-3" />}
+              {isSyncing && !hasIssues && drifted === 0 && <Loader2 className="h-3 w-3 animate-spin" />}
+              {!isFullySynced && !hasIssues && !isSyncing && drifted === 0 && <X className="h-3 w-3" />}
               <span className="text-xs">
                 {synced}/{total_devices}
               </span>
@@ -93,8 +96,20 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
                     <span className="text-destructive font-medium">{failed}</span>
                   </>
                 )}
+
+                {drifted > 0 && (
+                  <>
+                    <span className="text-muted-foreground">Drifted:</span>
+                    <span className="text-orange-600 font-medium">{drifted}</span>
+                  </>
+                )}
               </div>
-              {partial > 0 && (
+              {drifted > 0 && (
+                <div className="text-orange-600 pt-0.5 border-t">
+                  Drifted = data mismatch between ADMS and device
+                </div>
+              )}
+              {partial > 0 && drifted === 0 && (
                 <div className="text-muted-foreground pt-0.5 border-t">
                   Partial = user data on device but biometrics missing
                 </div>
@@ -117,15 +132,28 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
             All devices synced
           </Badge>
         )}
-        {!isFullySynced && (
+        {drifted > 0 && (
+          <Badge className="gap-1.5 bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-950 dark:text-orange-400">
+            <AlertTriangle className="h-3 w-3" />
+            {drifted} drifted
+          </Badge>
+        )}
+        {!isFullySynced && drifted === 0 && (
           <Badge className="gap-1.5 bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300">
             {synced}/{total_devices} devices
           </Badge>
         )}
       </div>
 
-      {(partial > 0 || not_synced > 0 || syncing > 0 || failed > 0) && (
+      {(partial > 0 || not_synced > 0 || syncing > 0 || failed > 0 || drifted > 0) && (
         <div className="grid grid-cols-2 gap-2 text-xs">
+          {drifted > 0 && (
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3 w-3 text-orange-600" />
+              <span>{drifted} drifted (needs fix)</span>
+            </div>
+          )}
+
           {partial > 0 && (
             <div className="flex items-center gap-1.5">
               <AlertTriangle className="h-3 w-3 text-amber-600" />

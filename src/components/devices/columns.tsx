@@ -2,27 +2,39 @@ import { format, parseISO } from 'date-fns'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Check, MoreHorizontal, RotateCcw, Info, RefreshCw, Send } from 'lucide-react'
+import { 
+  Check, 
+  MoreHorizontal, 
+  RotateCcw, 
+  Info, 
+  RefreshCw, 
+  Send, 
+  History,
+  Wifi,
+  WifiOff,
+  Edit
+} from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
   SelectFilterHeader,
-  TwoLineTextCell,
+  DeviceCell,
 } from '@/components/ui/table-components'
 import type { DeviceEntry } from '@/services/device-service'
 
 interface CreateDeviceColumnsProps {
   onFilterByStatus?: (status: string) => void
-  onFilterByMaster?: (isMaster: string) => void
   currentStatusFilter?: string
-  currentMasterFilter?: string
   onSetMaster?: (serialNumber: string) => void
   onDeviceCommand?: (serialNumber: string, commandType: string, commandBody: string) => void
+  onShowHistory?: (serialNumber: string) => void
+  onEdit?: (device: DeviceEntry) => void
 }
 
 // Status options for filter
@@ -31,48 +43,39 @@ const STATUS_OPTIONS = [
   { value: 'offline', label: 'Offline' },
 ]
 
-// Master filter options
-const MASTER_OPTIONS = [
-  { value: 'true', label: 'Master' },
-  { value: 'false', label: 'Not Master' },
-]
-
 export function createDeviceColumns({
   onFilterByStatus,
-  onFilterByMaster,
   currentStatusFilter,
-  currentMasterFilter,
   onSetMaster,
   onDeviceCommand,
+  onShowHistory,
+  onEdit,
 }: CreateDeviceColumnsProps): ColumnDef<DeviceEntry>[] {
   return [
     {
-      id: 'serial_number',
-      accessorKey: 'serial_number',
-      header: 'Serial Number',
-      cell: ({ row }) => (
-        <div className="font-mono font-medium">{row.getValue('serial_number')}</div>
-      ),
-    },
-    {
-      id: 'name',
-      accessorKey: 'name',
-      header: 'Device Name',
+      id: 'device',
+      header: 'Device',
       cell: ({ row }) => {
-        const name = row.getValue('name') as string | undefined
+        const device = row.original
         return (
-          <div className="font-medium">{name || <span className="text-xs italic text-muted-foreground">Unnamed</span>}</div>
+          <DeviceCell
+            name={device.name}
+            location={device.location}
+            isMaster={device.is_master}
+          />
         )
       },
     },
     {
-      id: 'location',
-      accessorKey: 'location',
-      header: 'Location',
+      id: 'serial_number',
+      accessorKey: 'serial_number',
+      header: 'Serial Number',
       cell: ({ row }) => {
-        const location = row.getValue('location') as string | undefined
+        const serialNumber = row.getValue('serial_number') as string
         return (
-          <div className="text-muted-foreground text-sm">{location || <span className="text-xs italic">-</span>}</div>
+          <code className="text-sm font-mono">
+            {serialNumber}
+          </code>
         )
       },
     },
@@ -91,10 +94,19 @@ export function createDeviceColumns({
         : 'Status',
       cell: ({ row }) => {
         const status = row.getValue('status') as string
+        const isOnline = status === 'online'
+        
         return (
-          <Badge variant={status === 'online' ? 'default' : 'secondary'}>
-            {status === 'online' ? 'Online' : 'Offline'}
-          </Badge>
+          <div className="flex justify-center">
+            <Badge className={isOnline ? 'bg-green-100 text-green-800 hover:bg-green-100 border-transparent' : 'bg-gray-100 text-gray-800 hover:bg-gray-100 border-transparent'}>
+              {isOnline ? (
+                <Wifi className="h-3 w-3 mr-1" />
+              ) : (
+                <WifiOff className="h-3 w-3 mr-1" />
+              )}
+              {isOnline ? 'Online' : 'Offline'}
+            </Badge>
+          </div>
         )
       },
     },
@@ -104,91 +116,63 @@ export function createDeviceColumns({
       header: 'Last Seen',
       cell: ({ row }) => {
         const lastSeen = row.getValue('last_seen') as string | undefined
-        const lastSeenMinutes = row.original.last_seen_minutes
 
         if (!lastSeen) {
-          return <span className="text-sm text-muted-foreground">Never</span>
+          return <span className="text-muted-foreground text-sm">-</span>
         }
 
         const timestamp = parseISO(lastSeen)
-        let timeAgo = ''
-
-        if (lastSeenMinutes !== null && lastSeenMinutes !== undefined) {
-          if (lastSeenMinutes < 1) {
-            timeAgo = 'Just now'
-          } else if (lastSeenMinutes < 60) {
-            timeAgo = `${lastSeenMinutes}m ago`
-          } else {
-            const hours = Math.floor(lastSeenMinutes / 60)
-            timeAgo = `${hours}h ago`
-          }
-        }
+        const timeStr = format(timestamp, 'MMM d, h:mm a')
 
         return (
-          <TwoLineTextCell
-            mainText={format(timestamp, 'MMM d, h:mm a')}
-            secondaryText={timeAgo}
-            mainClassName="text-sm"
-            secondaryClassName="text-xs"
-          />
-        )
-      },
-    },
-    {
-      id: 'is_master',
-      accessorKey: 'is_master',
-      header: onFilterByMaster
-        ? () => (
-          <SelectFilterHeader
-            title="Master"
-            options={MASTER_OPTIONS}
-            currentFilter={currentMasterFilter}
-            onFilterChange={onFilterByMaster}
-          />
-        )
-        : 'Master',
-      cell: ({ row }) => {
-        const isMaster = row.getValue('is_master') as boolean
-        return (
-          <div className="flex items-center gap-2">
-            {isMaster ? (
-              <Badge variant="default">Master</Badge>
-            ) : (
-              <span className="text-sm text-muted-foreground">-</span>
-            )}
-          </div>
+          <span className="text-sm text-muted-foreground">{timeStr}</span>
         )
       },
     },
     {
       id: 'actions',
-      header: 'Actions',
+      header: '',
       cell: ({ row }) => {
-        const isMaster = row.getValue('is_master') as boolean
-        const serialNumber = row.getValue('serial_number') as string
+        const isMaster = row.original.is_master
+        const serialNumber = row.original.serial_number
+        const name = row.original.name
 
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-gray-100">
                 <MoreHorizontal className="h-4 w-4" />
                 <span className="sr-only">Open menu</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {!isMaster && (
+            <DropdownMenuContent align="end" className="w-48">
+              {/* Device Info Header */}
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col space-y-1">
+                  <p className="text-sm font-medium leading-none">{name || 'Unnamed Device'}</p>
+                  <p className="text-xs text-muted-foreground">{serialNumber}</p>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              
+              {/* Master Device Section */}
+              <DropdownMenuLabel className="text-xs">Master Device</DropdownMenuLabel>
+              {!isMaster ? (
                 <DropdownMenuItem onClick={() => onSetMaster?.(serialNumber)}>
-                  <Check className="mr-2 h-4 w-4" />
+                  <Crown className="mr-2 h-4 w-4" />
                   Set as Master
                 </DropdownMenuItem>
-              )}
-              {isMaster && (
+              ) : (
                 <DropdownMenuItem disabled>
                   <Check className="mr-2 h-4 w-4" />
                   Current Master
                 </DropdownMenuItem>
               )}
+              
               <DropdownMenuSeparator />
+              
+              {/* Quick Commands Section */}
+              <DropdownMenuLabel className="text-xs">Quick Commands</DropdownMenuLabel>
               <DropdownMenuItem
                 onClick={() => onDeviceCommand?.(serialNumber, 'info', 'INFO')}
               >
@@ -207,7 +191,19 @@ export function createDeviceColumns({
                 <Send className="mr-2 h-4 w-4" />
                 Push New Logs
               </DropdownMenuItem>
+              
               <DropdownMenuSeparator />
+              
+              {/* Device Management Section */}
+              <DropdownMenuLabel className="text-xs">Management</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => onEdit?.(row.original)}>
+                <Edit className="mr-2 h-4 w-4" />
+                Edit Device
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onShowHistory?.(serialNumber)}>
+                <History className="mr-2 h-4 w-4" />
+                Command History
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDeviceCommand?.(serialNumber, 'reboot', 'REBOOT')}
                 className="text-destructive focus:text-destructive"

@@ -232,10 +232,21 @@ export function EnrollBiometricDialog({
   const biometrics = bioData?.data || []
   const syncStatus = syncData?.data || []
 
-  const onlineDevices = useMemo(
-    () => syncStatus.filter((s) => s.is_online),
+  // Filter to only registrar devices with capabilities
+  const registrarDevices = useMemo(
+    () => syncStatus.filter((s) => s.is_online && s.devices?.is_registrar),
     [syncStatus],
   )
+
+  // Get selected device capabilities
+  const selectedDevice = useMemo(
+    () => registrarDevices.find((d) => d.device_sn === deviceSn),
+    [registrarDevices, deviceSn]
+  )
+
+  const selectedDeviceCapabilities = selectedDevice?.devices?.registrar_capabilities || []
+  const supportsFingerprint = selectedDeviceCapabilities.includes('fingerprint')
+  const supportsFace = selectedDeviceCapabilities.includes('face')
 
   const hasFingerprint = biometrics.some((b) => b.type === 'fingerprint')
   const hasFace = biometrics.some((b) => b.type === 'face')
@@ -284,6 +295,18 @@ export function EnrollBiometricDialog({
       startEnrollment.reset()
     }
   }, [open])
+
+  // Auto-select supported biometric type when device changes
+  useEffect(() => {
+    if (deviceSn) {
+      if (!supportsFingerprint && supportsFace) {
+        setBiometricType('face')
+      } else if (supportsFingerprint && !supportsFace) {
+        setBiometricType('fingerprint')
+      }
+      // If both supported, keep current selection or default to fingerprint
+    }
+  }, [deviceSn, supportsFingerprint, supportsFace])
 
   if (!user) return null
 
@@ -350,37 +373,53 @@ export function EnrollBiometricDialog({
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={() => setBiometricType('fingerprint')}
+                  onClick={() => supportsFingerprint && setBiometricType('fingerprint')}
+                  disabled={!supportsFingerprint}
                   className={cn(
                     'flex items-center gap-2 rounded-lg border p-3 transition-all text-left',
                     biometricType === 'fingerprint'
                       ? 'border-primary bg-primary/5 ring-1 ring-primary'
                       : 'border-border hover:border-muted-foreground/30',
+                    !supportsFingerprint && 'opacity-50 cursor-not-allowed bg-muted',
                   )}
                 >
                   <Fingerprint className="h-5 w-5 shrink-0" />
                   <div>
                     <div className="text-sm font-medium">Fingerprint</div>
                     <div className="text-[10px] text-muted-foreground">
-                      {hasFingerprint ? 'Enrolled' : 'Not enrolled'}
+                      {!deviceSn 
+                        ? 'Select device first' 
+                        : !supportsFingerprint 
+                          ? 'Not supported'
+                          : hasFingerprint 
+                            ? 'Enrolled' 
+                            : 'Not enrolled'}
                     </div>
                   </div>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setBiometricType('face')}
+                  onClick={() => supportsFace && setBiometricType('face')}
+                  disabled={!supportsFace}
                   className={cn(
                     'flex items-center gap-2 rounded-lg border p-3 transition-all text-left',
                     biometricType === 'face'
                       ? 'border-primary bg-primary/5 ring-1 ring-primary'
                       : 'border-border hover:border-muted-foreground/30',
+                    !supportsFace && 'opacity-50 cursor-not-allowed bg-muted',
                   )}
                 >
                   <ScanFace className="h-5 w-5 shrink-0" />
                   <div>
                     <div className="text-sm font-medium">Face</div>
                     <div className="text-[10px] text-muted-foreground">
-                      {hasFace ? 'Enrolled' : 'Not enrolled'}
+                      {!deviceSn 
+                        ? 'Select device first' 
+                        : !supportsFace 
+                          ? 'Not supported'
+                          : hasFace 
+                            ? 'Enrolled' 
+                            : 'Not enrolled'}
                     </div>
                   </div>
                 </button>
@@ -442,10 +481,16 @@ export function EnrollBiometricDialog({
               {/* Device selection */}
               <div className="space-y-1.5">
                 <Label className="text-xs">Device</Label>
-                {onlineDevices.length === 0 ? (
-                  <div className="flex items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                    <WifiOff className="h-4 w-4" />
-                    No online devices available
+                {registrarDevices.length === 0 ? (
+                  <div className="flex items-start gap-2 rounded-md border border-dashed border-orange-300 bg-orange-50 p-3 text-xs">
+                    <WifiOff className="h-4 w-4 text-orange-600 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-orange-800">No registrar devices available</p>
+                      <p className="text-orange-700 mt-0.5">
+                        A device must be configured as a registrar with biometric capabilities.
+                        Go to Device Management → Edit Device to enable.
+                      </p>
+                    </div>
                   </div>
                 ) : (
                   <Select value={deviceSn} onValueChange={setDeviceSn}>
@@ -453,19 +498,48 @@ export function EnrollBiometricDialog({
                       <SelectValue placeholder="Select a device…" />
                     </SelectTrigger>
                     <SelectContent>
-                      {onlineDevices.map((s) => (
-                        <SelectItem key={s.device_sn} value={s.device_sn}>
-                          <span className="flex items-center gap-2">
-                            <Wifi className="h-3 w-3 text-green-600" />
-                            {s.devices?.name || s.device_sn}
-                            <span className="text-muted-foreground text-[10px]">
-                              {s.devices?.name ? s.device_sn : ''}
+                      {registrarDevices.map((s) => {
+                        const capabilities = s.devices?.registrar_capabilities || []
+                        return (
+                          <SelectItem key={s.device_sn} value={s.device_sn}>
+                            <span className="flex items-center gap-2">
+                              <Wifi className="h-3 w-3 text-green-600" />
+                              <span className="font-medium">{s.devices?.name || s.device_sn}</span>
+                              <span className="flex gap-1">
+                                {capabilities.includes('fingerprint') && (
+                                  <Fingerprint className="h-3 w-3 text-blue-500" />
+                                )}
+                                {capabilities.includes('face') && (
+                                  <ScanFace className="h-3 w-3 text-purple-500" />
+                                )}
+                              </span>
                             </span>
-                          </span>
-                        </SelectItem>
-                      ))}
+                          </SelectItem>
+                        )
+                      })}
                     </SelectContent>
                   </Select>
+                )}
+                {deviceSn && selectedDevice && (
+                  <div className="flex gap-1.5 text-[10px]">
+                    {selectedDeviceCapabilities.includes('fingerprint') && (
+                      <Badge variant="outline" className="h-4 px-1 text-[9px]">
+                        <Fingerprint className="h-2.5 w-2.5 mr-0.5" />
+                        Fingerprint
+                      </Badge>
+                    )}
+                    {selectedDeviceCapabilities.includes('face') && (
+                      <Badge variant="outline" className="h-4 px-1 text-[9px]">
+                        <ScanFace className="h-2.5 w-2.5 mr-0.5" />
+                        Face
+                      </Badge>
+                    )}
+                    {selectedDeviceCapabilities.includes('card') && (
+                      <Badge variant="outline" className="h-4 px-1 text-[9px]">
+                        Card
+                      </Badge>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -572,7 +646,7 @@ export function EnrollBiometricDialog({
                 </Button>
                 <Button
                   onClick={handleStartEnrollment}
-                  disabled={!deviceSn || startEnrollment.isPending || onlineDevices.length === 0}
+                  disabled={!deviceSn || startEnrollment.isPending || registrarDevices.length === 0}
                 >
                   {startEnrollment.isPending && (
                     <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />

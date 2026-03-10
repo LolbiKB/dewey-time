@@ -8,12 +8,13 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { RefreshCw, Loader2, Fingerprint, ScanFace, Wifi, WifiOff, CheckCircle2, AlertCircle, Clock, Circle, Upload, Image } from 'lucide-react'
-import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands } from '@/hooks/use-users'
+import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands, useDriftStatus } from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
 import { format } from 'date-fns'
 import { useMemo, useState } from 'react'
 import { ClearCommandsModal } from './clear-commands-modal'
 import { DeviceSyncPipeline } from './device-sync-pipeline'
+import { isSyncCommand } from '@/lib/command-types'
 
 interface SyncStatusDialogProps {
   user: UserEntry | null
@@ -23,13 +24,27 @@ interface SyncStatusDialogProps {
 
 export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogProps) {
   const { data, isLoading } = useSyncStatus(user?.id || '')
-  const { data: commandData } = useCommandQueue(user?.id || '', 20)
+  const { data: commandData } = useCommandQueue(user?.id || '', 50)
+  const { data: driftData } = useDriftStatus(user?.id || '')
   const syncUser = useSyncUser()
   const clearCommands = useClearPendingCommands()
   const [clearModalState, setClearModalState] = useState<{ deviceSn: string; deviceName: string; count: number } | null>(null)
+  
+  // Build drift map for quick lookup
+  const driftMap = useMemo(() => {
+    const map = new Map()
+    driftData?.data?.forEach(drift => {
+      map.set(drift.device_sn, drift)
+    })
+    return map
+  }, [driftData])
 
   const syncStatus = data?.data || []
-  const commands = commandData?.data || []
+  // Filter to only show sync commands (not device-level commands like reboot, info, etc.)
+  const allCommands = commandData?.data || []
+  const commands = useMemo(() => {
+    return allCommands.filter(cmd => isSyncCommand(cmd.command_type || ''))
+  }, [allCommands])
 
   // Count active (pending/sent) commands per device
   const activeCommandsByDevice = useMemo(() => {
@@ -262,6 +277,63 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                 </div>
               </div>
 
+              {/* Drift Alert */}
+              {(() => {
+                const drift = driftMap.get(status.device_sn)
+                if (!drift) return null
+                
+                const isDeviceOnline = status.is_online
+                
+                return (
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4 text-orange-600" />
+                      <span className="text-sm font-medium text-orange-800">
+                        Sync Drift Detected
+                      </span>
+                      {!isDeviceOnline && (
+                        <span className="text-xs text-orange-600 italic">
+                          (device offline - data may be stale)
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-orange-700 space-y-1">
+                      <div>
+                        Expected: {drift.expected_state} | Actual: {drift.actual_state}
+                      </div>
+                      {drift.drift_detected_at && (
+                        <div>
+                          Detected: {format(new Date(drift.drift_detected_at), 'MMM d, h:mm a')}
+                          {!isDeviceOnline && (
+                            <span className="text-orange-600 ml-1">
+                              • device offline
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {drift.error_message && (
+                        <div className="text-orange-800">
+                          {drift.error_message}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs border-orange-300 text-orange-700 hover:bg-orange-100"
+                        onClick={() => handleSyncToDevice(status.device_sn)}
+                        disabled={syncUser.isPending || deviceActiveCount > 0 || !isDeviceOnline}
+                      >
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                        Fix: Resync
+                        {!isDeviceOnline && ' (when online)'}
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })()}
+
               {/* Sync Pipeline Progress */}
               <DeviceSyncPipeline
                 deviceSn={status.device_sn}
@@ -433,18 +505,6 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Sync All button */}
-            <div className="flex justify-end">
-              <Button
-                onClick={handleSyncToAll}
-                disabled={syncStatus.length === 0 || syncUser.isPending || allDevicesBusy}
-                size="sm"
-              >
-                <RefreshCw className="h-4 w-4 mr-1.5" />
-                Sync to All Devices
-              </Button>
-            </div>
-
             {/* Device Sync Status Cards */}
             {isLoading ? (
               <div className="flex items-center justify-center py-8">
@@ -455,7 +515,20 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                 <p>No devices found. User may not be registered on any devices yet.</p>
               </div>
             ) : (
-              renderDeviceCards()
+              <>
+                {!syncUser.isPending && syncStatus.length > 0 && !allDevicesBusy && (
+                  <div className="flex justify-end">
+                    <Button
+                      onClick={handleSyncToAll}
+                      size="sm"
+                    >
+                      <RefreshCw className="h-4 w-4 mr-1.5" />
+                      Sync to All Devices
+                    </Button>
+                  </div>
+                )}
+                {renderDeviceCards()}
+              </>
             )}
           </div>
         </DialogContent>
