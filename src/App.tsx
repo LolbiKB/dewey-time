@@ -8,7 +8,8 @@ import { LoginPage } from './pages/Login'
 import { AuthProvider, useAuth } from '@/contexts/auth-context'
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
-import { LogOut, Loader2 } from 'lucide-react'
+import { LogOut, Loader2, Menu } from 'lucide-react'
+import { useState } from 'react'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -18,8 +19,7 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
 import { Separator } from '@/components/ui/separator'
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
-import { AppSidebar } from '@/components/app-sidebar'
+import { AppSidebar } from '@/components/app-sidebar-new'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +43,7 @@ function AppContent() {
   const location = useLocation()
   const pageTitle = routeTitles[location.pathname] || 'Dashboard'
   const { user, isAdmin, loading, isAdminLoading, signOut } = useAuth()
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
   // Show loading spinner while checking initial auth
   if (loading) {
@@ -85,54 +86,64 @@ function AppContent() {
   }
 
   return (
-    <div className="h-full">
-      <SidebarProvider>
-        <AppSidebar />
-        <SidebarInset className="flex flex-col overflow-hidden">
-          <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-            <div className="flex items-center justify-between gap-2 px-4 w-full">
-              <div className="flex items-center gap-2">
-                <SidebarTrigger className="-ml-1" />
-                <Separator
-                  orientation="vertical"
-                  className="mr-2 data-[orientation=vertical]:h-4"
-                />
-                <Breadcrumb>
-                  <BreadcrumbList>
-                    <BreadcrumbItem className="hidden md:block">
-                      <BreadcrumbLink asChild>
-                        <Link to="/">Dashboard</Link>
-                      </BreadcrumbLink>
+    <div className="h-screen flex overflow-hidden">
+      <AppSidebar isOpen={sidebarOpen} onToggle={() => setSidebarOpen(!sidebarOpen)} />
+      
+      <main 
+        className="flex-1 flex flex-col overflow-hidden transition-all duration-300 ease-in-out"
+        style={{ marginLeft: sidebarOpen ? '16rem' : '4rem' }}
+      >
+        <header className="flex h-16 shrink-0 items-center gap-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 sm:px-6">
+          <div className="flex items-center gap-2 flex-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+            >
+              <Menu className="h-5 w-5" />
+              <span className="sr-only">Toggle sidebar</span>
+            </Button>
+            
+            <Separator orientation="vertical" className="h-6" />
+            
+            <Breadcrumb>
+              <BreadcrumbList>
+                <BreadcrumbItem className="hidden md:block">
+                  <BreadcrumbLink asChild>
+                    <Link to="/">Dashboard</Link>
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                {location.pathname !== '/' && (
+                  <>
+                    <BreadcrumbSeparator className="hidden md:block" />
+                    <BreadcrumbItem>
+                      <BreadcrumbPage>{pageTitle}</BreadcrumbPage>
                     </BreadcrumbItem>
-                    {location.pathname !== '/' && (
-                      <>
-                        <BreadcrumbSeparator className="hidden md:block" />
-                        <BreadcrumbItem>
-                          <BreadcrumbPage>{pageTitle}</BreadcrumbPage>
-                        </BreadcrumbItem>
-                      </>
-                    )}
-                  </BreadcrumbList>
-                </Breadcrumb>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">{user?.email}</span>
-                <Button onClick={signOut} variant="ghost" size="sm">
-                  <LogOut className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </header>
-          <div className="flex flex-1 flex-col gap-4 p-4 pt-0 min-w-0 overflow-hidden">
-            <Routes>
-              <Route path="/" element={<AttendanceLogs />} />
-              <Route path="/attendance-logs" element={<AttendanceLogs />} />
-              <Route path="/devices" element={<Devices />} />
-              <Route path="/users" element={<Users />} />
-            </Routes>
+                  </>
+                )}
+              </BreadcrumbList>
+            </Breadcrumb>
           </div>
-        </SidebarInset>
-      </SidebarProvider>
+          
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground hidden sm:inline-block">{user?.email}</span>
+            <Button onClick={signOut} variant="ghost" size="sm" className="gap-2">
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </Button>
+          </div>
+        </header>
+        
+        <div className="flex-1 overflow-auto p-4 sm:p-6">
+          <Routes>
+            <Route path="/" element={<AttendanceLogs />} />
+            <Route path="/attendance-logs" element={<AttendanceLogs />} />
+            <Route path="/devices" element={<Devices />} />
+            <Route path="/users" element={<Users />} />
+          </Routes>
+        </div>
+      </main>
     </div>
   )
 }
