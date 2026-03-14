@@ -57,7 +57,6 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
   // Immediate refetch when modal opens
   useEffect(() => {
     if (open && user?.id) {
-      console.log('[SyncDialog] Modal opened, refetching...')
       refetchSyncStatus()
       refetchCommands()
     }
@@ -69,7 +68,11 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
     return allCommands.filter(cmd => isSyncCommand(cmd.command_type || ''))
   }, [allCommands])
 
-  const getItemStatus = (deviceSn: string, type: string) => {
+  const getItemStatus = (deviceSn: string, type: string, isSynced: boolean) => {
+    // If already synced according to database, return synced
+    if (isSynced) return 'synced'
+    
+    // Check for active commands
     const deviceCommands = commands.filter(cmd => 
       cmd.device_sn === deviceSn && 
       cmd.command_type?.includes(type === 'user' ? 'user' : type)
@@ -82,11 +85,12 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
     if (latestCmd?.status === 'sent') return 'syncing'
     if (latestCmd?.status === 'pending') return 'pending'
     if (latestCmd?.status === 'failed') return 'failed'
-    return 'synced'
+    
+    // Not synced and no active command = needs sync
+    return 'pending'
   }
 
   const getSyncState = (status: any, deviceSn: string) => {
-    console.log('[SyncDialog] getSyncState:', { deviceSn, status, commandsCount: commands.length })
     const items = DATA_TYPES.map(({ key, icon, label }) => {
       const hasData = key === 'user' ? true : 
         key === 'fingerprint' ? user?.has_fingerprint :
@@ -103,7 +107,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
         icon,
         label,
         hasData,
-        status: !hasData ? 'na' : (isSynced ? 'synced' : getItemStatus(deviceSn, key))
+        status: !hasData ? 'na' : getItemStatus(deviceSn, key, isSynced)
       }
     })
 
@@ -117,11 +121,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
   }
 
   const handleSyncToDevice = (deviceSn: string) => {
-    console.log('[SyncDialog] handleSyncToDevice called:', { deviceSn, userId: user?.id })
-    if (!user?.id) {
-      console.error('[SyncDialog] No user.id available')
-      return
-    }
+    if (!user?.id) return
     syncUser.mutate({ userId: user.id, deviceSns: [deviceSn] })
   }
 
