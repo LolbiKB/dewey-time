@@ -243,20 +243,6 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
               </div>
             </div>
 
-            {/* Cross-Device Sync Info */}
-            {deviceInfo.fp_algorithm_version && (
-              <div className="rounded-md bg-blue-50 p-3">
-                <p className="text-sm text-blue-900">
-                  {deviceInfo.fp_algorithm_version.startsWith('10') ? (
-                    <>Uses ZKFinger VX10.0 - templates can sync to other v10 devices.</>
-                  ) : deviceInfo.fp_algorithm_version.startsWith('13') ? (
-                    <>Uses ZKFinger VX13.0 - cross-device sync requires v13 devices only.</>
-                  ) : (
-                    <>Algorithm v{deviceInfo.fp_algorithm_version} - check compatibility.</>
-                  )}
-                </p>
-              </div>
-            )}
           </div>
         ) : (
           <div className="py-8 text-center text-muted-foreground">
