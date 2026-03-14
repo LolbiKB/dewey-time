@@ -15,8 +15,6 @@ import {
   Users,
   Monitor,
   Settings,
-  ChevronLeft,
-  ChevronRight,
   Fingerprint,
 } from "lucide-react"
 
@@ -72,22 +70,25 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
     if (isCollapsed) {
       return (
-        <TooltipProvider delayDuration={0}>
+        <TooltipProvider delayDuration={100}>
           <Tooltip>
             <TooltipTrigger asChild>
               <Link
                 to={item.href}
                 className={cn(
-                  "flex h-10 w-10 items-center justify-center rounded-lg transition-colors",
-                  "hover:bg-accent hover:text-accent-foreground",
-                  isActive && "bg-primary text-primary-foreground hover:bg-primary/90"
+                  "flex h-10 w-10 items-center justify-center rounded-lg transition-colors duration-200",
+                  !isActive && "hover:bg-accent hover:text-accent-foreground",
+                  isActive && "bg-primary text-primary-foreground shadow-sm"
                 )}
               >
                 <Icon className="h-5 w-5" />
                 <span className="sr-only">{item.title}</span>
               </Link>
             </TooltipTrigger>
-            <TooltipContent side="right" className="flex flex-col gap-1">
+            <TooltipContent 
+              side="right" 
+              className="flex flex-col gap-1"
+            >
               <span className="font-medium">{item.title}</span>
               {item.description && (
                 <span className="text-xs text-muted-foreground">{item.description}</span>
@@ -102,22 +103,45 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
       <Link
         to={item.href}
         className={cn(
-          "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all",
-          "hover:bg-accent hover:text-accent-foreground",
-          isActive && "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+          "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-300 ease-out",
+          "relative overflow-hidden",
+          !isActive && "hover:bg-accent hover:text-accent-foreground hover:translate-x-1",
+          isActive && "bg-primary text-primary-foreground shadow-md"
         )}
       >
-        <Icon className={cn("h-5 w-5 shrink-0", isActive && "text-primary-foreground")} />
-        <div className="flex flex-col gap-0.5 overflow-hidden">
-          <span className={cn("text-sm font-medium truncate", isActive && "text-primary-foreground")}>
+        {/* Animated background indicator */}
+        <div 
+          className={cn(
+            "absolute left-0 top-0 bottom-0 w-1 bg-primary-foreground transition-all duration-300",
+            isActive ? "opacity-100" : "opacity-0"
+          )} 
+        />
+        
+        <Icon 
+          className={cn(
+            "h-5 w-5 shrink-0 transition-all duration-300",
+            isActive && "text-primary-foreground scale-110"
+          )} 
+        />
+        <div className="flex flex-col gap-0.5 overflow-hidden flex-1">
+          <span 
+            className={cn(
+              "text-sm font-medium truncate transition-all duration-300",
+              isActive && "text-primary-foreground translate-x-0.5"
+            )}
+          >
             {item.title}
           </span>
           {item.description && !isActive && (
-            <span className="text-xs text-muted-foreground truncate">{item.description}</span>
+            <span className="text-xs text-muted-foreground truncate group-hover:text-accent-foreground/70 transition-colors duration-300">
+              {item.description}
+            </span>
           )}
         </div>
         {isActive && (
-          <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary-foreground" />
+          <div className="ml-auto flex items-center gap-1">
+            <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground animate-pulse" />
+          </div>
         )}
       </Link>
     )
@@ -127,82 +151,101 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     <TooltipProvider delayDuration={0}>
       <aside
         className={cn(
-          "fixed left-0 top-0 z-40 flex h-screen flex-col border-r bg-background transition-all duration-300 ease-in-out",
+          "fixed left-0 top-0 z-40 flex h-screen flex-col border-r bg-background transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
           isOpen ? "w-64" : "w-16"
         )}
       >
         {/* Header */}
         <div className={cn("flex h-16 items-center border-b px-4", !isOpen && "justify-center px-2")}>
-          {isOpen ? (
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-                <Fingerprint className="h-5 w-5" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm font-bold leading-tight">ZKTeco ADMS</span>
-                <span className="text-[10px] text-muted-foreground leading-tight">Bridge</span>
-              </div>
-            </div>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm cursor-pointer">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div 
+                className="flex items-center gap-3 cursor-pointer"
+                onClick={onToggle}
+              >
+                <div 
+                  className={cn(
+                    "flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-all duration-500 flex-shrink-0",
+                    "hover:shadow-lg hover:scale-105"
+                  )}
+                >
                   <Fingerprint className="h-5 w-5" />
                 </div>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                <span className="font-bold">ZKTeco ADMS Bridge</span>
-              </TooltipContent>
-            </Tooltip>
-          )}
+                
+                {/* Animated text container */}
+                <div 
+                  className={cn(
+                    "flex flex-col transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden",
+                    isOpen 
+                      ? "opacity-100 translate-x-0 w-auto" 
+                      : "opacity-0 -translate-x-4 w-0"
+                  )}
+                >
+                  <span className="text-sm font-bold leading-tight whitespace-nowrap">ZKTeco ADMS</span>
+                  <span className="text-[10px] text-muted-foreground leading-tight whitespace-nowrap">Bridge</span>
+                </div>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <span className="font-bold">ZKTeco ADMS Bridge</span>
+            </TooltipContent>
+          </Tooltip>
         </div>
-
-        {/* Toggle Button */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            "absolute -right-3 top-20 h-6 w-6 rounded-full border bg-background shadow-md hover:bg-accent",
-            "flex items-center justify-center"
-          )}
-          onClick={onToggle}
-        >
-          {isOpen ? (
-            <ChevronLeft className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-        </Button>
 
         {/* Navigation */}
         <div className="flex-1 overflow-y-auto py-4">
           <nav className={cn("grid gap-1 px-2", !isOpen && "justify-center")}>
             {/* Main Navigation */}
             <div className={cn("mb-4", !isOpen && "mb-2")}>
-              {isOpen && (
-                <h3 className="mb-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Main
-                </h3>
-              )}
+              <h3 
+                className={cn(
+                  "mb-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider",
+                  "transition-all duration-500 overflow-hidden whitespace-nowrap",
+                  isOpen ? "opacity-100 max-w-full" : "opacity-0 max-w-0 px-0"
+                )}
+              >
+                Main
+              </h3>
               <div className="grid gap-1">
-                {mainNavItems.map((item) => (
-                  <NavItemComponent key={item.href} item={item} isCollapsed={!isOpen} />
+                {mainNavItems.map((item, index) => (
+                  <div 
+                    key={item.href}
+                    className="animate-in fade-in slide-in-from-left-2 duration-500"
+                    style={{ animationDelay: `${index * 100}ms`, animationFillMode: 'backwards' }}
+                  >
+                    <NavItemComponent item={item} isCollapsed={!isOpen} />
+                  </div>
                 ))}
               </div>
             </div>
 
-            <Separator className={cn("my-2", !isOpen && "mx-auto w-8")} />
+            <Separator 
+              className={cn(
+                "my-2 transition-all duration-500",
+                !isOpen && "mx-auto w-8"
+              )} 
+            />
 
             {/* Management Navigation */}
             <div className={cn("mb-4", !isOpen && "mb-2")}>
-              {isOpen && (
-                <h3 className="mb-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  Management
-                </h3>
-              )}
+              <h3 
+                className={cn(
+                  "mb-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider",
+                  "transition-all duration-500 overflow-hidden whitespace-nowrap",
+                  isOpen ? "opacity-100 max-w-full" : "opacity-0 max-w-0 px-0"
+                )}
+              >
+                Management
+              </h3>
               <div className="grid gap-1">
-                {managementNavItems.map((item) => (
-                  <NavItemComponent key={item.href} item={item} isCollapsed={!isOpen} />
+                {managementNavItems.map((item, index) => (
+                  <div 
+                    key={item.href}
+                    className="animate-in fade-in slide-in-from-left-2 duration-500"
+                    style={{ animationDelay: `${(index + 2) * 100}ms`, animationFillMode: 'backwards' }}
+                  >
+                    <NavItemComponent item={item} isCollapsed={!isOpen} />
+                  </div>
                 ))}
               </div>
             </div>
@@ -210,29 +253,37 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         </div>
 
         {/* Footer */}
-        <div className={cn("border-t p-4", !isOpen && "p-2")}>
-          {isOpen ? (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">v1.0.0</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                    <Settings className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Settings</TooltipContent>
-              </Tooltip>
-            </div>
-          ) : (
+        <div className={cn("border-t p-4 overflow-hidden", !isOpen && "p-2")}>
+          <div className="flex items-center justify-between">
+            {/* Version text - animates out when collapsed */}
+            <span 
+              className={cn(
+                "text-xs text-muted-foreground transition-all duration-500 whitespace-nowrap",
+                isOpen ? "opacity-100 max-w-full" : "opacity-0 max-w-0"
+              )}
+            >
+              v1.0.0
+            </span>
+            
+            {/* Settings button */}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8 w-full">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className={cn(
+                    "h-8 w-8 transition-all duration-300 hover:rotate-45",
+                    !isOpen && "w-full"
+                  )}
+                >
                   <Settings className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="right">Settings</TooltipContent>
+              <TooltipContent side={isOpen ? "top" : "right"} className="animate-in fade-in duration-300">
+                Settings
+              </TooltipContent>
             </Tooltip>
-          )}
+          </div>
         </div>
       </aside>
     </TooltipProvider>
