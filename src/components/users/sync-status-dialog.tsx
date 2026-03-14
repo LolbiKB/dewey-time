@@ -5,14 +5,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Badge } from '@/components/ui/badge'
+
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Separator } from '@/components/ui/separator'
+
 import { 
   RefreshCw, 
   Loader2, 
@@ -27,7 +27,8 @@ import {
   ChevronDown,
   X,
   RotateCcw,
-  Server
+  Server,
+  Image
 } from 'lucide-react'
 import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands } from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
@@ -43,7 +44,7 @@ interface SyncStatusDialogProps {
 }
 
 type SyncItem = {
-  type: 'user' | 'fingerprint' | 'face'
+  type: 'user' | 'fingerprint' | 'face' | 'photo'
   label: string
   icon: React.ElementType
   hasData: boolean
@@ -105,6 +106,14 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
         hasData: user?.has_face || false,
         isSynced: status?.has_face || false,
         status: !user?.has_face ? 'na' : (status?.has_face ? 'synced' : getItemStatus(deviceSn, 'face'))
+      },
+      {
+        type: 'photo',
+        label: 'Photo',
+        icon: Image,
+        hasData: !!user?.photo_url,
+        isSynced: status?.has_photo || false,
+        status: !user?.photo_url ? 'na' : (status?.has_photo ? 'synced' : getItemStatus(deviceSn, 'photo'))
       }
     ]
   }
@@ -134,18 +143,6 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
       case 'na':
         return <span className="h-4 w-4 text-gray-300">—</span>
     }
-  }
-
-  const getStatusBadge = (status: SyncItem['status']) => {
-    const variants: Record<typeof status, { label: string; className: string }> = {
-      synced: { label: 'Synced', className: 'bg-green-100 text-green-800 border-green-200' },
-      syncing: { label: 'Syncing', className: 'bg-blue-100 text-blue-800 border-blue-200' },
-      pending: { label: 'Pending', className: 'bg-amber-100 text-amber-800 border-amber-200' },
-      failed: { label: 'Failed', className: 'bg-red-100 text-red-800 border-red-200' },
-      na: { label: 'N/A', className: 'bg-gray-100 text-gray-500 border-gray-200' }
-    }
-    const { label, className } = variants[status]
-    return <Badge variant="outline" className={cn("text-[10px] h-5 font-normal", className)}>{label}</Badge>
   }
 
   const handleSyncToDevice = (deviceSn: string) => {
@@ -190,29 +187,30 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
             </DialogDescription>
           </DialogHeader>
 
-          <div className="p-6 space-y-6">
+          <div className="p-4 space-y-4">
             {/* Global Actions */}
             {!isLoading && syncStatus.length > 0 && (
               <div className="flex justify-end">
                 <Button
                   onClick={handleSyncToAll}
                   disabled={syncUser.isPending}
-                  className="gap-2"
+                  size="sm"
+                  className="gap-1.5"
                 >
                   {syncUser.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    <RefreshCw className="h-4 w-4" />
+                    <RefreshCw className="h-3.5 w-3.5" />
                   )}
-                  Sync All Devices
+                  Sync All
                 </Button>
               </div>
             )}
 
             {/* Device Cards */}
             {isLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : syncStatus.length === 0 ? (
               <Alert>
@@ -222,7 +220,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
               </Alert>
             ) : (
               <TooltipProvider>
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {syncStatus.map((status) => {
                     const device = status.devices
                     const deviceSn = status.device_sn
@@ -238,16 +236,16 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                         hasErrors && "border-red-200",
                         progress.isComplete && !hasErrors && "border-green-200"
                       )}>
-                        <CardHeader className="pb-3">
+                        <CardHeader className="p-3 pb-2 space-y-0">
                           <div className="flex items-start justify-between">
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <div className={cn(
-                                    "p-2 rounded-full",
+                                    "p-1.5 rounded-full",
                                     isOnline ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"
                                   )}>
-                                    {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
+                                    {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
                                   </div>
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -255,11 +253,11 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                                 </TooltipContent>
                               </Tooltip>
                               <div>
-                                <CardTitle className="text-base font-medium">
+                                <CardTitle className="text-sm font-medium">
                                   {device?.name || deviceSn}
                                 </CardTitle>
                                 {device?.name && (
-                                  <p className="text-xs text-muted-foreground font-mono">
+                                  <p className="text-[10px] text-muted-foreground font-mono">
                                     {deviceSn}
                                   </p>
                                 )}
@@ -273,13 +271,13 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                                     <Button
                                       variant="ghost"
                                       size="icon"
-                                      className="h-8 w-8 text-muted-foreground"
+                                      className="h-7 w-7 text-muted-foreground"
                                       onClick={() => handleClearDevice(deviceSn, device?.name || deviceSn)}
                                     >
-                                      <X className="h-4 w-4" />
+                                      <X className="h-3.5 w-3.5" />
                                     </Button>
                                   </TooltipTrigger>
-                                  <TooltipContent>Clear pending commands</TooltipContent>
+                                  <TooltipContent>Clear pending</TooltipContent>
                                 </Tooltip>
                               )}
                               <Button
@@ -287,7 +285,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                                 size="sm"
                                 onClick={() => handleSyncToDevice(deviceSn)}
                                 disabled={syncUser.isPending || isActive}
-                                className="gap-1"
+                                className="h-7 text-xs gap-1"
                               >
                                 {isActive ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -296,16 +294,16 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                                 ) : (
                                   <RefreshCw className="h-3 w-3" />
                                 )}
-                                {isActive ? 'Syncing' : progress.isComplete ? 'Re-sync' : 'Sync'}
+                                {isActive ? '...' : progress.isComplete ? 'Again' : 'Sync'}
                               </Button>
                             </div>
                           </div>
 
-                          {/* Progress */}
-                          <div className="pt-2 space-y-2">
-                            <div className="flex items-center justify-between text-sm">
+                          {/* Compact Progress */}
+                          <div className="pt-1.5">
+                            <div className="flex items-center justify-between text-xs mb-1">
                               <span className="text-muted-foreground">
-                                {progress.synced} of {progress.total} synced
+                                {progress.synced}/{progress.total} synced
                               </span>
                               <span className={cn(
                                 "font-medium",
@@ -317,7 +315,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                             <Progress 
                               value={progress.percent} 
                               className={cn(
-                                "h-2",
+                                "h-1.5",
                                 progress.isComplete && "bg-green-100 [&>div]:bg-green-600",
                                 hasErrors && "bg-red-100 [&>div]:bg-red-600"
                               )}
@@ -325,39 +323,48 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                           </div>
                         </CardHeader>
 
-                        <Separator />
-
-                        <CardContent className="pt-4 pb-4">
+                        <CardContent className="px-3 py-2">
                           <Collapsible>
                             <CollapsibleTrigger asChild>
-                              <Button variant="ghost" className="w-full justify-between p-0 h-auto font-normal hover:bg-transparent">
-                                <span className="text-sm text-muted-foreground">View details</span>
-                                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform data-[state=open]:rotate-180" />
+                              <Button variant="ghost" className="w-full justify-between p-0 h-6 font-normal hover:bg-transparent text-xs text-muted-foreground">
+                                <span>Details</span>
+                                <ChevronDown className="h-3.5 w-3.5 transition-transform data-[state=open]:rotate-180" />
                               </Button>
                             </CollapsibleTrigger>
-                            <CollapsibleContent className="pt-4 space-y-2">
+                            <CollapsibleContent className="pt-2 space-y-1.5">
                               {items.map((item) => {
                                 const Icon = item.icon
                                 return (
                                   <div
                                     key={item.type}
                                     className={cn(
-                                      "flex items-center justify-between p-3 rounded-lg border",
+                                      "flex items-center justify-between px-2.5 py-1.5 rounded-md border text-xs",
                                       item.status === 'synced' && "bg-green-50/50 border-green-100",
                                       item.status === 'syncing' && "bg-blue-50/50 border-blue-100",
                                       item.status === 'pending' && "bg-amber-50/50 border-amber-100",
                                       item.status === 'failed' && "bg-red-50/50 border-red-100",
-                                      item.status === 'na' && "bg-gray-50 border-gray-100"
+                                      item.status === 'na' && "bg-gray-50 border-gray-100 opacity-60"
                                     )}
                                   >
-                                    <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2">
                                       {getStatusIcon(item.status)}
-                                      <div className="flex items-center gap-2">
-                                        <Icon className="h-4 w-4 text-muted-foreground" />
-                                        <span className="text-sm font-medium">{item.label}</span>
-                                      </div>
+                                      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                                      <span className="font-medium">{item.label}</span>
                                     </div>
-                                    {getStatusBadge(item.status)}
+                                    <span className={cn(
+                                      "text-[10px]",
+                                      item.status === 'synced' && "text-green-700",
+                                      item.status === 'syncing' && "text-blue-700",
+                                      item.status === 'pending' && "text-amber-700",
+                                      item.status === 'failed' && "text-red-700",
+                                      item.status === 'na' && "text-gray-500"
+                                    )}>
+                                      {item.status === 'synced' && 'Done'}
+                                      {item.status === 'syncing' && 'Syncing'}
+                                      {item.status === 'pending' && 'Pending'}
+                                      {item.status === 'failed' && 'Failed'}
+                                      {item.status === 'na' && '—'}
+                                    </span>
                                   </div>
                                 )
                               })}
