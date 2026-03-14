@@ -89,13 +89,13 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         to={item.href}
         className={cn(
           "flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-200",
-          "relative",
+          "relative overflow-hidden",
           !isActive && "hover:bg-accent hover:text-accent-foreground",
           isActive && "bg-primary text-primary-foreground shadow-sm"
         )}
       >
         {isActive && (
-          <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary-foreground rounded-l" />
+          <div className="absolute -left-0 top-0 bottom-0 w-1 bg-primary-foreground" />
         )}
         
         <Icon 
@@ -131,33 +131,47 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
       >
         {/* Header */}
         <div className={cn("flex h-16 items-center border-b px-4", !isOpen && "justify-center px-2")}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div 
-                className="flex items-center gap-3 cursor-pointer"
-                onClick={onToggle}
-              >
+          {!isOpen ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <div 
-                  className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm flex-shrink-0",
-                    "hover:shadow-lg hover:scale-105 transition-all duration-300"
-                  )}
+                  className="flex items-center gap-3 cursor-pointer"
+                  onClick={onToggle}
                 >
-                  <Fingerprint className="h-5 w-5" />
-                </div>
-                
-                {isOpen && (
-                  <div className="flex flex-col">
-                    <span className="text-sm font-bold leading-tight whitespace-nowrap">ZKTeco ADMS</span>
-                    <span className="text-[10px] text-muted-foreground leading-tight whitespace-nowrap">Bridge</span>
+                  <div 
+                    className={cn(
+                      "flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm flex-shrink-0",
+                      "hover:shadow-lg hover:scale-105 transition-all duration-300"
+                    )}
+                  >
+                    <Fingerprint className="h-5 w-5" />
                   </div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                <span className="font-bold">ZKTeco ADMS Bridge</span>
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <div 
+              className="flex items-center gap-3 cursor-pointer"
+              onClick={onToggle}
+            >
+              <div 
+                className={cn(
+                  "flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm flex-shrink-0",
+                  "hover:shadow-lg hover:scale-105 transition-all duration-300"
                 )}
+              >
+                <Fingerprint className="h-5 w-5" />
               </div>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              <span className="font-bold">ZKTeco ADMS Bridge</span>
-            </TooltipContent>
-          </Tooltip>
+              
+              <div className="flex flex-col">
+                <span className="text-sm font-bold leading-tight whitespace-nowrap">ZKTeco ADMS</span>
+                <span className="text-[10px] text-muted-foreground leading-tight whitespace-nowrap">Bridge</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Navigation */}
