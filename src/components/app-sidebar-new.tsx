@@ -103,44 +103,41 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
       <Link
         to={item.href}
         className={cn(
-          "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-300 ease-out",
+          "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-200",
           "relative overflow-hidden",
-          !isActive && "hover:bg-accent hover:text-accent-foreground hover:translate-x-1",
-          isActive && "bg-primary text-primary-foreground shadow-md"
+          !isActive && "hover:bg-accent hover:text-accent-foreground",
+          isActive && "bg-primary text-primary-foreground shadow-sm"
         )}
       >
-        {/* Animated background indicator */}
-        <div 
-          className={cn(
-            "absolute left-0 top-0 bottom-0 w-1 bg-primary-foreground transition-all duration-300",
-            isActive ? "opacity-100" : "opacity-0"
-          )} 
-        />
+        {/* Active indicator bar */}
+        {isActive && (
+          <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary-foreground" />
+        )}
         
         <Icon 
           className={cn(
-            "h-5 w-5 shrink-0 transition-all duration-300",
-            isActive && "text-primary-foreground scale-110"
+            "h-5 w-5 shrink-0",
+            isActive && "text-primary-foreground"
           )} 
         />
         <div className="flex flex-col gap-0.5 overflow-hidden flex-1">
           <span 
             className={cn(
-              "text-sm font-medium truncate transition-all duration-300",
-              isActive && "text-primary-foreground translate-x-0.5"
+              "text-sm font-medium truncate",
+              isActive && "text-primary-foreground"
             )}
           >
             {item.title}
           </span>
           {item.description && !isActive && (
-            <span className="text-xs text-muted-foreground truncate group-hover:text-accent-foreground/70 transition-colors duration-300">
+            <span className="text-xs text-muted-foreground truncate group-hover:text-accent-foreground/70">
               {item.description}
             </span>
           )}
         </div>
         {isActive && (
           <div className="ml-auto flex items-center gap-1">
-            <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground animate-pulse" />
+            <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
           </div>
         )}
       </Link>
