@@ -1,7 +1,7 @@
 import type { ColumnDef } from '@tanstack/react-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { MoreHorizontal, Fingerprint, ScanFace, RefreshCw, CircleDot } from 'lucide-react'
+import { MoreHorizontal, Fingerprint, ScanFace, RefreshCw, CircleDot, Image } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +23,7 @@ export const columns: ColumnDef<UserEntry>[] = [
       return (
         <UserCell
           photoUrl={user.photo_url}
+          hasCachedPhoto={!!user.photo_storage_path}
           name={user.name || 'Unknown'}
           secondaryText={user.frappe_employee_id}
           avatarSize="sm"
@@ -46,9 +47,16 @@ export const columns: ColumnDef<UserEntry>[] = [
     accessorKey: 'status',
     header: 'Status',
     cell: ({ row }) => {
-      const status = row.getValue('status') as 'active' | 'inactive' | 'compromised' | 'archived' | null | undefined
+      const user = row.original
+      
+      // Unregistered users don't have ADMS status
+      if (!user.is_registered) {
+        return <span className="text-xs text-muted-foreground">-</span>
+      }
+      
+      const status = user.status as 'active' | 'inactive' | 'compromised' | 'archived' | null | undefined
 
-      if (!status) return <span className="text-xs italic text-muted-foreground">-</span>
+      if (!status) return <span className="text-xs text-muted-foreground">-</span>
 
       const statusConfig = {
         active: { label: 'Active', className: 'bg-green-100 text-green-800 hover:bg-green-100' },
@@ -170,6 +178,10 @@ export const columns: ColumnDef<UserEntry>[] = [
                 <DropdownMenuItem onClick={() => meta?.onEnrollBiometric?.(user)}>
                   <Fingerprint className="mr-2 h-4 w-4" />
                   Enroll Biometric
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => meta?.onRefreshPhoto?.(user)}>
+                  <Image className="mr-2 h-4 w-4" />
+                  Refresh Photo Cache
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => meta?.onChangeStatus?.(user)}>

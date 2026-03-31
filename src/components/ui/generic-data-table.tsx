@@ -357,7 +357,7 @@ export function GenericDataTable<TData, TFilters extends BaseFilters>({
             <div className="flex items-center space-x-6 lg:space-x-8">
               <div className="flex items-center space-x-2">
                 <p className="text-sm font-medium">
-                  Page {filters.page || 1} of {meta?.totalPages || 1}
+                  {loading || !meta ? 'Loading...' : `Page ${meta.page} of ${meta.totalPages}`}
                 </p>
               </div>
               <div className="flex items-center space-x-2">

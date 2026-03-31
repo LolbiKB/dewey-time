@@ -68,7 +68,7 @@ export function createAttendanceLogColumns({
         const user = row.original.users
         return (
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
+            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
               <KeyRound className="h-4 w-4 text-primary" />
             </div>
             <div className="flex flex-col">
@@ -107,7 +107,7 @@ export function createAttendanceLogColumns({
           : deviceName
         return (
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
+            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
               <Monitor className="h-4 w-4 text-primary" />
             </div>
             <div className="flex flex-col">

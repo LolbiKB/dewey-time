@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Home, Clock, Users, ChevronRight, Fingerprint } from "lucide-react"
+import { Home, CalendarCheck, Users, ChevronRight, Fingerprint } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
 import {
@@ -38,7 +38,7 @@ const menuItems = [
   {
     title: "Attendance",
     url: "#",
-    icon: Clock,
+    icon: CalendarCheck,
     items: [
       {
         title: "Attendance Logs",
@@ -68,42 +68,33 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   // Determine which section should be open based on current route
   const getDefaultOpen = (items: typeof menuItems[0]['items']) => {
-    return items.some(item => location.pathname === item.url || (item.url === '/' && location.pathname === '/attendance-logs'))
+    return items.some(item => location.pathname === item.url)
   }
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem className="h-auto min-h-[2rem]">
-            <a href="/" className="flex items-center justify-center">
-              {/* Square logo for collapsed state */}
-              <div className="aspect-square size-8 items-center justify-center overflow-hidden group-data-[collapsible=icon]:group-data-[state=collapsed]:flex hidden">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-all duration-300 hover:scale-110">
-                  <Fingerprint className="size-4" />
-                </div>
-              </div>
-
-              {/* Full logo for expanded state */}
-              <div className="flex flex-col items-center justify-center w-full m-2 transition-all duration-500 ease-out group-data-[collapsible=icon]:group-data-[state=collapsed]:hidden group-data-[collapsible=icon]:group-data-[state=collapsed]:opacity-0 group-data-[collapsible=icon]:group-data-[state=collapsed]:translate-x-4">
-                <div className="flex items-center gap-2">
-                  <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-all duration-300 hover:scale-110">
-                    <Fingerprint className="size-4" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-bold">ZKTeco ADMS</span>
-                    <span className="text-xs text-muted-foreground">Bridge System</span>
-                  </div>
-                </div>
-              </div>
-            </a>
-          </SidebarMenuItem>
-        </SidebarMenu>
+      <SidebarHeader className="p-2">
+        <a href="/" className="flex items-center justify-center h-10 relative">
+          {/* Collapsed: just icon - fades out when expanded */}
+          <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground absolute transition-all duration-200 ease-out group-data-[state=expanded]:opacity-0 group-data-[state=expanded]:scale-75">
+            <Fingerprint className="size-4" />
+          </div>
+          {/* Expanded: full logo - fades in when expanded */}
+          <div className="flex items-center gap-2 absolute transition-all duration-200 ease-out opacity-0 scale-75 group-data-[state=expanded]:opacity-100 group-data-[state=expanded]:scale-100">
+            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Fingerprint className="size-4" />
+            </div>
+            <div className="flex flex-col overflow-hidden">
+              <span className="text-sm font-bold whitespace-nowrap">ZKTeco ADMS</span>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">Bridge System</span>
+            </div>
+          </div>
+        </a>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel className="transition-opacity duration-300 group-data-[collapsible=icon]:opacity-0">Platform</SidebarGroupLabel>
+          <SidebarGroupLabel>Platform</SidebarGroupLabel>
           <SidebarMenu>
             {menuItems.map((item) => (
               <Collapsible
@@ -114,23 +105,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               >
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
-                    <SidebarMenuButton tooltip={item.title} className="transition-all duration-200">
-                      {item.icon && <item.icon className="transition-transform duration-200" />}
-                      <span className="truncate transition-opacity duration-200">{item.title}</span>
-                      <ChevronRight className="ml-auto shrink-0 transition-all duration-300 ease-out group-data-[state=open]/collapsible:rotate-90 group-data-[collapsible=icon]:w-0 group-data-[collapsible=icon]:opacity-0" />
+                    <SidebarMenuButton tooltip={item.title}>
+                      {item.icon && <item.icon />}
+                      <span className="min-w-0 flex-1">{item.title}</span>
+                      <ChevronRight className="ml-auto shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90 group-data-[collapsible=icon]:hidden" />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="transition-all data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-                    <SidebarMenuSub>
+                  <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-none">
+                    <SidebarMenuSub className="border-l-0 px-0">
                       {item.items?.map((subItem) => (
                         <SidebarMenuSubItem key={subItem.title}>
-                          <SidebarMenuSubButton 
-                            asChild 
-                            isActive={location.pathname === subItem.url || (subItem.url === '/' && location.pathname === '/attendance-logs')}
-                            className="transition-all duration-200"
-                          >
-                            <Link to={subItem.url}>
-                              <span>{subItem.title}</span>
+                          <SidebarMenuSubButton asChild isActive={location.pathname === subItem.url}>
+                            <Link to={subItem.url} className="min-w-0">
+                              <span className="min-w-0">{subItem.title}</span>
                             </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
@@ -148,7 +135,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
-              <span className="transition-all duration-300 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:w-0 group-data-[collapsible=icon]:overflow-hidden">
+              <span className="group-data-[collapsible=icon]:hidden">
                 v1.0.0
               </span>
             </div>

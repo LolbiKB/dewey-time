@@ -6,8 +6,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { toast } from 'sonner'
 import { 
   RefreshCw, 
   Loader2, 
@@ -20,36 +20,62 @@ import {
   AlertCircle, 
   Clock,
   Image,
-  X
+  X,
+  ArrowRight
 } from 'lucide-react'
 import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands } from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
-import { useMemo, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { ClearCommandsModal } from './clear-commands-modal'
-import { isSyncCommand } from '@/lib/command-types'
 import { cn } from '@/lib/utils'
 
 interface SyncStatusDialogProps {
   user: UserEntry | null
+  userId: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-// All possible sync items (some may not apply to all users)
+// All possible sync items in order (first to last in sync sequence)
 const ALL_DATA_TYPES = [
-  { key: 'user', icon: User, label: 'User' },
-  { key: 'fingerprint', icon: Fingerprint, label: 'FP' },
-  { key: 'face', icon: ScanFace, label: 'Face' },
-  { key: 'photo', icon: Image, label: 'Photo' },
+  { key: 'user', icon: User, label: 'User', commandType: 'sync_user' },
+  { key: 'fingerprint', icon: Fingerprint, label: 'FP', commandType: 'enroll_fingerprint' },
+  { key: 'face', icon: ScanFace, label: 'Face', commandType: 'enroll_face' },
+  { key: 'photo', icon: Image, label: 'Photo', commandType: 'upload_photo' },
 ] as const
 
-export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogProps) {
-  // Use more aggressive polling when modal is open (3s for sync, 1s for commands)
-  const { data, isLoading, refetch: refetchSyncStatus } = useSyncStatus(user?.id || '', {
-    refetchInterval: open ? 3000 : 10000, // 3s when open, 10s when closed
+type ItemStatus = 'pending' | 'syncing' | 'synced' | 'failed'
+
+// Get status from per-item sync flags (from database)
+function getItemStatusFromFlags(status: any, key: string, hasPendingCommands: boolean): ItemStatus {
+  const fieldMap: Record<string, string> = {
+    user: 'user_synced',
+    fingerprint: 'fingerprint_synced',
+    face: 'face_synced',
+    photo: 'photo_synced',
+  }
+  
+  const field = fieldMap[key]
+  if (!field) return 'pending'
+  
+  const isSynced = status[field]
+  
+  if (isSynced) return 'synced'
+  
+  // Check if there are pending commands - shows syncing
+  if (hasPendingCommands) return 'syncing'
+  
+  return 'pending'
+}
+
+export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatusDialogProps) {
+  // Use more aggressive polling when modal is open (3s for sync)
+  const refetchInterval = open ? 3000 : undefined
+  const { data, isLoading, refetch: refetchSyncStatus } = useSyncStatus(userId, {
+    refetchInterval,
   })
-  const { data: commandData, refetch: refetchCommands } = useCommandQueue(user?.id || '', 50, {
-    refetchInterval: open ? 1000 : 3000, // 1s when open, 3s when closed
+  const { data: commandData } = useCommandQueue(userId, 50, {
+    refetchInterval,
   })
   const syncUser = useSyncUser()
   const clearCommands = useClearPendingCommands()
@@ -57,123 +83,91 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
 
   // Immediate refetch when modal opens
   useEffect(() => {
-    if (open && user?.id) {
+    if (userId && open) {
       refetchSyncStatus()
-      refetchCommands()
     }
-  }, [open, user?.id, refetchSyncStatus, refetchCommands])
+  }, [open, userId])
   
   const syncStatus = data?.data || []
-  const allCommands = commandData?.data || []
-  const commands = useMemo(() => {
-    return allCommands.filter(cmd => isSyncCommand(cmd.command_type || ''))
-  }, [allCommands])
+  const commands = commandData?.data || []
 
-  const getItemStatus = (deviceSn: string, type: string, isSynced: boolean) => {
-    // If already synced according to database, return synced
-    if (isSynced) return 'synced'
-    
-    // Check for active commands
-    const deviceCommands = commands.filter(cmd => 
-      cmd.device_sn === deviceSn && 
-      cmd.command_type?.includes(type === 'user' ? 'user' : type)
+  const getDeviceState = (status: any, _deviceSn: string) => {
+    // Check if there are any pending commands for this device
+    const deviceCommands = commands.filter(cmd => cmd.device_sn === status.device_sn)
+    const hasPendingCommands = deviceCommands.some(cmd => 
+      cmd.status === 'pending' || cmd.status === 'sent'
     )
     
-    const latestCmd = deviceCommands.sort((a, b) => 
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )[0]
-
-    if (latestCmd?.status === 'sent') return 'syncing'
-    if (latestCmd?.status === 'pending') return 'pending'
-    if (latestCmd?.status === 'failed') return 'failed'
+    // Use per-item sync status from database (much more stable)
+    const availableItems = ALL_DATA_TYPES.filter(({ key }) => {
+      if (key === 'user') return true
+      if (key === 'fingerprint') return status.has_fingerprint_in_db
+      if (key === 'face') return status.has_face_in_db
+      if (key === 'photo') return status.has_photo_in_db
+      return true
+    })
     
-    // Not synced and no active command = needs sync
-    return 'pending'
-  }
-
-  const getSyncState = (status: any, deviceSn: string) => {
-    // Check for active commands (pending/sent) for each data type
-    const hasActiveCommandsForType = (type: string) => {
-      return commands.some(cmd => 
-        cmd.device_sn === deviceSn && 
-        cmd.command_type?.includes(type === 'user' ? 'user' : type) &&
-        (cmd.status === 'pending' || cmd.status === 'sent')
-      )
-    }
-    
-    // Determine which items to show:
-    // - User: Always show (reliable sync)
-    // - FP/Face: Show if user has them (we can detect sync status reliably)
-    // - Photo: ONLY show if there are ACTIVE commands (photo sync not robust, don't show stuck state)
-    const items = ALL_DATA_TYPES.map(({ key, icon, label }) => {
-      const userHasData = key === 'user' ? true : 
-        key === 'fingerprint' ? user?.has_fingerprint :
-        key === 'face' ? user?.has_face :
-        !!user?.photo_url
-      
-      const hasActiveCommands = hasActiveCommandsForType(key)
-      
-      // Photo: Only show if there are active commands (not just because user has photo)
-      if (key === 'photo' && !hasActiveCommands) {
-        return null
-      }
-      
-      // FP/Face: Show if user has them (can detect sync status from DB)
-      if ((key === 'fingerprint' || key === 'face') && !userHasData) {
-        return null
-      }
-      
-      // User: Always show
-      const shouldShow = key === 'user' || userHasData || hasActiveCommands
-      
-      if (!shouldShow) return null
-      
-      const isSynced = key === 'user' ? status?.has_user :
-        key === 'fingerprint' ? status?.has_fingerprint :
-        key === 'face' ? status?.has_face :
-        status?.has_photo
+    const items = availableItems.map(({ key, icon, label }) => {
+      const itemStatus = getItemStatusFromFlags(status, key, hasPendingCommands)
       
       return {
         key,
         icon,
         label,
-        hasData: userHasData,
-        status: getItemStatus(deviceSn, key, isSynced)
+        status: itemStatus,
       }
-    }).filter((item): item is NonNullable<typeof item> => item !== null)
+    })
 
-    const relevant = items.filter(i => i.hasData)
-    const synced = relevant.filter(i => i.status === 'synced').length
-    const hasErrors = relevant.some(i => i.status === 'failed')
-    const isActive = relevant.some(i => i.status === 'syncing' || i.status === 'pending')
-    const percent = relevant.length > 0 ? Math.round((synced / relevant.length) * 100) : 0
+    // Determine overall device state
+    const hasFailed = items.some(i => i.status === 'failed')
+    const isActive = items.some(i => i.status === 'syncing')
+    // Device is synced if ALL items are synced
+    const allSynced = items.length > 0 && items.every(i => i.status === 'synced')
 
-    return { items, synced, total: relevant.length, percent, hasErrors, isActive }
+    return { 
+      items, 
+      hasFailed,
+      isActive,
+      allSynced,
+      lastSyncedAt: status?.last_synced_at
+    }
   }
 
   const handleSyncToDevice = (deviceSn: string) => {
-    if (!user?.id) return
-    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn] })
+    console.log('[handleSyncToDevice] user:', user, 'deviceSn:', deviceSn)
+    if (!user?.id) {
+      console.log('[handleSyncToDevice] No user.id, returning')
+      return
+    }
+    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn], photoUrl: user.photo_url || undefined })
   }
 
   const handleSyncToAll = () => {
+    console.log('[handleSyncToAll] user:', user, 'syncStatus:', syncStatus)
     if (!user?.id || syncStatus.length === 0) return
     const deviceSns = syncStatus.map(s => s.device_sn)
-    syncUser.mutate({ userId: user.id, deviceSns })
+    syncUser.mutate({ userId: user.id, deviceSns, photoUrl: user.photo_url || undefined })
   }
 
   const handleClearDevice = (deviceSn: string, deviceName: string) => {
-    const deviceCommands = commands.filter(cmd => cmd.device_sn === deviceSn)
-    const count = deviceCommands.length
-    if (count === 0) return
-    setClearModalState({ deviceSn, deviceName, count })
+    // Show clear modal - for now use a placeholder count
+    // Could be enhanced to show actual pending command count
+    setClearModalState({ deviceSn, deviceName, count: 1 })
   }
 
   const handleConfirmClear = () => {
     if (!clearModalState || !user?.id) return
     clearCommands.mutate(
       { deviceSn: clearModalState.deviceSn, userId: user.id },
-      { onSuccess: () => setClearModalState(null) }
+      { 
+        onSuccess: (data) => {
+          setClearModalState(null)
+          toast.success(`${data.cleared} commands cleared`)
+        },
+        onError: (error) => {
+          toast.error(`Failed to clear: ${error.message}`)
+        }
+      }
     )
   }
 
@@ -205,7 +199,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                   {syncStatus.map((status) => {
                     const device = status.devices
                     const deviceSn = status.device_sn
-                    const state = getSyncState(status, deviceSn)
+                    const state = getDeviceState(status, deviceSn)
                     const isOnline = status.is_online
                     
                     return (
@@ -213,8 +207,8 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                         key={status.id} 
                         className={cn(
                           "rounded-lg border p-2.5",
-                          state.hasErrors && "border-red-200 bg-red-50/30",
-                          state.percent === 100 && !state.hasErrors && "border-green-200 bg-green-50/30"
+                          state.hasFailed && "border-red-200 bg-red-50/30",
+                          state.allSynced && !state.hasFailed && "border-green-200 bg-green-50/30"
                         )}
                       >
                         {/* Header Row */}
@@ -260,7 +254,7 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                             >
                               {state.isActive ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : state.percent === 100 ? (
+                              ) : state.allSynced ? (
                                 <RefreshCw className="h-3 w-3" />
                               ) : (
                                 'Sync'
@@ -269,50 +263,33 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                           </div>
                         </div>
 
-                        {/* Progress */}
-                        <div className="flex items-center gap-2 mb-2">
-                          <Progress 
-                            value={state.percent} 
-                            className={cn(
-                              "h-1.5 flex-1",
-                              state.percent === 100 && !state.hasErrors && "bg-green-100 [&>div]:bg-green-500",
-                              state.hasErrors && "bg-red-100 [&>div]:bg-red-500"
-                            )}
-                          />
-                          <span className={cn(
-                            "text-xs font-medium w-8 text-right shrink-0",
-                            state.percent === 100 ? "text-green-600" : "text-muted-foreground"
-                          )}>
-                            {state.percent}%
-                          </span>
-                        </div>
+                        {/* Last synced timestamp */}
+                        {state.lastSyncedAt && (
+                          <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-2">
+                            <Clock className="h-2.5 w-2.5" />
+                            <span>Last sync: {new Date(state.lastSyncedAt).toLocaleString()}</span>
+                          </div>
+                        )}
 
-                        {/* Items Grid */}
-                        <div className="grid grid-cols-4 gap-1">
-                          {state.items.map(({ key, icon: Icon, label, status }) => {
-                            if (status === 'na') return (
-                              <div key={key} className="flex flex-col items-center gap-0.5 p-1 rounded opacity-40">
-                                <Icon className="h-3.5 w-3.5 text-gray-400" />
-                                <span className="text-[9px] text-gray-400">{label}</span>
-                              </div>
-                            )
-                            
+                        {/* Items Horizontal with Arrows */}
+                        <div className="flex items-center gap-1 overflow-x-auto pb-1">
+                          {state.items.map(({ key, label, status }) => {
                             return (
                               <Tooltip key={key}>
                                 <TooltipTrigger asChild>
                                   <div className={cn(
-                                    "flex flex-col items-center gap-0.5 p-1 rounded cursor-default",
+                                    "flex flex-col items-center gap-0.5 p-1.5 rounded cursor-default min-w-[48px]",
                                     status === 'synced' && "bg-green-100/50",
                                     status === 'syncing' && "bg-blue-100/50",
                                     status === 'pending' && "bg-amber-100/50",
                                     status === 'failed' && "bg-red-100/50"
                                   )}>
-                                    {status === 'synced' && <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />}
-                                    {status === 'syncing' && <Loader2 className="h-3.5 w-3.5 text-blue-600 animate-spin" />}
-                                    {status === 'pending' && <Clock className="h-3.5 w-3.5 text-amber-600" />}
-                                    {status === 'failed' && <AlertCircle className="h-3.5 w-3.5 text-red-600" />}
+                                    {status === 'synced' && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+                                    {status === 'syncing' && <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />}
+                                    {status === 'pending' && <Clock className="h-4 w-4 text-amber-600" />}
+                                    {status === 'failed' && <AlertCircle className="h-4 w-4 text-red-600" />}
                                     <span className={cn(
-                                      "text-[9px] font-medium",
+                                      "text-[10px] font-medium",
                                       status === 'synced' && "text-green-700",
                                       status === 'syncing' && "text-blue-700",
                                       status === 'pending' && "text-amber-700",
@@ -327,7 +304,11 @@ export function SyncStatusDialog({ user, open, onOpenChange }: SyncStatusDialogP
                                 </TooltipContent>
                               </Tooltip>
                             )
-                          })}
+                          }).flatMap((el, idx, arr) => 
+                            idx < arr.length - 1 
+                              ? [el, <ArrowRight key={`arrow-${idx}`} className="h-3 w-3 text-muted-foreground shrink-0" />]
+                              : [el]
+                          )}
                         </div>
                       </div>
                     )

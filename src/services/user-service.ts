@@ -13,6 +13,7 @@ export interface UserFilters {
   search?: string
   frappe_employee_id?: string
   status?: 'active' | 'inactive' | 'compromised' | 'archived'
+  registration_status?: 'registered' | 'unregistered' | 'inactive'
   has_fingerprint?: boolean
   has_face?: boolean
 }
@@ -25,6 +26,7 @@ export interface UserEntry {
   frappe_employee_id?: string
   card_number?: string | null
   photo_url?: string
+  photo_storage_path?: string | null
   privilege: number | null
   status?: 'active' | 'inactive' | 'compromised' | 'archived'
   notes?: string
@@ -49,6 +51,20 @@ export interface SyncStatusEntry {
   has_face: boolean
   has_photo: boolean
   has_card: boolean
+  // Whether user has data available in DB
+  has_fingerprint_in_db?: boolean
+  has_face_in_db?: boolean
+  has_photo_in_db?: boolean
+  // New per-item sync status
+  user_synced: boolean
+  fingerprint_synced: boolean
+  face_synced: boolean
+  photo_synced: boolean
+  // Timestamps for each item
+  user_synced_at?: string | null
+  fingerprint_synced_at?: string | null
+  face_synced_at?: string | null
+  photo_synced_at?: string | null
   last_synced_at?: string
   is_online?: boolean
   devices?: {
@@ -289,13 +305,17 @@ export class UserService {
     deviceSns: string[],
   ): Promise<{ parentCommands: Record<string, number> }> {
     const headers = await this.getAuthHeaders()
+    console.log('[UserService.syncUserToDevices] Calling API:', `${API_BASE_URL}/api-users/${userId}/sync`, { device_sns: deviceSns })
     const response = await fetch(`${API_BASE_URL}/api-users/${userId}/sync`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ device_sns: deviceSns }),
     })
+    console.log('[UserService.syncUserToDevices] Response:', response.status, response.statusText)
 
     if (!response.ok) {
+      const text = await response.text()
+      console.log('[UserService.syncUserToDevices] Error response:', text)
       throw new Error('Failed to sync user')
     }
 
@@ -312,13 +332,17 @@ export class UserService {
     parentCommands: Record<string, number>,
   ): Promise<void> {
     const headers = await this.getAuthHeaders()
+    console.log('[UserService.enrichUserDevices] Calling API:', `${API_BASE_URL}/api-users/${userId}/enrich`)
     const response = await fetch(`${API_BASE_URL}/api-users/${userId}/enrich`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ device_sns: deviceSns, parent_commands: parentCommands }),
     })
+    console.log('[UserService.enrichUserDevices] Response:', response.status, response.statusText)
 
     if (!response.ok) {
+      const text = await response.text()
+      console.log('[UserService.enrichUserDevices] Error response:', text)
       throw new Error('Failed to enrich sync')
     }
   }
@@ -391,6 +415,8 @@ export class UserService {
     if (filters.page) params.append('page', filters.page.toString())
     if (filters.limit) params.append('limit', filters.limit.toString())
     if (filters.search) params.append('search', filters.search)
+    if (filters.registration_status) params.append('registration_status', filters.registration_status)
+    if (filters.status) params.append('status', filters.status)
     
     const headers = await this.getAuthHeaders()
     const response = await fetch(`${API_BASE_URL}/api-frappe-employees?${params}`, {
@@ -481,10 +507,11 @@ export class UserService {
       (pendingRes.data || []).map(cmd => cmd.device_sn)
     )
 
-    // Build drift map from user_device_sync_status
+    // Build drift map - only count as drifted if there are failed commands
+    // Not just "haven't synced yet" (expected != actual before first sync is normal)
     const driftMap = new Map(
       (syncRes.data || [])
-        .filter(d => d.expected_state !== d.actual_state)
+        .filter(d => d.expected_state === 'synced' && d.actual_state === 'not_synced' && failedDevices.has(d.device_sn))
         .map(d => [d.device_sn, d])
     )
 
@@ -498,7 +525,8 @@ export class UserService {
     for (const device of devicesRes.data || []) {
       const sn = device.serial_number
       const sync = syncMap.get(sn)
-      const hasDrift = driftMap.has(sn)
+      // Drift: actual failed commands, not just not synced yet
+      const hasDrift = driftMap.has(sn) || sync?.actual_state === 'drift_detected'
       const isSynced = sync?.actual_state === 'synced'
 
       if (hasDrift) {
@@ -547,23 +575,104 @@ export class UserService {
   /**
    * Clear pending/sent commands for a specific device
    * Removes commands that haven't completed yet to reset the queue
+   * Also updates sync status based on remaining completed commands
    */
   static async clearPendingCommands(deviceSn: string, userId?: string): Promise<{ cleared: number }> {
-    let query = supabase
+    // First, get the user IDs we're clearing commands for (to update sync status later)
+    let lookupQuery = supabase
+      .from('command_queue')
+      .select('related_user_id, device_sn')
+      .eq('device_sn', deviceSn)
+      .in('status', ['pending', 'sent'])
+
+    if (userId) {
+      lookupQuery = lookupQuery.eq('related_user_id', userId)
+    }
+
+    const { data: commandsToClear } = await lookupQuery
+
+    // Get unique user IDs
+    const userIds = [...new Set(commandsToClear?.map(c => c.related_user_id).filter(Boolean) || [])]
+
+    // Delete the pending/sent commands
+    let deleteQuery = supabase
       .from('command_queue')
       .delete()
       .eq('device_sn', deviceSn)
       .in('status', ['pending', 'sent'])
 
     if (userId) {
-      query = query.eq('related_user_id', userId)
+      deleteQuery = deleteQuery.eq('related_user_id', userId)
     }
 
-    const { data, error } = await query.select()
+    // First delete, then count separately (delete with select may not return data in all cases)
+    const { error: deleteError } = await deleteQuery
 
-    if (error) throw error
+    if (deleteError) throw deleteError
+
+    // Count how many were deleted
+    const deleted = commandsToClear?.length || 0
+
+    // After clearing commands, check each affected user-device pair
+    // and update sync status based on remaining commands
+    for (const uid of userIds) {
+      if (!uid) continue
+
+      // Check remaining commands for this user-device
+      const { data: remainingCommands } = await supabase
+        .from('command_queue')
+        .select('status')
+        .eq('device_sn', deviceSn)
+        .eq('related_user_id', uid)
+        .in('status', ['pending', 'sent', 'dispatched'])
+
+      // Check completed commands
+      const { data: completedCommands } = await supabase
+        .from('command_queue')
+        .select('status')
+        .eq('device_sn', deviceSn)
+        .eq('related_user_id', uid)
+        .eq('status', 'success')
+
+      // Update sync status based on remaining commands
+      if (remainingCommands && remainingCommands.length > 0) {
+        // Still have pending commands, mark as syncing
+        await supabase
+          .from('user_device_sync_status')
+          .upsert({
+            device_sn: deviceSn,
+            user_id: uid,
+            expected_state: 'synced',
+            actual_state: 'syncing',
+            retry_count: 0,
+          }, { onConflict: 'device_sn,user_id' })
+      } else if (completedCommands && completedCommands.length > 0) {
+        // No pending, have completed - mark as synced
+        await supabase
+          .from('user_device_sync_status')
+          .upsert({
+            device_sn: deviceSn,
+            user_id: uid,
+            expected_state: 'synced',
+            actual_state: 'synced',
+            last_successful_sync: new Date().toISOString(),
+            retry_count: 0,
+          }, { onConflict: 'device_sn,user_id' })
+      } else {
+        // No commands at all - mark as not synced
+        await supabase
+          .from('user_device_sync_status')
+          .upsert({
+            device_sn: deviceSn,
+            user_id: uid,
+            expected_state: 'synced',
+            actual_state: 'not_synced',
+            retry_count: 0,
+          }, { onConflict: 'device_sn,user_id' })
+      }
+    }
     
-    return { cleared: data?.length || 0 }
+    return { cleared: deleted }
   }
 
   /**

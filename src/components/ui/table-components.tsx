@@ -15,7 +15,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { X, ChevronsUpDown, Server } from "lucide-react"
+import { CloudOff, X, ChevronsUpDown, Server } from "lucide-react"
+import { useUserPhoto } from "@/hooks/use-user-photo"
 
 // ========================================
 // HEADER COMPONENTS (Filters)
@@ -171,12 +172,14 @@ export function BadgeCell({
 
 interface AvatarCellProps {
   photoUrl?: string | null
+  hasCachedPhoto?: boolean
   fallbackText: string
   size?: 'sm' | 'md' | 'lg'
 }
 
 export function AvatarCell({
   photoUrl,
+  hasCachedPhoto,
   fallbackText,
   size = 'md'
 }: AvatarCellProps) {
@@ -185,6 +188,13 @@ export function AvatarCell({
     md: 'h-10 w-10 text-sm',
     lg: 'h-12 w-12 text-base'
   }
+
+  // Use cached photo hook
+  const { photoUrl: displayUrl, isCached } = useUserPhoto({
+    photoUrl,
+    hasCachedPhoto,
+    enabled: !!photoUrl,
+  })
 
   // Get initials from fallback text (max 2 characters)
   const getInitials = (text: string) => {
@@ -197,38 +207,37 @@ export function AvatarCell({
       .toUpperCase()
   }
 
-  // Get pixel size for image optimization
-  const pixelSizes = {
-    sm: 32,
-    md: 40,
-    lg: 48
-  }
-
-  // Optimize image URL with size parameter if it's a pravatar or similar service
-  const optimizedPhotoUrl = photoUrl ? (
-    photoUrl.includes('pravatar.cc') || photoUrl.includes('placeholder')
-      ? `${photoUrl.split('?')[0]}?s=${pixelSizes[size]}`
-      : photoUrl
-  ) : null
+  const initials = getInitials(fallbackText)
 
   return (
-    <Avatar className={sizeClasses[size]}>
-      {optimizedPhotoUrl && (
+    <div className="relative">
+      <Avatar className={`${sizeClasses[size]} bg-gray-100`}>
         <AvatarImage
-          src={optimizedPhotoUrl}
+          key={displayUrl || 'no-photo'}
+          src={displayUrl || undefined}
           alt={fallbackText}
           className="object-cover"
         />
+        <AvatarFallback className="bg-primary/10 text-primary font-medium">
+          {initials}
+        </AvatarFallback>
+      </Avatar>
+      {/* Cloud icon indicator - photo from Frappe, not processed for devices */}
+      {displayUrl && !isCached && (
+        <div 
+          className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5"
+          title="Photo not processed for devices - click refresh in menu to process"
+        >
+          <CloudOff className="w-3 h-3 text-blue-500" />
+        </div>
       )}
-      <AvatarFallback className="bg-primary/10 text-primary font-medium">
-        {getInitials(fallbackText)}
-      </AvatarFallback>
-    </Avatar>
+    </div>
   )
 }
 
 interface UserCellProps {
   photoUrl?: string | null
+  hasCachedPhoto?: boolean
   name: string
   secondaryText?: string
   avatarSize?: 'sm' | 'md' | 'lg'
@@ -236,6 +245,7 @@ interface UserCellProps {
 
 export function UserCell({
   photoUrl,
+  hasCachedPhoto,
   name,
   secondaryText,
   avatarSize = 'sm'
@@ -244,6 +254,7 @@ export function UserCell({
     <div className="flex items-center gap-3">
       <AvatarCell
         photoUrl={photoUrl}
+        hasCachedPhoto={hasCachedPhoto}
         fallbackText={name}
         size={avatarSize}
       />
@@ -268,7 +279,7 @@ export function DeviceCell({
 }: DeviceCellProps) {
   return (
     <div className="flex items-center gap-3">
-      <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
+      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
         <Server className="h-4 w-4 text-primary" />
       </div>
       <div className="flex flex-col">

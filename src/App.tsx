@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, useLocation, Link } from 'react-router-do
 import { AttendanceLogs } from './pages/AttendanceLogs'
 import { Devices } from './pages/Devices'
 import { Users } from './pages/Users'
+import { Dashboard } from './pages/Dashboard'
 import { LoginPage } from './pages/Login'
 import { AuthProvider, useAuth } from '@/contexts/auth-context'
 import { Toaster } from '@/components/ui/sonner'
@@ -125,7 +126,8 @@ function AppContent() {
           </header>
           <div className="flex flex-1 flex-col gap-4 p-4 pt-0 min-w-0 overflow-hidden">
             <Routes>
-              <Route path="/" element={<AttendanceLogs />} />
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/attendance-logs" element={<AttendanceLogs />} />
               <Route path="/devices" element={<Devices />} />
               <Route path="/users" element={<Users />} />

@@ -13,6 +13,7 @@ interface UserTableMeta {
   onEnrollBiometric?: (user: UserEntry) => void
   onRegister?: (user: UserEntry) => void
   onChangeStatus?: (user: UserEntry) => void
+  onRefreshPhoto?: (user: UserEntry) => void
 }
 
 interface UserDataTableProps {

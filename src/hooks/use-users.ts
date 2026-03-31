@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { UserService, type UserFilters, type UserEntry } from '@/services/user-service'
+import { PhotoService } from '@/services/photo-service'
 import { toast } from 'sonner'
 
 // Query key factory
@@ -68,18 +69,43 @@ export function useSyncUser() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ userId, deviceSns }: { userId: string; deviceSns: string[] }) => {
-      // Queue sync_user commands (fast, local DB)
-      const { parentCommands } = await UserService.syncUserToDevices(userId, deviceSns)
-      // Fetch bio+photo from Frappe & queue remaining commands (slow)
-      await UserService.enrichUserDevices(userId, deviceSns, parentCommands)
+    mutationFn: async ({ userId, deviceSns, photoUrl }: { userId: string; deviceSns: string[]; photoUrl?: string }) => {
+      try {
+        // Queue sync_user commands (fast, local DB)
+        const { parentCommands } = await UserService.syncUserToDevices(userId, deviceSns)
+        console.log('[useSyncUser] syncUserToDevices done, parentCommands:', parentCommands)
+        
+        // If photo URL provided, process and store it first
+        if (photoUrl) {
+          try {
+            const result = await PhotoService.processAndStorePhoto(userId, photoUrl)
+            if (!result.success) {
+              console.warn('[useSyncUser] Photo processing failed:', result.message)
+              toast.warning(result.message || 'Photo processing failed, continuing without photo')
+            }
+          } catch (error) {
+            console.error('[useSyncUser] Photo processing error:', error)
+            // Continue without photo - other data will still sync
+          }
+        }
+        
+        // Fetch bio+photo from cache & queue remaining commands (slow)
+        // Photo will be included if it was successfully processed above
+        await UserService.enrichUserDevices(userId, deviceSns, parentCommands)
+        console.log('[useSyncUser] enrichUserDevices done')
+      } catch (error) {
+        console.error('[useSyncUser] Full error:', error)
+        throw error
+      }
     },
     onSuccess: (_, variables) => {
+      console.log('[useSyncUser] onSuccess triggered')
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
       toast.success('Sync commands queued')
     },
     onError: (error: Error) => {
+      console.error('[useSyncUser] onError triggered:', error)
       toast.error(`Failed to sync user: ${error.message}`)
     },
   })
