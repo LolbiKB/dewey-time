@@ -1,8 +1,21 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { UserService, type UserFilters, type UserEntry } from '@/services/user-service'
+import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, type UserEntry } from '@/services/user-service'
 import { PhotoService } from '@/services/photo-service'
 import { toast } from 'sonner'
+
+export function useSyncCancel() {
+  return {
+    cancel: () => setGlobalCancel(true),
+    reset: () => setGlobalCancel(false),
+    isCancelling: getGlobalCancel().value,
+  }
+}
+
+// Hook to get global sync state (persists across modal closes/users)
+export function useGlobalSyncState() {
+  return getSyncState()
+}
 
 // Query key factory
 export const userKeys = {
@@ -21,9 +34,20 @@ export const userKeys = {
 export function useUsers(filters: UserFilters = {}) {
   return useQuery({
     queryKey: userKeys.list(filters),
-    queryFn: () => UserService.getFrappeEmployees(filters),
-    staleTime: 1000 * 60 * 2, // 2 minutes - user data doesn't change frequently
-    gcTime: 1000 * 60 * 5, // 5 minutes
+    queryFn: async () => {
+      try {
+        const result = await UserService.getFrappeEmployees(filters)
+        console.log('useUsers result:', result)
+        console.log('useUsers result.data:', result.data)
+        console.log('useUsers result.meta:', result.meta)
+        return result
+      } catch (e) {
+        console.error('useUsers error:', e)
+        throw e
+      }
+    },
+    staleTime: 1000 * 60 * 2,
+    gcTime: 1000 * 60 * 5,
     retry: 2,
   })
 }
@@ -34,7 +58,8 @@ export function useSyncStatus(userId: string, options?: { refetchInterval?: numb
     queryKey: userKeys.syncStatus(userId),
     queryFn: () => UserService.getSyncStatus(userId),
     enabled: !!userId,
-    refetchInterval: options?.refetchInterval ?? 10000, // Refresh every 10 seconds by default
+    staleTime: 0,
+    refetchInterval: options?.refetchInterval ?? 10000,
   })
 }
 
@@ -44,7 +69,8 @@ export function useCommandQueue(userId: string, limit: number = 10, options?: { 
     queryKey: userKeys.commandQueue(userId),
     queryFn: () => UserService.getCommandQueue(userId, limit),
     enabled: !!userId,
-    refetchInterval: options?.refetchInterval ?? 3000, // Auto-refresh every 3 seconds by default
+    staleTime: 0,
+    refetchInterval: options?.refetchInterval ?? 3000,
   })
 }
 
@@ -70,45 +96,122 @@ export function useSyncUser() {
 
   return useMutation({
     mutationFn: async ({ userId, deviceSns, photoUrl }: { userId: string; deviceSns: string[]; photoUrl?: string }) => {
-      try {
-        // Queue sync_user commands (fast, local DB)
-        const { parentCommands } = await UserService.syncUserToDevices(userId, deviceSns)
-        console.log('[useSyncUser] syncUserToDevices done, parentCommands:', parentCommands)
+      setGlobalCancel(false) // Reset cancel flag
+      setSyncState({ active: true, userId, deviceSns, lastSyncTriggered: Date.now() })
+      
+      // Step 1: Queue sync_user commands for ALL devices
+      const { parentCommands } = await UserService.syncUserToDevices(userId, deviceSns)
+      console.log('[useSyncUser] sync_user queued, parentCommands:', parentCommands)
+      
+      // Invalidate immediately so UI shows pending state
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
+      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+      
+      // Check for cancellation before photo processing
+      if (getGlobalCancel().value) {
+        await UserService.clearPendingCommandsForUser(userId)
+        throw new Error('Sync cancelled')
+      }
+      
+      // Process photo BEFORE biometrics (if needed)
+      if (photoUrl) {
+        try {
+          const result = await PhotoService.processAndStorePhoto(userId, photoUrl)
+          if (!result.success) {
+            console.warn('[useSyncUser] Photo processing failed:', result.message)
+            toast.warning(result.message || 'Photo processing failed, continuing without photo')
+          }
+        } catch (error) {
+          console.error('[useSyncUser] Photo processing error:', error)
+        }
+      }
+      
+      // Step 2: Run sync for each device in PARALLEL
+      const syncPromises = deviceSns.map(async (deviceSn) => {
+        const parentId = parentCommands[deviceSn]
+        if (!parentId) return
         
-        // If photo URL provided, process and store it first
-        if (photoUrl) {
-          try {
-            const result = await PhotoService.processAndStorePhoto(userId, photoUrl)
-            if (!result.success) {
-              console.warn('[useSyncUser] Photo processing failed:', result.message)
-              toast.warning(result.message || 'Photo processing failed, continuing without photo')
-            }
-          } catch (error) {
-            console.error('[useSyncUser] Photo processing error:', error)
-            // Continue without photo - other data will still sync
+        // Wait for sync_user to complete
+        const result = await UserService.waitForCommand(parentId, 30000)
+        console.log('[useSyncUser] sync_user completed:', result, 'for device:', deviceSn)
+        
+        if (result === 'cancelled' || getGlobalCancel().value) {
+          await UserService.clearPendingCommandsForDevice(deviceSn)
+          return 'cancelled'
+        }
+        
+        // Invalidate after sync_user completes
+        queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
+        queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+        
+        // Queue biometrics for this device
+        await UserService.enrichUserDevicesForDevice(userId, deviceSn, parentId)
+        
+        if (getGlobalCancel().value) {
+          await UserService.clearPendingCommandsForDevice(deviceSn)
+          return 'cancelled'
+        }
+        
+        // Invalidate after biometrics queued
+        queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
+        queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+        
+        // Wait for biometric commands to complete
+        const deviceCommands = await UserService.getCommandQueue(userId, 50)
+        const cmds = deviceCommands.data?.filter(c => c.device_sn === deviceSn) || []
+        const lastCmd = cmds.sort((a, b) => b.id - a.id)[0]
+        if (lastCmd && lastCmd.status !== 'success') {
+          const bioResult = await UserService.waitForCommand(lastCmd.id, 30000)
+          if (bioResult === 'cancelled' || getGlobalCancel().value) {
+            await UserService.clearPendingCommandsForDevice(deviceSn)
+            return 'cancelled'
           }
         }
         
-        // Fetch bio+photo from cache & queue remaining commands (slow)
-        // Photo will be included if it was successfully processed above
-        await UserService.enrichUserDevices(userId, deviceSns, parentCommands)
-        console.log('[useSyncUser] enrichUserDevices done')
-      } catch (error) {
-        console.error('[useSyncUser] Full error:', error)
-        throw error
+        // Final invalidate
+        queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
+        queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+        
+        return 'success'
+      })
+      
+      const results = await Promise.all(syncPromises)
+      
+      if (results.some(r => r === 'cancelled')) {
+        throw new Error('Sync cancelled')
       }
+      
+      return { success: true }
     },
     onSuccess: (_, variables) => {
       console.log('[useSyncUser] onSuccess triggered')
+      setSyncState({ active: false })
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
-      toast.success('Sync commands queued')
+      toast.success('Sync completed')
     },
     onError: (error: Error) => {
-      console.error('[useSyncUser] onError triggered:', error)
-      toast.error(`Failed to sync user: ${error.message}`)
+      console.error('[useSyncUser] onError triggered:', error.message)
+      setSyncState({ active: false })
+      if (error.message === 'Sync cancelled') {
+        toast.info('Sync cancelled')
+      } else {
+        toast.error(`Failed to sync user: ${error.message}`)
+      }
+      setGlobalCancel(false)
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus() })
+      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue() })
+    },
+    onSettled: () => {
+      setGlobalCancel(false)
+      setSyncState({ active: false })
     },
   })
+}
+
+// Export cancel function helper
+export function cancelSyncUser(queryClient: ReturnType<typeof useQueryClient>, cancelledRef: { current: boolean }) {
+  cancelledRef.current = true
 }
 
 // Hook: Get biometric inventory for a user

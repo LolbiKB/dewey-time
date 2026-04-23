@@ -23,7 +23,7 @@ import {
   X,
   ArrowRight
 } from 'lucide-react'
-import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands } from '@/hooks/use-users'
+import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands, useSyncCancel, useGlobalSyncState } from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
 import { useState, useEffect } from 'react'
 import { ClearCommandsModal } from './clear-commands-modal'
@@ -46,8 +46,17 @@ const ALL_DATA_TYPES = [
 
 type ItemStatus = 'pending' | 'syncing' | 'synced' | 'failed'
 
-// Get status from per-item sync flags (from database)
-function getItemStatusFromFlags(status: any, key: string, hasPendingCommands: boolean): ItemStatus {
+function getCommandTypeForItem(key: string): string {
+  const map: Record<string, string> = {
+    user: 'sync_user',
+    fingerprint: 'enroll_fingerprint',
+    face: 'enroll_face',
+    photo: 'upload_photo',
+  }
+  return map[key] || key
+}
+
+function getItemStatus(status: any, key: string, commands: any[], lastSyncTriggered: number | null): ItemStatus {
   const fieldMap: Record<string, string> = {
     user: 'user_synced',
     fingerprint: 'fingerprint_synced',
@@ -55,22 +64,52 @@ function getItemStatusFromFlags(status: any, key: string, hasPendingCommands: bo
     photo: 'photo_synced',
   }
   
+  const commandType = getCommandTypeForItem(key)
+  
+  // Get commands for this specific type
+  const typeCommands = commands.filter(c => c.command_type === commandType)
+  
+  // Check for pending/sent commands
+  const pendingCmd = typeCommands.find(c => 
+    c.status === 'pending' || c.status === 'sent'
+  )
+  if (pendingCmd) return 'syncing'
+  
+  // Failed command?
+  const failedCmd = typeCommands.find(c => c.status === 'failed')
+  if (failedCmd) return 'failed'
+  
+  // During active sync - only trust commands created in this sync session
+  if (lastSyncTriggered) {
+    const recentCmd = typeCommands.find(c => 
+      new Date(c.created_at).getTime() >= lastSyncTriggered
+    )
+    
+    if (recentCmd) {
+      // This item has a command created during this sync
+      if (recentCmd.status === 'success') {
+        return 'synced'
+      }
+      // Command exists but not yet success
+      return 'syncing'
+    }
+    
+    // No command found for this item type in this sync session
+    // This item hasn't been processed yet
+    return 'syncing'
+  }
+  
+  // Sync not active - use DB flags normally
   const field = fieldMap[key]
-  if (!field) return 'pending'
-  
-  const isSynced = status[field]
-  
+  const isSynced = field ? status[field] : false
   if (isSynced) return 'synced'
-  
-  // Check if there are pending commands - shows syncing
-  if (hasPendingCommands) return 'syncing'
   
   return 'pending'
 }
 
 export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatusDialogProps) {
-  // Use more aggressive polling when modal is open (3s for sync)
-  const refetchInterval = open ? 3000 : undefined
+  // Use aggressive polling when modal is open (500ms for sync)
+  const refetchInterval = open ? 500 : undefined
   const { data, isLoading, refetch: refetchSyncStatus } = useSyncStatus(userId, {
     refetchInterval,
   })
@@ -79,7 +118,12 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
   })
   const syncUser = useSyncUser()
   const clearCommands = useClearPendingCommands()
+  const { cancel: doCancel } = useSyncCancel()
+  const globalSyncState = useGlobalSyncState()
   const [clearModalState, setClearModalState] = useState<{ deviceSn: string; deviceName: string; count: number } | null>(null)
+  
+  // Use global lastSyncTriggered if it matches current user
+  const lastSyncTriggered = globalSyncState.userId === userId ? globalSyncState.lastSyncTriggered : null
 
   // Immediate refetch when modal opens
   useEffect(() => {
@@ -91,14 +135,9 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
   const syncStatus = data?.data || []
   const commands = commandData?.data || []
 
-  const getDeviceState = (status: any, _deviceSn: string) => {
-    // Check if there are any pending commands for this device
+  const getDeviceState = (status: any, deviceSn: string) => {
     const deviceCommands = commands.filter(cmd => cmd.device_sn === status.device_sn)
-    const hasPendingCommands = deviceCommands.some(cmd => 
-      cmd.status === 'pending' || cmd.status === 'sent'
-    )
     
-    // Use per-item sync status from database (much more stable)
     const availableItems = ALL_DATA_TYPES.filter(({ key }) => {
       if (key === 'user') return true
       if (key === 'fingerprint') return status.has_fingerprint_in_db
@@ -108,7 +147,7 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
     })
     
     const items = availableItems.map(({ key, icon, label }) => {
-      const itemStatus = getItemStatusFromFlags(status, key, hasPendingCommands)
+      const itemStatus = getItemStatus(status, key, deviceCommands, lastSyncTriggered)
       
       return {
         key,
@@ -118,10 +157,11 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
       }
     })
 
-    // Determine overall device state
     const hasFailed = items.some(i => i.status === 'failed')
-    const isActive = items.some(i => i.status === 'syncing')
-    // Device is synced if ALL items are synced
+    // Check local items for syncing, OR check if global sync is active for this user
+    const localActive = items.some(i => i.status === 'syncing')
+    const globalActive = globalSyncState.active && globalSyncState.userId === userId
+    const isActive = localActive || globalActive
     const allSynced = items.length > 0 && items.every(i => i.status === 'synced')
 
     return { 
@@ -169,6 +209,11 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
         }
       }
     )
+  }
+
+  const handleCancelSync = () => {
+    doCancel()
+    toast.info('Cancelling sync...')
   }
 
   if (!user) return null
@@ -237,29 +282,42 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
-                                    onClick={() => handleClearDevice(deviceSn, device?.name || deviceSn)}
+                                    onClick={handleCancelSync}
                                   >
                                     <X className="h-3 w-3" />
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>Clear</TooltipContent>
+                                <TooltipContent>Cancel</TooltipContent>
                               </Tooltip>
                             )}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleSyncToDevice(deviceSn)}
-                              disabled={syncUser.isPending || state.isActive}
-                              className="h-6 text-xs px-2"
-                            >
-                              {state.isActive ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : state.allSynced ? (
-                                <RefreshCw className="h-3 w-3" />
-                              ) : (
-                                'Sync'
-                              )}
-                            </Button>
+                            {/* Any sync in progress (for any user)? */}
+                            {globalSyncState.active && globalSyncState.userId !== userId && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="outline" size="sm" disabled className="h-6 text-xs px-2">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Sync in progress for another user</TooltipContent>
+                              </Tooltip>
+                            )}
+                            {(!globalSyncState.active || globalSyncState.userId === userId) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleSyncToDevice(deviceSn)}
+                                disabled={syncUser.isPending || state.isActive}
+                                className="h-6 text-xs px-2"
+                              >
+                                {state.isActive ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : state.allSynced ? (
+                                  <RefreshCw className="h-3 w-3" />
+                                ) : (
+                                  'Sync'
+                                )}
+                              </Button>
+                            )}
                           </div>
                         </div>
 
@@ -318,16 +376,21 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
             )}
             
             {/* Sync All button at bottom */}
-            {!isLoading && syncStatus.length > 0 && !syncUser.isPending && (
+            {!isLoading && syncStatus.length > 0 && (
               <div className="flex justify-center pt-2">
                 <Button
                   onClick={handleSyncToAll}
                   size="sm"
                   variant="outline"
+                  disabled={syncUser.isPending || globalSyncState.active}
                   className="h-7 text-xs"
                 >
-                  <RefreshCw className="h-3 w-3 mr-1" />
-                  Sync All Devices
+                  {globalSyncState.active && globalSyncState.userId === userId ? (
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                  )}
+                  {globalSyncState.active && globalSyncState.userId !== userId ? 'Sync in progress...' : 'Sync All Devices'}
                 </Button>
               </div>
             )}
