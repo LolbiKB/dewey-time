@@ -108,11 +108,8 @@ export interface CommandQueueEntry {
 export interface SyncStatusSummary {
   total_devices: number
   synced: number
-  partial: number
   not_synced: number
-  syncing: number
-  failed: number
-  drifted: number
+  is_fully_synced: boolean
 }
 
 export interface UsersResponse {
@@ -542,38 +539,27 @@ export class UserService {
   }
 
   static async getUserSyncSummary(userId: string): Promise<SyncStatusSummary> {
-    const [devicesRes, syncRes, failedRes, pendingRes] = await Promise.all([
-      supabase.from('devices').select('serial_number'),
-      supabase.from('user_device_sync_status').select('device_sn, expected_state, actual_state, last_successful_sync').eq('user_id', userId),
-      supabase.from('command_queue').select('device_sn, retry_count, max_retries').eq('related_user_id', userId).eq('status', 'failed'),
-      supabase.from('command_queue').select('device_sn').eq('related_user_id', userId).in('status', ['pending', 'sent']),
-    ])
+    // Only query user_device_sync_status - the source of truth
+    // actual_state is maintained by:
+    // 1. Triggers (user/biometric changes → 'not_synced')
+    // 2. Sync flow (sync completed → 'synced')
+    const { data: syncStatuses, error } = await supabase
+      .from('user_device_sync_status')
+      .select('device_sn, actual_state')
+      .eq('user_id', userId)
 
-    if (devicesRes.error) throw devicesRes.error
-    if (syncRes.error) throw syncRes.error
+    if (error) throw error
 
-    const syncMap = new Map((syncRes.data || []).map(s => [s.device_sn, s]))
-    const failedDevices = new Set((failedRes.data || []).filter(cmd => (cmd.retry_count || 0) >= (cmd.max_retries || 3)).map(cmd => cmd.device_sn))
-    const syncingDevices = new Set((pendingRes.data || []).map(cmd => cmd.device_sn))
+    const total = syncStatuses?.length || 0
+    const synced = syncStatuses?.filter(s => s.actual_state === 'synced').length || 0
+    const not_synced = total - synced
 
-    const driftMap = new Map((syncRes.data || []).filter(d => d.expected_state === 'synced' && d.actual_state === 'not_synced' && failedDevices.has(d.device_sn)).map(d => [d.device_sn, d]))
-
-    const total = devicesRes.data?.length || 0
-    let synced = 0, syncing = 0, failed = 0, drifted = 0
-
-    for (const device of devicesRes.data || []) {
-      const sn = device.serial_number
-      const sync = syncMap.get(sn)
-      const hasDrift = driftMap.has(sn) || sync?.actual_state === 'drift_detected'
-      const isSynced = sync?.actual_state === 'synced'
-
-      if (hasDrift) drifted++
-      else if (failedDevices.has(sn)) failed++
-      else if (syncingDevices.has(sn)) syncing++
-      else if (isSynced) synced++
+    return {
+      total_devices: total,
+      synced,
+      not_synced,
+      is_fully_synced: synced === total && total > 0,
     }
-
-    return { total_devices: total, synced, partial: 0, not_synced: total - synced - syncing - failed - drifted, syncing, failed, drifted }
   }
 
   static async getDriftStatus(userId: string): Promise<{ success: boolean; data: any[] }> {
