@@ -110,20 +110,19 @@ export function RegisterDialog({ employee, open, onOpenChange }: RegisterDialogP
       return
     }
 
-    // Check if PIN already exists
+    // Check if PIN already exists (direct DB check)
     const checkPin = async () => {
       setIsCheckingPin(true)
       try {
-        const users = await UserService.listUsers()
-        const exists = users.some((u: UserEntry) => u.pin === pin)
-
-        if (exists) {
+        const isAvailable = await UserService.checkPinAvailability(pin)
+        if (!isAvailable) {
           setPinError('PIN already in use')
         } else {
           setPinError('')
         }
       } catch (error) {
         console.error('Failed to check PIN:', error)
+        setPinError('Failed to check PIN availability')
       } finally {
         setIsCheckingPin(false)
       }

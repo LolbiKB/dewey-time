@@ -538,6 +538,44 @@ export class UserService {
     return result.data
   }
 
+  static async checkPinAvailability(pin: string): Promise<boolean> {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('pin', pin)
+      .maybeSingle()
+    
+    if (error) {
+      console.error('[checkPinAvailability] Error:', error)
+      return true // Assume available on error to not block user
+    }
+    
+    return !data // true = available (no user found), false = taken
+  }
+
+  static async getNextAvailablePin(): Promise<string> {
+    const { data, error } = await supabase
+      .from('users')
+      .select('pin')
+      .not('pin', 'is', null)
+      .order('pin', { ascending: true })
+    
+    if (error || !data || data.length === 0) {
+      return '1' // Default to 1 if no users exist
+    }
+    
+    // Find first gap in sequential PINs
+    const pins = data.map(u => parseInt(u.pin!, 10)).filter(n => !isNaN(n))
+    
+    for (let i = 1; i <= pins.length + 1; i++) {
+      if (!pins.includes(i)) {
+        return i.toString()
+      }
+    }
+    
+    return (pins.length + 1).toString()
+  }
+
   static async getUserSyncSummary(userId: string): Promise<SyncStatusSummary> {
     // Only query user_device_sync_status - the source of truth
     // actual_state is maintained by:
