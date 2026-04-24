@@ -79,14 +79,7 @@ export function RegisterDialog({ employee, open, onOpenChange }: RegisterDialogP
   // Suggest the next available PIN
   const suggestNextPin = async () => {
     try {
-      const users = await UserService.listUsers()
-      const pins = users
-        .map((u: UserEntry) => parseInt(u.pin || '0'))
-        .filter((p: number) => !isNaN(p))
-
-      const maxPin = pins.length > 0 ? Math.max(...pins) : 0
-      const nextPin = (maxPin + 1).toString()
-
+      const nextPin = await UserService.getNextAvailablePin()
       setPin(nextPin)
       setSuggestedPin(nextPin)
       setPinError('')
