@@ -73,8 +73,8 @@ export function BiometricViewDialog({
 
   const formatHash = (hash: string | null) => {
     if (!hash) return 'N/A'
-    // Base64 data - show more for better identification
-    return hash.length > 32 ? hash.substring(0, 32) + '...' : hash
+    // Show first 20 chars with ellipsis
+    return hash.length > 20 ? hash.substring(0, 20) + '...' : hash
   }
 
   const formatDate = (date: string | null) => {
@@ -104,11 +104,11 @@ export function BiometricViewDialog({
             ) : (
               <div className="space-y-1 pl-6">
                 {fingerprints.map(bio => (
-                  <div key={bio.id} className="flex items-center justify-between text-sm">
-                    <span className="font-mono text-muted-foreground">
+                  <div key={bio.id} className="flex items-center justify-between text-sm gap-2">
+                    <span className="font-mono text-muted-foreground text-xs break-all">
                       {formatHash(bio.template_data)}
                     </span>
-                    <span className="text-muted-foreground">
+                    <span className="text-muted-foreground shrink-0">
                       {FINGER_LABELS[bio.finger_id || 0]}
                     </span>
                   </div>
@@ -133,11 +133,11 @@ export function BiometricViewDialog({
             {faces.length > 0 && (
               <div className="space-y-1 pl-6">
                 {faces.map(bio => (
-                  <div key={bio.id} className="flex items-center justify-between text-sm">
-                    <span className="font-mono text-muted-foreground">
+                  <div key={bio.id} className="flex items-center justify-between text-sm gap-2">
+                    <span className="font-mono text-muted-foreground text-xs break-all">
                       {formatHash(bio.template_data)}
                     </span>
-                    <span className="text-muted-foreground">
+                    <span className="text-muted-foreground shrink-0">
                       {bio.enrolled_device_sn || 'N/A'}
                     </span>
                   </div>

@@ -88,18 +88,18 @@ export const columns: ColumnDef<UserEntry>[] = [
           <Button
             variant="ghost"
             size="sm"
-            className="h-auto p-1 gap-1 hover:bg-accent"
+            className="h-auto p-1 gap-1 hover:bg-accent [&>svg]:h-3 [&>svg]:w-3"
             onClick={(e) => {
               e.stopPropagation()
               meta?.onViewBiometric?.(user)
             }}
           >
-            <Badge variant={fingerprintCount > 0 ? 'default' : 'outline'} className="gap-1">
-              <Fingerprint className="h-3 w-3" />
+            <Badge variant={fingerprintCount > 0 ? 'default' : 'outline'} className="gap-1 text-[10px] h-5">
+              <Fingerprint className="h-2 w-2" />
               {fingerprintCount}
             </Badge>
-            <Badge variant={faceCount > 0 ? 'default' : 'outline'} className="gap-1">
-              <ScanFace className="h-3 w-3" />
+            <Badge variant={faceCount > 0 ? 'default' : 'outline'} className="gap-1 text-[10px] h-5">
+              <ScanFace className="h-2 w-2" />
               {faceCount}
             </Badge>
           </Button>
@@ -108,12 +108,12 @@ export const columns: ColumnDef<UserEntry>[] = [
 
       return (
         <div className="flex gap-2">
-          <Badge variant="outline" className="gap-1">
-            <Fingerprint className="h-3 w-3" />
+          <Badge variant="outline" className="gap-1 text-[10px] h-5">
+            <Fingerprint className="h-2 w-2" />
             {fingerprintCount}
           </Badge>
-          <Badge variant="outline" className="gap-1">
-            <ScanFace className="h-3 w-3" />
+          <Badge variant="outline" className="gap-1 text-[10px] h-5">
+            <ScanFace className="h-2 w-2" />
             {faceCount}
           </Badge>
         </div>
