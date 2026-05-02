@@ -103,7 +103,7 @@ export class DeviceService {
       
       return {
         ...device,
-        status: lastSeenMinutes !== null && lastSeenMinutes < 5 ? 'online' : 'offline',
+status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
         last_seen_minutes: lastSeenMinutes,
       } as DeviceEntry
     })
@@ -277,7 +277,7 @@ export class DeviceService {
 
     return {
       ...data,
-      status: lastSeenMinutes !== null && lastSeenMinutes < 5 ? 'online' : 'offline',
+      status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
       last_seen_minutes: lastSeenMinutes,
     } as DeviceEntry
   }
@@ -346,7 +346,7 @@ export class DeviceService {
 
     return {
       ...data,
-      status: lastSeenMinutes !== null && lastSeenMinutes < 5 ? 'online' : 'offline',
+      status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
       last_seen_minutes: lastSeenMinutes,
     } as DeviceEntry
   }
@@ -360,23 +360,37 @@ export class DeviceService {
     message: string
     command_id: number
   }> {
-    const response = await fetch(
-      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/api-devices/${serialNumber}/query-fp-version`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-      }
-    )
+    // Query FP version via command queue (device will respond in getrequest)
+    const { data: lastCmd } = await supabase
+      .from('command_queue')
+      .select('id')
+      .eq('device_sn', serialNumber)
+      .order('id', { ascending: false })
+      .limit(1)
+      .single()
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-      throw new Error(error.error || `HTTP ${response.status}`)
+    const nextId = (lastCmd?.id || 0) + 1
+    const command = `C:${nextId}:GETOption,ZKFPVersion`
+
+    const { data, error } = await supabase
+      .from('command_queue')
+      .insert({
+        device_sn: serialNumber,
+        command,
+        command_type: 'info',
+        status: 'pending',
+        initiated_by: 'api',
+      })
+      .select('id')
+      .single()
+
+    if (error) throw new Error(error.message)
+
+    return {
+      success: true,
+      message: 'Query command queued',
+      command_id: data?.id,
     }
-
-    return response.json()
   }
 }
 

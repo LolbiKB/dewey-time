@@ -1,7 +1,7 @@
 import type { ColumnDef } from '@tanstack/react-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { MoreHorizontal, Fingerprint, ScanFace, RefreshCw, CircleDot, Image } from 'lucide-react'
+import { MoreHorizontal, Fingerprint, ScanFace, RefreshCw, CircleDot, Image, AlertTriangle } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,6 +69,25 @@ export const columns: ColumnDef<UserEntry>[] = [
       return (
         <Badge className={config.className}>
           {config.label}
+        </Badge>
+      )
+    },
+  },
+  {
+    id: 'attendance_flag',
+    header: 'Attendance',
+    cell: ({ row }) => {
+      const user = row.original
+      const isFlagged = user.attendance_flagged_at
+
+      if (!isFlagged) {
+        return <span className="text-xs text-muted-foreground">-</span>
+      }
+
+      return (
+        <Badge variant="destructive" className="gap-1">
+          <AlertTriangle className="h-3 w-3" />
+          Flagged
         </Badge>
       )
     },

@@ -21,12 +21,13 @@ import {
   Clock,
   Image,
   X,
-  ArrowRight
+  ArrowRight,
+  RotateCcw,
+  Zap,
 } from 'lucide-react'
-import { useSyncStatus, useSyncUser, useCommandQueue, useClearPendingCommands, useSyncCancel, useGlobalSyncState } from '@/hooks/use-users'
+import { useSyncStatus, useSyncUser, useCommandQueue, useSyncCancel, useGlobalSyncState, useRetryUserSync, useForceUserSync } from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
-import { useState, useEffect } from 'react'
-import { ClearCommandsModal } from './clear-commands-modal'
+import { useEffect } from 'react'
 import { cn } from '@/lib/utils'
 
 interface SyncStatusDialogProps {
@@ -46,17 +47,7 @@ const ALL_DATA_TYPES = [
 
 type ItemStatus = 'pending' | 'syncing' | 'synced' | 'failed'
 
-function getCommandTypeForItem(key: string): string {
-  const map: Record<string, string> = {
-    user: 'sync_user',
-    fingerprint: 'enroll_fingerprint',
-    face: 'enroll_face',
-    photo: 'upload_photo',
-  }
-  return map[key] || key
-}
-
-function getItemStatus(status: any, key: string, commands: any[], lastSyncTriggered: number | null): ItemStatus {
+function getItemStatus(status: any, key: string, hasActiveCommands: boolean): ItemStatus {
   const fieldMap: Record<string, string> = {
     user: 'user_synced',
     fingerprint: 'fingerprint_synced',
@@ -64,52 +55,23 @@ function getItemStatus(status: any, key: string, commands: any[], lastSyncTrigge
     photo: 'photo_synced',
   }
   
-  const commandType = getCommandTypeForItem(key)
-  
-  // Get commands for this specific type
-  const typeCommands = commands.filter(c => c.command_type === commandType)
-  
-  // Check for pending/sent commands
-  const pendingCmd = typeCommands.find(c => 
-    c.status === 'pending' || c.status === 'sent'
-  )
-  if (pendingCmd) return 'syncing'
-  
-  // Failed command?
-  const failedCmd = typeCommands.find(c => c.status === 'failed')
-  if (failedCmd) return 'failed'
-  
-  // During active sync - only trust commands created in this sync session
-  if (lastSyncTriggered) {
-    const recentCmd = typeCommands.find(c => 
-      new Date(c.created_at).getTime() >= lastSyncTriggered
-    )
-    
-    if (recentCmd) {
-      // This item has a command created during this sync
-      if (recentCmd.status === 'success') {
-        return 'synced'
-      }
-      // Command exists but not yet success
-      return 'syncing'
-    }
-    
-    // No command found for this item type in this sync session
-    // This item hasn't been processed yet
-    return 'syncing'
-  }
-  
-  // Sync not active - use DB flags normally
   const field = fieldMap[key]
-  const isSynced = field ? status[field] : false
+  if (!field) return 'pending'
+  
+  const isSynced = status[field]
+  
+  // PRIMARY: Use DB sync flag as single source of truth
   if (isSynced) return 'synced'
+  
+  // Override: If actively syncing (pending commands), show syncing
+  if (hasActiveCommands) return 'syncing'
   
   return 'pending'
 }
 
 export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatusDialogProps) {
-  // Use aggressive polling when modal is open (500ms for sync)
-  const refetchInterval = open ? 500 : undefined
+  // Use more aggressive polling when modal is open (3s for sync)
+  const refetchInterval = open ? 3000 : undefined
   const { data, isLoading, refetch: refetchSyncStatus } = useSyncStatus(userId, {
     refetchInterval,
   })
@@ -117,14 +79,9 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
     refetchInterval,
   })
   const syncUser = useSyncUser()
-  const clearCommands = useClearPendingCommands()
   const { cancel: doCancel } = useSyncCancel()
   const globalSyncState = useGlobalSyncState()
-  const [clearModalState, setClearModalState] = useState<{ deviceSn: string; deviceName: string; count: number } | null>(null)
   
-  // Use global lastSyncTriggered if it matches current user
-  const lastSyncTriggered = globalSyncState.userId === userId ? globalSyncState.lastSyncTriggered : null
-
   // Immediate refetch when modal opens
   useEffect(() => {
     if (userId && open) {
@@ -135,19 +92,35 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
   const syncStatus = data?.data || []
   const commands = commandData?.data || []
 
-  const getDeviceState = (status: any, deviceSn: string) => {
+  const getDeviceState = (status: any) => {
     const deviceCommands = commands.filter(cmd => cmd.device_sn === status.device_sn)
+    const isOnline = status.is_online
+    
+    // Check if there are active (pending/sent) commands - for transient "syncing" indicator
+    const hasActiveCommands = deviceCommands.some(cmd => 
+      cmd.status === 'pending' || cmd.status === 'sent'
+    )
     
     const availableItems = ALL_DATA_TYPES.filter(({ key }) => {
+      // Show item if: has local data OR has been synced (any status exists)
       if (key === 'user') return true
-      if (key === 'fingerprint') return status.has_fingerprint_in_db
-      if (key === 'face') return status.has_face_in_db
-      if (key === 'photo') return status.has_photo_in_db
+      if (key === 'fingerprint') return status.has_fingerprint_in_db || status.fingerprint_synced === true
+      if (key === 'face') return status.has_face_in_db || status.face_synced === true
+      if (key === 'photo') return status.has_photo_in_db || status.photo_synced === true
       return true
     })
     
     const items = availableItems.map(({ key, icon, label }) => {
-      const itemStatus = getItemStatus(status, key, deviceCommands, lastSyncTriggered)
+      let itemStatus = getItemStatus(status, key, hasActiveCommands)
+      
+      // For offline devices with pending commands, show as "pending" instead of actual status
+      // because we don't know what the device actually has until it connects
+      if (!isOnline && hasActiveCommands) {
+        itemStatus = 'pending'
+      }
+      
+      // For offline devices with no pending commands, show current state but note it's offline
+      // (the visual indicator handles the offline state)
       
       return {
         key,
@@ -157,11 +130,12 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
       }
     })
 
-    const hasFailed = items.some(i => i.status === 'failed')
+    // Only show "failed" for online devices or if there are no active pending commands
+    // For offline devices with pending commands, don't show as failed since it'll retry
+    const hasFailed = items.some(i => i.status === 'failed' && isOnline)
     // Check local items for syncing, OR check if global sync is active for this user
     const localActive = items.some(i => i.status === 'syncing')
-    const globalActive = globalSyncState.active && globalSyncState.userId === userId
-    const isActive = localActive || globalActive
+    const isActive = localActive || globalSyncState.active
     const allSynced = items.length > 0 && items.every(i => i.status === 'synced')
 
     return { 
@@ -169,6 +143,7 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
       hasFailed,
       isActive,
       allSynced,
+      isOffline: !isOnline,
       lastSyncedAt: status?.last_synced_at
     }
   }
@@ -179,41 +154,44 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
       console.log('[handleSyncToDevice] No user.id, returning')
       return
     }
-    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn], photoUrl: user.photo_url || undefined })
+    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn] })
   }
 
   const handleSyncToAll = () => {
     console.log('[handleSyncToAll] user:', user, 'syncStatus:', syncStatus)
     if (!user?.id || syncStatus.length === 0) return
     const deviceSns = syncStatus.map(s => s.device_sn)
-    syncUser.mutate({ userId: user.id, deviceSns, photoUrl: user.photo_url || undefined })
-  }
-
-  const handleClearDevice = (deviceSn: string, deviceName: string) => {
-    // Show clear modal - for now use a placeholder count
-    // Could be enhanced to show actual pending command count
-    setClearModalState({ deviceSn, deviceName, count: 1 })
-  }
-
-  const handleConfirmClear = () => {
-    if (!clearModalState || !user?.id) return
-    clearCommands.mutate(
-      { deviceSn: clearModalState.deviceSn, userId: user.id },
-      { 
-        onSuccess: (data) => {
-          setClearModalState(null)
-          toast.success(`${data.cleared} commands cleared`)
-        },
-        onError: (error) => {
-          toast.error(`Failed to clear: ${error.message}`)
-        }
-      }
-    )
+    syncUser.mutate({ userId: user.id, deviceSns })
   }
 
   const handleCancelSync = () => {
     doCancel()
     toast.info('Cancelling sync...')
+  }
+
+  const retryUserSync = useRetryUserSync()
+  const forceUserSync = useForceUserSync()
+
+  const handleRetryToDevice = (deviceSn: string) => {
+    if (!user?.id) return
+    retryUserSync.mutate({ userId: user.id, deviceSns: [deviceSn] })
+  }
+
+  const handleForceSyncToDevice = (deviceSn: string) => {
+    if (!user?.id) return
+    forceUserSync.mutate({ userId: user.id, deviceSns: [deviceSn] })
+  }
+
+  const handleRetryToAll = () => {
+    if (!user?.id || syncStatus.length === 0) return
+    const deviceSns = syncStatus.map(s => s.device_sn)
+    retryUserSync.mutate({ userId: user.id, deviceSns })
+  }
+
+  const handleForceSyncToAll = () => {
+    if (!user?.id || syncStatus.length === 0) return
+    const deviceSns = syncStatus.map(s => s.device_sn)
+    forceUserSync.mutate({ userId: user.id, deviceSns })
   }
 
   if (!user) return null
@@ -244,7 +222,7 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
                   {syncStatus.map((status) => {
                     const device = status.devices
                     const deviceSn = status.device_sn
-                    const state = getDeviceState(status, deviceSn)
+                    const state = getDeviceState(status)
                     const isOnline = status.is_online
                     
                     return (
@@ -302,22 +280,56 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
                               </Tooltip>
                             )}
                             {(!globalSyncState.active || globalSyncState.userId === userId) && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleSyncToDevice(deviceSn)}
-                                disabled={syncUser.isPending || state.isActive}
-                                className="h-6 text-xs px-2"
-                              >
-                                {state.isActive ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : state.allSynced ? (
-                                  <RefreshCw className="h-3 w-3" />
-                                ) : (
-                                  'Sync'
-                                )}
-                              </Button>
-                            )}
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleSyncToDevice(deviceSn)}
+                                    disabled={syncUser.isPending || state.isActive}
+                                    className="h-6 text-xs px-2"
+                                  >
+                                    {state.isActive ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : state.allSynced ? (
+                                      <RefreshCw className="h-3 w-3" />
+                                    ) : (
+                                      'Sync'
+                                    )}
+                                  </Button>
+                                  {state.hasFailed && (
+                                    <>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6"
+                                            onClick={() => handleRetryToDevice(deviceSn)}
+                                            disabled={retryUserSync.isPending}
+                                          >
+                                            <RotateCcw className="h-3 w-3" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Retry failed sync</TooltipContent>
+                                      </Tooltip>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 text-orange-600 hover:text-orange-700"
+                                            onClick={() => handleForceSyncToDevice(deviceSn)}
+                                            disabled={forceUserSync.isPending}
+                                          >
+                                            <Zap className="h-3 w-3" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Force full re-sync</TooltipContent>
+                                      </Tooltip>
+                                    </>
+                                  )}
+                                </>
+                              )}
                           </div>
                         </div>
 
@@ -377,7 +389,7 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
             
             {/* Sync All button at bottom */}
             {!isLoading && syncStatus.length > 0 && (
-              <div className="flex justify-center pt-2">
+              <div className="flex justify-center pt-2 gap-2">
                 <Button
                   onClick={handleSyncToAll}
                   size="sm"
@@ -390,24 +402,33 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
                   ) : (
                     <RefreshCw className="h-3 w-3 mr-1" />
                   )}
-                  {globalSyncState.active && globalSyncState.userId !== userId ? 'Sync in progress...' : 'Sync All Devices'}
+                  {globalSyncState.active && globalSyncState.userId !== userId ? 'Sync in progress...' : 'Sync All'}
+                </Button>
+                <Button
+                  onClick={handleRetryToAll}
+                  size="sm"
+                  variant="outline"
+                  disabled={retryUserSync.isPending}
+                  className="h-7 text-xs"
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  Retry Failed
+                </Button>
+                <Button
+                  onClick={handleForceSyncToAll}
+                  size="sm"
+                  variant="outline"
+                  disabled={forceUserSync.isPending}
+                  className="h-7 text-xs text-orange-600 border-orange-200 hover:bg-orange-50"
+                >
+                  <Zap className="h-3 w-3 mr-1" />
+                  Force Sync
                 </Button>
               </div>
             )}
           </div>
         </DialogContent>
       </Dialog>
-
-      {clearModalState && (
-        <ClearCommandsModal
-          commandCount={clearModalState.count}
-          deviceName={clearModalState.deviceName}
-          isOpen={!!clearModalState}
-          onOpenChange={(open) => !open && setClearModalState(null)}
-          onConfirm={handleConfirmClear}
-          isClearing={clearCommands.isPending}
-        />
-      )}
     </>
   )
 }

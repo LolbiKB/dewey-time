@@ -11,6 +11,7 @@ import type {
 interface UserTableMeta {
   onViewSyncStatus?: (user: UserEntry) => void
   onEnrollBiometric?: (user: UserEntry) => void
+  onViewBiometric?: (user: UserEntry) => void
   onRegister?: (user: UserEntry) => void
   onChangeStatus?: (user: UserEntry) => void
   onRefreshPhoto?: (user: UserEntry) => void

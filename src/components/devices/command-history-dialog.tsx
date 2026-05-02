@@ -161,7 +161,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
   }
 
   const isOnline = device?.last_seen
-    ? new Date(device.last_seen).getTime() > Date.now() - 5 * 60 * 1000
+    ? new Date(device.last_seen).getTime() > Date.now() - 1 * 60 * 1000
     : false
 
   return (

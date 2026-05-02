@@ -11,7 +11,8 @@ import {
   History,
   Wifi,
   WifiOff,
-  Edit
+  Edit,
+  Eye,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -34,6 +35,7 @@ interface CreateDeviceColumnsProps {
   onShowHistory?: (serialNumber: string) => void
   onEdit?: (device: DeviceEntry) => void
   onShowInfo?: (serialNumber: string) => void
+  onShowDetail?: (serialNumber: string) => void
 }
 
 // Status options for filter
@@ -49,6 +51,7 @@ export function createDeviceColumns({
   onShowHistory,
   onEdit,
   onShowInfo,
+  onShowDetail,
 }: CreateDeviceColumnsProps): ColumnDef<DeviceEntry>[] {
   return [
     {
@@ -221,6 +224,10 @@ export function createDeviceColumns({
               
               {/* Device Management Section */}
               <DropdownMenuLabel className="text-xs">Management</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => onShowDetail?.(serialNumber)}>
+                <Eye className="mr-2 h-4 w-4" />
+                View Sync Details
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onEdit?.(row.original)}>
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Device

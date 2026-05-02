@@ -1,12 +1,20 @@
+// Improved Devices Page using Centralized Data Pipeline
 import { useState, useMemo } from 'react'
-import { AlertCircle } from 'lucide-react'
+import { 
+  AlertCircle, 
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { createDeviceColumns } from '@/components/devices/columns'
 import { DeviceDataTable } from '@/components/devices/data-table'
-import { useDevices, useDeviceCommand, useUpdateDevice } from '@/hooks/use-devices'
+import { 
+  useDevices as useLegacyDevices, 
+  useDeviceCommand, 
+  useUpdateDevice 
+} from '@/hooks/use-devices'
 import { EditDeviceDialog } from '@/components/devices/edit-device-dialog'
 import { DeviceInfoDialog } from '@/components/devices/device-info-dialog'
+import { DeviceDetailDialog } from '@/components/devices/device-detail-dialog'
 import type { DeviceFilters, DeviceEntry } from '@/services/device-service'
 
 const COMMAND_LABELS: Record<string, string> = {
@@ -17,6 +25,7 @@ const COMMAND_LABELS: Record<string, string> = {
 }
 
 import { CommandHistoryDialog } from '@/components/devices/command-history-dialog'
+
 export function Devices() {
   const [filters, setFilters] = useState<DeviceFilters>({
     page: 1,
@@ -25,8 +34,8 @@ export function Devices() {
     sortOrder: 'desc',
   })
 
-  // Fetch devices
-  const { data: response, isLoading, isError, error, refetch, isFetching } = useDevices(filters)
+  // Fetch devices for table
+  const { data: response, isLoading, isError, error, refetch, isFetching } = useLegacyDevices(filters)
 
   // Device command mutation
   const deviceCommandMutation = useDeviceCommand()
@@ -40,6 +49,8 @@ export function Devices() {
   const [editOpen, setEditOpen] = useState(false)
   const [infoDevice, setInfoDevice] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [detailDevice, setDetailDevice] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
 
   // Handle device command
   const handleDeviceCommand = async (
@@ -99,6 +110,12 @@ export function Devices() {
     setInfoOpen(true)
   }
 
+  // Handle show device detail
+  const handleShowDetail = (serialNumber: string) => {
+    setDetailDevice(serialNumber)
+    setDetailOpen(true)
+  }
+
   // Column definitions with filter callbacks
   const columns = useMemo(
     () =>
@@ -117,6 +134,7 @@ export function Devices() {
         },
         onEdit: handleEditDevice,
         onShowInfo: handleShowInfo,
+        onShowDetail: handleShowDetail,
       }),
     [filters]
   )
@@ -141,17 +159,22 @@ export function Devices() {
   }
 
   return (
-    <div className="h-full">
-      <DeviceDataTable
-        columns={columns}
-        data={response?.data || []}
-        meta={response?.meta}
-        loading={isLoading}
-        isFetching={isFetching}
-        filters={filters}
-        onFiltersChange={setFilters}
-        onRefresh={refetch}
-      />
+    <div className="h-full flex flex-col gap-4">
+      {/* Data Table */}
+      <div className="flex-1 min-h-0">
+        <DeviceDataTable
+          columns={columns}
+          data={response?.data || []}
+          meta={response?.meta}
+          loading={isLoading}
+          isFetching={isFetching}
+          filters={filters}
+          onFiltersChange={setFilters}
+          onRefresh={refetch}
+        />
+      </div>
+
+      {/* Dialogs */}
       <CommandHistoryDialog deviceSn={historyDevice} open={historyOpen} onOpenChange={setHistoryOpen} />
       <EditDeviceDialog
         device={editDevice}
@@ -164,6 +187,11 @@ export function Devices() {
         deviceSn={infoDevice}
         open={infoOpen}
         onOpenChange={setInfoOpen}
+      />
+      <DeviceDetailDialog
+        deviceSn={detailDevice}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
       />
     </div>
   )

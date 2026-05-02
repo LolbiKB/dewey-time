@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
 import { useUsers } from '@/hooks/use-users'
-import { useQueryClient } from '@tanstack/react-query'
 import { UserDataTable } from '@/components/users/data-table'
 import { columns } from './columns'
 import { SyncStatusDialog } from '@/components/users/sync-status-dialog'
@@ -8,7 +7,7 @@ import { RegisterDialog } from '@/components/users/register-dialog'
 import { ChangeStatusDialog } from '@/components/users/change-status-dialog'
 import { EnrollBiometricDialog } from '@/components/users/enroll-biometric-dialog'
 import { BiometricViewDialog } from '@/components/users/biometric-view-dialog'
-import { PhotoService } from '@/services/photo-service'
+import { PhotoRefreshDialog } from '@/components/users/photo-refresh-dialog'
 import type { UserFilters, UserEntry } from '@/services/user-service'
 import {
   Select,
@@ -20,11 +19,9 @@ import {
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { AlertCircle } from 'lucide-react'
-import { toast } from 'sonner'
+import { AlertCircle, AlertTriangle } from 'lucide-react'
 
 export function Users() {
-  const queryClient = useQueryClient()
   const [filters, setFilters] = useState<UserFilters>({
     page: 1,
     limit: 20,
@@ -34,11 +31,16 @@ export function Users() {
   const [changeStatusUser, setChangeStatusUser] = useState<UserEntry | null>(null)
   const [enrollBiometricUser, setEnrollBiometricUser] = useState<UserEntry | null>(null)
   const [viewBiometricUser, setViewBiometricUser] = useState<UserEntry | null>(null)
+  const [refreshPhotoUser, setRefreshPhotoUser] = useState<UserEntry | null>(null)
   
   const { data, isLoading, isFetching, refetch } = useUsers(filters)
 
   const compromisedCount = useMemo(() => {
     return data?.data?.filter(user => user.status === 'compromised').length || 0
+  }, [data])
+
+  const flaggedCount = useMemo(() => {
+    return data?.data?.filter(user => user.attendance_flagged_at).length || 0
   }, [data])
 
   // Check if current filter is showing compromised users
@@ -68,28 +70,9 @@ export function Users() {
     setChangeStatusUser(user)
   }
 
-  const handleRefreshPhoto = async (user: UserEntry) => {
-    if (!user.id || !user.frappe_employee_id) return
-    
-    try {
-      toast.info(`Processing photo for ${user.name}...`)
-      
-      const result = await PhotoService.processAndStorePhoto(user.id, user.photo_url || '')
-      
-      if (result.success) {
-        toast.success(`Photo for ${user.name} processed successfully`, {
-          description: `Size: ${result.processedImage?.size ? (result.processedImage.size / 1024).toFixed(1) : '?'}KB, ${result.processedImage?.width}x${result.processedImage?.height}px`,
-        })
-        queryClient.invalidateQueries({ queryKey: ['user-photo', user.id] })
-      } else {
-        toast.error(result.message || 'Failed to process photo', {
-          description: result.errors?.join(', '),
-        })
-      }
-    } catch (error) {
-      console.error('Photo refresh error:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to refresh photo')
-    }
+  const handleRefreshPhoto = (user: UserEntry) => {
+    if (!user.id) return
+    setRefreshPhotoUser(user)
   }
 
   return (
@@ -111,6 +94,19 @@ export function Users() {
             >
               View Compromised
             </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {flaggedCount > 0 && (
+        <Alert variant="destructive" className="border-orange-500 bg-orange-50">
+          <AlertTriangle className="h-4 w-4 text-orange-600" />
+          <AlertTitle className="text-orange-800">Suspicious Attendance Detected</AlertTitle>
+          <AlertDescription className="flex items-center justify-between text-orange-700">
+            <span>
+              {flaggedCount} user{flaggedCount !== 1 ? 's' : ''} with suspicious attendance patterns detected.
+              These users clocked in from multiple devices at the same time.
+            </span>
           </AlertDescription>
         </Alert>
       )}
@@ -189,6 +185,13 @@ export function Users() {
         userName={viewBiometricUser?.name || null}
         open={!!viewBiometricUser}
         onOpenChange={(open) => !open && setViewBiometricUser(null)}
+      />
+
+      <PhotoRefreshDialog
+        user={refreshPhotoUser}
+        open={!!refreshPhotoUser}
+        onOpenChange={(open) => !open && setRefreshPhotoUser(null)}
+        onSuccess={() => refetch()}
       />
     </div>
   )

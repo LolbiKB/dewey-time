@@ -42,10 +42,6 @@ export function RegisterDialog({ employee, open, onOpenChange }: RegisterDialogP
       return result
     },
     onSuccess: () => {
-      toast.success('Employee Registered', {
-        description: `${employee?.name} has been registered successfully.`,
-      })
-
       // Invalidate queries to refresh the user list
       queryClient.invalidateQueries({ queryKey: ['users'] })
 
@@ -54,8 +50,12 @@ export function RegisterDialog({ employee, open, onOpenChange }: RegisterDialogP
       setSuggestedPin('')
       setPinError('')
 
-      // Close modal
+      // Close modal with success - user can check sync status in user details
       onOpenChange(false)
+      
+      toast.success('Employee Registered', {
+        description: `${employee?.name} registered. Syncing to devices...`,
+      })
     },
     onError: (error: Error) => {
       toast.error('Registration Failed', {

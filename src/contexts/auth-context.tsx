@@ -80,19 +80,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const refreshToken = params.get('refresh_token')
 
           if (accessToken && refreshToken) {
-            const { data, error } = await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: refreshToken,
-            })
+            try {
+              const { data, error } = await supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+              })
 
-            if (!error && data.session) {
-              window.history.replaceState(null, '', window.location.pathname)
+              if (!error && data.session) {
+                window.history.replaceState(null, '', window.location.pathname)
+              } else if (error) {
+                console.warn('Failed to set session:', error.message)
+              }
+            } catch (err) {
+              console.warn('Failed to set session:', err)
             }
           }
         }
 
-        // Get current session
-        const { data: { session } } = await supabase.auth.getSession()
+        // Get current session - handle stale sessions gracefully
+        let session = null
+        try {
+          const { data } = await supabase.auth.getSession()
+          session = data.session
+        } catch (err) {
+          console.warn('Failed to get session, clearing auth state:', err)
+          await supabase.auth.signOut()
+        }
 
         if (!mounted) return
         setSession(session)

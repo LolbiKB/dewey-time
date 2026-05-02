@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, type UserEntry } from '@/services/user-service'
 import { PhotoService } from '@/services/photo-service'
@@ -136,7 +136,7 @@ export function useSyncUser() {
         console.log('[useSyncUser] sync_user completed:', result, 'for device:', deviceSn)
         
         if (result === 'cancelled' || getGlobalCancel().value) {
-          await UserService.clearPendingCommandsForDevice(deviceSn)
+          await UserService.clearPendingCommandsForDevice(deviceSn, userId)
           return 'cancelled'
         }
         
@@ -148,7 +148,7 @@ export function useSyncUser() {
         await UserService.enrichUserDevicesForDevice(userId, deviceSn, parentId)
         
         if (getGlobalCancel().value) {
-          await UserService.clearPendingCommandsForDevice(deviceSn)
+          await UserService.clearPendingCommandsForDevice(deviceSn, userId)
           return 'cancelled'
         }
         
@@ -163,7 +163,7 @@ export function useSyncUser() {
         if (lastCmd && lastCmd.status !== 'success') {
           const bioResult = await UserService.waitForCommand(lastCmd.id, 30000)
           if (bioResult === 'cancelled' || getGlobalCancel().value) {
-            await UserService.clearPendingCommandsForDevice(deviceSn)
+            await UserService.clearPendingCommandsForDevice(deviceSn, userId)
             return 'cancelled'
           }
         }
@@ -185,32 +185,32 @@ export function useSyncUser() {
     },
     onSuccess: (_, variables) => {
       console.log('[useSyncUser] onSuccess triggered')
-      setSyncState({ active: false })
+      setSyncState({ active: false, lastSyncTriggered: null })
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
       toast.success('Sync completed')
     },
     onError: (error: Error) => {
       console.error('[useSyncUser] onError triggered:', error.message)
-      setSyncState({ active: false })
+      setSyncState({ active: false, lastSyncTriggered: null })
       if (error.message === 'Sync cancelled') {
         toast.info('Sync cancelled')
       } else {
         toast.error(`Failed to sync user: ${error.message}`)
       }
       setGlobalCancel(false)
-      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus() })
-      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue() })
+      queryClient.invalidateQueries({ queryKey: userKeys.details() })
+      queryClient.invalidateQueries({ queryKey: userKeys.lists() })
     },
     onSettled: () => {
       setGlobalCancel(false)
-      setSyncState({ active: false })
+      setSyncState({ active: false, lastSyncTriggered: null })
     },
   })
 }
 
 // Export cancel function helper
-export function cancelSyncUser(queryClient: ReturnType<typeof useQueryClient>, cancelledRef: { current: boolean }) {
+export function cancelSyncUser(_queryClient: ReturnType<typeof useQueryClient>, cancelledRef: { current: boolean }) {
   cancelledRef.current = true
 }
 
@@ -252,6 +252,7 @@ export function useStartEnrollment() {
       return UserService.startEnrollment(userId, deviceSn, biometricType, fingerId)
     },
     onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
     },
     onError: (error: Error) => {
@@ -323,6 +324,77 @@ export function useDeviceState(deviceSn: string) {
     queryFn: () => UserService.getDeviceState(deviceSn),
     enabled: !!deviceSn,
     refetchInterval: 3000, // Check every 3 seconds
+  })
+}
+
+// Hook: Delete a biometric template
+export function useDeleteBiometric() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ userId, type, fingerId }: { userId: string; type: 'fingerprint' | 'face'; fingerId?: number }) =>
+      UserService.deleteBiometric(userId, type, fingerId),
+    onSuccess: (result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['user-biometrics', variables.userId] })
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
+      toast.success(`Deleted ${variables.type} template${result.commandsQueued > 0 ? `, ${result.commandsQueued} device delete command(s) queued` : ''}`)
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to delete biometric: ${error.message}`)
+    },
+  })
+}
+
+// Hook: Cancel pending enrollment
+export function useCancelEnrollment() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (userId: string) => UserService.cancelEnrollment(userId),
+    onSuccess: (result, userId) => {
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
+      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+      toast.success(result.message)
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to cancel enrollment: ${error.message}`)
+    },
+  })
+}
+
+// Hook: Retry failed sync
+export function useRetryUserSync() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ userId, deviceSns }: { userId: string; deviceSns?: string[] }) =>
+      UserService.retryUserSync(userId, deviceSns),
+    onSuccess: (result, variables) => {
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
+      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
+      toast.success(`Retry initiated for ${result.commandsQueued} device(s)`)
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to retry sync: ${error.message}`)
+    },
+  })
+}
+
+// Hook: Force full re-sync
+export function useForceUserSync() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ userId, deviceSns }: { userId: string; deviceSns?: string[] }) =>
+      UserService.forceUserSync(userId, deviceSns),
+    onSuccess: (result, variables) => {
+      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
+      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
+      toast.success(`Force sync initiated for ${result.commandsQueued} device(s)`)
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to force sync: ${error.message}`)
+    },
   })
 }
 

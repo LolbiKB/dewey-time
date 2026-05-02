@@ -50,6 +50,8 @@ export interface UserEntry {
   has_face?: boolean
   department?: string
   is_registered?: boolean
+  attendance_flagged_at?: string | null
+  attendance_flag_reason?: string | null
 }
 
 export interface SyncStatusEntry {
@@ -229,42 +231,14 @@ export class UserService {
     userId: string,
     deviceSns: string[],
   ): Promise<{ parentCommands: Record<string, number> }> {
-    const { data: user } = await supabase.from('users').select('*').eq('id', userId).single()
-    if (!user) throw new Error('User not found')
-
-    const parentCommands: Record<string, number> = {}
-
-    for (const deviceSn of deviceSns) {
-      const { data: lastCmd } = await supabase
-        .from('command_queue').select('id').eq('device_sn', deviceSn).order('id', { ascending: false }).limit(1).single()
-
-      const nextId = (lastCmd?.id || Date.now())
-      // Match exact format from Fastify admin-users.ts (tabs)
-      const command = `C:${nextId}:DATA UPDATE USERINFO PIN=${user.pin}\tName=${user.name || ''}\tPri=${user.privilege || 0}\tPasswd=\tCard=\tGrp=1\tTZ=0000000000000000\tVerify=-1`
-
-      const { data: cmdData, error } = await supabase
-        .from('command_queue')
-        .insert({ device_sn: deviceSn, command, command_type: 'sync_user', status: 'pending', related_user_id: userId, initiated_by: 'user' })
-        .select('id')
-        .single()
-
-      if (error) continue
-      if (cmdData) parentCommands[deviceSn] = cmdData.id
-
-      await supabase.from('user_device_sync_status').upsert({
-        device_sn: deviceSn,
-        user_id: userId,
-        expected_state: 'synced',
-        actual_state: 'syncing',
-        user_command_id: cmdData?.id,
-        user_synced: false,
-        fingerprint_synced: false,
-        face_synced: false,
-        photo_synced: false,
-      }, { onConflict: 'device_sn,user_id' })
-    }
-
-    return { parentCommands }
+    const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number; parentCommands: Record<string, number> }>(
+      `/admin/users/${userId}/sync`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ device_sns: deviceSns }),
+      }
+    )
+    return { parentCommands: result.parentCommands || {} }
   }
 
   static async enrichUserDevices(
@@ -272,132 +246,17 @@ export class UserService {
     deviceSns: string[],
     parentCommands: Record<string, number>
   ): Promise<{ commandsQueued: number; biometrics: string[]; photo: boolean }> {
-    const { data: biometrics, error: bioError } = await supabase
-      .from('user_biometrics')
-      .select('*')
-      .eq('user_id', userId)
-
-    if (bioError) {
-      console.error('[enrichUserDevices] Error fetching biometrics:', bioError)
-      throw bioError
-    }
-
-    const { data: user } = await supabase
-      .from('users')
-      .select('pin, photo_storage_path')
-      .eq('id', userId)
-      .single()
-
-    if (!user) {
-      throw new Error('User not found')
-    }
-
-    let photoBase64: string | null = null
-    let photoSize: number | null = null
-
-    if (user.photo_storage_path) {
-      try {
-        const { data: photoBlob, error: photoError } = await supabase.storage
-          .from('user-photos')
-          .download(user.photo_storage_path)
-
-        if (!photoError && photoBlob) {
-          const photoBytes = new Uint8Array(await photoBlob.arrayBuffer())
-          photoBase64 = btoa(String.fromCharCode(...photoBytes))
-          photoSize = photoBytes.byteLength
-          console.log('[enrichUserDevices] Loaded photo:', photoSize, 'bytes')
-        }
-      } catch (err) {
-        console.log('[enrichUserDevices] Failed to load cached photo:', err)
+    const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number; photoIncluded: boolean }>(
+      `/admin/users/${userId}/enrich`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ device_sns: deviceSns, parent_commands: parentCommands }),
       }
-    }
-
-    let totalQueued = 0
-    const queuedBiometrics: string[] = []
-
-    for (const deviceSn of deviceSns) {
-      const parentId = parentCommands[deviceSn]
-      if (!parentId) {
-        console.warn('[enrichUserDevices] No parent command for device:', deviceSn)
-        continue
-      }
-
-      let commandIndex = 1
-      const commandIdBase = Math.floor(Date.now() / 1000)
-
-      const fingerprint = biometrics?.find((b: any) => b.type === 'fingerprint')
-      if (fingerprint) {
-        const fpCommandId = commandIdBase + commandIndex++
-        const fingerId = fingerprint.finger_id || 0
-        const templateSize = fingerprint.template_size || 0
-        const fpCommand = `C:${fpCommandId}:DATA UPDATE FINGERTMP PIN=${user.pin}\tFID=${fingerId}\tSize=${templateSize}\tValid=1\tTMP=${fingerprint.template_data || ''}`
-
-        const { error: fpError } = await supabase.from('command_queue').insert({
-          device_sn: deviceSn,
-          command: fpCommand,
-          command_type: 'enroll_fingerprint',
-          related_user_id: userId,
-          status: 'pending',
-          priority: 2,
-          depends_on_command_id: parentId,
-          initiated_by: 'user',
-        })
-
-        if (!fpError) {
-          totalQueued++
-          queuedBiometrics.push('fingerprint')
-        }
-      }
-
-      const face = biometrics?.find((b: any) => b.type === 'face')
-      if (face) {
-        const faceCommandId = commandIdBase + commandIndex++
-        const faceCommand = `C:${faceCommandId}:DATA UPDATE FACE PIN=${user.pin}\tFID=0\tSize=${face.template_size || 0}\tValid=1\tTMP=${face.template_data || ''}`
-
-        const { error: faceError } = await supabase.from('command_queue').insert({
-          device_sn: deviceSn,
-          command: faceCommand,
-          command_type: 'enroll_face',
-          related_user_id: userId,
-          status: 'pending',
-          priority: 2,
-          depends_on_command_id: parentId,
-          initiated_by: 'user',
-        })
-
-        if (!faceError) {
-          totalQueued++
-          queuedBiometrics.push('face')
-        }
-      }
-
-      if (photoBase64 && photoSize) {
-        const photoCommandId = commandIdBase + commandIndex++
-        const photoCommand = `C:${photoCommandId}:DATA UPDATE userpic PIN=${user.pin}\tSize=${photoSize}\tContent=${photoBase64}`
-
-        const { error: photoError } = await supabase.from('command_queue').insert({
-          device_sn: deviceSn,
-          command: photoCommand,
-          command_type: 'upload_photo',
-          related_user_id: userId,
-          status: 'pending',
-          priority: 3,
-          depends_on_command_id: parentId,
-          initiated_by: 'user',
-        })
-
-        if (!photoError) {
-          totalQueued++
-        }
-      }
-    }
-
-    console.log('[enrichUserDevices] Queued:', totalQueued, 'commands, biometrics:', queuedBiometrics, 'photo:', !!photoBase64)
-
+    )
     return {
-      commandsQueued: totalQueued,
-      biometrics: queuedBiometrics,
-      photo: !!photoBase64,
+      commandsQueued: result.commandsQueued || 0,
+      biometrics: [], // Fastify doesn't return which biometrics were queued
+      photo: result.photoIncluded || false,
     }
   }
 
@@ -406,87 +265,61 @@ export class UserService {
     deviceSn: string,
     parentCommandId: number
   ): Promise<void> {
-    const { data: biometrics } = await supabase
-      .from('user_biometrics')
-      .select('*')
-      .eq('user_id', userId)
-
-    const { data: user } = await supabase
-      .from('users')
-      .select('pin, photo_storage_path')
-      .eq('id', userId)
-      .single()
-
-    if (!user) throw new Error('User not found')
-
-    let photoBase64: string | null = null
-    let photoSize: number | null = null
-
-    if (user.photo_storage_path) {
-      try {
-        const { data: photoBlob } = await supabase.storage
-          .from('user-photos')
-          .download(user.photo_storage_path)
-        if (photoBlob) {
-          const photoBytes = new Uint8Array(await photoBlob.arrayBuffer())
-          photoBase64 = btoa(String.fromCharCode(...photoBytes))
-          photoSize = photoBytes.byteLength
-        }
-      } catch {}
-    }
-
-    let commandIndex = 1
-    const commandIdBase = Math.floor(Date.now() / 1000)
-
-    const fingerprint = biometrics?.find((b: any) => b.type === 'fingerprint')
-    if (fingerprint) {
-      const fpCommand = `C:${commandIdBase + commandIndex++}:DATA UPDATE FINGERTMP PIN=${user.pin}\tFID=${fingerprint.finger_id || 0}\tSize=${fingerprint.template_size || 0}\tValid=1\tTMP=${fingerprint.template_data || ''}`
-      await supabase.from('command_queue').insert({
-        device_sn: deviceSn,
-        command: fpCommand,
-        command_type: 'enroll_fingerprint',
-        related_user_id: userId,
-        status: 'pending',
-        priority: 2,
-        depends_on_command_id: parentCommandId,
-        initiated_by: 'user',
-      })
-    }
-
-    const face = biometrics?.find((b: any) => b.type === 'face')
-    if (face) {
-      const faceCommand = `C:${commandIdBase + commandIndex++}:DATA UPDATE FACE PIN=${user.pin}\tFID=0\tSize=${face.template_size || 0}\tValid=1\tTMP=${face.template_data || ''}`
-      await supabase.from('command_queue').insert({
-        device_sn: deviceSn,
-        command: faceCommand,
-        command_type: 'enroll_face',
-        related_user_id: userId,
-        status: 'pending',
-        priority: 2,
-        depends_on_command_id: parentCommandId,
-        initiated_by: 'user',
-      })
-    }
-
-    if (photoBase64 && photoSize) {
-      const photoCommand = `C:${commandIdBase + commandIndex++}:DATA UPDATE userpic PIN=${user.pin}\tSize=${photoSize}\tContent=${photoBase64}`
-      await supabase.from('command_queue').insert({
-        device_sn: deviceSn,
-        command: photoCommand,
-        command_type: 'upload_photo',
-        related_user_id: userId,
-        status: 'pending',
-        priority: 3,
-        depends_on_command_id: parentCommandId,
-        initiated_by: 'user',
-      })
-    }
+    await this.fetchApi<{ success: boolean; message: string }>(
+      `/admin/users/${userId}/enrich`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          device_sns: [deviceSn],
+          parent_commands: { [deviceSn]: parentCommandId }
+        }),
+      }
+    )
   }
 
   static async getUserBiometrics(userId: string): Promise<BiometricsResponse> {
     const { data, error } = await supabase.from('user_biometrics').select('*').eq('user_id', userId)
     if (error) throw error
     return { success: true, data: (data || []) as BiometricEntry[] }
+  }
+
+  static async deleteBiometric(userId: string, type: 'fingerprint' | 'face', fingerId?: number): Promise<{ success: boolean; commandsQueued: number }> {
+    const params = new URLSearchParams({ type })
+    if (fingerId !== undefined) {
+      params.append('finger_id', String(fingerId))
+    }
+
+    const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number }>(
+      `/admin/users/${userId}/biometrics?${params}`,
+      { method: 'DELETE' }
+    )
+
+    return { success: result.success, commandsQueued: result.commandsQueued }
+  }
+
+  static async retryUserSync(userId: string, deviceSns?: string[]): Promise<{ success: boolean; commandsQueued: number }> {
+    const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number }>(
+      `/admin/users/${userId}/sync/retry`,
+      { 
+        method: 'POST',
+        body: JSON.stringify({ device_sns: deviceSns }),
+      }
+    )
+
+    return { success: result.success, commandsQueued: result.commandsQueued }
+  }
+
+  static async forceUserSync(userId: string, deviceSns?: string[]): Promise<{ success: boolean; commandsQueued: number }> {
+    console.log('[forceUserSync] Calling API:', `/admin/users/${userId}/sync/force`, 'devices:', deviceSns)
+    const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number }>(
+      `/admin/users/${userId}/sync/force`,
+      { 
+        method: 'POST',
+        body: JSON.stringify({ device_sns: deviceSns }),
+      }
+    )
+    console.log('[forceUserSync] API result:', result)
+    return { success: result.success, commandsQueued: result.commandsQueued }
   }
 
   static async getCommandStatus(commandId: number): Promise<CommandQueueEntry | null> {
@@ -499,19 +332,30 @@ export class UserService {
     const { data: user } = await supabase.from('users').select('*').eq('id', userId).single()
     if (!user) throw new Error('User not found')
 
-    const { data: lastCmd } = await supabase.from('command_queue').select('id').eq('device_sn', deviceSn).order('id', { ascending: false }).limit(1).single()
-    const nextId = (lastCmd?.id || 0) + 1
     const cmdType = biometricType === 'fingerprint' ? 'ENROLL_FP' : 'ENROLL_FACE'
-    const cmd = `C:${nextId}:${cmdType},Pin=${user.pin}, Fargo=${fingerId || 0}`
+    const cmdBody = `${cmdType} PIN=${user.pin}\tFID=${fingerId || 0}\tRETRY=3\tOVERWRITE=1`
 
     const { data, error } = await supabase
       .from('command_queue')
-      .insert({ device_sn: deviceSn, command: cmd, command_type: biometricType === 'fingerprint' ? 'enroll_fingerprint' : 'enroll_face', status: 'pending', related_user_id: userId, initiated_by: 'user' })
+      .insert({ device_sn: deviceSn, command: cmdBody, command_type: biometricType === 'fingerprint' ? 'enroll_fingerprint' : 'enroll_face', status: 'pending', related_user_id: userId, initiated_by: 'user' })
       .select('id')
       .single()
 
     if (error) throw new Error(error.message)
+
+    if (data) {
+      await supabase.from('command_queue').update({ command: `C:${data.id}:${cmdBody}` }).eq('id', data.id)
+    }
+
     return { commandId: data?.id }
+  }
+
+  static async cancelEnrollment(userId: string): Promise<{ cancelled: number; message: string }> {
+    const result = await this.fetchApi<{ success: boolean; cancelled: number; message: string }>(
+      `/admin/users/${userId}/enrollment/cancel`,
+      { method: 'POST' }
+    )
+    return { cancelled: result.cancelled, message: result.message }
   }
 
   static async getFrappeEmployees(filters: UserFilters = {}): Promise<UsersResponse> {
@@ -720,6 +564,18 @@ export class UserService {
     return 0
   }
 
+  static async getSyncHealth(): Promise<{
+    success: boolean;
+    data: {
+      devices: { total: number; online: number; offline: number };
+      users: { total: number; synced: number; syncing: number; failed: number };
+      commands: { pending: number; failed: number };
+      health: { deviceOnlinePercent: number; userSyncPercent: number };
+    };
+  }> {
+    return this.fetchApi<{ success: boolean; data: any }>('/admin/sync/health')
+  }
+
   static async getDeviceState(deviceSn: string): Promise<{ state: 'idle' | 'syncing' | 'unknown'; activeCommand?: CommandQueueEntry }> {
     const { data, error } = await supabase.from('command_queue').select('*').eq('device_sn', deviceSn).in('status', ['pending', 'sent']).order('created_at', { ascending: false }).limit(1).single()
     if (error) {
@@ -727,5 +583,12 @@ export class UserService {
       return { state: 'unknown' }
     }
     return { state: 'syncing', activeCommand: data as CommandQueueEntry }
+  }
+
+  static async queryDeviceStats(deviceSn: string): Promise<{ success: boolean; message: string }> {
+    return this.fetchApi<{ success: boolean; message: string }>(`/admin/devices/${deviceSn}/query-stats`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
   }
 }

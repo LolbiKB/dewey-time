@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -7,9 +7,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
-import { Fingerprint, ScanFace, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Fingerprint, ScanFace, Trash2, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { useEffect, useState } from 'react'
+import { useDeleteBiometric } from '@/hooks/use-users'
 
 interface BiometricViewDialogProps {
   userId: string | null
@@ -47,6 +48,8 @@ export function BiometricViewDialog({
   onOpenChange,
 }: BiometricViewDialogProps) {
   const [biometrics, setBiometrics] = useState<BiometricRecord[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const deleteBiometric = useDeleteBiometric()
 
   // Fetch biometrics for this user
   useEffect(() => {
@@ -67,19 +70,35 @@ export function BiometricViewDialog({
     fetchBiometrics()
   }, [userId, open])
 
+  const handleDelete = async (bio: BiometricRecord) => {
+    if (!userId) return
+    
+    setDeletingId(bio.id)
+    try {
+      await deleteBiometric.mutateAsync({
+        userId,
+        type: bio.type as 'fingerprint' | 'face',
+        fingerId: bio.finger_id ?? undefined,
+      })
+      // Refresh biometrics
+      const { data } = await supabase
+        .from('user_biometrics')
+        .select('*')
+        .eq('user_id', userId)
+        .order('enrolled_at', { ascending: false })
+      if (data) setBiometrics(data)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   // Group by type
   const fingerprints = biometrics.filter(b => b.type === 'fingerprint')
   const faces = biometrics.filter(b => b.type === 'face')
 
-  const formatHash = (hash: string | null) => {
+const formatHash = (hash: string | null) => {
     if (!hash) return 'N/A'
-    // Show first 20 chars with ellipsis
     return hash.length > 20 ? hash.substring(0, 20) + '...' : hash
-  }
-
-  const formatDate = (date: string | null) => {
-    if (!date) return 'N/A'
-    return new Date(date).toLocaleDateString()
   }
 
   return (
@@ -108,9 +127,24 @@ export function BiometricViewDialog({
                     <span className="font-mono text-muted-foreground text-xs break-all">
                       {formatHash(bio.template_data)}
                     </span>
-                    <span className="text-muted-foreground shrink-0">
-                      {FINGER_LABELS[bio.finger_id || 0]}
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-muted-foreground text-xs">
+                        {FINGER_LABELS[bio.finger_id || 0]}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-red-500"
+                        onClick={() => handleDelete(bio)}
+                        disabled={deletingId === bio.id}
+                      >
+                        {deletingId === bio.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -137,9 +171,24 @@ export function BiometricViewDialog({
                     <span className="font-mono text-muted-foreground text-xs break-all">
                       {formatHash(bio.template_data)}
                     </span>
-                    <span className="text-muted-foreground shrink-0">
-                      {bio.enrolled_device_sn || 'N/A'}
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-muted-foreground text-xs">
+                        {bio.enrolled_device_sn || 'N/A'}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-red-500"
+                        onClick={() => handleDelete(bio)}
+                        disabled={deletingId === bio.id}
+                      >
+                        {deletingId === bio.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>

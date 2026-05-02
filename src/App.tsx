@@ -27,10 +27,20 @@ import { HeaderDeviceStatus } from '@/components/header-device-status'
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 2, // 2 minutes
+      // Data freshness strategy:
+      // - Stale immediately (always refetch on mount if needed)
+      // - But keep in cache for 5 minutes (gcTime)
+      staleTime: 0,
       gcTime: 1000 * 60 * 5, // 5 minutes
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true, // Refetch when user returns to app
+      refetchOnReconnect: true, // Refetch when network reconnects
       retry: 2,
+      retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000),
+    },
+    mutations: {
+      // Retry mutations once on network errors
+      retry: 1,
+      retryDelay: 1000,
     },
   },
 })
