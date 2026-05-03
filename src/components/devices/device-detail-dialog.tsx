@@ -38,17 +38,6 @@ interface DeviceDetailDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-interface CommandEntry {
-  id: number
-  command: string
-  command_type: string
-  status: string
-  created_at: string
-  completed_at?: string
-  error_message?: string
-  retry_count?: number
-}
-
 // Component to show individual sync component status
 // Simple icon-only status indicator
 function StatusIcon({

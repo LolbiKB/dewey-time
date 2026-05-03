@@ -352,7 +352,7 @@ export function useRealtimeSyncStatus(userId?: string) {
           table: 'user_device_sync_status',
           filter: userId ? `user_id=eq.${userId}` : undefined,
         },
-        (payload) => {
+        () => {
           // Invalidate and refetch to get fresh data with joins
           queryClient.invalidateQueries({
             queryKey: ['sync-status', 'all'],

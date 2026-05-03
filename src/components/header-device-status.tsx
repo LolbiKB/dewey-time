@@ -1,5 +1,5 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Wifi, Monitor, Clock, AlertTriangle, CheckCircle2, RefreshCw, Activity } from 'lucide-react'
+import { Wifi, Clock, AlertTriangle, CheckCircle2, RefreshCw, Activity } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { useDevices, useSyncStatus, useCommandQueue } from '@/hooks/use-core-data'
 import { useMemo } from 'react'

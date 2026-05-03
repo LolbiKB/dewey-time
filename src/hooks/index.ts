@@ -43,7 +43,7 @@ export {
   useSendDeviceCommand,
   useUpdateDevice,
   useProcessPhoto,
-  useRefreshPhoto,
+  // useRefreshPhoto, // TODO: fix or remove
   useSyncCancel,
   getGlobalCancel,
 } from './use-mutations'

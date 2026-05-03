@@ -56,7 +56,7 @@ export function useDeviceWithUsers(deviceSn: string) {
     }
     
     // Get all users synced to this device
-    const deviceSyncs = syncData.filter(s => s.device_sn === deviceSn)
+    const deviceSyncs = (syncData || []).filter(s => s.device_sn === deviceSn)
     
     // Get pending commands for this device (only fresh ones < 2 minutes old)
     // This prevents showing "syncing" for old stuck commands
@@ -89,6 +89,7 @@ export function useDeviceWithUsers(deviceSn: string) {
         userId: sync.user_id,
         userName: sync.users?.name || 'Unknown',
         userPin: sync.users?.pin,
+        employeeId: sync.users?.frappe_employee_id || '',
         actualState: sync.actual_state,
         expectedState: sync.expected_state,
         userSynced: sync.user_synced,

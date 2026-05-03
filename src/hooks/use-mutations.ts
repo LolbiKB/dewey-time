@@ -89,11 +89,11 @@ export function useForceSync() {
       toast.error(`Force sync failed: ${error.message}`)
     },
     
-    onSuccess: (data, variables) => {
+    onSuccess: (data, _variables) => {
       toast.success(`Force sync started for ${data.commandsQueued} command(s)`)
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       // Always refetch after error or success
       queryClient.invalidateQueries({ queryKey: queryKeys.users.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: ['sync-status', 'all'] })
@@ -155,7 +155,7 @@ export function useRetrySync() {
       toast.success('Retry initiated')
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.users.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: ['sync-status', 'all'] })
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
@@ -216,7 +216,7 @@ export function useDeleteBiometric() {
       toast.success('Biometric deleted')
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.users.biometrics(variables.userId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.users.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: ['sync-status', 'all'] })
@@ -242,7 +242,7 @@ export function useStartEnrollment() {
       return UserService.startEnrollment(userId, deviceSn, biometricType, fingerId)
     },
     
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast.success(`Enrollment started on device. Please follow instructions on the device.`)
     },
     
@@ -250,7 +250,7 @@ export function useStartEnrollment() {
       toast.error(`Failed to start enrollment: ${error.message}`)
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.byDevice(variables.deviceSn) })
     },
@@ -313,7 +313,7 @@ export function useUpdateUser() {
       toast.error(`Failed to update user: ${error.message}`)
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.users.detail(variables.userId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.users.lists() })
     },
@@ -361,7 +361,7 @@ export function useSendDeviceCommand() {
       command: string
       commandType: string
     }) => {
-      return DeviceService.sendCommand(deviceSn, command, commandType)
+      return DeviceService.queueDeviceCommand(deviceSn, commandType, command)
     },
     
     onSuccess: (_, variables) => {
@@ -372,7 +372,7 @@ export function useSendDeviceCommand() {
       toast.error(`Failed to send command: ${error.message}`)
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.byDevice(variables.deviceSn) })
     },
@@ -409,7 +409,7 @@ export function useUpdateDevice() {
       toast.error(`Failed to update device: ${error.message}`)
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.devices.detail(variables.deviceSn) })
       queryClient.invalidateQueries({ queryKey: queryKeys.devices.lists() })
       queryClient.invalidateQueries({ queryKey: queryKeys.devices.status() })
@@ -474,7 +474,7 @@ export function useProcessPhoto() {
       toast.error(`Failed to process photo: ${error.message}`)
     },
     
-    onSettled: (data, error, variables) => {
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.photos.status(variables.userId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.photos.detail(variables.userId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.users.detail(variables.userId) })
@@ -482,28 +482,8 @@ export function useProcessPhoto() {
   })
 }
 
-export function useRefreshPhoto() {
-  const queryClient = useQueryClient()
-  
-  return useMutation({
-    mutationFn: async (userId: string) => {
-      return UserService.refreshPhoto(userId)
-    },
-    
-    onSuccess: () => {
-      toast.success('Photo cache cleared. Reprocessing...')
-    },
-    
-    onError: (error) => {
-      toast.error(`Failed to refresh photo: ${error.message}`)
-    },
-    
-    onSettled: (data, error, userId) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.photos.detail(userId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.users.detail(userId) })
-    },
-  })
-}
+// TODO: fix or remove unused
+// export function useRefreshPhoto() { }
 
 // =====================================================
 // CANCELLATION

@@ -24,8 +24,6 @@ const COMMAND_LABELS: Record<string, string> = {
   log: 'Push new logs',
 }
 
-import { CommandHistoryDialog } from '@/components/devices/command-history-dialog'
-
 export function Devices() {
   const [filters, setFilters] = useState<DeviceFilters>({
     page: 1,
@@ -43,8 +41,6 @@ export function Devices() {
   // Update device mutation
   const updateDeviceMutation = useUpdateDevice()
 
-  const [historyDevice, setHistoryDevice] = useState<string | null>(null)
-  const [historyOpen, setHistoryOpen] = useState(false)
   const [editDevice, setEditDevice] = useState<DeviceEntry | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [infoDevice, setInfoDevice] = useState<string | null>(null)
@@ -128,10 +124,6 @@ export function Devices() {
           })),
         currentStatusFilter: filters.status,
         onDeviceCommand: handleDeviceCommand,
-        onShowHistory: (sn: string) => {
-          setHistoryDevice(sn)
-          setHistoryOpen(true)
-        },
         onEdit: handleEditDevice,
         onShowInfo: handleShowInfo,
         onShowDetail: handleShowDetail,
@@ -175,7 +167,6 @@ export function Devices() {
       </div>
 
       {/* Dialogs */}
-      <CommandHistoryDialog deviceSn={historyDevice} open={historyOpen} onOpenChange={setHistoryOpen} />
       <EditDeviceDialog
         device={editDevice}
         open={editOpen}
