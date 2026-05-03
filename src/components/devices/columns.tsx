@@ -8,7 +8,6 @@ import {
   Info, 
   RefreshCw, 
   Send, 
-  History,
   Wifi,
   WifiOff,
   Edit,
@@ -32,7 +31,6 @@ interface CreateDeviceColumnsProps {
   onFilterByStatus?: (status: string) => void
   currentStatusFilter?: string
   onDeviceCommand?: (serialNumber: string, commandType: string, commandBody: string) => void
-  onShowHistory?: (serialNumber: string) => void
   onEdit?: (device: DeviceEntry) => void
   onShowInfo?: (serialNumber: string) => void
   onShowDetail?: (serialNumber: string) => void
@@ -48,7 +46,6 @@ export function createDeviceColumns({
   onFilterByStatus,
   currentStatusFilter,
   onDeviceCommand,
-  onShowHistory,
   onEdit,
   onShowInfo,
   onShowDetail,
@@ -231,10 +228,6 @@ export function createDeviceColumns({
               <DropdownMenuItem onClick={() => onEdit?.(row.original)}>
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Device
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onShowHistory?.(serialNumber)}>
-                <History className="mr-2 h-4 w-4" />
-                Command History
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDeviceCommand?.(serialNumber, 'reboot', 'REBOOT')}
