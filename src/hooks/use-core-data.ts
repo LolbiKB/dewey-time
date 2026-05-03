@@ -7,38 +7,138 @@ import { queryKeys } from '@/lib/query-keys'
 import { UserService } from '@/services/user-service'
 import { useEffect } from 'react'
 
-// =====================================================
-// CORE ENTITY QUERIES (Root Data Sources)
-// =====================================================
+export interface DeviceFilters {
+  page?: number
+  limit?: number
+  sortBy?: string
+  sortOrder?: 'asc' | 'desc'
+  search?: string
+  name?: string
+  location?: string
+  is_master?: boolean
+}
 
 /**
  * Master device query - single source for all device data
  * Includes online/offline status calculation
  * Refetches every 5 seconds to keep status fresh
  */
-export function useDevices(options?: { enabled?: boolean }) {
+export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolean }) {
+  const page = filters?.page || 1
+  const limit = filters?.limit || 20
+  const from = (page - 1) * limit
+  const to = from + limit - 1
+  const sortBy = filters?.sortBy || 'created_at'
+  const sortOrder = filters?.sortOrder || 'desc'
+  
   return useQuery({
-    queryKey: queryKeys.devices.status(),
+    queryKey: queryKeys.devices.list({ 
+      page, limit, sortBy, sortOrder, 
+      search: filters?.search, name: filters?.name, location: filters?.location, is_master: filters?.is_master 
+    }),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from('devices')
-        .select('*')
-        .order('name', { ascending: true })
+        .select('*', { count: 'exact' })
+      
+      // Apply filters
+      if (filters?.search) {
+        query = query.or(`serial_number.ilike.%${filters.search}%,name.ilike.%${filters.search}%,location.ilike.%${filters.search}%`)
+      }
+      if (filters?.name) {
+        query = query.ilike('name', `%${filters.name}%`)
+      }
+      if (filters?.location) {
+        query = query.ilike('location', `%${filters.location}%`)
+      }
+      if (filters?.is_master !== undefined) {
+        query = query.eq('is_master', filters.is_master)
+      }
+      
+      // Apply sorting
+      query = query.order(sortBy, { ascending: sortOrder === 'asc' })
+      
+      // Apply pagination
+      query = query.range(from, to)
+      
+      const { data, error, count } = await query
       
       if (error) throw error
       
       const now = Date.now()
-      return (data || []).map(device => ({
+      const devices = (data || []).map(device => ({
         ...device,
         isOnline: device.last_seen 
           ? now - new Date(device.last_seen).getTime() < 60000 
           : false,
       }))
+      
+      return {
+        devices,
+        total: count || 0,
+        page,
+        limit,
+        totalPages: Math.ceil((count || 0) / limit),
+        hasNext: (page * limit) < (count || 0),
+        hasPrev: page > 1,
+      }
     },
     staleTime: 5000, // 5 seconds
     refetchInterval: 5000, // Poll every 5s for online status
     ...options,
   })
+}
+
+/**
+ * Realtime subscription for device status updates (especially last_seen for online status)
+ */
+export function useRealtimeDevices() {
+  const queryClient = useQueryClient()
+  
+  useEffect(() => {
+    const channel = supabase
+      .channel('devices-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'devices',
+        },
+        (payload) => {
+          // Update the devices cache when any device changes
+          queryClient.setQueryData(queryKeys.devices.status(), (old: any) => {
+            if (!old) return old
+            
+            const devices = old.devices || []
+            
+            if (payload.eventType === 'UPDATE') {
+              const updatedDevices = devices.map((d: any) => 
+                d.serial_number === payload.new.serial_number 
+                  ? { ...d, ...payload.new }
+                  : d
+              )
+              return { ...old, devices: updatedDevices }
+            }
+            
+            if (payload.eventType === 'INSERT') {
+              return { ...old, devices: [payload.new, ...devices] }
+            }
+            
+            if (payload.eventType === 'DELETE') {
+              return { ...old, devices: devices.filter((d: any) => d.serial_number !== payload.old.serial_number) }
+            }
+            
+            return old
+          })
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [queryClient])
 }
 
 /**
@@ -107,7 +207,8 @@ export function useUsersList(filters?: {
   return useQuery({
     queryKey: queryKeys.users.list(filterKey),
     queryFn: async () => {
-      const result = await UserService.getUsers({
+      // Use getFrappeEmployees (same as legacy useUsers) to maintain compatibility
+      const result = await UserService.getFrappeEmployees({
         page: filters?.page,
         limit: filters?.limit,
         search: filters?.search,
@@ -173,6 +274,8 @@ export function useAttendanceLogs(filters?: {
         page,
         limit,
         totalPages: Math.ceil((count || 0) / limit),
+        hasNext: (page * limit) < (count || 0),
+        hasPrev: page > 1,
       }
     },
     staleTime: 30000, // 30 seconds

@@ -5,9 +5,9 @@ import { Card, CardContent } from '@/components/ui/card'
 import { createAttendanceLogColumns } from '@/components/attendance-logs/columns'
 import { AttendanceLogDataTable } from '@/components/attendance-logs/data-table'
 import {
-  useAttendanceLogManagement,
-  useExportAttendanceLogs,
-} from '@/hooks/use-attendance-logs'
+  useAttendanceLogs,
+} from '@/hooks'
+import { useExportAttendanceLogs } from '@/hooks/use-attendance-logs'
 import type { AttendanceLogFilters } from '@/services/attendance-log-service'
 
 export function AttendanceLogs() {
@@ -21,20 +21,26 @@ export function AttendanceLogs() {
   // Fetch attendance logs
   const {
     data,
-    meta,
     isLoading,
     isError,
     error,
-    refetchAttendanceLogs,
+    refetch,
     isFetching,
-  } = useAttendanceLogManagement(filters)
+  } = useAttendanceLogs({
+    page: filters.page,
+    limit: filters.limit,
+    startDate: filters.dateFrom,
+    endDate: filters.dateTo,
+    deviceSn: filters.device_sn,
+    userPin: filters.user_pin,
+  })
 
   // Export mutation
   const { mutate: exportLogs, isPending: isExporting } = useExportAttendanceLogs()
 
   // Extract unique devices for filter
   const availableDevices = useMemo(() => {
-    const uniqueDevices = new Set(data.map((log) => log.device_sn))
+    const uniqueDevices = new Set((data?.logs || []).map((log) => log.device_sn))
     return Array.from(uniqueDevices).map((sn) => ({
       value: sn,
       label: sn,
@@ -115,13 +121,13 @@ export function AttendanceLogs() {
     <div className="h-full">
       <AttendanceLogDataTable
         columns={columns}
-        data={data}
-        meta={meta}
+        data={data?.logs || []}
+        meta={data ? { total: data.total, page: data.page, limit: data.limit, totalPages: data.totalPages, hasNext: data.hasNext, hasPrev: data.hasPrev } : undefined}
         loading={isLoading}
         isFetching={isFetching}
         filters={filters}
         onFiltersChange={setFilters}
-        onRefresh={refetchAttendanceLogs}
+        onRefresh={refetch}
         onExportLogs={handleExport}
         isExporting={isExporting}
       />

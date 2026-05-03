@@ -1,7 +1,7 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Wifi, Clock, AlertTriangle, CheckCircle2, RefreshCw, Activity } from 'lucide-react'
 import { useNavigate } from 'react-router'
-import { useDevices, useSyncStatus, useCommandQueue } from '@/hooks/use-core-data'
+import { useDevices, useSyncStatus, useCommandQueue, useRealtimeDevices } from '@/hooks/use-core-data'
 import { useMemo } from 'react'
 
 // Command freshness threshold (2 minutes)
@@ -10,15 +10,20 @@ const COMMAND_FRESHNESS_MS = 2 * 60 * 1000
 export function HeaderDeviceStatus() {
   const navigate = useNavigate()
   
+  // Subscribe to realtime device updates (last_seen changes)
+  useRealtimeDevices()
+  
   // Use centralized data hooks
-  const { data: devices, isLoading: devicesLoading } = useDevices()
+  const { data: devicesResponse, isLoading: devicesLoading } = useDevices()
   const { data: syncData, isLoading: syncLoading } = useSyncStatus()
   const { data: commands, isLoading: commandsLoading } = useCommandQueue()
+  
+  const devices = devicesResponse?.devices || []
 
   // Calculate derived metrics using centralized data
   const metrics = useMemo(() => {
     const total = devices?.length ?? 0
-    const online = devices?.filter(d => d.isOnline).length ?? 0
+    const online = devices?.filter((d: any) => d.isOnline).length ?? 0
     
     // User sync stats - only count actual failures, not missing optional components
     // face_sync=false is OK if user simply hasn't enrolled face

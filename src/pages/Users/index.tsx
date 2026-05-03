@@ -19,8 +19,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { AlertCircle, AlertTriangle, Search } from 'lucide-react'
+import { AlertCircle, AlertTriangle } from 'lucide-react'
 
 export function Users() {
   const [filters, setFilters] = useState<UserFilters>({
@@ -128,15 +127,6 @@ export function Users() {
         onRefresh={() => refetch()}
         toolbarActions={
           <div className="flex items-center gap-3">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search name, PIN, ID..."
-                value={filters.search || ''}
-                onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value || undefined, page: 1 }))}
-                className="pl-9 h-9 w-56"
-              />
-            </div>
             <Label htmlFor="registration-filter" className="text-sm font-medium">
               Registration:
             </Label>

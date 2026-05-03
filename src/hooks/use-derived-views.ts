@@ -18,9 +18,11 @@ import { queryKeys } from '@/lib/query-keys'
 export function useDeviceWithUsers(deviceSn: string) {
   const hasDeviceSn = !!deviceSn
   
-  const { data: devices, isLoading: devicesLoading } = useDevices({ enabled: hasDeviceSn })
+  const { data: devicesResponse, isLoading: devicesLoading } = useDevices({}, { enabled: hasDeviceSn })
   const { data: syncData, isLoading: syncLoading } = useSyncStatus({ enabled: hasDeviceSn })
   const { data: commands, isLoading: commandsLoading } = useCommandQueue({ enabled: hasDeviceSn })
+  
+  const devices = devicesResponse?.devices || []
   
   return useMemo(() => {
     // If no deviceSn provided, don't show loading - just empty state
@@ -175,10 +177,12 @@ export function useDeviceSyncSummary(deviceSn: string) {
  * Used by: SyncStatusDialog
  */
 export function useUserWithDevices(userId: string) {
-  const { data: devices, isLoading: devicesLoading } = useDevices()
+  const { data: devicesResponse, isLoading: devicesLoading } = useDevices()
   const { data: syncData, isLoading: syncLoading } = useSyncStatus()
   const { data: commands, isLoading: commandsLoading } = useCommandQueue()
   const { data: user, isLoading: userLoading } = useUser(userId)
+  
+  const devices = devicesResponse?.devices || []
   
   return useMemo(() => {
     if (!devices || !syncData) {
@@ -275,13 +279,15 @@ export function useUserSyncProgress(userId: string) {
  * Used by: Dashboard page, Header stats
  */
 export function useDashboardStats() {
-  const { data: devices } = useDevices()
+  const { data: devicesResponse } = useDevices()
   const { data: syncData } = useSyncStatus()
   const { data: commands } = useCommandQueue()
   
+  const devices = devicesResponse?.devices || []
+  
   return useMemo(() => {
     const totalDevices = devices?.length || 0
-    const onlineDevices = devices?.filter(d => d.isOnline).length || 0
+    const onlineDevices = devices?.filter((d: any) => d.isOnline).length || 0
     const offlineDevices = totalDevices - onlineDevices
     
     const totalUsers = new Set(syncData?.map(s => s.user_id)).size
@@ -323,13 +329,15 @@ export function useDashboardStats() {
  * Used by: Dashboard alerts, notification badges
  */
 export function useDevicesNeedingAttention() {
-  const { data: devices } = useDevices()
+  const { data: devicesResponse } = useDevices()
   const { data: syncData } = useSyncStatus()
   
+  const devices = devicesResponse?.devices || []
+  
   return useMemo(() => {
-    const offlineDevices = devices?.filter(d => !d.isOnline) || []
+    const offlineDevices = devices?.filter((d: any) => !d.isOnline) || []
     
-    const devicesWithFailedSyncs = devices?.filter(device => {
+    const devicesWithFailedSyncs = devices?.filter((device: any) => {
       const deviceSyncs = syncData?.filter(s => s.device_sn === device.serial_number)
       return deviceSyncs?.some(s => s.actual_state === 'not_synced')
     }) || []
@@ -354,13 +362,15 @@ export function useDevicesNeedingAttention() {
  */
 export function useRecentOperations(limit: number = 20) {
   const { data: commands } = useCommandQueue()
-  const { data: devices } = useDevices()
+  const { data: devicesResponse } = useDevices()
+  
+  const devices = devicesResponse?.devices || []
   
   return useMemo(() => {
     if (!commands) return []
     
     return commands.slice(0, limit).map(cmd => {
-      const device = devices?.find(d => d.serial_number === cmd.device_sn)
+      const device = devices?.find((d: any) => d.serial_number === cmd.device_sn)
       return {
         id: cmd.id,
         type: cmd.command_type,
@@ -412,10 +422,11 @@ export function useCommandsByStatus() {
  * Available registrar devices for enrollment
  */
 export function useRegistrarDevices() {
-  const { data: devices } = useDevices()
+  const { data: devicesResponse } = useDevices()
+  const devices = devicesResponse?.devices || []
   
   return useMemo(() => {
-    return devices?.filter(d => d.is_registrar && d.isOnline) || []
+    return devices?.filter((d: any) => d.is_registrar && d.isOnline) || []
   }, [devices])
 }
 
@@ -423,7 +434,8 @@ export function useRegistrarDevices() {
  * User enrollment readiness check
  */
 export function useUserEnrollmentReadiness(userId: string) {
-  const { data: devices } = useDevices()
+  const { data: devicesResponse } = useDevices()
+  const devices = devicesResponse?.devices || []
   const { data: biometrics } = useUserBiometrics(userId)
   
   return useMemo(() => {
