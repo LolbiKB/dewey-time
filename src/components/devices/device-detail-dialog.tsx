@@ -420,7 +420,7 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
                 </div>
                 <Button
                   onClick={handleForceSyncAll}
-                  disabled={forceSync.isPending || users.length === 0}
+                  disabled={stats.syncing > 0 || users.length === 0}
                   size="sm"
                 >
                   {forceSync.isPending ? (
@@ -472,7 +472,7 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
                           key={user.userId}
                           user={user}
                           onForceSync={handleForceSyncUser}
-                          isSyncing={forceSync.isPending}
+                          isSyncing={user.isUserSyncing || user.isFingerprintSyncing || user.isFaceSyncing || user.isPhotoSyncing}
                         />
                       ))}
                     </tbody>
