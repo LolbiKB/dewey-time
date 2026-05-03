@@ -31,27 +31,10 @@ export function useForceSync() {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: queryKeys.users.syncStatus(userId) })
       await queryClient.cancelQueries({ queryKey: ['sync-status', 'all'] })
-      await queryClient.cancelQueries({ queryKey: ['commands', 'all'] })
       
       // Snapshot previous values
       const previousUserStatus = queryClient.getQueryData(queryKeys.users.syncStatus(userId))
       const previousAllStatus = queryClient.getQueryData(['sync-status', 'all'])
-      const previousCommands = queryClient.getQueryData(queryKeys.commands.all)
-      
-      // Add fake "preparing" commands to show immediate feedback before real commands exist
-      const preparingCommands = deviceSns.flatMap(sn => [
-        { id: -Date.now() - 1, device_sn: sn, command_type: 'sync_user', status: 'pending', related_user_id: userId, created_at: new Date().toISOString(), isOptimistic: true },
-        { id: -Date.now() - 2, device_sn: sn, command_type: 'upload_photo', status: 'pending', related_user_id: userId, created_at: new Date().toISOString(), isOptimistic: true },
-      ])
-      
-      // Inject preparing commands into cache for immediate feedback
-      queryClient.setQueryData(
-        queryKeys.commands.all,
-        (old: any) => {
-          if (!old || !Array.isArray(old)) return preparingCommands
-          return [...preparingCommands, ...old]
-        }
-      )
       
       // Optimistically update to "syncing"
       const optimisticSync = {
@@ -88,14 +71,11 @@ export function useForceSync() {
         }
       )
       
-      return { previousUserStatus, previousAllStatus, previousCommands, deviceSns }
+      return { previousUserStatus, previousAllStatus, deviceSns }
     },
     
     onError: (error, variables, context) => {
-      // Rollback on error - restore previous commands
-      if (context?.previousCommands) {
-        queryClient.setQueryData(queryKeys.commands.all, context.previousCommands)
-      }
+      // Rollback on error
       if (context?.previousUserStatus) {
         queryClient.setQueryData(
           queryKeys.users.syncStatus(variables.userId),

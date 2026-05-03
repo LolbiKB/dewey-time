@@ -252,7 +252,6 @@ function UserSyncRow({
 export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetailDialogProps) {
   const [activeTab, setActiveTab] = useState('sync')
   const [searchQuery, setSearchQuery] = useState('')
-  const [syncTriggered, setSyncTriggered] = useState(false)
   
   // Use centralized hooks - single source of truth
   const { 
@@ -316,22 +315,12 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
   
   // Real-time updates for commands
   useRealtimeCommands(deviceSn || undefined)
-  
-  // Reset trigger state when syncing completes
-  useEffect(() => {
-    if (syncTriggered && stats.syncing === 0) {
-      setSyncTriggered(false)
-    }
-  }, [syncTriggered, stats.syncing])
 
   // Mutations
   const forceSync = useForceSync()
 
   const handleForceSyncAll = async () => {
     if (!deviceSn || users.length === 0) return
-    
-    // Immediate UI feedback - acknowledge user intent
-    setSyncTriggered(true)
     
     try {
       let totalQueued = 0
@@ -436,17 +425,15 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
                 </div>
                 <Button
                   onClick={handleForceSyncAll}
-                  disabled={syncTriggered || stats.syncing > 0 || users.length === 0}
+                  disabled={forceSync.isPending || users.length === 0}
                   size="sm"
                 >
-                  {syncTriggered ? (
+                  {forceSync.isPending ? (
                     <CheckCircle2 className="h-4 w-4 mr-2" />
-                  ) : forceSync.isPending ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   ) : (
                     <Zap className="h-4 w-4 mr-2" />
                   )}
-                  {syncTriggered ? 'Syncing...' : 'Force Sync All'}
+                  {forceSync.isPending ? 'Syncing...' : 'Force Sync All'}
                 </Button>
               </div>
             </div>
