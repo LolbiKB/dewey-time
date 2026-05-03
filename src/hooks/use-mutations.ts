@@ -31,10 +31,12 @@ export function useForceSync() {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: queryKeys.users.syncStatus(userId) })
       await queryClient.cancelQueries({ queryKey: ['sync-status', 'all'] })
+      await queryClient.cancelQueries({ queryKey: ['commands', 'all'] })
       
       // Snapshot previous values
       const previousUserStatus = queryClient.getQueryData(queryKeys.users.syncStatus(userId))
       const previousAllStatus = queryClient.getQueryData(['sync-status', 'all'])
+      const previousCommands = queryClient.getQueryData(['commands', 'all'])
       
       // Optimistically update to "syncing"
       const optimisticSync = {
@@ -71,7 +73,10 @@ export function useForceSync() {
         }
       )
       
-      return { previousUserStatus, previousAllStatus, deviceSns }
+      // Immediately invalidate commands to fetch new pending commands
+      queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
+      
+      return { previousUserStatus, previousAllStatus, previousCommands, deviceSns }
     },
     
     onError: (error, variables, context) => {
