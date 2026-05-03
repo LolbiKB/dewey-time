@@ -2,7 +2,9 @@
 // Transform core data for specific UI needs without re-fetching
 
 import { useMemo } from 'react'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { useDevices, useSyncStatus, useCommandQueue, useUser, useUserBiometrics } from './use-core-data'
+import { DeviceService } from '@/services/device-service'
 
 // =====================================================
 // DEVICE-CENTRIC DERIVED VIEWS
@@ -436,4 +438,38 @@ export function useUserEnrollmentReadiness(userId: string) {
       missingBiometrics: !hasFingerprint || !hasFace,
     }
   }, [devices, biometrics, userId])
+}
+
+/**
+ * Paginated device users with search support using useInfiniteQuery
+ * Used by: DeviceDetailDialog for large user lists
+ */
+export function useDeviceUsersPaginated(
+  deviceSn: string,
+  options: { limit?: number; search?: string } = {}
+) {
+  const limit = options.limit || 20
+  const search = options.search || ''
+  
+  const query = useInfiniteQuery({
+    queryKey: ['device-users', deviceSn, search],
+    queryFn: async ({ pageParam = 1 }) => {
+      if (!deviceSn) return { data: [], meta: { page: 1, limit: 20, total: 0, totalPages: 0 } }
+      return DeviceService.getDeviceUsers(deviceSn, { 
+        page: pageParam, 
+        limit,
+        search: search || undefined
+      })
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      if (!lastPage?.meta) return undefined
+      const { page, totalPages } = lastPage.meta
+      return page < totalPages ? page + 1 : undefined
+    },
+    enabled: !!deviceSn,
+    staleTime: 30000,
+  })
+
+  return query
 }

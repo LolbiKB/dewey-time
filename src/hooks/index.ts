@@ -29,6 +29,7 @@ export {
   useCommandsByStatus,
   useRegistrarDevices,
   useUserEnrollmentReadiness,
+  useDeviceUsersPaginated,
 } from './use-derived-views'
 
 // Mutations (Data modifications with optimistic updates)

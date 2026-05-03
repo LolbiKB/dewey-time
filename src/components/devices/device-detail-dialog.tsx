@@ -1,5 +1,5 @@
 // Refactored DeviceDetailDialog using centralized hooks
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -39,6 +39,7 @@ import {
   useDeviceWithUsers, 
   useForceSync,
   useRealtimeCommands,
+  useDeviceUsersPaginated,
 } from '@/hooks'
 
 interface DeviceDetailDialogProps {
@@ -255,22 +256,36 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
     users, 
     commands, 
     stats, 
-    isLoading 
   } = useDeviceWithUsers(deviceSn || '')
+  
+  // Infinite query for users (TanStack)
+  const paginatedUsers = useDeviceUsersPaginated(deviceSn || '', {
+    limit: 20,
+    search: searchQuery || undefined,
+  })
+  
+  // Flatten pages into single array
+  const allUsers = useMemo(() => {
+    if (!paginatedUsers.data?.pages) return []
+    return paginatedUsers.data.pages.flatMap(page => page.data || [])
+  }, [paginatedUsers.data])
+  
+  // Reset when search changes
+  useEffect(() => {
+    paginatedUsers.refetch()
+  }, [searchQuery])
+  
+  // Load more on scroll
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLDivElement
+    const nearBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 100
+    if (nearBottom && !paginatedUsers.isLoading && paginatedUsers.hasNextPage) {
+      paginatedUsers.fetchNextPage()
+    }
+  }
   
   // Real-time updates for commands
   useRealtimeCommands(deviceSn || undefined)
-  
-  // Filter users by search query (name, pin, employee_id)
-  const filteredUsers = useMemo(() => {
-    if (!searchQuery.trim()) return users
-    const q = searchQuery.toLowerCase()
-    return users.filter(u => 
-      u.userName?.toLowerCase().includes(q) ||
-      u.userPin?.toString().includes(q) ||
-      u.employeeId?.toLowerCase().includes(q)
-    )
-  }, [users, searchQuery])
 
   // Mutations
   const forceSync = useForceSync()
@@ -394,46 +409,56 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
               </div>
             </div>
 
-            <div className="flex-1 overflow-auto border rounded-lg">
-              {isLoading ? (
+            <div className="flex-1 min-h-0">
+              {paginatedUsers.isLoading && allUsers.length === 0 ? (
                 <div className="flex items-center justify-center h-32">
                   <Loader2 className="h-6 w-6 animate-spin" />
                 </div>
-              ) : filteredUsers.length === 0 ? (
+              ) : allUsers.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-muted-foreground">
                   {searchQuery ? 'No matching users found' : 'No users synced to this device'}
                 </div>
               ) : (
-                <table className="w-full">
-                  <thead className="bg-muted sticky top-0">
-                    <tr>
-                      <th className="px-4 py-2 text-left text-xs font-medium">User</th>
-                      <th className="px-4 py-2 text-center text-xs font-medium w-12">
-                        <Users className="h-4 w-4 mx-auto" />
-                      </th>
-                      <th className="px-4 py-2 text-center text-xs font-medium w-12">
-                        <Fingerprint className="h-4 w-4 mx-auto" />
-                      </th>
-                      <th className="px-4 py-2 text-center text-xs font-medium w-12">
-                        <ScanFace className="h-4 w-4 mx-auto" />
-                      </th>
-                      <th className="px-4 py-2 text-center text-xs font-medium w-12">
-                        <Image className="h-4 w-4 mx-auto" />
-                      </th>
-                      <th className="px-4 py-2 text-right text-xs font-medium w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {filteredUsers.map((user) => (
-                      <UserSyncRow 
-                        key={user.userId}
-                        user={user}
-                        onForceSync={handleForceSyncUser}
-                        isSyncing={forceSync.isPending}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+                <div 
+                  className="h-[300px] overflow-y-auto border rounded-lg"
+                  onScroll={handleScroll}
+                >
+                  <table className="w-full">
+                    <thead className="bg-muted sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium">User</th>
+                        <th className="px-4 py-2 text-center text-xs font-medium w-12">
+                          <Users className="h-4 w-4 mx-auto" />
+                        </th>
+                        <th className="px-4 py-2 text-center text-xs font-medium w-12">
+                          <Fingerprint className="h-4 w-4 mx-auto" />
+                        </th>
+                        <th className="px-4 py-2 text-center text-xs font-medium w-12">
+                          <ScanFace className="h-4 w-4 mx-auto" />
+                        </th>
+                        <th className="px-4 py-2 text-center text-xs font-medium w-12">
+                          <Image className="h-4 w-4 mx-auto" />
+                        </th>
+                        <th className="px-4 py-2 text-right text-xs font-medium w-10"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {allUsers.map((user: any) => (
+                        <UserSyncRow 
+                          key={user.userId}
+                          user={user}
+                          onForceSync={handleForceSyncUser}
+                          isSyncing={forceSync.isPending}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                  {paginatedUsers.isFetchingNextPage && (
+                    <div className="flex justify-center py-4">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </TabsContent>

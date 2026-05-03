@@ -392,5 +392,45 @@ status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
       command_id: data?.id,
     }
   }
+
+  /**
+   * Get paginated users for a specific device via API
+   */
+  static async getDeviceUsers(
+    deviceSn: string,
+    options: { page?: number; limit?: number; search?: string } = {}
+  ): Promise<{ data: any[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
+    const params = new URLSearchParams()
+    if (options.page) params.append('page', String(options.page))
+    if (options.limit) params.append('limit', String(options.limit))
+    if (options.search) params.append('search', options.search)
+
+    const response = await fetch(`/admin/devices/${deviceSn}/users?${params}`, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to fetch device users')
+    }
+
+    return response.json()
+  }
+
+  /**
+   * Get sync summary for a device
+   */
+  static async getDeviceSyncSummary(deviceSn: string): Promise<{ total: number; synced: number; syncing: number; failed: number }> {
+    const response = await fetch(`/admin/devices/${deviceSn}/sync-summary`)
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to fetch sync summary')
+    }
+
+    return response.json()
+  }
 }
 
