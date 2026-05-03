@@ -1,5 +1,5 @@
 // Refactored DeviceDetailDialog using centralized hooks
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Accordion,
@@ -30,6 +31,7 @@ import {
   Image,
   Copy,
   Clock,
+  Search,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
@@ -245,6 +247,7 @@ function UserSyncRow({
 
 export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetailDialogProps) {
   const [activeTab, setActiveTab] = useState('sync')
+  const [searchQuery, setSearchQuery] = useState('')
   
   // Use centralized hooks - single source of truth
   const { 
@@ -258,6 +261,17 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
   // Real-time updates for commands
   useRealtimeCommands(deviceSn || undefined)
   
+  // Filter users by search query (name, pin, employee_id)
+  const filteredUsers = useMemo(() => {
+    if (!searchQuery.trim()) return users
+    const q = searchQuery.toLowerCase()
+    return users.filter(u => 
+      u.userName?.toLowerCase().includes(q) ||
+      u.userPin?.toString().includes(q) ||
+      u.employeeId?.toLowerCase().includes(q)
+    )
+  }, [users, searchQuery])
+
   // Mutations
   const forceSync = useForceSync()
 
@@ -340,7 +354,7 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
           </TabsList>
 
           <TabsContent value="sync" className="flex-1 flex flex-col min-h-0 mt-4">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 gap-4">
               <div className="flex items-center gap-4 text-sm">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -355,18 +369,29 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
                   <span>{stats.failed} failed</span>
                 </div>
               </div>
-              <Button
-                onClick={handleForceSyncAll}
-                disabled={forceSync.isPending || users.length === 0}
-                size="sm"
-              >
-                {forceSync.isPending ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <Zap className="h-4 w-4 mr-2" />
-                )}
-                Force Sync All
-              </Button>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search name, PIN, ID..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9 h-8 w-48 text-sm"
+                  />
+                </div>
+                <Button
+                  onClick={handleForceSyncAll}
+                  disabled={forceSync.isPending || users.length === 0}
+                  size="sm"
+                >
+                  {forceSync.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Zap className="h-4 w-4 mr-2" />
+                  )}
+                  Force Sync All
+                </Button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto border rounded-lg">
@@ -374,9 +399,9 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
                 <div className="flex items-center justify-center h-32">
                   <Loader2 className="h-6 w-6 animate-spin" />
                 </div>
-              ) : users.length === 0 ? (
+              ) : filteredUsers.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-muted-foreground">
-                  No users synced to this device
+                  {searchQuery ? 'No matching users found' : 'No users synced to this device'}
                 </div>
               ) : (
                 <table className="w-full">
@@ -399,7 +424,7 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {users.map((user) => (
+                    {filteredUsers.map((user) => (
                       <UserSyncRow 
                         key={user.userId}
                         user={user}
