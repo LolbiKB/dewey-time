@@ -188,7 +188,8 @@ function StatusIcon({
     return <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
   }
 
-  return <div className="w-5 h-5 rounded-full border-2 border-gray-200 mx-auto" />
+  // No active command - show clock to indicate "needs sync" / "not queued yet"
+  return <Clock className="h-5 w-5 text-gray-400 mx-auto" />
 }
 
 // User row component with detailed sync breakdown
