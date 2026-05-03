@@ -486,6 +486,39 @@ export function useProcessPhoto() {
 // export function useRefreshPhoto() { }
 
 // =====================================================
+// DEVICE COMMAND MUTATIONS
+// =====================================================
+
+/**
+ * Retry a failed command
+ */
+export function useRetryCommand() {
+  const queryClient = useQueryClient()
+  
+  return useMutation({
+    mutationFn: (commandId: number) => DeviceService.retryCommand(commandId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
+    },
+  })
+}
+
+/**
+ * Clear commands for a device
+ */
+export function useClearDeviceCommands() {
+  const queryClient = useQueryClient()
+  
+  return useMutation({
+    mutationFn: ({ deviceSn, commandId }: { deviceSn: string; commandId: number }) => 
+      DeviceService.clearCommand(deviceSn, commandId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
+    },
+  })
+}
+
+// =====================================================
 // CANCELLATION
 // =====================================================
 

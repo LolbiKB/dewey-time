@@ -10,6 +10,7 @@ export {
   useAttendanceLogs,
   useUser,
   useDevice,
+  useDeviceCommands,
   useUserBiometrics,
   useRealtimeCommands,
   useRealtimeSyncStatus,
@@ -47,6 +48,8 @@ export {
   // useRefreshPhoto, // TODO: fix or remove
   useSyncCancel,
   getGlobalCancel,
+  useRetryCommand,
+  useClearDeviceCommands,
 } from './use-mutations'
 
 // Query Keys (Central registry)

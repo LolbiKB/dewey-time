@@ -230,6 +230,32 @@ export function useDevice(deviceSn: string, options?: { enabled?: boolean }) {
   })
 }
 
+/**
+ * Device-specific command queue
+ */
+export function useDeviceCommands(deviceSn: string, options?: { enabled?: boolean; limit?: number }) {
+  const limit = options?.limit ?? 20
+  
+  return useQuery({
+    queryKey: queryKeys.devices.commands(deviceSn),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('command_queue')
+        .select('*')
+        .eq('device_sn', deviceSn)
+        .order('created_at', { ascending: false })
+        .limit(limit)
+      
+      if (error) throw error
+      return data || []
+    },
+    enabled: !!deviceSn,
+    staleTime: 3000,
+    refetchInterval: 5000,
+    ...options,
+  })
+}
+
 export function useUserBiometrics(userId: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.users.biometrics(userId),
