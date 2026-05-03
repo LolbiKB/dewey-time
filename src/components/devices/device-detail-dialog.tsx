@@ -162,32 +162,33 @@ function CommandList({ commands }: { commands: any[] }) {
 // Component to show individual sync component status
 // Simple icon-only status indicator
 function StatusIcon({
-  synced,
   hasData = true,
-  isInProgress = false
+  status = 'never'
 }: {
-  synced: boolean
   hasData?: boolean
-  isInProgress?: boolean
+  status?: 'never' | 'queued' | 'sent' | 'synced' | 'failed'
 }) {
   if (!hasData) {
     return <span className="text-gray-300">-</span>
   }
 
-  if (isInProgress) {
-    return <Loader2 className="h-5 w-5 text-blue-500 animate-spin mx-auto" />
+  switch (status) {
+    case 'failed':
+      return <AlertCircle className="h-5 w-5 text-red-500 mx-auto" />
+    case 'sent':
+      return <Loader2 className="h-5 w-5 text-blue-500 animate-spin mx-auto" />
+    case 'queued':
+      return <Clock className="h-5 w-5 text-amber-500 mx-auto" />
+    case 'synced':
+      return <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
+    case 'never':
+    default:
+      return (
+        <div className="h-5 w-5 mx-auto flex items-center justify-center">
+          <div className="w-4 h-4 rounded-full border-2 border-dashed border-gray-400" />
+        </div>
+      )
   }
-
-  if (synced) {
-    return <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
-  }
-
-  // Not synced - needs sync action
-  return (
-    <div className="h-5 w-5 mx-auto flex items-center justify-center">
-      <div className="w-4 h-4 rounded-full border-2 border-dashed border-gray-400" />
-    </div>
-  )
 }
 
 // User row component with detailed sync breakdown
@@ -213,30 +214,26 @@ function UserSyncRow({
       </td>
       <td className="px-4 py-3 text-center">
         <StatusIcon
-          synced={user.userSynced}
           hasData={true}
-          isInProgress={user.isUserInProgress}
+          status={user.userStatus}
         />
       </td>
       <td className="px-4 py-3 text-center">
         <StatusIcon
-          synced={user.fingerprintSynced}
           hasData={user.hasFingerprint}
-          isInProgress={user.isFingerprintInProgress}
+          status={user.fingerprintStatus}
         />
       </td>
       <td className="px-4 py-3 text-center">
         <StatusIcon
-          synced={user.faceSynced}
           hasData={user.hasFace}
-          isInProgress={user.isFaceInProgress}
+          status={user.faceStatus}
         />
       </td>
       <td className="px-4 py-3 text-center">
         <StatusIcon
-          synced={user.photoSynced}
           hasData={user.hasPhoto}
-          isInProgress={user.isPhotoInProgress}
+          status={user.photoStatus}
         />
       </td>
       <td className="px-4 py-3 text-right">
@@ -277,32 +274,19 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
     if (!paginatedUsers.data?.pages) return []
     const flatUsers = paginatedUsers.data.pages.flatMap(page => page.data || [])
     
-    // Get recent commands for this device (within 2 minutes - both for spinner and checkmark)
-    const TWO_MINUTES = 2 * 60 * 1000
-    const now = Date.now()
-    const recentCommandsForDevice = (commands || []).filter(c => {
-      const commandAge = now - new Date(c.created_at).getTime()
-      return commandAge < TWO_MINUTES
-    })
-    
-    // Compute syncing flags per user from pending/sent commands
+    // Use persistent synced flags directly - no need to check commands
+    // Batch system tracks active sync, persistent flags show final state
     return flatUsers.map(user => {
-      const userCommands = recentCommandsForDevice.filter(c => c.related_user_id === user.userId)
-      
-      const hasSentSyncUser = userCommands.some(c => c.command_type === 'sync_user' && c.status === 'sent')
-      const hasSentFingerprint = userCommands.some(c => c.command_type === 'enroll_fingerprint' && c.status === 'sent')
-      const hasSentFace = userCommands.some(c => c.command_type === 'enroll_face' && c.status === 'sent')
-      const hasSentPhoto = userCommands.some(c => c.command_type === 'upload_photo' && c.status === 'sent')
-      
       return {
         ...user,
-        isUserInProgress: hasSentSyncUser,
-        isFingerprintInProgress: hasSentFingerprint,
-        isFaceInProgress: hasSentFace,
-        isPhotoInProgress: hasSentPhoto,
+        // Status is just based on persistent synced flags
+        userStatus: user.userSynced ? 'synced' : 'never',
+        fingerprintStatus: user.hasFingerprint ? (user.fingerprintSynced ? 'synced' : 'never') : 'never',
+        faceStatus: user.hasFace ? (user.faceSynced ? 'synced' : 'never') : 'never',
+        photoStatus: user.hasPhoto ? (user.photoSynced ? 'synced' : 'never') : 'never',
       }
     })
-  }, [paginatedUsers.data, commands])
+  }, [paginatedUsers.data])
   
   // Reset when search changes
   useEffect(() => {
