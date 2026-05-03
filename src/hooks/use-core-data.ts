@@ -105,32 +105,9 @@ export function useRealtimeDevices() {
           schema: 'public',
           table: 'devices',
         },
-        (payload) => {
-          // Update the devices cache when any device changes
-          queryClient.setQueryData(queryKeys.devices.status(), (old: any) => {
-            if (!old) return old
-            
-            const devices = old.devices || []
-            
-            if (payload.eventType === 'UPDATE') {
-              const updatedDevices = devices.map((d: any) => 
-                d.serial_number === payload.new.serial_number 
-                  ? { ...d, ...payload.new }
-                  : d
-              )
-              return { ...old, devices: updatedDevices }
-            }
-            
-            if (payload.eventType === 'INSERT') {
-              return { ...old, devices: [payload.new, ...devices] }
-            }
-            
-            if (payload.eventType === 'DELETE') {
-              return { ...old, devices: devices.filter((d: any) => d.serial_number !== payload.old.serial_number) }
-            }
-            
-            return old
-          })
+        () => {
+          // Just refetch all devices queries when any device changes
+          queryClient.invalidateQueries({ queryKey: ['devices'] })
         }
       )
       .subscribe()

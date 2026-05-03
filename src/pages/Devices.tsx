@@ -156,7 +156,7 @@ export function Devices() {
       <div className="flex-1 min-h-0">
         <DeviceDataTable
           columns={columns}
-          data={data?.devices || []}
+          data={(data?.devices || []).map(d => ({ ...d, status: d.isOnline ? 'online' : 'offline' }))}
           meta={data ? { total: data.total, page: data.page, limit: data.limit, totalPages: data.totalPages, hasNext: data.hasNext, hasPrev: data.hasPrev } : undefined}
           loading={isLoading}
           isFetching={isFetching}
