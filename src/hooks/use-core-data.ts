@@ -83,8 +83,8 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
         hasPrev: page > 1,
       }
     },
-    staleTime: 5000, // 5 seconds
-    refetchInterval: 5000, // Poll every 5s for online status
+    staleTime: 30000, // 30 seconds - longer since we have realtime
+    // No refetchInterval - rely on realtime for live updates
     ...options,
   })
 }
@@ -159,16 +159,11 @@ export function useSyncStatus(options?: { enabled?: boolean }) {
       if (error) throw error
       return data || []
     },
-    staleTime: 10000, // 10 seconds
-    refetchInterval: 10000, // Poll every 10s
+staleTime: 30000, // 30 seconds - rely on realtime
     ...options,
   })
 }
 
-/**
- * Master command queue query - recent commands across all devices
- * Limited to 100 most recent for performance
- */
 export function useCommandQueue(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.commands.all,
@@ -185,8 +180,7 @@ export function useCommandQueue(options?: { enabled?: boolean }) {
       if (error) throw error
       return data || []
     },
-    staleTime: 3000,
-    refetchInterval: 3000, // 3s polling for real-time feel
+    staleTime: 30000, // 30 seconds - rely on realtime
     ...options,
   })
 }
