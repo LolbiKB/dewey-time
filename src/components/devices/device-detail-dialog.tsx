@@ -166,7 +166,7 @@ function StatusIcon({
   status = 'never'
 }: {
   hasData?: boolean
-  status?: 'never' | 'queued' | 'sent' | 'synced' | 'failed'
+  status?: 'never' | 'syncing' | 'synced' | 'failed'
 }) {
   if (!hasData) {
     return <span className="text-gray-300">-</span>
@@ -175,10 +175,8 @@ function StatusIcon({
   switch (status) {
     case 'failed':
       return <AlertCircle className="h-5 w-5 text-red-500 mx-auto" />
-    case 'sent':
+    case 'syncing':
       return <Loader2 className="h-5 w-5 text-blue-500 animate-spin mx-auto" />
-    case 'queued':
-      return <Clock className="h-5 w-5 text-amber-500 mx-auto" />
     case 'synced':
       return <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
     case 'never':
@@ -260,7 +258,8 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
     device, 
     users, 
     commands, 
-    stats, 
+    stats,
+    batches,
   } = useDeviceWithUsers(deviceSn || '')
   
   // Infinite query for users (TanStack)
@@ -274,19 +273,36 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
     if (!paginatedUsers.data?.pages) return []
     const flatUsers = paginatedUsers.data.pages.flatMap(page => page.data || [])
     
-    // Use persistent synced flags directly - no need to check commands
-    // Batch system tracks active sync, persistent flags show final state
+    // Create batch map for quick lookup
+    const batchMap = new Map((batches || []).map(b => [b.user_id, b]))
+    
+    // Use batch status as single source of truth
     return flatUsers.map(user => {
+      const batch = batchMap.get(user.userId)
+      
+      let userStatus: 'never' | 'syncing' | 'synced' | 'failed' = 'never'
+      if (batch) {
+        if (batch.status === 'pending' || batch.status === 'processing') {
+          userStatus = 'syncing'
+        } else if (batch.status === 'completed') {
+          userStatus = 'synced'
+        } else if (batch.status === 'failed') {
+          userStatus = 'failed'
+        }
+      }
+      
       return {
         ...user,
-        // Status is just based on persistent synced flags
+        // User-level status from batch (primary)
+        batchStatus: userStatus,
+        // Component status still from persistent flags for now
         userStatus: user.userSynced ? 'synced' : 'never',
         fingerprintStatus: user.hasFingerprint ? (user.fingerprintSynced ? 'synced' : 'never') : 'never',
         faceStatus: user.hasFace ? (user.faceSynced ? 'synced' : 'never') : 'never',
         photoStatus: user.hasPhoto ? (user.photoSynced ? 'synced' : 'never') : 'never',
       }
     })
-  }, [paginatedUsers.data])
+  }, [paginatedUsers.data, batches])
   
   // Reset when search changes
   useEffect(() => {

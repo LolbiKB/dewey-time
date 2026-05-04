@@ -2,10 +2,11 @@
 // Transform core data for specific UI needs without re-fetching
 
 import { useMemo } from 'react'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useDevices, useSyncStatus, useCommandQueue, useUser, useUserBiometrics } from './use-core-data'
 import { DeviceService } from '@/services/device-service'
 import { queryKeys } from '@/lib/query-keys'
+import { supabase } from '@/lib/supabase'
 
 // =====================================================
 // DEVICE-CENTRIC DERIVED VIEWS
@@ -21,6 +22,22 @@ export function useDeviceWithUsers(deviceSn: string) {
   const { data: devicesResponse, isLoading: devicesLoading } = useDevices({}, { enabled: hasDeviceSn })
   const { data: syncData, isLoading: syncLoading } = useSyncStatus({ enabled: hasDeviceSn })
   const { data: commands, isLoading: commandsLoading } = useCommandQueue({ enabled: hasDeviceSn })
+  
+  // Fetch batches for this device
+  const { data: batches, isLoading: batchesLoading } = useQuery({
+    queryKey: ['batches', deviceSn],
+    queryFn: async () => {
+      if (!deviceSn) return []
+      const { data, error } = await supabase
+        .from('sync_batches')
+        .select('*')
+        .eq('device_sn', deviceSn)
+      if (error) throw error
+      return data || []
+    },
+    enabled: hasDeviceSn,
+    staleTime: 5000,
+  })
   
   const devices = devicesResponse?.devices || []
   
@@ -121,17 +138,24 @@ export function useDeviceWithUsers(deviceSn: string) {
       .filter(c => c.device_sn === deviceSn)
       .slice(0, 50)
     
-    // Calculate stats - smarter logic for sync status
-    // Count stats based on pending commands (real-time), not database state
-    const syncingCount = users.filter(u => 
-      u.isUserSyncing || u.isFingerprintSyncing || u.isFaceSyncing || u.isPhotoSyncing
+    // Calculate stats from batch status (single source of truth)
+    const syncingCount = (batches || []).filter(b => 
+      b.status === 'pending' || b.status === 'processing'
+    ).length
+    
+    const completedCount = (batches || []).filter(b => 
+      b.status === 'completed'
+    ).length
+    
+    const failedCount = (batches || []).filter(b => 
+      b.status === 'failed'
     ).length
     
     const stats = {
       total: users.length,
-      synced: users.filter(u => u.actualState === 'synced' || u.lastSuccessfulSync).length,
+      synced: completedCount,
       syncing: syncingCount,
-      failed: users.filter(u => u.actualState === 'not_synced' && u.errorMessage).length,
+      failed: failedCount,
     }
     
     return {
@@ -139,9 +163,10 @@ export function useDeviceWithUsers(deviceSn: string) {
       users,
       commands: deviceCommands,
       stats,
-      isLoading: devicesLoading || syncLoading || commandsLoading,
+      batches,
+      isLoading: devicesLoading || syncLoading || commandsLoading || batchesLoading,
     }
-  }, [devices, syncData, commands, deviceSn, devicesLoading, syncLoading, commandsLoading])
+  }, [devices, syncData, commands, batches, deviceSn, devicesLoading, syncLoading, commandsLoading, batchesLoading])
 }
 
 /**
