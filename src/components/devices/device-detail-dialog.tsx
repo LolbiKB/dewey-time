@@ -10,12 +10,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/animate-ui/components/radix/tabs'
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from '@/components/animate-ui/components/radix/accordion'
 import { 
   Wifi, 
   WifiOff, 
@@ -29,7 +23,6 @@ import {
   Fingerprint,
   ScanFace,
   Image,
-  Copy,
   Clock,
   Search,
 } from 'lucide-react'
@@ -42,6 +35,7 @@ import {
   useForceSync,
   useRealtimeCommands,
   useDeviceUsersPaginated,
+  useDeviceBatches,
 } from '@/hooks'
 
 interface DeviceDetailDialogProps {
@@ -50,114 +44,47 @@ interface DeviceDetailDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-// Helper to format command display with size and truncation
-function formatCommandDisplay(command: string, maxLength: number = 200): { display: string; wasTruncated: boolean; size: string } {
-  const size = `${(command.length / 1024).toFixed(1)} KB`
-  
-  if (command.length <= maxLength) {
-    return { display: command, wasTruncated: false, size }
+// Batch history row component
+function BatchHistoryRow({ batch }: { batch: any }) {
+  const statusConfig: Record<string, { icon: any; color: string; label: string }> = {
+    pending: { icon: Clock, color: 'text-amber-500', label: 'Pending' },
+    processing: { icon: Loader2, color: 'text-blue-500', label: 'Processing' },
+    completed: { icon: CheckCircle2, color: 'text-green-500', label: 'Completed' },
+    failed: { icon: AlertCircle, color: 'text-red-500', label: 'Failed' },
   }
-  
-  if (command.includes('Content=') && command.length > maxLength) {
-    const contentIndex = command.indexOf('Content=')
-    const prefix = command.substring(0, contentIndex + 8)
-    const suffix = '... [truncated]'
-    return { display: prefix + suffix, wasTruncated: true, size }
-  }
-  
-  return { display: command.substring(0, maxLength) + '...', wasTruncated: true, size }
-}
+  const config = statusConfig[batch.status] || statusConfig.pending
+  const Icon = config.icon
 
-function getCommandLabel(type: string): string {
-  const labels: Record<string, string> = {
-    sync_user: 'Sync User',
-    enroll_fingerprint: 'Enroll Fingerprint',
-    enroll_face: 'Enroll Face',
-    upload_photo: 'Upload Photo',
-    delete_user: 'Delete User',
-    reboot: 'Reboot',
-    info: 'Info Request',
-    check: 'Force Check',
-  }
-  return labels[type] || type
-}
+  const timeAgo = useMemo(() => {
+    const date = new Date(batch.created_at)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    if (diffMins < 1) return 'just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours}h ago`
+    return format(date, 'MMM d HH:mm')
+  }, [batch.created_at])
 
-// Command list with detailed view using animated accordion
-function CommandList({ commands }: { commands: any[] }) {
-  const statusConfig = {
-    pending: { icon: Clock, color: 'text-gray-500' },
-    sent: { icon: Loader2, color: 'text-blue-500' },
-    success: { icon: CheckCircle2, color: 'text-green-500' },
-    failed: { icon: AlertCircle, color: 'text-red-500' },
-  }
-  
   return (
-    <Accordion type="multiple" className="space-y-2">
-      {commands.map((cmd) => {
-        const cfg = statusConfig[cmd.status as keyof typeof statusConfig] || statusConfig.pending
-        const StatusIcon = cfg.icon
-        const label = getCommandLabel(cmd.command_type)
-        
-        return (
-          <AccordionItem 
-            key={cmd.id} 
-            value={cmd.id.toString()}
-            className={`rounded-lg border ${cmd.status === 'success' ? 'border-green-200' : cmd.status === 'failed' ? 'border-red-200' : cmd.status === 'sent' ? 'border-blue-200' : 'border-gray-200'} bg-white overflow-hidden`}
-          >
-            <AccordionTrigger className="px-3 py-2 hover:no-underline hover:bg-muted/50 transition-colors">
-              <div className="flex items-center gap-3 flex-1">
-                <div className={cfg.color}>
-                  <StatusIcon className={`h-4 w-4 ${cmd.status === 'sent' ? 'animate-spin' : ''}`} />
-                </div>
-                <span className="font-medium text-sm flex-1 text-left">{label}</span>
-                <span className="text-xs text-muted-foreground">
-                  {format(new Date(cmd.created_at), 'MMM d, h:mm a')}
-                </span>
-              </div>
-            </AccordionTrigger>
-            <AccordionContent className="px-3 pb-3">
-              {cmd.status === 'failed' && cmd.error_message && (
-                <div className="text-xs text-red-600 mb-3 flex items-start gap-1 bg-red-50 p-2 rounded">
-                  <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
-                  <span>{cmd.error_message}</span>
-                </div>
-              )}
-              <div className="space-y-2">
-                {(() => {
-                  const { display, wasTruncated, size } = formatCommandDisplay(cmd.command)
-                  return (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-muted-foreground">Command</span>
-                        <span className="text-[10px] text-muted-foreground">{size}</span>
-                      </div>
-                      <code className="text-[10px] font-mono text-muted-foreground block break-all bg-muted p-2 rounded">
-                        {display}
-                      </code>
-                      {wasTruncated && (
-                        <p className="text-[10px] text-muted-foreground">
-                          Command truncated — use Copy to get full command
-                        </p>
-                      )}
-                    </div>
-                  )
-                })()}
-                <button
-                  onClick={() => {
-                    navigator.clipboard?.writeText(cmd.command)
-                    toast.success('Copied')
-                  }}
-                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                >
-                  <Copy className="h-3 w-3" />
-                  Copy
-                </button>
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        )
-      })}
-    </Accordion>
+    <div className="flex items-center gap-3 p-3 border rounded-lg bg-card">
+      <Icon className={`h-5 w-5 ${config.color} ${batch.status === 'processing' ? 'animate-spin' : ''}`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-sm truncate">
+            {batch.user_id.slice(0, 8)}...
+          </span>
+          <span className={`text-xs px-1.5 py-0.5 rounded ${config.color} bg-opacity-10`}>
+            {config.label}
+          </span>
+        </div>
+        <div className="text-xs text-muted-foreground mt-1">
+          {batch.batch_type} · {batch.commands_count} cmds · {batch.completed_count} ok · {batch.failed_count} fail
+        </div>
+      </div>
+      <span className="text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
+    </div>
   )
 }
 
@@ -252,19 +179,21 @@ function UserSyncRow({
 }
 
 export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetailDialogProps) {
-  const [activeTab, setActiveTab] = useState('sync')
+  const [activeTab, setActiveTab] = useState('users')
   const [searchQuery, setSearchQuery] = useState('')
   
   // Use centralized hooks - single source of truth
   const { 
     device, 
     users, 
-    commands, 
     stats,
     batches,
   } = useDeviceWithUsers(deviceSn || '')
   
   const queryClient = useQueryClient()
+  
+  // Batch history for activity tab
+  const batchHistory = useDeviceBatches(deviceSn || '')
   
   // Infinite query for users (TanStack)
   const paginatedUsers = useDeviceUsersPaginated(deviceSn || '', {
@@ -412,17 +341,17 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="sync" className="flex items-center gap-2">
+            <TabsTrigger value="users" className="flex items-center gap-2">
               <Users className="h-4 w-4" />
               Users ({stats.total})
             </TabsTrigger>
-            <TabsTrigger value="commands" className="flex items-center gap-2">
+            <TabsTrigger value="activity" className="flex items-center gap-2">
               <History className="h-4 w-4" />
-              Commands
+              Activity
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="sync" className="flex-1 flex flex-col min-h-0 mt-4">
+          <TabsContent value="users" className="flex-1 flex flex-col min-h-0 mt-4">
             <div className="flex items-center justify-between mb-4 gap-4">
               <div className="flex items-center gap-4 text-sm">
                 <div className="flex items-center gap-2">
@@ -517,14 +446,22 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
             </div>
           </TabsContent>
 
-          <TabsContent value="commands" className="flex-1 flex flex-col min-h-0 mt-4">
-            <div className="flex-1 overflow-y-auto space-y-2">
-              {commands.length === 0 ? (
-                <div className="flex items-center justify-center h-32 text-muted-foreground">
-                  No recent commands
+          <TabsContent value="activity" className="flex-1 flex flex-col min-h-0 mt-4">
+            <div className="flex-1 overflow-y-auto">
+              {batchHistory.isLoading ? (
+                <div className="flex items-center justify-center h-32">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                </div>
+              ) : batchHistory.data && batchHistory.data.length > 0 ? (
+                <div className="space-y-2">
+                  {batchHistory.data.slice(0, 20).map((batch: any) => (
+                    <BatchHistoryRow key={batch.id} batch={batch} />
+                  ))}
                 </div>
               ) : (
-                <CommandList commands={commands} />
+                <div className="flex items-center justify-center h-32 text-muted-foreground">
+                  No recent batch activity
+                </div>
               )}
             </div>
           </TabsContent>
