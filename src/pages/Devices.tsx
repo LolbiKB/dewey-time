@@ -13,7 +13,6 @@ import {
   useUpdateDevice 
 } from '@/hooks'
 import { EditDeviceDialog } from '@/components/devices/edit-device-dialog'
-import { DeviceInfoDialog } from '@/components/devices/device-info-dialog'
 import { DeviceDetailDialog } from '@/components/devices/device-detail-dialog'
 import type { DeviceFilters, DeviceEntry } from '@/services/device-service'
 
@@ -43,8 +42,6 @@ export function Devices() {
 
   const [editDevice, setEditDevice] = useState<DeviceEntry | null>(null)
   const [editOpen, setEditOpen] = useState(false)
-  const [infoDevice, setInfoDevice] = useState<string | null>(null)
-  const [infoOpen, setInfoOpen] = useState(false)
   const [detailDevice, setDetailDevice] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
@@ -100,12 +97,6 @@ export function Devices() {
     }
   }
 
-  // Handle show device info
-  const handleShowInfo = (serialNumber: string) => {
-    setInfoDevice(serialNumber)
-    setInfoOpen(true)
-  }
-
   // Handle show device detail
   const handleShowDetail = (serialNumber: string) => {
     setDetailDevice(serialNumber)
@@ -125,7 +116,6 @@ export function Devices() {
         currentStatusFilter: filters.status,
         onDeviceCommand: handleDeviceCommand,
         onEdit: handleEditDevice,
-        onShowInfo: handleShowInfo,
         onShowDetail: handleShowDetail,
       }),
     [filters]
@@ -173,11 +163,6 @@ export function Devices() {
         onOpenChange={setEditOpen}
         onSave={handleUpdateDevice}
         isSaving={updateDeviceMutation.isPending}
-      />
-      <DeviceInfoDialog
-        deviceSn={infoDevice}
-        open={infoOpen}
-        onOpenChange={setInfoOpen}
       />
       <DeviceDetailDialog
         deviceSn={detailDevice}

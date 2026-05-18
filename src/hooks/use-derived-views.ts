@@ -23,17 +23,51 @@ export function useDeviceWithUsers(deviceSn: string) {
   const { data: syncData, isLoading: syncLoading } = useSyncStatus({ enabled: hasDeviceSn })
   const { data: commands, isLoading: commandsLoading } = useCommandQueue({ enabled: hasDeviceSn })
   
-  // Fetch batches for this device
+  // Fetch sync summary from API
+  const { data: syncSummary, isLoading: summaryLoading } = useQuery({
+    queryKey: ['device-sync-summary', deviceSn],
+    queryFn: () => DeviceService.getDeviceSyncSummary(deviceSn),
+    enabled: hasDeviceSn,
+    staleTime: 10000,
+  })
+  
+  // Fetch batches with user_ids from batch_commands
   const { data: batches, isLoading: batchesLoading } = useQuery({
-    queryKey: ['batches', deviceSn],
+    queryKey: ['batches-detailed', deviceSn],
     queryFn: async () => {
       if (!deviceSn) return []
-      const { data, error } = await supabase
+      const { data: batchData, error } = await supabase
         .from('sync_batches')
         .select('*')
         .eq('device_sn', deviceSn)
+      
       if (error) throw error
-      return data || []
+      if (!batchData || batchData.length === 0) return []
+      
+      // Get batch_ids
+      const batchIds = batchData.map(b => b.id)
+      
+      // Fetch batch_commands to get user_ids for each batch
+      const { data: batchCommands, error: bcError } = await supabase
+        .from('batch_commands')
+        .select('batch_id, user_id')
+        .in('batch_id', batchIds)
+      
+      if (bcError) throw bcError
+      
+      // Map user_ids to batches
+      const userIdByBatch = new Map<string, string>()
+      ;(batchCommands || []).forEach(bc => {
+        if (bc.user_id) {
+          userIdByBatch.set(bc.batch_id, bc.user_id)
+        }
+      })
+      
+      // Attach user_id to each batch
+      return batchData.map(batch => ({
+        ...batch,
+        user_id: userIdByBatch.get(batch.id) || null
+      }))
     },
     enabled: hasDeviceSn,
     staleTime: 5000,
@@ -138,24 +172,12 @@ export function useDeviceWithUsers(deviceSn: string) {
       .filter(c => c.device_sn === deviceSn)
       .slice(0, 50)
     
-    // Calculate stats from batch status (single source of truth)
-    const syncingCount = (batches || []).filter(b => 
-      b.status === 'pending' || b.status === 'processing'
-    ).length
-    
-    const completedCount = (batches || []).filter(b => 
-      b.status === 'completed'
-    ).length
-    
-    const failedCount = (batches || []).filter(b => 
-      b.status === 'failed'
-    ).length
-    
+    // Stats from sync summary API (single source of truth)
     const stats = {
       total: users.length,
-      synced: completedCount,
-      syncing: syncingCount,
-      failed: failedCount,
+      synced: syncSummary?.synced ?? 0,
+      syncing: syncSummary?.syncing ?? 0,
+      failed: syncSummary?.failed ?? 0,
     }
     
     return {
@@ -164,9 +186,9 @@ export function useDeviceWithUsers(deviceSn: string) {
       commands: deviceCommands,
       stats,
       batches,
-      isLoading: devicesLoading || syncLoading || commandsLoading || batchesLoading,
+      isLoading: devicesLoading || syncLoading || commandsLoading || batchesLoading || summaryLoading,
     }
-  }, [devices, syncData, commands, batches, deviceSn, devicesLoading, syncLoading, commandsLoading, batchesLoading])
+  }, [devices, syncData, commands, batches, syncSummary, deviceSn, devicesLoading, syncLoading, commandsLoading, batchesLoading, summaryLoading])
 }
 
 /**

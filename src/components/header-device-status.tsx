@@ -1,7 +1,7 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Wifi, Clock, AlertTriangle, CheckCircle2, RefreshCw, Activity } from 'lucide-react'
 import { useNavigate } from 'react-router'
-import { useDevices, useSyncStatus, useCommandQueue, useRealtimeDevices } from '@/hooks/use-core-data'
+import { useDevices, useSyncStatus, useCommandQueue } from '@/hooks/use-core-data'
 import { useMemo } from 'react'
 
 // Command freshness threshold (2 minutes)
@@ -9,9 +9,6 @@ const COMMAND_FRESHNESS_MS = 2 * 60 * 1000
 
 export function HeaderDeviceStatus() {
   const navigate = useNavigate()
-  
-  // Subscribe to realtime device updates (last_seen changes)
-  useRealtimeDevices()
   
   // Use centralized data hooks
   const { data: devicesResponse, isLoading: devicesLoading } = useDevices()

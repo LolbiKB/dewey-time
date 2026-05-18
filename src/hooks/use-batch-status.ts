@@ -113,8 +113,8 @@ export function useDeviceBatches(deviceSn: string) {
         current.commands++
         if (bc.completed === true) current.completed++
         if (bc.failed === true) current.failed++
-        const cmdType = commandMap.get(bc.command_id)
-        if (cmdType) current.types.add(cmdType)
+        const cmd = commandMap.get(bc.command_id)
+        if (cmd) current.types.add(cmd.command_type)
         batchData.set(bc.batch_id, current)
       }
       

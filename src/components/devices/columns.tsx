@@ -5,9 +5,6 @@ import { Button } from '@/components/ui/button'
 import { 
   MoreHorizontal, 
   RotateCcw, 
-  Info, 
-  RefreshCw, 
-  Send, 
   Wifi,
   WifiOff,
   Edit,
@@ -32,7 +29,6 @@ interface CreateDeviceColumnsProps {
   currentStatusFilter?: string
   onDeviceCommand?: (serialNumber: string, commandType: string, commandBody: string) => void
   onEdit?: (device: DeviceEntry) => void
-  onShowInfo?: (serialNumber: string) => void
   onShowDetail?: (serialNumber: string) => void
 }
 
@@ -47,7 +43,6 @@ export function createDeviceColumns({
   currentStatusFilter,
   onDeviceCommand,
   onEdit,
-  onShowInfo,
   onShowDetail,
 }: CreateDeviceColumnsProps): ColumnDef<DeviceEntry>[] {
   return [
@@ -115,7 +110,6 @@ export function createDeviceColumns({
       cell: ({ row }) => {
         const fpVersion = row.original.fp_algorithm_version
         const faceVersion = row.original.face_algorithm_version
-        const device = row.original
         
         return (
           <div className="flex items-center gap-2">
@@ -134,17 +128,6 @@ export function createDeviceColumns({
               <Badge variant="outline" className="text-muted-foreground">
                 Unknown
               </Badge>
-            )}
-            {onShowInfo && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0"
-                onClick={() => onShowInfo(device.serial_number)}
-                title="View device info"
-              >
-                <Info className="h-3 w-3" />
-              </Button>
             )}
           </div>
         )
@@ -184,8 +167,7 @@ export function createDeviceColumns({
                 <span className="sr-only">Open menu</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {/* Device Info Header */}
+            <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuLabel className="font-normal">
                 <div className="flex flex-col space-y-1">
                   <p className="text-sm font-medium leading-none">{name || 'Unnamed Device'}</p>
@@ -193,34 +175,6 @@ export function createDeviceColumns({
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              
-              {/* Quick Commands Section */}
-              <DropdownMenuLabel className="text-xs">Quick Commands</DropdownMenuLabel>
-              {onShowInfo && (
-                <DropdownMenuItem
-                  onClick={() => onShowInfo(serialNumber)}
-                >
-                  <Info className="mr-2 h-4 h-4" />
-                  Device Info
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                onClick={() => onDeviceCommand?.(serialNumber, 'check', 'CHECK')}
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Force Sync
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDeviceCommand?.(serialNumber, 'log', 'LOG')}
-              >
-                <Send className="mr-2 h-4 w-4" />
-                Push New Logs
-              </DropdownMenuItem>
-              
-              <DropdownMenuSeparator />
-              
-              {/* Device Management Section */}
-              <DropdownMenuLabel className="text-xs">Management</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => onShowDetail?.(serialNumber)}>
                 <Eye className="mr-2 h-4 w-4" />
                 View Sync Details
@@ -229,9 +183,10 @@ export function createDeviceColumns({
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Device
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => onDeviceCommand?.(serialNumber, 'reboot', 'REBOOT')}
-                className="text-destructive focus:text-destructive"
+                className="text-red-600 focus:text-red-600"
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
                 Reboot Device

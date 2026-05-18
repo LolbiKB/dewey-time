@@ -188,7 +188,7 @@ export function useForceSync() {
       toast.error(`Force sync failed: ${error.message}`)
     },
     
-onSuccess: (data, vars) => {
+onSuccess: (data) => {
       toast.success(`Force sync started for ${data.commandsQueued} command(s)`)
     },
 

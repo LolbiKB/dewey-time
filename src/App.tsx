@@ -19,10 +19,11 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
 import { Separator } from '@/components/ui/separator'
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/animate-ui/components/radix/sidebar'
 import { AppSidebar } from '@/components/app-sidebar'
 import { HeaderConnection } from '@/components/header-connection'
 import { HeaderDeviceStatus } from '@/components/header-device-status'
+import { useRealtimeDevices } from '@/hooks/use-core-data'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,6 +57,9 @@ function AppContent() {
   const location = useLocation()
   const pageTitle = routeTitles[location.pathname] || 'Dashboard'
   const { user, isAdmin, loading, isAdminLoading, signOut } = useAuth()
+  
+  // Global realtime for devices - available to all pages
+  useRealtimeDevices()
 
   // Show loading spinner while checking initial auth
   if (loading) {
