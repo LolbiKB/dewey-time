@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useQuery } from '@tanstack/react-query'
 import { PhotoService } from '@/services/photo-service'
+
+const API_URL = import.meta.env.VITE_API_URL || ''
 
 interface UseUserPhotoOptions {
   photoUrl?: string | null
   hasCachedPhoto?: boolean
+  frappeEmployeeId?: string
   userId?: string
   enabled?: boolean
 }
@@ -20,9 +22,10 @@ interface UseUserPhotoResult {
 /**
  * Hook to get photo URL for a user
  * - If hasCachedPhoto is true and userId is provided, resolves the Supabase Storage public URL
- * - Otherwise returns null (don't try to load private Frappe URLs)
+ * - If not cached but frappeEmployeeId is provided, uses the backend proxy URL
+ * - Private Frappe URLs are never returned directly (browser can't access them)
  */
-export function useUserPhoto({ photoUrl, hasCachedPhoto, userId, enabled = true }: UseUserPhotoOptions): UseUserPhotoResult {
+export function useUserPhoto({ photoUrl, hasCachedPhoto, frappeEmployeeId, userId, enabled = true }: UseUserPhotoOptions): UseUserPhotoResult {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -60,7 +63,17 @@ export function useUserPhoto({ photoUrl, hasCachedPhoto, userId, enabled = true 
     return { photoUrl: null, isLoading: true, error: null, isCached: false }
   }
 
-  // Don't return the raw Frappe URL — it's private and browser can't access it
+  // Fall back to Frappe proxy URL for uncached private photos
+  if (frappeEmployeeId && !hasCachedPhoto) {
+    return {
+      photoUrl: `${API_URL}/admin/frappe-employees/${frappeEmployeeId}/photo/image`,
+      isLoading: false,
+      error: null,
+      isCached: false,
+    }
+  }
+
+  // Don't return raw Frappe URL — browser can't access private files
   return { photoUrl: null, isLoading: false, error: null, isCached: false }
 }
 

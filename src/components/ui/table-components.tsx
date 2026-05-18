@@ -174,6 +174,7 @@ interface AvatarCellProps {
   photoUrl?: string | null
   hasCachedPhoto?: boolean
   userId?: string
+  frappeEmployeeId?: string
   fallbackText: string
   size?: 'sm' | 'md' | 'lg'
 }
@@ -182,6 +183,7 @@ export function AvatarCell({
   photoUrl,
   hasCachedPhoto,
   userId,
+  frappeEmployeeId,
   fallbackText,
   size = 'md'
 }: AvatarCellProps) {
@@ -192,11 +194,12 @@ export function AvatarCell({
   }
 
   // Resolve photo URL — uses Supabase Storage URL for cached photos,
-  // returns null for uncached private Frappe URLs (browser can't access them)
+  // proxy URL for uncached private Frappe photos, or null for no photo
   const { photoUrl: displayUrl, isCached } = useUserPhoto({
     photoUrl,
     hasCachedPhoto,
     userId,
+    frappeEmployeeId,
     enabled: true,
   })
 
@@ -226,8 +229,8 @@ export function AvatarCell({
           {initials}
         </AvatarFallback>
       </Avatar>
-      {/* Cloud icon indicator - photo from Frappe, not processed for devices */}
-      {displayUrl && !isCached && (
+      {/* Cloud icon indicator - photo exists in Frappe but not yet processed for devices */}
+      {photoUrl && !hasCachedPhoto && (
         <div 
           className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5"
           title="Photo not processed for devices - click refresh in menu to process"
@@ -243,6 +246,7 @@ interface UserCellProps {
   photoUrl?: string | null
   hasCachedPhoto?: boolean
   userId?: string
+  frappeEmployeeId?: string
   name: string
   secondaryText?: string
   avatarSize?: 'sm' | 'md' | 'lg'
@@ -252,6 +256,7 @@ export function UserCell({
   photoUrl,
   hasCachedPhoto,
   userId,
+  frappeEmployeeId,
   name,
   secondaryText,
   avatarSize = 'sm'
@@ -262,6 +267,7 @@ export function UserCell({
         photoUrl={photoUrl}
         hasCachedPhoto={hasCachedPhoto}
         userId={userId}
+        frappeEmployeeId={frappeEmployeeId}
         fallbackText={name}
         size={avatarSize}
       />

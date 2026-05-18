@@ -25,6 +25,7 @@ export const columns: ColumnDef<UserEntry>[] = [
           photoUrl={user.photo_url}
           hasCachedPhoto={!!user.photo_storage_path}
           userId={user.id}
+          frappeEmployeeId={user.frappe_employee_id}
           name={user.name || 'Unknown'}
           secondaryText={user.frappe_employee_id}
           avatarSize="sm"
