@@ -69,8 +69,8 @@ interface ConfirmationDialogProps {
   isOpen: boolean
   /** Confirmation title */
   title: string
-  /** Confirmation message */
-  message: string
+  /** Confirmation message (string or custom React content) */
+  message: React.ReactNode
   /** Confirm button label */
   confirmLabel?: string
   /** Cancel button label */
@@ -105,9 +105,11 @@ export function ConfirmationDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {message}
-          </DialogDescription>
+          {typeof message === 'string' ? (
+            <DialogDescription>{message}</DialogDescription>
+          ) : (
+            <div className="text-sm text-muted-foreground pt-1">{message}</div>
+          )}
         </DialogHeader>
         <DialogFooter>
           <Button
