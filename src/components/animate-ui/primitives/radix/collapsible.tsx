@@ -55,6 +55,8 @@ type CollapsibleContentProps = Omit<
 function CollapsibleContent({
   keepRendered = false,
   transition = { duration: 0.35, ease: 'easeInOut' },
+  className,
+  children,
   ...props
 }: CollapsibleContentProps) {
   const { open } = useCollapsible();
@@ -62,7 +64,7 @@ function CollapsibleContent({
   return (
     <AnimatePresence>
       {keepRendered ? (
-        <CollapsiblePrimitive.Content asChild forceMount>
+        <CollapsiblePrimitive.Content forceMount>
           <motion.div
             key="collapsible-content"
             data-slot="collapsible-content"
@@ -74,12 +76,15 @@ function CollapsibleContent({
             }
             transition={transition}
             style={{ overflow: 'hidden' }}
+            className={className}
             {...props}
-          />
+          >
+            {children}
+          </motion.div>
         </CollapsiblePrimitive.Content>
       ) : (
         open && (
-          <CollapsiblePrimitive.Content asChild forceMount>
+          <CollapsiblePrimitive.Content forceMount>
             <motion.div
               key="collapsible-content"
               data-slot="collapsible-content"
@@ -88,8 +93,11 @@ function CollapsibleContent({
               exit={{ height: 0, opacity: 0 }}
               transition={transition}
               style={{ overflow: 'hidden' }}
+              className={className}
               {...props}
-            />
+            >
+              {children}
+            </motion.div>
           </CollapsiblePrimitive.Content>
         )
       )}
