@@ -24,6 +24,7 @@ export const columns: ColumnDef<UserEntry>[] = [
         <UserCell
           photoUrl={user.photo_url}
           hasCachedPhoto={!!user.photo_storage_path}
+          userId={user.id}
           name={user.name || 'Unknown'}
           secondaryText={user.frappe_employee_id}
           avatarSize="sm"

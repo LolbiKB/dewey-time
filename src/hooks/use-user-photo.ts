@@ -1,9 +1,12 @@
+import { useState, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
 import { useQuery } from '@tanstack/react-query'
 import { PhotoService } from '@/services/photo-service'
 
 interface UseUserPhotoOptions {
   photoUrl?: string | null
   hasCachedPhoto?: boolean
+  userId?: string
   enabled?: boolean
 }
 
@@ -16,37 +19,59 @@ interface UseUserPhotoResult {
 
 /**
  * Hook to get photo URL for a user
- * - If hasCachedPhoto is true, the photo_url is from bucket (processed)
- * - Otherwise, photo_url is from Frappe (not processed)
+ * - If hasCachedPhoto is true and userId is provided, resolves the Supabase Storage public URL
+ * - Otherwise returns null (don't try to load private Frappe URLs)
  */
-export function useUserPhoto({ photoUrl, hasCachedPhoto, enabled = true }: UseUserPhotoOptions): UseUserPhotoResult {
-  // Just return the URL directly - no async fetch needed
-  if (!photoUrl || !enabled) {
-    return {
-      photoUrl: null,
-      isLoading: false,
-      error: null,
-      isCached: false,
+export function useUserPhoto({ photoUrl, hasCachedPhoto, userId, enabled = true }: UseUserPhotoOptions): UseUserPhotoResult {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!enabled || !hasCachedPhoto || !userId) {
+      setResolvedUrl(null)
+      return
     }
+
+    let cancelled = false
+    setLoading(true)
+
+    PhotoService.getPhotoUrl(userId).then(url => {
+      if (!cancelled) {
+        setResolvedUrl(url)
+        setLoading(false)
+      }
+    }).catch(() => {
+      if (!cancelled) setLoading(false)
+    })
+
+    return () => { cancelled = true }
+  }, [userId, hasCachedPhoto, enabled])
+
+  if (!enabled) {
+    return { photoUrl: null, isLoading: false, error: null, isCached: false }
   }
 
-  return {
-    photoUrl: photoUrl,
-    isLoading: false,
-    error: null,
-    isCached: hasCachedPhoto ?? false,
+  // Prefer Supabase Storage URL (public, always accessible)
+  if (hasCachedPhoto && resolvedUrl) {
+    return { photoUrl: resolvedUrl, isLoading: false, error: null, isCached: true }
   }
+
+  if (loading) {
+    return { photoUrl: null, isLoading: true, error: null, isCached: false }
+  }
+
+  // Don't return the raw Frappe URL — it's private and browser can't access it
+  return { photoUrl: null, isLoading: false, error: null, isCached: false }
 }
 
 /**
  * Hook to get photo cache status for multiple users
- * Useful for tables/lists to batch check cache status
  */
 export function usePhotoCacheStatus(userIds: string[]) {
   return useQuery({
     queryKey: ['photo-cache-status', userIds],
     queryFn: () => PhotoService.getPhotoCacheStatus(userIds),
     enabled: userIds.length > 0,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
   })
 }

@@ -173,6 +173,7 @@ export function BadgeCell({
 interface AvatarCellProps {
   photoUrl?: string | null
   hasCachedPhoto?: boolean
+  userId?: string
   fallbackText: string
   size?: 'sm' | 'md' | 'lg'
 }
@@ -180,6 +181,7 @@ interface AvatarCellProps {
 export function AvatarCell({
   photoUrl,
   hasCachedPhoto,
+  userId,
   fallbackText,
   size = 'md'
 }: AvatarCellProps) {
@@ -189,11 +191,13 @@ export function AvatarCell({
     lg: 'h-12 w-12 text-base'
   }
 
-  // Use cached photo hook
+  // Resolve photo URL — uses Supabase Storage URL for cached photos,
+  // returns null for uncached private Frappe URLs (browser can't access them)
   const { photoUrl: displayUrl, isCached } = useUserPhoto({
     photoUrl,
     hasCachedPhoto,
-    enabled: !!photoUrl,
+    userId,
+    enabled: true,
   })
 
   // Get initials from fallback text (max 2 characters)
@@ -238,6 +242,7 @@ export function AvatarCell({
 interface UserCellProps {
   photoUrl?: string | null
   hasCachedPhoto?: boolean
+  userId?: string
   name: string
   secondaryText?: string
   avatarSize?: 'sm' | 'md' | 'lg'
@@ -246,6 +251,7 @@ interface UserCellProps {
 export function UserCell({
   photoUrl,
   hasCachedPhoto,
+  userId,
   name,
   secondaryText,
   avatarSize = 'sm'
@@ -255,6 +261,7 @@ export function UserCell({
       <AvatarCell
         photoUrl={photoUrl}
         hasCachedPhoto={hasCachedPhoto}
+        userId={userId}
         fallbackText={name}
         size={avatarSize}
       />
