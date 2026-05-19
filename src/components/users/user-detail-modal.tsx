@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { ConfirmationDialog } from '@/components/ui/base-modal'
 import { useUserPhoto } from '@/hooks/use-user-photo'
 import {
   RefreshCw,
@@ -399,6 +400,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
   const [activeTab, setActiveTab] = useState('sync')
   const [enrollOpen, setEnrollOpen] = useState(false)
   const [copiedPin, setCopiedPin] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; bioId?: string; type?: 'fingerprint' | 'face'; fingerId?: number }>({ open: false })
 
   const userId = user?.id || ''
   const refetchInterval = open ? 3000 : undefined
@@ -463,13 +465,20 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
     syncUser.mutate({ userId: user.id, deviceSns: [deviceSn] })
   }
 
-  const handleDeleteBiometric = async (_bioId: string, type: 'fingerprint' | 'face', fingerId?: number) => {
-    if (!user?.id) return
+  const handleDeleteBiometric = (bioId: string, type: 'fingerprint' | 'face', fingerId?: number) => {
+    setDeleteConfirm({ open: true, bioId, type, fingerId })
+  }
+
+  const confirmDeleteBiometric = async () => {
+    if (!user?.id || !deleteConfirm.bioId) return
     try {
-      await deleteBiometric.mutateAsync({ userId: user.id, type, fingerId })
+      await deleteBiometric.mutateAsync({ userId: user.id, type: deleteConfirm.type!, fingerId: deleteConfirm.fingerId })
       refetchBiometrics()
       onRefreshList?.()
-    } catch {}
+    } catch (error: any) {
+      toast.error(`Failed to delete biometric: ${error.message}`)
+    }
+    setDeleteConfirm({ open: false })
   }
 
   const isSyncing = globalSyncState.active
@@ -681,6 +690,17 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
           <EnrollContent user={user} onSuccess={() => { refetchBiometrics(); onRefreshList?.() }} />
         </DialogContent>
       </Dialog>
+
+      <ConfirmationDialog
+        isOpen={deleteConfirm.open}
+        title="Delete Biometric"
+        message={`Are you sure you want to delete this ${deleteConfirm.type === 'fingerprint' ? 'fingerprint' : 'face'} template? This will sync the deletion to all devices.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        isProcessing={deleteBiometric.isPending}
+        onConfirm={confirmDeleteBiometric}
+        onCancel={() => setDeleteConfirm({ open: false })}
+      />
     </>
   )
 }
