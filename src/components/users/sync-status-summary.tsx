@@ -56,12 +56,11 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
         <Tooltip>
           <TooltipTrigger asChild>
             <Badge
+              variant="secondary"
               className={`gap-1.5 cursor-help ${
                 is_fully_synced
-                  ? 'bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950 dark:text-green-400'
-                  : not_synced > 0
-                    ? 'bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300'
-                    : 'bg-gray-100 text-gray-800 hover:bg-gray-100'
+                  ? 'text-green-700 dark:text-green-400'
+                  : 'text-gray-500 dark:text-gray-400'
               }`}
             >
               {is_fully_synced && <Check className="h-3 w-3" />}
@@ -101,12 +100,12 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium">Sync Status:</span>
         {is_fully_synced ? (
-          <Badge className="gap-1.5 bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950 dark:text-green-400">
+          <Badge variant="secondary" className="gap-1.5 text-green-700 dark:text-green-400">
             <Check className="h-3 w-3" />
             All devices synced
           </Badge>
         ) : (
-          <Badge className="gap-1.5 bg-gray-100 text-gray-800 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300">
+          <Badge variant="secondary" className="gap-1.5 text-gray-500 dark:text-gray-400">
             {synced}/{total_devices} devices
           </Badge>
         )}

@@ -91,7 +91,7 @@ export function createDeviceColumns({
         
         return (
           <div className="flex justify-center">
-            <Badge className={isOnline ? 'bg-green-100 text-green-800 hover:bg-green-100 border-transparent' : 'bg-gray-100 text-gray-800 hover:bg-gray-100 border-transparent'}>
+            <Badge variant="secondary" className={isOnline ? 'text-green-700' : 'text-gray-500'}>
               {isOnline ? (
                 <Wifi className="h-3 w-3 mr-1" />
               ) : (

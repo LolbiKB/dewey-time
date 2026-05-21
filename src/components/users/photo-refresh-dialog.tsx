@@ -193,7 +193,7 @@ export function PhotoRefreshDialog({ user, open, onOpenChange, onSuccess }: Phot
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Cached in Bridge:</span>
               {photoInfo?.hasCached ? (
-                <Badge variant="default" className="gap-1">
+                <Badge variant="secondary" className="gap-1 text-green-700">
                   <Check className="h-3 w-3" />
                   Yes
                 </Badge>

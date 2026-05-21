@@ -10,6 +10,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/animate-ui/components/radix/tabs'
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from '@/components/animate-ui/components/radix/accordion'
+import { Badge } from '@/components/ui/badge'
 import { 
   Wifi, 
   WifiOff, 
@@ -23,11 +30,11 @@ import {
   Image,
   Clock,
   Search,
-  ChevronDown,
   Info,
   MapPin,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { Sparkles } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-keys'
@@ -72,7 +79,7 @@ function StatusIcon({
   }
 }
 
-// User row component with expandable details
+// User row component with animated accordion
 function UserSyncRow({
   user,
   onForceSync,
@@ -82,87 +89,81 @@ function UserSyncRow({
   onForceSync: (userId: string) => void
   isSyncing: boolean
 }) {
-  const [expanded, setExpanded] = useState(false)
-  
   return (
-    <div className="border rounded-lg overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 hover:bg-muted/30 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}>
-        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        <div className="flex-1 min-w-0 flex items-center gap-2">
-          <span className="text-sm font-medium">{user.userName}</span>
-          {user.employeeId && (
-            <span className="text-[10px] font-mono bg-slate-200/60 px-1 py-0.5 rounded">{user.employeeId}</span>
-          )}
-          <span className={`w-1.5 h-1.5 rounded-full ${
-            user.userStatus === 'synced' ? 'bg-green-500' :
-            user.userStatus === 'syncing' ? 'bg-blue-500' :
-            user.userStatus === 'failed' ? 'bg-red-500' :
-            'bg-gray-400'
-          }`} />
-          <span className="text-xs text-muted-foreground">PIN: {user.userPin}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <StatusIcon hasData={true} status={user.userStatus} />
-          <StatusIcon hasData={user.hasFingerprint} status={user.fingerprintStatus} />
-          <StatusIcon hasData={user.hasFace} status={user.faceStatus} />
-          <StatusIcon hasData={user.hasPhoto} status={user.photoStatus} />
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={(e) => { e.stopPropagation(); onForceSync(user.userId) }}
-          disabled={isSyncing}
-          title={isSyncing ? 'Sync in progress' : 'Force sync'}
-        >
-          {isSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
-        </Button>
-      </div>
-      
-      {/* Expanded details */}
-      {expanded && (
-        <div className="px-4 pb-3 pt-3 border-t bg-slate-50/50 text-sm space-y-3">
+    <Accordion type="single" collapsible className="border rounded-lg overflow-hidden">
+      <AccordionItem value={user.userId} className="border-0">
+        <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <span className="text-sm font-medium">{user.userName}</span>
+            {user.employeeId && (
+              <Badge variant="secondary" className="text-[10px] font-mono">{user.employeeId}</Badge>
+            )}
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              user.userStatus === 'synced' ? 'bg-green-500' :
+              user.userStatus === 'syncing' ? 'bg-blue-500' :
+              user.userStatus === 'failed' ? 'bg-red-500' :
+              'bg-gray-400'
+            }`} />
+            <span className="text-xs text-muted-foreground">PIN: {user.userPin}</span>
+          </div>
+          <div className="flex items-center gap-1 ml-auto">
+            <StatusIcon hasData={true} status={user.userStatus} />
+            <StatusIcon hasData={user.hasFingerprint} status={user.fingerprintStatus} />
+            <StatusIcon hasData={user.hasFace} status={user.faceStatus} />
+            <StatusIcon hasData={user.hasPhoto} status={user.photoStatus} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => { e.stopPropagation(); onForceSync(user.userId) }}
+              disabled={isSyncing}
+              title={isSyncing ? 'Sync in progress' : 'Force sync'}
+            >
+              {isSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+            </Button>
+          </div>
+        </AccordionTrigger>
+        <AccordionContent className="px-4 pb-3 pt-2">
           {/* Biometric status cards */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 gap-2 text-xs">
             <div className={`p-2 rounded-lg ${user.fingerprintStatus === 'synced' ? 'bg-green-50 border border-green-200' : user.fingerprintStatus === 'syncing' ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'}`}>
-              <div className="flex items-center gap-1.5 mb-1">
+              <div className="flex items-center gap-1 mb-1">
                 <Fingerprint className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-xs font-medium">Fingerprint</span>
+                <span className="font-medium">Fingerprint</span>
               </div>
-              <div className="text-[10px] text-muted-foreground">{user.fingerprintStatus}</div>
+              <div className="text-muted-foreground">{user.fingerprintStatus}</div>
             </div>
             <div className={`p-2 rounded-lg ${user.faceStatus === 'synced' && user.hasFace ? 'bg-green-50 border border-green-200' : user.faceStatus === 'syncing' ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'}`}>
-              <div className="flex items-center gap-1.5 mb-1">
+              <div className="flex items-center gap-1 mb-1">
                 <ScanFace className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-xs font-medium">Face</span>
+                <span className="font-medium">Face</span>
               </div>
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-muted-foreground">
                 {user.hasFace ? user.faceStatus : 'not enrolled'}
               </div>
             </div>
             <div className={`p-2 rounded-lg ${user.photoStatus === 'synced' ? 'bg-green-50 border border-green-200' : user.photoStatus === 'syncing' ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'}`}>
-              <div className="flex items-center gap-1.5 mb-1">
+              <div className="flex items-center gap-1 mb-1">
                 <Image className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-xs font-medium">Photo</span>
+                <span className="font-medium">Photo</span>
               </div>
-              <div className="text-[10px] text-muted-foreground">{user.photoStatus}</div>
+              <div className="text-muted-foreground">{user.photoStatus}</div>
             </div>
           </div>
           
           {/* Metadata */}
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <div className="flex items-center gap-4 text-xs text-muted-foreground mt-3">
             <span>Last attempt: {user.lastSyncAttempt ? new Date(user.lastSyncAttempt).toLocaleString() : 'Never'}</span>
           </div>
           
           {/* Error message */}
           {user.errorMessage && (
-            <div className="text-xs text-red-600 p-2 bg-red-50 border border-red-200 rounded-lg">
+            <div className="text-xs text-red-600 p-2 bg-red-50 border border-red-200 rounded-lg mt-2">
               {user.errorMessage}
             </div>
           )}
-        </div>
-      )}
-    </div>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   )
 }
 
@@ -341,18 +342,30 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
           <TabsContent value="users" className="flex-1 flex flex-col min-h-0 mt-4">
             <div className="flex items-center justify-between mb-4 gap-4">
               <div className="flex items-center gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  <span>{stats.synced} synced</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Loader2 className={`h-4 w-4 text-blue-500 ${stats.syncing > 0 ? 'animate-spin' : ''}`} />
-                  <span>{stats.syncing} syncing</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="h-4 w-4 rounded-full border-2 border-dashed border-gray-400" />
-                  <span>{(stats as any).notSynced || (stats as any).failed || 0} pending</span>
-                </div>
+                {stats.synced > 0 && (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    <span>{stats.synced} synced</span>
+                  </div>
+                )}
+                {stats.syncing > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+                    <span>{stats.syncing} syncing</span>
+                  </div>
+                )}
+                {(stats as any).cleaning > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-purple-500" />
+                    <span>{(stats as any).cleaning} cleaning</span>
+                  </div>
+                )}
+                {(stats as any).notSynced > 0 && (
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-4 rounded-full border-2 border-dashed border-gray-400" />
+                    <span>{(stats as any).notSynced} pending</span>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">

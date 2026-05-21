@@ -65,15 +65,15 @@ export const columns: ColumnDef<UserEntry>[] = [
       if (!status) return <span className="text-xs text-muted-foreground">-</span>
 
       const statusConfig = {
-        active: { label: 'Active', className: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-400' },
-        inactive: { label: 'Inactive', className: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400' },
-        compromised: { label: 'Compromised', className: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400' },
-        archived: { label: 'Archived', className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-400' },
+        active: { label: 'Active', className: 'text-green-700 dark:text-green-400' },
+        inactive: { label: 'Inactive', className: 'text-gray-500 dark:text-gray-400' },
+        compromised: { label: 'Compromised', className: 'text-red-700 dark:text-red-400' },
+        archived: { label: 'Archived', className: 'text-slate-500 dark:text-slate-400' },
       }
 
       const config = statusConfig[status]
       return (
-        <Badge className={config.className}>
+        <Badge variant="secondary" className={config.className}>
           {config.label}
         </Badge>
       )
@@ -89,7 +89,7 @@ export const columns: ColumnDef<UserEntry>[] = [
       if (!isFlagged) return null
 
       return (
-        <Badge variant="destructive" className="gap-1" title="Suspicious attendance detected">
+        <Badge variant="secondary" className="gap-1 text-red-700" title="Suspicious attendance detected">
           <AlertTriangle className="h-3 w-3" />
         </Badge>
       )

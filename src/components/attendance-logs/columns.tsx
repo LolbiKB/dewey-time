@@ -143,14 +143,14 @@ export function createAttendanceLogColumns({
       cell: ({ row }) => {
         const type = row.getValue('verify_type') as number
         const config: Record<number, { label: string; className: string; icon: typeof KeyRound }> = {
-          0: { label: 'Password', className: 'bg-gray-100 text-gray-800', icon: KeyRound },
-          1: { label: 'Fingerprint', className: 'bg-blue-100 text-blue-800', icon: Fingerprint },
-          15: { label: 'Face', className: 'bg-purple-100 text-purple-800', icon: ScanFace },
-          255: { label: 'Other', className: 'bg-slate-100 text-slate-800', icon: KeyRound },
+          0: { label: 'Password', className: 'text-gray-600', icon: KeyRound },
+          1: { label: 'Fingerprint', className: 'text-blue-700', icon: Fingerprint },
+          15: { label: 'Face', className: 'text-purple-700', icon: ScanFace },
+          255: { label: 'Other', className: 'text-slate-600', icon: KeyRound },
         }
         const { label, className, icon: Icon } = config[type] || config[255]
         return (
-          <Badge className={`${className} border-transparent pointer-events-none`}>
+          <Badge variant="secondary" className={`${className} pointer-events-none`}>
             <Icon className="h-3 w-3 mr-1" />
             {label}
           </Badge>
@@ -177,13 +177,13 @@ export function createAttendanceLogColumns({
       cell: ({ row }) => {
         const status = row.getValue('status') as number
         const config: Record<number, { label: string; className: string }> = {
-          0: { label: 'Check-In', className: 'bg-green-100 text-green-800' },
-          1: { label: 'Check-Out', className: 'bg-amber-100 text-amber-800' },
-          255: { label: 'Unknown', className: 'bg-gray-100 text-gray-800' },
+          0: { label: 'Check-In', className: 'text-green-700' },
+          1: { label: 'Check-Out', className: 'text-amber-700' },
+          255: { label: 'Unknown', className: 'text-gray-500' },
         }
         const { label, className } = config[status] || config[255]
         return (
-          <Badge className={`${className} border-transparent pointer-events-none`}>
+          <Badge variant="secondary" className={`${className} pointer-events-none`}>
             {label}
           </Badge>
         )

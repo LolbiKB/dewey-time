@@ -27,6 +27,7 @@ import {
   Loader2,
   Fingerprint,
   ScanFace,
+  Image,
   Wifi,
   WifiOff,
   CheckCircle2,
@@ -38,6 +39,7 @@ import {
   UserPlus,
   CloudOff,
   Sparkles,
+  Copy,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -129,7 +131,7 @@ function DeviceCard({ status, device, commands, onSync, isSyncing, hasFace, fing
               </div>
             </div>
             <div className={cn("p-2 rounded-lg", status.photo_synced ? "bg-green-50 border border-green-200" : "bg-gray-50")}>
-              <div className="flex items-center gap-1 mb-1"><X className="h-3 w-3" /><span className="font-medium">Photo</span></div>
+              <div className="flex items-center gap-1 mb-1"><Image className="h-3 w-3" /><span className="font-medium">Photo</span></div>
               <div className="text-muted-foreground">{status.photo_synced ? 'synced' : 'pending'}</div>
             </div>
           </div>
@@ -562,12 +564,12 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
                   {user.frappe_employee_id && <span>{user.frappe_employee_id}</span>}
                   {user.pin && (
                     <button onClick={handleCopyPin} className="flex items-center gap-1 font-mono bg-muted px-1.5 py-0.5 rounded hover:bg-muted/80">
-                      {copiedPin ? <CheckCircle2 className="h-3 w-3 text-green-500" /> : <X className="h-3 w-3" />}
+                      {copiedPin ? <CheckCircle2 className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
                       PIN {user.pin}
                     </button>
                   )}
                   {user.status && isRegistered && (
-                    <Badge variant={user.status === 'active' ? 'default' : 'secondary'} className="text-[10px]">{user.status}</Badge>
+                    <Badge variant="secondary" className="text-[10px]">{user.status}</Badge>
                   )}
                   {!isRegistered && <Badge variant="outline" className="text-[10px]">Unregistered</Badge>}
                 </DialogDescription>

@@ -130,13 +130,13 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
   const getStatusBadge = (status?: string) => {
     if (status === 'online') {
       return (
-        <Badge className="bg-green-100 text-green-800">
+        <Badge variant="secondary" className="text-green-700">
           <Wifi className="h-3 w-3 mr-1" /> Online
         </Badge>
       )
     }
     return (
-      <Badge variant="outline" className="text-gray-600">
+      <Badge variant="secondary" className="text-gray-500">
         <WifiOff className="h-3 w-3 mr-1" /> Offline
       </Badge>
     )
@@ -149,21 +149,21 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
       case 'pending':
       case 'sent':
         return (
-          <Badge variant="outline" className="gap-1">
+        <Badge variant="secondary" className="gap-1 text-blue-700">
             <Loader2 className="h-3 w-3 animate-spin" />
             {commandResult.status === 'sent' ? 'Sent to device...' : 'Queued...'}
           </Badge>
         )
       case 'success':
-        return (
-          <Badge className="bg-green-100 text-green-800 gap-1">
-            <CheckCircle2 className="h-3 w-3" />
-            Received
-          </Badge>
+          return (
+            <Badge variant="secondary" className="gap-1 text-green-700">
+              <CheckCircle2 className="h-3 w-3" />
+              Received
+            </Badge>
         )
       case 'failed':
         return (
-          <Badge variant="destructive" className="gap-1">
+          <Badge variant="secondary" className="gap-1 text-red-700">
             <AlertCircle className="h-3 w-3" />
             Failed
           </Badge>
