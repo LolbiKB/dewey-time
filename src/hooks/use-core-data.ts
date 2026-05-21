@@ -83,7 +83,7 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
     ...options,
   })
   
-  // Initialize pipeline with query data
+  // Initialize pipeline with query data whenever it changes
   useInitializeDevicePipeline(query.data?.devices)
   
   // Get real-time statuses from pipeline
@@ -93,11 +93,24 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
   const enrichedData = useMemo(() => {
     if (!query.data) return undefined
     
+    // If pipeline has data, use it; otherwise calculate directly from last_seen
     const devicesWithStatus = query.data.devices.map(device => {
       const status = statuses.get(device.serial_number)
+      if (status) {
+        return {
+          ...device,
+          isOnline: status.isOnline,
+        }
+      }
+      
+      // Fallback: calculate directly from last_seen if pipeline hasn't synced yet
+      const isOnline = device.last_seen 
+        ? (Date.now() - new Date(device.last_seen).getTime()) < 60000 
+        : false
+      
       return {
         ...device,
-        isOnline: status?.isOnline ?? false,
+        isOnline,
       }
     })
     

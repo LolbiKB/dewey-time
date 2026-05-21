@@ -231,15 +231,13 @@ export function useAllDeviceStatuses(): Map<string, DeviceStatus> {
   const [statuses, setStatuses] = useState<Map<string, DeviceStatus>>(() => 
     new Map(pipeline.getAllStatuses())
   )
-  const updateCount = useRef(0)
 
   useEffect(() => {
+    // Immediately get current state when subscribing
+    setStatuses(new Map(pipeline.getAllStatuses()))
+    
     const unsubscribe = pipeline.subscribe('*', () => {
-      // Batch updates to avoid excessive re-renders
-      updateCount.current++
-      if (updateCount.current % 5 === 0 || updateCount.current === 1) {
-        setStatuses(new Map(pipeline.getAllStatuses()))
-      }
+      setStatuses(new Map(pipeline.getAllStatuses()))
     })
 
     return () => unsubscribe()
