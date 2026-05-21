@@ -92,7 +92,7 @@ function UserSyncRow({
   return (
     <Accordion type="single" collapsible className="border rounded-lg overflow-hidden">
       <AccordionItem value={user.userId} className="border-0">
-        <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
+        <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 hover:no-underline rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <span className="text-sm font-medium">{user.userName}</span>
             {user.employeeId && (

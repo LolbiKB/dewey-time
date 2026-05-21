@@ -105,7 +105,7 @@ function DeviceCard({ status, device, commands, onSync, isSyncing, hasFace, fing
   return (
     <Accordion type="single" collapsible className="border rounded-lg overflow-hidden">
       <AccordionItem value={status.id} className="border-0">
-        <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
+        <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 hover:no-underline rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isOnline ? "bg-green-500" : "bg-gray-400")} />
             {allSynced && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
