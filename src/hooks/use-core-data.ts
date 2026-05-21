@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { queryKeys } from '@/lib/query-keys'
 import { UserService } from '@/services/user-service'
 import { useEffect, useMemo } from 'react'
-import { deviceStatusPipeline, useInitializeDevicePipeline, useAllDeviceStatuses } from '@/lib/device-status-pipeline'
+import { isDeviceOnline } from '@/lib/device-status'
 
 export interface DeviceFilters {
   page?: number
@@ -21,7 +21,7 @@ export interface DeviceFilters {
 
 /**
  * Master device query - single source for all device data
- * Uses central device status pipeline for real-time online/offline status
+ * isOnline calculated fresh from last_seen on every render
  */
 export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolean }) {
   const page = filters?.page || 1
@@ -41,7 +41,6 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
         .from('devices')
         .select('*', { count: 'exact' })
       
-      // Apply filters
       if (filters?.search) {
         dbQuery = dbQuery.or(`serial_number.ilike.%${filters.search}%,name.ilike.%${filters.search}%,location.ilike.%${filters.search}%`)
       }
@@ -55,22 +54,15 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
         dbQuery = dbQuery.eq('is_master', filters.is_master)
       }
       
-      // Apply sorting
       dbQuery = dbQuery.order(sortBy, { ascending: sortOrder === 'asc' })
-      
-      // Apply pagination
       dbQuery = dbQuery.range(from, to)
       
       const { data, error, count } = await dbQuery
       
       if (error) throw error
       
-      // Initialize pipeline with fetched data (isOnline calculated from pipeline)
-      const devices = data || []
-      deviceStatusPipeline.initializeFromDevices(devices)
-      
       return {
-        devices,
+        devices: data || [],
         total: count || 0,
         page,
         limit,
@@ -80,60 +72,24 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
       }
     },
     staleTime: 30000,
+    refetchInterval: 15000,
     ...options,
   })
   
-  // Initialize pipeline with query data whenever it changes
-  useInitializeDevicePipeline(query.data?.devices)
-  
-  // Get real-time statuses from pipeline
-  const statuses = useAllDeviceStatuses()
-  
-  // Merge pipeline statuses with device data
+  // Calculate isOnline fresh from last_seen on every render
   const enrichedData = useMemo(() => {
     if (!query.data) return undefined
     
-    // DEBUG: Log what we're working with
-    console.log('[useDevices] Pipeline statuses size:', statuses.size)
-    console.log('[useDevices] Devices count:', query.data.devices.length)
-    
-    // If pipeline has data, use it; otherwise calculate directly from last_seen
-    const devicesWithStatus = query.data.devices.map(device => {
-      const status = statuses.get(device.serial_number)
-      
-      if (status) {
-        console.log(`[useDevices] ${device.serial_number}: using pipeline status = ${status.isOnline}`)
-        return {
-          ...device,
-          isOnline: status.isOnline,
-        }
-      }
-      
-      // Fallback: calculate directly from last_seen if pipeline hasn't synced yet
-      const lastSeenTime = device.last_seen ? new Date(device.last_seen).getTime() : 0
-      const now = Date.now()
-      const diff = now - lastSeenTime
-      const isOnline = device.last_seen ? diff < 60000 : false
-      
-      console.log(`[useDevices] ${device.serial_number}: fallback calculation`, {
-        last_seen: device.last_seen,
-        lastSeenTime,
-        now,
-        diff,
-        isOnline
-      })
-      
-      return {
-        ...device,
-        isOnline,
-      }
-    })
+    const devicesWithStatus = query.data.devices.map(device => ({
+      ...device,
+      isOnline: isDeviceOnline(device.last_seen),
+    }))
     
     return {
       ...query.data,
       devices: devicesWithStatus,
     }
-  }, [query.data, statuses])
+  }, [query.data])
   
   return {
     ...query,
@@ -142,8 +98,8 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
 }
 
 /**
- * Realtime subscription for device status updates (especially last_seen for online status)
- * Uses setQueryData for smooth updates without full refetch
+ * Realtime subscription for device status updates
+ * Invalidates the devices query cache so isOnline gets recalculated
  */
 export function useRealtimeDevices() {
   const queryClient = useQueryClient()
@@ -158,29 +114,9 @@ export function useRealtimeDevices() {
           schema: 'public',
           table: 'devices',
         },
-        (payload) => {
-          // Only update the cache for the specific device that changed
-          queryClient.setQueryData(['devices', 'list', {}], (old: any) => {
-            if (!old || !old.devices) return old
-            
-            const updatedDevices = old.devices.map((d: any) => 
-              d.serial_number === payload.new.serial_number 
-                ? { ...d, ...payload.new }
-                : d
-            )
-            return { ...old, devices: updatedDevices }
-          })
-          
-          // Also update any paginated queries for devices
-          queryClient.setQueryData(['devices', 'list'], (old: any) => {
-            if (!old || !old.devices) return old
-            
-            const updatedDevices = old.devices.map((d: any) => 
-              d.serial_number === payload.new.serial_number 
-                ? { ...d, ...payload.new }
-                : d
-            )
-            return { ...old, devices: updatedDevices }
+        () => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.devices.all,
           })
         }
       )
@@ -362,12 +298,9 @@ export function useDevice(deviceSn: string, options?: { enabled?: boolean }) {
       
       if (error) throw error
       
-      const now = Date.now()
       return {
         ...data,
-        isOnline: data.last_seen 
-          ? now - new Date(data.last_seen).getTime() < 60000 
-          : false,
+        isOnline: isDeviceOnline(data.last_seen),
       }
     },
     staleTime: 5000,
