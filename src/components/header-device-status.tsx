@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { useDevices, useSyncStatus, useCommandQueue } from '@/hooks/use-core-data'
-import { useAllDeviceStatuses } from '@/lib/device-status-pipeline'
 import { useMemo } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -37,13 +36,10 @@ const FAILED_COMMAND_WINDOW_MS = 60 * 60 * 1000 // 1 hour
 export function HeaderDeviceStatus() {
   const navigate = useNavigate()
   
-  // Use centralized data hooks
+  // Use centralized data hooks - devices already have isOnline from pipeline
   const { data: devicesResponse, isLoading: devicesLoading } = useDevices()
   const { data: syncData, isLoading: syncLoading } = useSyncStatus()
   const { data: commands, isLoading: commandsLoading } = useCommandQueue()
-  
-  // Get real-time statuses from central pipeline
-  const deviceStatuses = useAllDeviceStatuses()
   
   const devices = devicesResponse?.devices || []
 
@@ -51,12 +47,8 @@ export function HeaderDeviceStatus() {
   const metrics = useMemo(() => {
     const total = devices?.length ?? 0
     
-    // Use real-time statuses from pipeline for accurate online count
-    let online = 0
-    devices.forEach((d: any) => {
-      const status = deviceStatuses.get(d.serial_number)
-      if (status?.isOnline ?? false) online++
-    })
+    // Use isOnline from devices array (already calculated by useDevices hook from pipeline)
+    const online = devices?.filter((d: any) => d.isOnline).length ?? 0
     const offline = total - online
     
     // User sync stats
@@ -112,7 +104,7 @@ export function HeaderDeviceStatus() {
       status,
       isLoading: devicesLoading || syncLoading || commandsLoading,
     }
-  }, [devices, deviceStatuses, syncData, commands, devicesLoading, syncLoading, commandsLoading])
+  }, [devices, syncData, commands, devicesLoading, syncLoading, commandsLoading])
 
   const handleClick = () => {
     navigate('/devices')
