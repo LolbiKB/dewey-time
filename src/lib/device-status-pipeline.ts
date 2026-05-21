@@ -38,6 +38,14 @@ class DeviceStatusPipeline {
       ? (now.getTime() - lastSeen.getTime()) < ONLINE_THRESHOLD_MS 
       : false
 
+    console.log(`[Pipeline] calculateStatus(${serialNumber}):`, {
+      lastSeenStr,
+      lastSeen: lastSeen?.toISOString(),
+      now: now.toISOString(),
+      diff: lastSeen ? now.getTime() - lastSeen.getTime() : null,
+      isOnline
+    })
+
     return {
       serialNumber,
       lastSeen,
@@ -75,12 +83,21 @@ class DeviceStatusPipeline {
   // Heartbeat: Recalculate all devices periodically to catch timeouts
   private heartbeat = () => {
     const now = new Date()
+    console.log(`[Pipeline] Heartbeat running, cache size: ${this.deviceCache.size}`)
     this.deviceCache.forEach((status, serialNumber) => {
       const shouldBeOnline = status.lastSeen 
         ? (now.getTime() - status.lastSeen.getTime()) < ONLINE_THRESHOLD_MS 
         : false
       
+      console.log(`[Pipeline] Heartbeat check ${serialNumber}:`, {
+        cachedIsOnline: status.isOnline,
+        shouldBeOnline,
+        lastSeen: status.lastSeen?.toISOString(),
+        diff: status.lastSeen ? now.getTime() - status.lastSeen.getTime() : null
+      })
+      
       if (status.isOnline !== shouldBeOnline) {
+        console.log(`[Pipeline] Heartbeat changing ${serialNumber} to ${shouldBeOnline}`)
         const newStatus = { ...status, isOnline: shouldBeOnline, lastCheckedAt: now }
         this.deviceCache.set(serialNumber, newStatus)
         this.notifySubscribers(serialNumber, newStatus)
@@ -104,6 +121,7 @@ class DeviceStatusPipeline {
           table: 'devices',
         },
         (payload) => {
+          console.log('[Pipeline] Realtime UPDATE received:', payload.new)
           if (payload.new.serial_number && payload.new.last_seen !== undefined) {
             this.updateDevice(payload.new.serial_number, payload.new.last_seen)
           }
@@ -189,10 +207,13 @@ class DeviceStatusPipeline {
 
   // Initialize cache from device list
   initializeFromDevices(devices: Array<{ serial_number: string; last_seen?: string | null }>) {
+    console.log(`[Pipeline] initializeFromDevices called with ${devices.length} devices`)
     devices.forEach(device => {
+      console.log(`[Pipeline] Initializing ${device.serial_number}:`, { last_seen: device.last_seen })
       const status = this.calculateStatus(device.serial_number, device.last_seen || null)
       this.deviceCache.set(device.serial_number, status)
     })
+    console.log(`[Pipeline] Cache now has ${this.deviceCache.size} devices`)
   }
 }
 
