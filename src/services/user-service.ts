@@ -368,25 +368,19 @@ export class UserService {
   }
 
   static async startEnrollment(userId: string, deviceSn: string, biometricType: 'fingerprint' | 'face', fingerId?: number): Promise<{ commandId: number }> {
-    const { data: user } = await supabase.from('users').select('*').eq('id', userId).single()
-    if (!user) throw new Error('User not found')
+    const result = await this.fetchApi<{ success: boolean; commandId: number }>(
+      `/admin/users/${userId}/enrollment/start`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          device_sn: deviceSn,
+          biometric_type: biometricType,
+          finger_id: fingerId,
+        }),
+      }
+    )
 
-    const cmdType = biometricType === 'fingerprint' ? 'ENROLL_FP' : 'ENROLL_FACE'
-    const cmdBody = `${cmdType} PIN=${user.pin}\tFID=${fingerId || 0}\tRETRY=3\tOVERWRITE=1`
-
-    const { data, error } = await supabase
-      .from('command_queue')
-      .insert({ device_sn: deviceSn, command: cmdBody, command_type: biometricType === 'fingerprint' ? 'enroll_fingerprint' : 'enroll_face', status: 'pending', related_user_id: userId, initiated_by: 'user' })
-      .select('id')
-      .single()
-
-    if (error) throw new Error(error.message)
-
-    if (data) {
-      await supabase.from('command_queue').update({ command: `C:${data.id}:${cmdBody}` }).eq('id', data.id)
-    }
-
-    return { commandId: data?.id }
+    return { commandId: result.commandId }
   }
 
   static async cancelEnrollment(userId: string): Promise<{ cancelled: number; message: string }> {
