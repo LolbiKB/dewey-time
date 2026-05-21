@@ -249,21 +249,22 @@ export function useDeviceStatus(serialNumber: string): DeviceStatus | null {
 
 // React hook for all device statuses
 export function useAllDeviceStatuses(): Map<string, DeviceStatus> {
-  const [statuses, setStatuses] = useState<Map<string, DeviceStatus>>(() => 
-    new Map(pipeline.getAllStatuses())
-  )
+  const [, forceUpdate] = useState({})
 
   useEffect(() => {
-    // Immediately get current state when subscribing
-    setStatuses(new Map(pipeline.getAllStatuses()))
+    console.log('[useAllDeviceStatuses] Subscribing, current cache:', pipeline.getAllStatuses())
     
-    const unsubscribe = pipeline.subscribe('*', () => {
-      setStatuses(new Map(pipeline.getAllStatuses()))
+    const unsubscribe = pipeline.subscribe('*', (status) => {
+      console.log(`[useAllDeviceStatuses] Got update for ${status.serialNumber}: isOnline=${status.isOnline}`)
+      forceUpdate({})
     })
 
     return () => unsubscribe()
   }, [])
 
+  // Always return fresh data from pipeline cache
+  const statuses = pipeline.getAllStatuses()
+  console.log('[useAllDeviceStatuses] Returning statuses:', Array.from(statuses.entries()).map(([k, v]) => `${k}: ${v.isOnline}`))
   return statuses
 }
 
