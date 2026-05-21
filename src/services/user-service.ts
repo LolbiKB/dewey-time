@@ -1,5 +1,25 @@
 import { supabase } from '@/lib/supabase'
 
+// Custom error for user operation locks (423 Locked)
+export class UserOperationLockedError extends Error {
+  existingOperation?: string
+  startedAt?: string
+  retryAfter: number
+
+  constructor(
+    message: string,
+    existingOperation?: string,
+    startedAt?: string,
+    retryAfter: number = 30
+  ) {
+    super(message)
+    this.name = 'UserOperationLockedError'
+    this.existingOperation = existingOperation
+    this.startedAt = startedAt
+    this.retryAfter = retryAfter
+  }
+}
+
 // Singleton state (shared across the app)
 let globalCancelled = { value: false }
 let globalSyncState = { active: false, userId: null as string | null, deviceSns: [] as string[], lastSyncTriggered: null as number | null }
@@ -172,6 +192,18 @@ export class UserService {
     })
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+      
+      // Handle 423 Locked (User Operation Lock)
+      if (response.status === 423) {
+        const retryAfter = response.headers.get('Retry-After')
+        throw new UserOperationLockedError(
+          error.error || 'User operation in progress',
+          error.existingOperation,
+          error.startedAt,
+          retryAfter ? parseInt(retryAfter, 10) : 30
+        )
+      }
+      
       throw new Error(error.error || `HTTP ${response.status}`)
     }
     try {

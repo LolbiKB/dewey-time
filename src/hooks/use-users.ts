@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, type UserEntry } from '@/services/user-service'
+import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, type UserEntry, UserOperationLockedError } from '@/services/user-service'
 import { PhotoService } from '@/services/photo-service'
 import { toast } from 'sonner'
 
@@ -195,6 +195,14 @@ export function useSyncUser() {
       setSyncState({ active: false, lastSyncTriggered: null })
       if (error.message === 'Sync cancelled') {
         toast.info('Sync cancelled')
+      } else if (error instanceof UserOperationLockedError) {
+        // Handle user operation lock with countdown
+        const startedTime = error.startedAt ? new Date(error.startedAt).toLocaleTimeString() : 'unknown'
+        const operationName = error.existingOperation || 'Another operation'
+        toast.error(
+          `User operation in progress: ${operationName} is running (started at ${startedTime}). Please wait ${error.retryAfter} seconds and try again.`,
+          { duration: 5000 }
+        )
       } else {
         toast.error(`Failed to sync user: ${error.message}`)
       }
@@ -375,12 +383,42 @@ export function useRetryUserSync() {
       toast.success(`Retry initiated for ${result.commandsQueued} device(s)`)
     },
     onError: (error: Error) => {
-      toast.error(`Failed to retry sync: ${error.message}`)
+      if (error instanceof UserOperationLockedError) {
+        showLockErrorToast(error)
+      } else {
+        toast.error(`Failed to retry sync: ${error.message}`)
+      }
     },
   })
 }
 
-// Hook: Force full re-sync
+// Hook: Check if user has active operation lock
+export function useUserLockStatus(userId: string) {
+  return useQuery({
+    queryKey: [...userKeys.detail(userId), 'lock-status'],
+    queryFn: async () => {
+      if (!userId) return null
+      try {
+        const result = await UserService.getSyncStatus(userId)
+        // Check if any device shows 'syncing' or 'cleaning' state which indicates lock
+        const hasActiveOperation = result.data?.some(
+          (status: any) => status.actual_state === 'syncing' || status.actual_state === 'cleaning'
+        )
+        return {
+          isLocked: hasActiveOperation,
+          states: result.data?.map((s: any) => ({
+            deviceSn: s.device_sn,
+            state: s.actual_state,
+          })),
+        }
+      } catch {
+        return null
+      }
+    },
+    enabled: !!userId,
+    refetchInterval: 5000, // Refetch every 5 seconds
+  })
+}
 export function useForceUserSync() {
   const queryClient = useQueryClient()
 
@@ -393,8 +431,27 @@ export function useForceUserSync() {
       toast.success(`Force sync initiated for ${result.commandsQueued} device(s)`)
     },
     onError: (error: Error) => {
-      toast.error(`Failed to force sync: ${error.message}`)
+      if (error instanceof UserOperationLockedError) {
+        const startedTime = error.startedAt ? new Date(error.startedAt).toLocaleTimeString() : 'unknown'
+        const operationName = error.existingOperation || 'Another operation'
+        toast.error(
+          `Cannot force sync: ${operationName} is running (started at ${startedTime}). Please wait ${error.retryAfter} seconds.`,
+          { duration: 5000 }
+        )
+      } else {
+        toast.error(`Failed to force sync: ${error.message}`)
+      }
     },
   })
+}
+
+// Helper function to show lock error toast
+function showLockErrorToast(error: UserOperationLockedError) {
+  const startedTime = error.startedAt ? new Date(error.startedAt).toLocaleTimeString() : 'unknown'
+  const operationName = error.existingOperation || 'Another operation'
+  toast.error(
+    `User operation in progress: ${operationName} is running (started at ${startedTime}). Please wait ${error.retryAfter} seconds and try again.`,
+    { duration: 5000 }
+  )
 }
 
