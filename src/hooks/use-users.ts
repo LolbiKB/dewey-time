@@ -378,7 +378,10 @@ export function useCancelEnrollment() {
     onSuccess: (result, userId) => {
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+      queryClient.invalidateQueries({ queryKey: userKeys.enrollmentStatus(userId) })
+      queryClient.invalidateQueries({ queryKey: ['user-sync-summary', userId] })
       toast.success(result.message)
+      toast.info('If a scan was captured on the device, it will be removed automatically.')
     },
     onError: (error: Error) => {
       toast.error(`Failed to cancel enrollment: ${error.message}`)

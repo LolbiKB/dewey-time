@@ -42,6 +42,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
+  buildComponentSyncOptions,
   getComponentSyncStatus,
   isDeviceAllComponentsSynced,
   isComponentSatisfiedForAggregate,
@@ -69,6 +70,7 @@ import {
   useCancelEnrollment,
 } from '@/hooks/use-users'
 import { UserService, type UserEntry, type SyncStatusEntry } from '@/services/user-service'
+import { deriveEnrollPhase, type EnrollPhase } from '@/lib/enrollment-phase'
 import {
   ZK_PROTOCOL_FINGER_ORDER,
   ZK_PROTOCOL_FINGER_GRID_LETTERS,
@@ -223,12 +225,11 @@ function DeviceCard({
     isStaleCommandForDisplay(c, deviceCommands, enrollmentSession)
   )
 
-  const syncOptions = {
-    hasActiveCommands,
+  const syncOptions = buildComponentSyncOptions(deviceCommands, {
     fingerprints,
     hasFaceInDb: hasFace,
     hasPhotoInDb: status.has_photo_in_db,
-  }
+  })
 
   const allSynced = isDeviceAllComponentsSynced(status, syncOptions)
 
@@ -274,32 +275,8 @@ function DeviceCard({
   )
 }
 
-type EnrollPhase = 'idle' | 'queued' | 'enrolling' | 'accepted' | 'success' | 'failed'
-
 /** Minimum time on Process so Capture → Done does not skip a visible step */
 const ENROLL_PROCESS_MIN_MS = 2500
-
-/**
- * Backend-aligned enrollment phase (protocol §12.6.1 + §11.9).
- * Done only when template exists in cloud (`user_biometrics`).
- */
-function deriveEnrollPhase(
-  sessionPhase: string | undefined,
-  commandStatus: string | undefined | null,
-  hasTemplate: boolean,
-  isPullingTemplate: boolean
-): EnrollPhase {
-  if (sessionPhase === 'failed' || sessionPhase === 'timed_out' || sessionPhase === 'cancelled') {
-    return 'failed'
-  }
-  if (commandStatus === 'failed' || commandStatus === 'cancelled') return 'failed'
-  if (hasTemplate) return 'success'
-  if (commandStatus === 'success' || isPullingTemplate) return 'accepted'
-  if (sessionPhase === 'completed') return 'accepted'
-  if (commandStatus === 'sent' || sessionPhase === 'awaiting_upload') return 'enrolling'
-  if (commandStatus === 'pending' || sessionPhase === 'queued') return 'queued'
-  return 'idle'
-}
 
 /** Hold Process step briefly before Done when cloud template arrives quickly */
 function applyProcessMinDisplay(
@@ -371,6 +348,8 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
 
   const sessionPhase = enrollmentStatusData?.data?.session?.phase
   const recoveryQueuedAt = enrollmentStatusData?.data?.session?.recovery_queued_at
+  const cleanupPending = enrollmentStatusData?.data?.cleanupPending ?? false
+  const cleanupComplete = enrollmentStatusData?.data?.cleanupComplete ?? false
   const commandStatus =
     enrollmentStatusData?.data?.command?.status ?? commandData?.status
   const hasTemplate =
@@ -378,8 +357,16 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
   const isPullingTemplate = !!recoveryQueuedAt || recoveryPending
 
   const rawPhase = useMemo(
-    () => deriveEnrollPhase(sessionPhase, commandStatus, !!hasTemplate, isPullingTemplate),
-    [sessionPhase, commandStatus, hasTemplate, isPullingTemplate]
+    () =>
+      deriveEnrollPhase(
+        sessionPhase,
+        commandStatus,
+        !!hasTemplate,
+        isPullingTemplate,
+        cleanupPending,
+        cleanupComplete
+      ),
+    [sessionPhase, commandStatus, hasTemplate, isPullingTemplate, cleanupPending, cleanupComplete]
   )
 
   useEffect(() => {
@@ -522,6 +509,8 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
         return biometricType === 'fingerprint' ? `${protocolFingerLabel(fingerId)} enrolled` : 'Face enrolled'
       case 'failed':
         return errorInfo ? `${errorInfo.label}. ${errorInfo.description}` : 'Enrollment failed'
+      case 'cleaning_up':
+        return 'Enrollment ended — removing fingerprint from device'
       default:
         return ''
     }
@@ -562,8 +551,10 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
   }, [open])
 
   const handleCancel = () => {
-    if (user?.id) cancelEnrollment.mutate(user.id)
-    handleReset()
+    if (!user?.id) return
+    cancelEnrollment.mutate(user.id, {
+      onSuccess: () => handleReset(),
+    })
   }
 
   const handleRecovery = async () => {
@@ -770,7 +761,8 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
             {phase === 'enrolling' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-blue-600 animate-spin" /></div><div className="font-medium text-sm">{biometricType === 'fingerprint' ? 'Place finger on sensor' : 'Look at camera'}</div><div className="text-xs text-muted-foreground">{commandStatus === 'sent' ? 'Device is ready — follow prompts on the device screen' : 'Waiting for device to start enrollment…'}</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div></div>}
             {phase === 'accepted' && <div><div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-amber-600 animate-spin" /></div><div className="font-medium text-sm">Saving to cloud</div><div className="text-xs text-muted-foreground">{isPullingTemplate ? 'Requesting template from device…' : 'Waiting for template upload…'}</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div><div className="h-1 mt-2 w-full rounded-full bg-muted overflow-hidden"><div className="h-full w-1/3 bg-amber-500 animate-pulse rounded-full" /></div></div>}
             {phase === 'success' && <div><div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-2"><CheckCircle2 className="h-5 w-5 text-green-600" /></div><div className="font-medium text-sm text-green-700">Success</div><div className="text-xs text-muted-foreground">{biometricType === 'fingerprint' ? `${protocolFingerLabel(fingerId)} enrolled` : 'Face enrolled'}</div></div>}
-            {phase === 'failed' && errorInfo && <div><div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-2"><AlertCircle className="h-5 w-5 text-red-600" /></div><div className="font-medium text-sm text-red-700">{errorInfo.label}</div><div className="text-xs text-muted-foreground">{errorInfo.description}</div>{errorInfo.action && <div className="text-xs text-amber-700 mt-1 font-medium">{errorInfo.action}</div>}</div>}
+            {phase === 'failed' && errorInfo && <div><div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-2"><AlertCircle className="h-5 w-5 text-red-600" /></div><div className="font-medium text-sm text-red-700">{errorInfo.label}</div><div className="text-xs text-muted-foreground">{errorInfo.description}</div>{errorInfo.action && <div className="text-xs text-amber-700 mt-1 font-medium">{errorInfo.action}</div>}{cleanupPending && <div className="text-xs text-blue-700 mt-2 font-medium">Removing fingerprint from device…</div>}</div>}
+            {phase === 'cleaning_up' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-blue-600 animate-spin" /></div><div className="font-medium text-sm">Removing from device</div><div className="text-xs text-muted-foreground">Enrollment did not complete — cleaning up registrar</div></div>}
           </div>
 
           {showTimeout && (phase === 'enrolling' || phase === 'accepted') && (
@@ -823,6 +815,9 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
                 <Button variant="outline" onClick={handleDone} className="flex-1">Close</Button>
               </>
             )}
+            {phase === 'cleaning_up' && (
+              <Button variant="outline" onClick={handleDone} className="w-full">Close</Button>
+            )}
           </div>
         </div>
       )}
@@ -862,17 +857,23 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
       onRefreshList?.()
     } else if (
       lastEnrollmentPhaseRef.current &&
-      (phase === 'failed' || phase === 'timed_out')
+      (phase === 'failed' || phase === 'timed_out' || phase === 'cancelled')
     ) {
-      toast.error(
-        backgroundEnrollment?.data?.session?.error_message ||
-          'Enrollment did not complete — template was not received from the device'
-      )
+      const cleanupPending = backgroundEnrollment?.data?.cleanupPending
+      if (cleanupPending) {
+        toast.info('Enrollment ended — removing fingerprint from device…')
+      } else {
+        toast.error(
+          backgroundEnrollment?.data?.session?.error_message ||
+            'Enrollment did not complete — template was not received from the device'
+        )
+      }
     }
     lastEnrollmentPhaseRef.current = phase
   }, [
     backgroundEnrollment?.data?.session?.phase,
     backgroundEnrollment?.data?.session?.error_message,
+    backgroundEnrollment?.data?.cleanupPending,
     refetchBiometrics,
     onRefreshList,
     enrollOpen,
@@ -922,12 +923,13 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
     }).length
 
     const componentSatisfied = (s: SyncStatusEntry, component: SyncComponent) => {
-      const { state } = getComponentSyncStatus(component, s, {
+      const deviceCommands = commands.filter((c: any) => c.device_sn === s.device_sn)
+      const syncOptions = buildComponentSyncOptions(deviceCommands, {
         fingerprints,
         hasFaceInDb: hasFace,
         hasPhotoInDb: s.has_photo_in_db,
-        hasActiveCommands: syncingDevices.has(s.device_sn),
       })
+      const { state } = getComponentSyncStatus(component, s, syncOptions)
       return isComponentSatisfiedForAggregate(state)
     }
 
@@ -1226,12 +1228,16 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
                 try {
                   const status = await UserService.getEnrollmentStatus(user.id)
                   const sessionPhase = status.data?.session?.phase
-                  const cmdStatus = status.data?.command?.status
-                  if (sessionPhase === 'queued' || cmdStatus === 'pending') {
+                  const isActive =
+                    sessionPhase === 'queued' ||
+                    sessionPhase === 'awaiting_upload' ||
+                    status.data?.isActive
+                  if (isActive) {
                     await UserService.cancelEnrollment(user.id)
                   }
-                } catch {
-                  // ignore — enrollment may already be complete
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : 'Cancel failed'
+                  toast.error(`Could not cancel enrollment: ${msg}`)
                 }
               }
             }

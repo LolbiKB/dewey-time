@@ -126,6 +126,16 @@ export function HeaderDeviceStatus() {
       isEnrollmentIncompleteInWindow(c, now)
     ).length
 
+    const enrollmentCleanupPending = cmdList.filter((c: any) => {
+      const age = now - new Date(c.created_at).getTime()
+      return (
+        age < COMMAND_FRESHNESS_MS &&
+        c.command_type === 'delete_fingerprint' &&
+        c.initiated_by === 'enrollment_abort' &&
+        (c.status === 'pending' || c.status === 'sent')
+      )
+    }).length
+
     const cancelledAll = cmdList.filter((c: any) => {
       if (c.status !== 'cancelled') return false
       return now - new Date(c.created_at).getTime() < CANCELLED_COMMAND_WINDOW_MS
@@ -163,6 +173,7 @@ export function HeaderDeviceStatus() {
       pendingCommands,
       failedCommands,
       enrollmentIncomplete,
+      enrollmentCleanupPending,
       cancelledCommands,
       driftCount,
       hasCriticalIssues,
@@ -296,6 +307,7 @@ export function HeaderDeviceStatus() {
             {(m.pendingCommands > 0 ||
               m.failedCommands > 0 ||
               m.enrollmentIncomplete > 0 ||
+              m.enrollmentCleanupPending > 0 ||
               m.cancelledCommands > 0) && (
               <>
                 <div className="border-t" />
@@ -346,6 +358,22 @@ export function HeaderDeviceStatus() {
                         </Badge>
                         <p className="text-[10px] text-muted-foreground mt-0.5 pl-0.5">
                           Device captured FP but cloud never received the template.
+                        </p>
+                      </div>
+                    )}
+                    {m.enrollmentCleanupPending > 0 && (
+                      <div>
+                        <Badge
+                          variant="secondary"
+                          className="flex w-full items-center justify-between px-2.5 py-1.5 text-blue-700 dark:text-blue-400"
+                        >
+                          <span>Enrollment cleanup</span>
+                          <span className="font-semibold tabular-nums">
+                            {m.enrollmentCleanupPending}
+                          </span>
+                        </Badge>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 pl-0.5">
+                          Removing aborted fingerprint from registrar device(s).
                         </p>
                       </div>
                     )}

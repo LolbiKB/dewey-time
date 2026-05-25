@@ -416,9 +416,18 @@ export class UserService {
         recovery_queued_at: string | null
         recovery_command_id: number | null
         recovery_attempts: number
+        cleanup_status?: string | null
+        cleanup_command_id?: number | null
+        late_operlog_rejected_at?: string | null
       } | null
       command: CommandQueueEntry | null
+      cleanupCommand?: CommandQueueEntry | null
       hasTemplateInDb: boolean
+      isActive?: boolean
+      isTerminal?: boolean
+      rogueRisk?: boolean
+      cleanupPending?: boolean
+      cleanupComplete?: boolean
     }
   }> {
     return this.fetchApi(`/admin/users/${userId}/enrollment/status`)

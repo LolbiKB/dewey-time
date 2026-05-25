@@ -30,6 +30,7 @@ import type { UserEntry } from '@/services/user-service'
 import React, { useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
+  buildComponentSyncOptions,
   getComponentSyncStatus,
   isDeviceAllComponentsSynced,
   type SyncComponent,
@@ -109,10 +110,13 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
   const getDeviceState = (status: any) => {
     const deviceCommands = commands.filter(cmd => cmd.device_sn === status.device_sn)
     const isOnline = status.is_online
-    const hasActiveCommands = deviceCommands.some(cmd => 
-      cmd.status === 'pending' || cmd.status === 'sent'
-    )
-    
+    const syncOptions = buildComponentSyncOptions(deviceCommands, {
+      fingerprints,
+      hasFaceInDb: !!(status.has_face_in_db ?? status.has_face),
+      hasPhotoInDb: !!status.has_photo_in_db,
+    })
+    const hasActiveCommands = syncOptions.hasActiveCommands ?? false
+
     const availableItems = DATA_TYPES.filter(({ key }) => {
       if (key === 'user') return true
       if (key === 'fingerprint') return status.has_fingerprint || status.fingerprint_synced
@@ -120,13 +124,6 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
       if (key === 'photo') return status.has_photo_in_db || status.photo_synced
       return true
     })
-
-    const syncOptions = {
-      hasActiveCommands,
-      fingerprints,
-      hasFaceInDb: !!(status.has_face_in_db ?? status.has_face),
-      hasPhotoInDb: !!status.has_photo_in_db,
-    }
 
     const items = availableItems.map(({ key, label }) => {
       let itemStatus = getComponentSyncStatus(key as SyncComponent, status, syncOptions).state

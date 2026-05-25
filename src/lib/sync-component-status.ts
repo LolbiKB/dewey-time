@@ -1,4 +1,10 @@
-export type SyncComponent = 'user' | 'fingerprint' | 'face' | 'photo'
+import type { CommandActivityInput, SyncComponentKey } from './command-types'
+import {
+  getActiveComponentsFromCommands,
+  hasActiveDeleteFingerprint,
+} from './command-types'
+
+export type SyncComponent = SyncComponentKey
 
 export type SyncComponentState =
   | 'not_enrolled'
@@ -27,7 +33,12 @@ export interface FingerprintBio {
 }
 
 export interface GetComponentSyncOptions {
+  /** @deprecated Prefer activeComponents — global flag bleeds FP work into other tiles */
   hasActiveCommands?: boolean
+  /** Per-component fresh pending/sent commands (from getActiveComponentsFromCommands). */
+  activeComponents?: Set<SyncComponent>
+  /** True when delete_fingerprint is actively running (shows "Removing…" on FP tile). */
+  activeDeleteFingerprint?: boolean
   fingerprints?: FingerprintBio[]
   hasFaceInDb?: boolean
   hasPhotoInDb?: boolean
@@ -40,6 +51,8 @@ export const SYNC_COMPONENT_LABELS: Record<SyncComponentState, string> = {
   synced: 'Synced',
   failed: 'Failed',
 }
+
+export const SYNC_COMPONENT_REMOVING_LABEL = 'Removing…'
 
 function fingerprintExpectedMask(fingerprints: FingerprintBio[]): number {
   return fingerprints
@@ -69,22 +82,67 @@ function hasFingerprintInCloudOnly(
   return hasFingerprintInCloud(status, fingerprints)
 }
 
-function isDeviceCleanupInProgress(
-  status: SyncStatusRow,
-  hasActiveCommands: boolean
+function isComponentCommandActive(
+  component: SyncComponent,
+  options: GetComponentSyncOptions
 ): boolean {
-  return (
-    hasActiveCommands ||
-    status.actual_state === 'syncing' ||
-    status.actual_state === 'cleaning'
-  )
+  if (options.activeComponents?.has(component)) return true
+  if (options.hasActiveCommands) {
+    return component === 'fingerprint'
+  }
+  return false
 }
 
-function deviceCleanupSyncState(
+/** Fingerprint may use global actual_state when FP is applicable and mask work is implied. */
+function isFingerprintGlobalCleanupInProgress(
   status: SyncStatusRow,
-  hasActiveCommands: boolean
+  fingerprints: FingerprintBio[]
+): boolean {
+  if (status.actual_state !== 'syncing' && status.actual_state !== 'cleaning') {
+    return false
+  }
+  if (!isFingerprintComponentApplicable(status, fingerprints)) return false
+  const fpList = fingerprints.filter(
+    (b) => b.type === 'fingerprint' || b.type === undefined
+  )
+  const deviceMask = status.fingerprint_mask ?? 0
+  if (fpList.length === 0 && deviceMask > 0) return true
+  if (fpList.length === 0) return false
+  const expectedMask = fingerprintExpectedMask(fpList)
+  return deviceMask !== expectedMask
+}
+
+function isComponentInProgress(
+  component: SyncComponent,
+  status: SyncStatusRow,
+  options: GetComponentSyncOptions
+): boolean {
+  if (isComponentCommandActive(component, options)) return true
+  if (component === 'fingerprint') {
+    return isFingerprintGlobalCleanupInProgress(
+      status,
+      options.fingerprints ?? []
+    )
+  }
+  return false
+}
+
+function componentIdleState(
+  component: SyncComponent,
+  status: SyncStatusRow,
+  options: GetComponentSyncOptions
 ): SyncComponentState {
-  return isDeviceCleanupInProgress(status, hasActiveCommands) ? 'syncing' : 'pending'
+  return isComponentInProgress(component, status, options) ? 'syncing' : 'pending'
+}
+
+function fingerprintComponentLabel(
+  state: SyncComponentState,
+  options: GetComponentSyncOptions
+): string {
+  if (state === 'syncing' && options.activeDeleteFingerprint) {
+    return SYNC_COMPONENT_REMOVING_LABEL
+  }
+  return SYNC_COMPONENT_LABELS[state]
 }
 
 function isFingerprintComponentApplicable(
@@ -137,7 +195,7 @@ export function getComponentSyncStatus(
   status: SyncStatusRow,
   options: GetComponentSyncOptions = {}
 ): { state: SyncComponentState; label: string; isApplicable: boolean } {
-  const { hasActiveCommands = false, fingerprints = [] } = options
+  const { fingerprints = [] } = options
 
   const applicable = isComponentApplicable(component, status, options)
   if (!applicable) {
@@ -164,10 +222,13 @@ export function getComponentSyncStatus(
     const inCloud = hasFingerprintInCloudOnly(status, fingerprints)
     const deviceMask = status.fingerprint_mask ?? 0
 
-    // Cloud empty but device still has templates — cleanup in progress, not a steady state
     if (fpCount === 0 && deviceMask > 0) {
-      const state = deviceCleanupSyncState(status, hasActiveCommands)
-      return { state, label: SYNC_COMPONENT_LABELS[state], isApplicable: true }
+      const state = componentIdleState('fingerprint', status, options)
+      return {
+        state,
+        label: fingerprintComponentLabel(state, options),
+        isApplicable: true,
+      }
     }
 
     if (fpCount === 0 && deviceMask === 0) {
@@ -179,8 +240,16 @@ export function getComponentSyncStatus(
     }
 
     const expectedMask = fingerprintExpectedMask(fpList)
-    const hasExpectedOnDevice = (deviceMask & expectedMask) === expectedMask
     const maskMatchesExactly = deviceMask === expectedMask
+
+    if (isComponentInProgress('fingerprint', status, options)) {
+      const state = 'syncing' as const
+      return {
+        state,
+        label: fingerprintComponentLabel(state, options),
+        isApplicable: true,
+      }
+    }
 
     if (maskMatchesExactly && inCloud) {
       return {
@@ -190,19 +259,18 @@ export function getComponentSyncStatus(
       }
     }
 
-    if (hasExpectedOnDevice && !maskMatchesExactly) {
-      const state = deviceCleanupSyncState(status, hasActiveCommands)
-      return { state, label: SYNC_COMPONENT_LABELS[state], isApplicable: true }
+    const state = componentIdleState('fingerprint', status, options)
+    return {
+      state,
+      label: fingerprintComponentLabel(state, options),
+      isApplicable: true,
     }
-
-    const state = deviceCleanupSyncState(status, hasActiveCommands)
-    return { state, label: SYNC_COMPONENT_LABELS[state], isApplicable: true }
   }
 
   if (component === 'face') {
     const inCloud = hasFaceInCloud(status, options.hasFaceInDb)
     if (!inCloud && status.face_synced) {
-      const state = deviceCleanupSyncState(status, hasActiveCommands)
+      const state = componentIdleState('face', status, options)
       return { state, label: SYNC_COMPONENT_LABELS[state], isApplicable: true }
     }
   }
@@ -210,7 +278,7 @@ export function getComponentSyncStatus(
   if (component === 'photo') {
     const inCloud = hasPhotoInCloud(status, options.hasPhotoInDb)
     if (!inCloud && status.photo_synced) {
-      const state = deviceCleanupSyncState(status, hasActiveCommands)
+      const state = componentIdleState('photo', status, options)
       return { state, label: SYNC_COMPONENT_LABELS[state], isApplicable: true }
     }
   }
@@ -230,7 +298,7 @@ export function getComponentSyncStatus(
     }
   }
 
-  const state = deviceCleanupSyncState(status, hasActiveCommands)
+  const state = componentIdleState(component, status, options)
   return { state, label: SYNC_COMPONENT_LABELS[state], isApplicable: true }
 }
 
@@ -262,5 +330,22 @@ export function syncComponentTileClass(state: SyncComponentState): string {
       return 'bg-red-50 border border-red-200 dark:bg-red-950/30 dark:border-red-800'
     default:
       return 'bg-gray-50 dark:bg-muted/30'
+  }
+}
+
+/** Build sync options for one device from its command list. */
+export function buildComponentSyncOptions(
+  deviceCommands: CommandActivityInput[],
+  context: Omit<
+    GetComponentSyncOptions,
+    'activeComponents' | 'activeDeleteFingerprint' | 'hasActiveCommands'
+  >
+): GetComponentSyncOptions {
+  const activeComponents = getActiveComponentsFromCommands(deviceCommands)
+  return {
+    ...context,
+    activeComponents,
+    activeDeleteFingerprint: hasActiveDeleteFingerprint(deviceCommands),
+    hasActiveCommands: activeComponents.size > 0,
   }
 }

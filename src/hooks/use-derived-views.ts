@@ -134,6 +134,7 @@ export function useDeviceWithUsers(deviceSn: string) {
       const isUserSyncing = userPendingCommands.some(c => c.command_type === 'sync_user')
       const isFingerprintSyncing = userPendingCommands.some(
         (c) =>
+          c.command_type === 'delete_fingerprint' ||
           c.command_type === 'enroll_fingerprint' ||
           c.command_type === 'enroll_fingerprint_confirm'
       )

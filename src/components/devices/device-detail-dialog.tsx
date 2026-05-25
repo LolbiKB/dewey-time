@@ -48,6 +48,7 @@ import {
   useCommandQueue,
 } from '@/hooks'
 import {
+  buildComponentSyncOptions,
   getComponentSyncStatus,
   syncComponentTileClass,
   type SyncComponent,
@@ -258,40 +259,40 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
         (c: { command_type: string }) => c.command_type === 'upload_photo'
       )
 
-      const hasActiveCommands = user.isBatchInProgress || userStatus === 'syncing'
-      const isPhotoInProgress = !!activePhotoCmd && !user.photoSynced
-      const photoHasActiveCommands = isPhotoInProgress
+      const syncOptions = buildComponentSyncOptions(userCmds, {
+        fingerprints: user.fingerprints ?? [],
+        hasFaceInDb: user.hasFace,
+        hasPhotoInDb: user.hasPhoto,
+      })
+      const hasActiveCommands =
+        user.isBatchInProgress ||
+        userStatus === 'syncing' ||
+        (syncOptions.activeComponents?.size ?? 0) > 0
+      const isPhotoInProgress = syncOptions.activeComponents?.has('photo') ?? false
 
       const enriched = { ...user, userStatus, isUserInProgress: hasActiveCommands }
 
-      const pick = (component: SyncComponent, photoActiveOnly = false) => {
-        const { state, label } = getComponentSyncStatus(component, {
-          user_synced: user.userSynced,
-          fingerprint_synced: user.fingerprintSynced,
-          fingerprint_mask: user.fingerprintMask,
-          face_synced: user.faceSynced,
-          photo_synced: user.photoSynced,
-          has_fingerprint: user.hasFingerprint,
-          has_fingerprint_in_db: user.hasFingerprint,
-          has_face: user.hasFace,
-          has_photo_in_db: user.hasPhoto,
-          actual_state: user.actualState,
-          error_message: user.errorMessage,
-        } as SyncStatusRow, {
-          hasActiveCommands: photoActiveOnly ? photoHasActiveCommands : hasActiveCommands,
-          fingerprints: user.fingerprints ?? [],
-          hasFaceInDb: user.hasFace,
-          hasPhotoInDb: user.hasPhoto,
-        })
-        return { state, label }
-      }
+      const statusRow = {
+        user_synced: user.userSynced,
+        fingerprint_synced: user.fingerprintSynced,
+        fingerprint_mask: user.fingerprintMask,
+        face_synced: user.faceSynced,
+        photo_synced: user.photoSynced,
+        has_fingerprint: user.hasFingerprint,
+        has_fingerprint_in_db: user.hasFingerprint,
+        has_face: user.hasFace,
+        has_photo_in_db: user.hasPhoto,
+        actual_state: user.actualState,
+        error_message: user.errorMessage,
+      } as SyncStatusRow
+
+      const pick = (component: SyncComponent) =>
+        getComponentSyncStatus(component, statusRow, syncOptions)
 
       const userComp = pick('user')
       const fp = pick('fingerprint')
       const face = pick('face')
-      const photo = user.photoSynced
-        ? { state: 'synced' as SyncComponentState, label: 'Synced' }
-        : pick('photo', true)
+      const photo = pick('photo')
 
       const lastSyncAttempt = user.photoSynced && user.photoSyncedAt
         ? user.photoSyncedAt
@@ -309,14 +310,8 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
         photoLabel: photo.label,
         lastSyncAttempt,
         isPhotoInProgress,
-        isFingerprintInProgress: freshActiveCmds.some(
-          (c: { command_type: string }) =>
-            c.command_type === 'enroll_fingerprint' ||
-            c.command_type === 'enroll_fingerprint_confirm'
-        ),
-        isFaceInProgress: freshActiveCmds.some(
-          (c: { command_type: string }) => c.command_type === 'enroll_face'
-        ),
+        isFingerprintInProgress: syncOptions.activeComponents?.has('fingerprint') ?? false,
+        isFaceInProgress: syncOptions.activeComponents?.has('face') ?? false,
       }
     })
   }, [paginatedUsers.data, batches, deviceCommands, deviceSn])
