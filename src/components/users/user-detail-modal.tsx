@@ -69,17 +69,18 @@ import {
   useCancelEnrollment,
 } from '@/hooks/use-users'
 import { UserService, type UserEntry, type SyncStatusEntry } from '@/services/user-service'
+import {
+  ZK_PROTOCOL_FINGER_ORDER,
+  ZK_PROTOCOL_FINGER_GRID_LETTERS,
+  protocolFingerLabel,
+  parseZkEnrollFpError,
+} from '@/lib/zk-finger-fid'
 
 interface UserDetailModalProps {
   user: UserEntry | null
   open: boolean
   onOpenChange: (open: boolean) => void
   onRefreshList?: () => void
-}
-
-const FINGER_LABELS: Record<number, string> = {
-  0: 'R-Thumb', 1: 'R-Index', 2: 'R-Middle', 3: 'R-Ring', 4: 'R-Little',
-  5: 'L-Thumb', 6: 'L-Index', 7: 'L-Middle', 8: 'L-Ring', 9: 'L-Little',
 }
 
 const COMMAND_FRESHNESS_MS = 2 * 60 * 1000
@@ -275,44 +276,28 @@ function DeviceCard({
 
 type EnrollPhase = 'idle' | 'queued' | 'enrolling' | 'accepted' | 'success' | 'failed'
 
-function getPhase(commandStatus: string | undefined | null, hasTemplate: boolean | null): EnrollPhase {
-  if (!commandStatus) return 'idle'
-  if (commandStatus === 'pending') return 'enrolling'
-  if (commandStatus === 'sent') return 'accepted'
-  if (commandStatus === 'success') return hasTemplate ? 'success' : 'accepted'
+/**
+ * Map enrollment session + command to UI phase.
+ * Per ZKTeco protocol, ENROLL_FP Return=0 → command status `sent` means the device
+ * opened the enroll screen — not that the template was captured (OPERLOG + `success` later).
+ */
+function deriveEnrollPhase(
+  sessionPhase: string | undefined,
+  commandStatus: string | undefined | null,
+  hasTemplate: boolean
+): EnrollPhase {
+  if (sessionPhase === 'failed' || sessionPhase === 'timed_out' || sessionPhase === 'cancelled') {
+    return 'failed'
+  }
   if (commandStatus === 'failed' || commandStatus === 'cancelled') return 'failed'
+  if (sessionPhase === 'completed' || hasTemplate) return 'success'
+  if (commandStatus === 'success') return hasTemplate ? 'success' : 'accepted'
+  if (commandStatus === 'sent' || sessionPhase === 'awaiting_upload') return 'enrolling'
+  if (commandStatus === 'pending' || sessionPhase === 'queued') return 'queued'
   return 'idle'
 }
 
-const ENROLL_ERROR_CODES: Record<string, { label: string; description: string; action?: string }> = {
-  '0': { label: 'Success', description: 'Enrollment completed.' },
-  '1': { label: 'Unknown Error', description: 'An unexpected error occurred.', action: 'Try again.' },
-  '2': { label: 'Already Exists', description: 'Template exists for this finger.', action: 'Select a different finger.' },
-  '4': { label: 'Poor Quality', description: 'Placement was unclear.', action: 'Clean finger and sensor.' },
-  '5': { label: 'Duplicate', description: 'Fingerprint matches another user.', action: 'Cannot enroll.' },
-  '6': { label: 'Cancelled', description: 'Cancelled on device.', action: 'Try again.' },
-  '7': { label: 'Device Busy', description: 'Device is busy.', action: 'Wait and try again.' },
-  '8': { label: 'Memory Full', description: 'Device memory is full.', action: 'Delete unused templates.' },
-}
-
-function parseEnrollError(errorMessage: string | null | undefined): {
-  label: string
-  description: string
-  action?: string
-  code?: string
-} {
-  if (!errorMessage) return { label: 'Failed', description: 'Enrollment failed.' }
-  const match = errorMessage.match(/error\s*(?:code:?)?\s*(\d+)/i)
-  if (match) {
-    const code = match[1]
-    const mapped = ENROLL_ERROR_CODES[code]
-    if (mapped) return { code, ...mapped }
-    return { code, label: `Error ${code}`, description: errorMessage }
-  }
-  return { label: 'Failed', description: errorMessage }
-}
-
-const ENROLL_FINGER_ORDER = [0, 1, 2, 3, 4, 9, 8, 7, 6, 5] as const
+const parseEnrollError = parseZkEnrollFpError
 
 interface EnrollContentProps {
   user: UserEntry
@@ -329,7 +314,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
   const cancelEnrollment = useCancelEnrollment()
 
   const [biometricType, setBiometricType] = useState<'fingerprint' | 'face'>('fingerprint')
-  const [fingerId, setFingerId] = useState<number>(0)
+  const [fingerId, setFingerId] = useState<number>(5)
   const [deviceSn, setDeviceSn] = useState<string>('')
   const [activeCommandId, setActiveCommandId] = useState<number | null>(null)
   const [showTimeout, setShowTimeout] = useState(false)
@@ -381,7 +366,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
     if (sessionPhase === 'completed' || hasTemplate) {
       return 'success' as EnrollPhase
     }
-    return getPhase(commandStatus, hasTemplate)
+    return deriveEnrollPhase(sessionPhase, commandStatus, !!hasTemplate)
   }, [sessionPhase, commandStatus, hasTemplate])
 
   const errorInfo = phase === 'failed'
@@ -400,7 +385,15 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
   }, [phase])
 
   useEffect(() => {
-    if (phase !== 'accepted' || !user?.id || recoveryQueuedAt || autoRecoveryTriggeredRef.current) {
+    // Only pull template after device reports capture complete (command success), not on `sent`
+    if (
+      phase !== 'accepted' ||
+      commandStatus !== 'success' ||
+      hasTemplate ||
+      !user?.id ||
+      recoveryQueuedAt ||
+      autoRecoveryTriggeredRef.current
+    ) {
       return
     }
     const timer = setTimeout(async () => {
@@ -418,7 +411,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
       }
     }, 45000)
     return () => clearTimeout(timer)
-  }, [phase, user?.id, recoveryQueuedAt])
+  }, [phase, commandStatus, hasTemplate, user?.id, recoveryQueuedAt])
 
   useEffect(() => {
     if (phase === 'idle' || phase === 'success' || phase === 'failed') {
@@ -454,7 +447,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
 
   useEffect(() => {
     if (phase !== 'idle' || biometricType !== 'fingerprint') return
-    const firstFree = ENROLL_FINGER_ORDER.find((id) => !enrolledFingers.has(id))
+    const firstFree = ZK_PROTOCOL_FINGER_ORDER.find((id) => !enrolledFingers.has(id))
     if (firstFree !== undefined && enrolledFingers.has(fingerId)) {
       setFingerId(firstFree)
     }
@@ -466,7 +459,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
 
   const deviceDisplayName = selectedDevice?.devices?.name || deviceSn
   const flowContextLabel = useMemo(() => {
-    const bioLabel = biometricType === 'fingerprint' ? FINGER_LABELS[fingerId] : 'Face'
+    const bioLabel = biometricType === 'fingerprint' ? protocolFingerLabel(fingerId) : 'Face'
     return deviceDisplayName ? `${deviceDisplayName} · ${bioLabel}` : bioLabel
   }, [deviceDisplayName, biometricType, fingerId])
 
@@ -479,7 +472,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
       case 'accepted':
         return isPullingTemplate ? 'Pulling template from device' : 'Uploading template'
       case 'success':
-        return biometricType === 'fingerprint' ? `${FINGER_LABELS[fingerId]} enrolled` : 'Face enrolled'
+        return biometricType === 'fingerprint' ? `${protocolFingerLabel(fingerId)} enrolled` : 'Face enrolled'
       case 'failed':
         return errorInfo ? `${errorInfo.label}. ${errorInfo.description}` : 'Enrollment failed'
       default:
@@ -581,22 +574,63 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
           {biometricType === 'fingerprint' && (
             <div className="space-y-2">
               <div className="text-xs text-muted-foreground font-medium">Select Finger</div>
-              <div className="grid grid-cols-5 gap-1">
-                {[0, 1, 2, 3, 4, 9, 8, 7, 6, 5].map(id => {
-                  const enrolled = enrolledFingers.has(id)
-                  const isSelected = fingerId === id
-                  return (
-                    <button key={id} type="button" onClick={() => !enrolled && setFingerId(id)} disabled={enrolled} className={cn("aspect-square rounded-lg border-2 flex items-center justify-center transition-all", isSelected && "border-blue-500 bg-blue-100", !isSelected && enrolled && "border-red-200 bg-red-50 opacity-50 cursor-not-allowed", !isSelected && !enrolled && "border-dashed border-gray-300 text-gray-400 hover:border-blue-300")}>
-                      <span className="text-xs font-bold">{id < 5 ? ['T', 'I', 'M', 'R', 'L'][id] : ['L', 'R', 'M', 'I', 'T'][id - 5]}</span>
-                      {enrolled && <span className="absolute text-[6px]">X</span>}
-                    </button>
-                  )
-                })}
+              <div className="space-y-1.5">
+                <div className="text-[9px] text-muted-foreground font-medium">Left hand (FID 0–4)</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[0, 1, 2, 3, 4].map((id) => {
+                    const enrolled = enrolledFingers.has(id)
+                    const isSelected = fingerId === id
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        title={protocolFingerLabel(id)}
+                        onClick={() => !enrolled && setFingerId(id)}
+                        disabled={enrolled}
+                        className={cn(
+                          'relative aspect-square rounded-lg border-2 flex items-center justify-center transition-all',
+                          isSelected && 'border-blue-500 bg-blue-100',
+                          !isSelected && enrolled && 'border-red-200 bg-red-50 opacity-50 cursor-not-allowed',
+                          !isSelected && !enrolled && 'border-dashed border-gray-300 text-gray-400 hover:border-blue-300'
+                        )}
+                      >
+                        <span className="text-xs font-bold">{ZK_PROTOCOL_FINGER_GRID_LETTERS[id]}</span>
+                        {enrolled && <span className="absolute text-[6px] top-0.5 right-0.5">X</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="text-[9px] text-muted-foreground font-medium">Right hand (FID 5–9)</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[5, 6, 7, 8, 9].map((id) => {
+                    const enrolled = enrolledFingers.has(id)
+                    const isSelected = fingerId === id
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        title={protocolFingerLabel(id)}
+                        onClick={() => !enrolled && setFingerId(id)}
+                        disabled={enrolled}
+                        className={cn(
+                          'relative aspect-square rounded-lg border-2 flex items-center justify-center transition-all',
+                          isSelected && 'border-blue-500 bg-blue-100',
+                          !isSelected && enrolled && 'border-red-200 bg-red-50 opacity-50 cursor-not-allowed',
+                          !isSelected && !enrolled && 'border-dashed border-gray-300 text-gray-400 hover:border-blue-300'
+                        )}
+                      >
+                        <span className="text-xs font-bold">{ZK_PROTOCOL_FINGER_GRID_LETTERS[id]}</span>
+                        {enrolled && <span className="absolute text-[6px] top-0.5 right-0.5">X</span>}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-              <div className="flex justify-between text-[9px] text-muted-foreground">
-                <span>Right</span>
-                <span className={cn(enrolledFingers.has(fingerId) && "text-red-500")}>{FINGER_LABELS[fingerId]}{enrolledFingers.has(fingerId) && ' (in use)'}</span>
-                <span>Left</span>
+              <div className="text-center text-[9px] text-muted-foreground">
+                <span className={cn(enrolledFingers.has(fingerId) && 'text-red-500')}>
+                  {protocolFingerLabel(fingerId)}
+                  {enrolledFingers.has(fingerId) && ' (in use)'}
+                </span>
               </div>
             </div>
           )}
@@ -685,9 +719,9 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
               {phaseAnnouncement}
             </div>
             {phase === 'queued' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><RefreshCw className="h-5 w-5 text-blue-600" /></div><div className="font-medium text-sm">Command Sent</div><div className="text-xs text-muted-foreground">Waiting for device...</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div></div>}
-            {phase === 'enrolling' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-blue-600 animate-spin" /></div><div className="font-medium text-sm">{biometricType === 'fingerprint' ? 'Place finger on sensor' : 'Look at camera'}</div><div className="text-xs text-muted-foreground">Follow prompts on the device</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div></div>}
+            {phase === 'enrolling' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-blue-600 animate-spin" /></div><div className="font-medium text-sm">{biometricType === 'fingerprint' ? 'Place finger on sensor' : 'Look at camera'}</div><div className="text-xs text-muted-foreground">{commandStatus === 'sent' ? 'Device is ready — follow prompts on the device screen' : 'Waiting for device to start enrollment…'}</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div></div>}
             {phase === 'accepted' && <div><div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-amber-600 animate-spin" /></div><div className="font-medium text-sm">Template Captured</div><div className="text-xs text-muted-foreground">{isPullingTemplate ? 'Pulling template from device…' : 'Uploading to cloud…'}</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div><div className="h-1 mt-2 w-full rounded-full bg-muted overflow-hidden"><div className="h-full w-1/3 bg-amber-500 animate-pulse rounded-full" /></div></div>}
-            {phase === 'success' && <div><div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-2"><CheckCircle2 className="h-5 w-5 text-green-600" /></div><div className="font-medium text-sm text-green-700">Success</div><div className="text-xs text-muted-foreground">{biometricType === 'fingerprint' ? `${FINGER_LABELS[fingerId]} enrolled` : 'Face enrolled'}</div></div>}
+            {phase === 'success' && <div><div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-2"><CheckCircle2 className="h-5 w-5 text-green-600" /></div><div className="font-medium text-sm text-green-700">Success</div><div className="text-xs text-muted-foreground">{biometricType === 'fingerprint' ? `${protocolFingerLabel(fingerId)} enrolled` : 'Face enrolled'}</div></div>}
             {phase === 'failed' && errorInfo && <div><div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-2"><AlertCircle className="h-5 w-5 text-red-600" /></div><div className="font-medium text-sm text-red-700">{errorInfo.label}</div><div className="text-xs text-muted-foreground">{errorInfo.description}</div>{errorInfo.action && <div className="text-xs text-amber-700 mt-1 font-medium">{errorInfo.action}</div>}</div>}
           </div>
 
@@ -1094,7 +1128,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
                           <div key={bio.id} className="flex items-center justify-between text-sm rounded-lg border px-3 py-2">
                             <div className="flex items-center gap-2">
                               <Fingerprint className="h-4 w-4 text-blue-500" />
-                              <span className="font-mono text-xs">{FINGER_LABELS[bio.finger_id || 0]}</span>
+                              <span className="font-mono text-xs">{protocolFingerLabel(bio.finger_id ?? 0)}</span>
                             </div>
                             <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500" onClick={() => handleDeleteBiometric(bio.id, 'fingerprint', bio.finger_id ?? undefined)}>
                               <X className="h-3 w-3" />

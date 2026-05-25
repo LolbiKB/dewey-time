@@ -11,25 +11,13 @@ import { Button } from '@/components/ui/button'
 import { Fingerprint, ScanFace, Trash2, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useDeleteBiometric } from '@/hooks/use-users'
+import { protocolFingerLabel } from '@/lib/zk-finger-fid'
 
 interface BiometricViewDialogProps {
   userId: string | null
   userName: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
-}
-
-const FINGER_LABELS: Record<number, string> = {
-  0: 'Right Thumb',
-  1: 'Right Index',
-  2: 'Right Middle',
-  3: 'Right Ring',
-  4: 'Right Little',
-  5: 'Left Thumb',
-  6: 'Left Index',
-  7: 'Left Middle',
-  8: 'Left Ring',
-  9: 'Left Little',
 }
 
 interface BiometricRecord {
@@ -129,7 +117,7 @@ const formatHash = (hash: string | null) => {
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-muted-foreground text-xs">
-                        {FINGER_LABELS[bio.finger_id || 0]}
+                        {protocolFingerLabel(bio.finger_id ?? 0)}
                       </span>
                       <Button
                         variant="ghost"
