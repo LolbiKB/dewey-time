@@ -3,6 +3,15 @@
 
 // Core Data (Single Source of Truth)
 export {
+  useDevicePresence,
+  useDevicePresenceMap,
+  useRequireDeviceOnline,
+  enrichSyncStatusWithPresence,
+  DEVICE_ACTION_TIERS,
+  type DeviceActionTier,
+} from './use-device-presence'
+
+export {
   useDevices,
   useSyncStatus,
   useCommandQueue,

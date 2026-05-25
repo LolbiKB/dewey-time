@@ -1,14 +1,57 @@
-// Simple utility to calculate if a device is online based on last_seen
-const ONLINE_THRESHOLD_MS = 65000 // 65 seconds (device pings every ~60s)
+/**
+ * Device presence (online/offline) — single source of truth for the dashboard.
+ *
+ * Derived from `devices.last_seen` (updated by device pings via gcr-fastify/iclock).
+ * Freshness is pushed via Supabase Realtime on `devices` UPDATE → useDevices refetch.
+ *
+ * Do not add a separate "connected" flag in UI; tune DEVICE_ONLINE_THRESHOLD_MS if needed.
+ */
+export const DEVICE_ONLINE_THRESHOLD_MS = 65_000 // ~60s device ping interval + buffer
 
-export function isDeviceOnline(lastSeen: string | null | undefined): boolean {
-  if (!lastSeen) return false
-  const now = Date.now()
-  const lastSeenTime = new Date(lastSeen).getTime()
-  return (now - lastSeenTime) < ONLINE_THRESHOLD_MS
+/** @deprecated Use DEVICE_ONLINE_THRESHOLD_MS */
+const ONLINE_THRESHOLD_MS = DEVICE_ONLINE_THRESHOLD_MS
+
+export type DevicePresenceStatus = 'online' | 'offline'
+
+export interface DevicePresence {
+  isOnline: boolean
+  status: DevicePresenceStatus
+  lastSeen: string | null
+  lastSeenMs: number | null
+  /** Whole minutes since last_seen (null if never seen) */
+  lastSeenMinutes: number | null
 }
 
-// Type for device with computed online status
+export function isDeviceOnline(lastSeen: string | null | undefined): boolean {
+  return getDevicePresence(lastSeen).isOnline
+}
+
+export function getDevicePresence(lastSeen: string | null | undefined): DevicePresence {
+  if (!lastSeen) {
+    return {
+      isOnline: false,
+      status: 'offline',
+      lastSeen: null,
+      lastSeenMs: null,
+      lastSeenMinutes: null,
+    }
+  }
+
+  const now = Date.now()
+  const lastSeenMs = new Date(lastSeen).getTime()
+  const ageMs = now - lastSeenMs
+  const isOnline = ageMs < ONLINE_THRESHOLD_MS
+  const lastSeenMinutes = Math.floor(ageMs / 60_000)
+
+  return {
+    isOnline,
+    status: isOnline ? 'online' : 'offline',
+    lastSeen,
+    lastSeenMs,
+    lastSeenMinutes,
+  }
+}
+
 export interface DeviceWithStatus {
   isOnline: boolean
   [key: string]: unknown

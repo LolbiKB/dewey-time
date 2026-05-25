@@ -27,13 +27,17 @@ import {
 } from 'lucide-react'
 import { useSyncStatus, useSyncUser, useCommandQueue, useSyncCancel, useGlobalSyncState, useRetryUserSync, useForceUserSync, useUserBiometrics } from '@/hooks/use-users'
 import type { UserEntry } from '@/services/user-service'
-import React, { useEffect } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
   getComponentSyncStatus,
   isDeviceAllComponentsSynced,
   type SyncComponent,
 } from '@/lib/sync-component-status'
+import {
+  useDevicePresenceMap,
+  enrichSyncStatusWithPresence,
+} from '@/hooks/use-device-presence'
 
 interface SyncStatusDialogProps {
   user: UserEntry | null
@@ -95,7 +99,11 @@ export function SyncStatusDialog({ user, userId, open, onOpenChange }: SyncStatu
     if (userId && open) refetchSyncStatus()
   }, [open, userId])
 
-  const syncStatus = data?.data || []
+  const { map: presenceMap } = useDevicePresenceMap({ enabled: open && !!userId })
+  const syncStatus = useMemo(
+    () => enrichSyncStatusWithPresence(data?.data || [], presenceMap),
+    [data, presenceMap]
+  )
   const commands = commandData?.data || []
 
   const getDeviceState = (status: any) => {

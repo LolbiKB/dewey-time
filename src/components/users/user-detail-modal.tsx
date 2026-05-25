@@ -49,6 +49,11 @@ import {
   syncComponentTileClass,
   type SyncComponent,
 } from '@/lib/sync-component-status'
+import {
+  useDevicePresenceMap,
+  useRequireDeviceOnline,
+  enrichSyncStatusWithPresence,
+} from '@/hooks/use-device-presence'
 import { toast } from 'sonner'
 import {
   useSyncStatus,
@@ -250,9 +255,17 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
     startEnrollment.reset()
   }, [])
 
-  const syncStatus = useMemo(() => syncData?.data || [], [syncData])
+  const { map: presenceMap } = useDevicePresenceMap({ enabled: !!user?.id })
+  const syncStatus = useMemo(
+    () => enrichSyncStatusWithPresence(syncData?.data || [], presenceMap),
+    [syncData, presenceMap]
+  )
   const biometricsList = useMemo(() => bioData?.data || [], [bioData])
-  const registrarDevices = useMemo(() => syncStatus.filter(s => s.is_online && s.devices?.is_registrar), [syncStatus])
+  const registrarDevices = useMemo(
+    () => syncStatus.filter((s) => s.is_online && s.devices?.is_registrar),
+    [syncStatus]
+  )
+  const enrollmentPresence = useRequireDeviceOnline(deviceSn || undefined, 'live')
   const selectedDevice = useMemo(() => registrarDevices.find(d => d.device_sn === deviceSn), [registrarDevices, deviceSn])
   const capabilities = selectedDevice?.devices?.registrar_capabilities || []
   const enrolledFingers = useMemo(() => new Set(biometricsList.filter(b => b.type === 'fingerprint' && b.finger_id !== null).map(b => b.finger_id!)), [biometricsList])
@@ -309,6 +322,10 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
 
   const handleStart = () => {
     if (!user?.id || !deviceSn) return
+    if (!enrollmentPresence.canRunLiveDeviceAction) {
+      toast.error(enrollmentPresence.blockReason ?? 'Device is offline')
+      return
+    }
     setActiveCommandId(null)
     startEnrollment.mutate(
       { userId: user.id, deviceSn, biometricType, fingerId: biometricType === 'fingerprint' ? fingerId : undefined },
@@ -437,7 +454,18 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
             )}
           </div>
 
-          <Button onClick={handleStart} disabled={!deviceSn || !capabilities.includes(biometricType) || (biometricType === 'fingerprint' && enrolledFingers.has(fingerId)) || startEnrollment.isPending} className="w-full gap-2">
+          <Button
+            onClick={handleStart}
+            disabled={
+              !deviceSn ||
+              !enrollmentPresence.canRunLiveDeviceAction ||
+              !capabilities.includes(biometricType) ||
+              (biometricType === 'fingerprint' && enrolledFingers.has(fingerId)) ||
+              startEnrollment.isPending
+            }
+            title={enrollmentPresence.blockReason}
+            className="w-full gap-2"
+          >
             {startEnrollment.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : biometricType === 'fingerprint' ? <Fingerprint className="h-4 w-4" /> : <ScanFace className="h-4 w-4" />}
             {biometricType === 'fingerprint' ? 'Start Fingerprint' : 'Start Face'}
           </Button>
@@ -574,7 +602,11 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
   }, [open, user])
 
   const commands = commandData?.data || []
-  const syncStatus = syncData?.data || []
+  const { map: presenceMap } = useDevicePresenceMap({ enabled: open && !!userId })
+  const syncStatus = useMemo(
+    () => enrichSyncStatusWithPresence(syncData?.data || [], presenceMap),
+    [syncData, presenceMap]
+  )
   const biometrics = biometricsData?.data || []
 
   const fingerprints = useMemo(() => biometrics.filter(b => b.type === 'fingerprint'), [biometrics])

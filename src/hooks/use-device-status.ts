@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
+import { getDevicePresence, type DevicePresenceStatus } from '@/lib/device-status'
 
 export interface DeviceStatusEntry {
   serial_number: string
   name: string | null
   location: string | null
   last_seen: string | null
-  status: 'online' | 'offline'
+  status: DevicePresenceStatus
   last_seen_minutes: number | null
 }
 
@@ -29,24 +30,20 @@ export function useDeviceStatus() {
         throw new Error(`Failed to fetch device status: ${error.message}`)
       }
 
-      const now = Date.now()
-const entries: DeviceStatusEntry[] = (devices || []).map(d => {
-        const lastSeenMinutes = d.last_seen
-          ? Math.floor((now - new Date(d.last_seen).getTime()) / 60000)
-          : null
-
+      const entries: DeviceStatusEntry[] = (devices || []).map((d) => {
+        const presence = getDevicePresence(d.last_seen)
         return {
           serial_number: d.serial_number,
           name: d.name,
           location: d.location,
           last_seen: d.last_seen,
-          status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
-          last_seen_minutes: lastSeenMinutes,
+          status: presence.status,
+          last_seen_minutes: presence.lastSeenMinutes,
         }
       })
 
-      const onlineDevices = entries.filter(e => e.status === 'online').length
-      const offlineDevices = entries.filter(e => e.status === 'offline').length
+      const onlineDevices = entries.filter((e) => e.status === 'online').length
+      const offlineDevices = entries.filter((e) => e.status === 'offline').length
 
       return {
         totalDevices: entries.length,
@@ -55,9 +52,9 @@ const entries: DeviceStatusEntry[] = (devices || []).map(d => {
         devices: entries,
       }
     },
-    refetchInterval: 5000,
+    refetchInterval: 15000,
     refetchOnWindowFocus: true,
-    staleTime: 2000,
+    staleTime: 5000,
     retry: 3,
     retryDelay: 1000,
   })

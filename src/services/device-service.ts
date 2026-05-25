@@ -3,6 +3,7 @@
 // ============================================================
 
 import { supabase } from '@/lib/supabase'
+import { getDevicePresence } from '@/lib/device-status'
 
 // Base pagination filters
 export interface BaseFilters {
@@ -95,16 +96,12 @@ export class DeviceService {
       throw new Error(`Failed to fetch devices: ${error.message}`)
     }
 
-    // Calculate derived fields (online/offline status)
-    const devicesWithStatus = (data || []).map(device => {
-      const lastSeenMinutes = device.last_seen 
-        ? Math.floor((Date.now() - new Date(device.last_seen).getTime()) / 60000)
-        : null
-      
+    const devicesWithStatus = (data || []).map((device) => {
+      const presence = getDevicePresence(device.last_seen)
       return {
         ...device,
-status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
-        last_seen_minutes: lastSeenMinutes,
+        status: presence.status,
+        last_seen_minutes: presence.lastSeenMinutes,
       } as DeviceEntry
     })
 
@@ -271,14 +268,11 @@ status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
 
     if (!data) return null
 
-    const lastSeenMinutes = data.last_seen
-      ? Math.floor((Date.now() - new Date(data.last_seen).getTime()) / 60000)
-      : null
-
+    const presence = getDevicePresence(data.last_seen)
     return {
       ...data,
-      status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
-      last_seen_minutes: lastSeenMinutes,
+      status: presence.status,
+      last_seen_minutes: presence.lastSeenMinutes,
     } as DeviceEntry
   }
 
@@ -339,15 +333,11 @@ status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
       throw new Error(`Failed to update device: ${error.message}`)
     }
 
-    // Calculate derived fields
-    const lastSeenMinutes = data.last_seen
-      ? Math.floor((Date.now() - new Date(data.last_seen).getTime()) / 60000)
-      : null
-
+    const presence = getDevicePresence(data.last_seen)
     return {
       ...data,
-      status: lastSeenMinutes !== null && lastSeenMinutes < 1 ? 'online' : 'offline',
-      last_seen_minutes: lastSeenMinutes,
+      status: presence.status,
+      last_seen_minutes: presence.lastSeenMinutes,
     } as DeviceEntry
   }
 

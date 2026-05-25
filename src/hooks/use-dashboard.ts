@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import { useDeviceStatus } from './use-device-status'
+import { useDevices } from './use-core-data'
+import { useMemo } from 'react'
 
 interface DashboardStats {
   totalUsers: number
@@ -12,11 +13,19 @@ interface DashboardStats {
 }
 
 export function useDashboardStats() {
-  // Use shared device status hook for real-time device counts
-  const { data: deviceData } = useDeviceStatus()
+  const { data: devicesData } = useDevices({ page: 1, limit: 500 })
+
+  const deviceCounts = useMemo(() => {
+    const devices = devicesData?.devices ?? []
+    const onlineDevices = devices.filter((d) => d.isOnline).length
+    return {
+      totalDevices: devicesData?.total ?? devices.length,
+      onlineDevices,
+    }
+  }, [devicesData])
 
   return useQuery({
-    queryKey: ['dashboard', 'stats'],
+    queryKey: ['dashboard', 'stats', deviceCounts.totalDevices, deviceCounts.onlineDevices],
     queryFn: async (): Promise<DashboardStats> => {
       const now = new Date()
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
@@ -49,12 +58,13 @@ export function useDashboardStats() {
       return {
         totalUsers: totalUsers || 0,
         registeredUsers: registeredUsers || 0,
-        onlineDevices: deviceData?.onlineDevices ?? 0,
-        totalDevices: deviceData?.totalDevices ?? 0,
+        onlineDevices: deviceCounts.onlineDevices,
+        totalDevices: deviceCounts.totalDevices,
         syncsToday: syncsToday || 0,
         attendanceToday: attendanceToday || 0,
       }
     },
     staleTime: 30000,
+    enabled: devicesData !== undefined,
   })
 }

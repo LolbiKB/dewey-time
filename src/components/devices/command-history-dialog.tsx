@@ -28,7 +28,9 @@ import {
   ChevronLeft,
   ChevronRightIcon,
 } from 'lucide-react'
-import { useDeviceCommands, useDevice, useClearDeviceCommands, type CommandFilters } from '@/hooks/use-devices'
+import { useDeviceCommands, useClearDeviceCommands, type CommandFilters } from '@/hooks/use-devices'
+import { useDevice } from '@/hooks/use-core-data'
+import { useDevicePresence } from '@/hooks/use-device-presence'
 import { format, formatDistanceToNow } from 'date-fns'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -107,7 +109,8 @@ function formatCommandDisplay(command: string, maxLength: number = 200): { displ
 const PAGE_SIZE = 20
 
 export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHistoryDialogProps) {
-  const { data: device } = useDevice(deviceSn || '')
+  const { data: device } = useDevice(deviceSn || '', { enabled: !!deviceSn && open })
+  const { isOnline } = useDevicePresence(deviceSn || undefined)
   const clearCommands = useClearDeviceCommands()
   
   // Pagination and filter state
@@ -164,10 +167,6 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
     setFilters(prev => ({ ...prev, commandType, page: 1 }))
     setExpandedCommands(new Set())
   }
-
-  const isOnline = device?.last_seen
-    ? new Date(device.last_seen).getTime() > Date.now() - 1 * 60 * 1000
-    : false
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
