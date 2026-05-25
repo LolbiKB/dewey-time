@@ -413,6 +413,9 @@ export class UserService {
         command_id: number | null
         deadline_at: string | null
         error_message: string | null
+        recovery_queued_at: string | null
+        recovery_command_id: number | null
+        recovery_attempts: number
       } | null
       command: CommandQueueEntry | null
       hasTemplateInDb: boolean

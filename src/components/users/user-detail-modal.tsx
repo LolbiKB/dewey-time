@@ -240,6 +240,7 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
   const [activeCommandId, setActiveCommandId] = useState<number | null>(null)
   const [showTimeout, setShowTimeout] = useState(false)
   const [recoveryPending, setRecoveryPending] = useState(false)
+  const autoRecoveryTriggeredRef = useRef(false)
 
   const enrollmentPolling = !!user?.id && activeCommandId !== null
   const { data: enrollmentStatusData } = useEnrollmentStatus(user.id || '', {
@@ -272,10 +273,12 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
   const hasTemplateForType = useMemo(() => biometricType === 'fingerprint' ? biometricsList.some(b => b.type === 'fingerprint' && b.finger_id === fingerId) : biometricsList.some(b => b.type === 'face'), [biometricsList, biometricType, fingerId])
 
   const sessionPhase = enrollmentStatusData?.data?.session?.phase
+  const recoveryQueuedAt = enrollmentStatusData?.data?.session?.recovery_queued_at
   const commandStatus =
     enrollmentStatusData?.data?.command?.status ?? commandData?.status
   const hasTemplate =
     enrollmentStatusData?.data?.hasTemplateInDb ?? hasTemplateForType
+  const isPullingTemplate = !!recoveryQueuedAt || recoveryPending
 
   const phase = useMemo(() => {
     if (sessionPhase === 'failed' || sessionPhase === 'timed_out' || sessionPhase === 'cancelled') {
@@ -300,6 +303,33 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
       return () => clearTimeout(timer)
     }
     setShowTimeout(false)
+  }, [phase])
+
+  useEffect(() => {
+    if (phase !== 'accepted' || !user?.id || recoveryQueuedAt || autoRecoveryTriggeredRef.current) {
+      return
+    }
+    const timer = setTimeout(async () => {
+      if (autoRecoveryTriggeredRef.current) return
+      autoRecoveryTriggeredRef.current = true
+      setRecoveryPending(true)
+      try {
+        const result = await UserService.triggerEnrollmentRecovery(user.id!)
+        toast.info(result.message || 'Pulling template from device…')
+      } catch (e: any) {
+        autoRecoveryTriggeredRef.current = false
+        toast.error(e.message || 'Auto-recovery failed')
+      } finally {
+        setRecoveryPending(false)
+      }
+    }, 45000)
+    return () => clearTimeout(timer)
+  }, [phase, user?.id, recoveryQueuedAt])
+
+  useEffect(() => {
+    if (phase === 'idle' || phase === 'success' || phase === 'failed') {
+      autoRecoveryTriggeredRef.current = false
+    }
   }, [phase])
 
   useEffect(() => {
@@ -498,7 +528,7 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
           <div className="rounded-lg border p-4 text-center">
             {phase === 'queued' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><RefreshCw className="h-5 w-5 text-blue-600" /></div><div className="font-medium text-sm">Command Sent</div><div className="text-xs text-muted-foreground">Waiting for device...</div></div>}
             {phase === 'enrolling' && <div><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-2"><Loader2 className="h-5 w-5 text-blue-600 animate-spin" /></div><div className="font-medium text-sm">{biometricType === 'fingerprint' ? 'Place finger on sensor' : 'Look at camera'}</div><div className="text-xs text-muted-foreground">Follow prompts on the device</div></div>}
-            {phase === 'accepted' && <div><div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-2"><Progress className="h-5 w-5 animate-pulse" /></div><div className="font-medium text-sm">Template Captured</div><div className="text-xs text-muted-foreground">Uploading...</div><Progress value={75} className="h-1 mt-2" /></div>}
+            {phase === 'accepted' && <div><div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-2"><Progress className="h-5 w-5 animate-pulse" /></div><div className="font-medium text-sm">Template Captured</div><div className="text-xs text-muted-foreground">{isPullingTemplate ? 'Pulling template from device…' : 'Uploading...'}</div><Progress value={isPullingTemplate ? 85 : 75} className="h-1 mt-2" /></div>}
             {phase === 'success' && <div><div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-2"><CheckCircle2 className="h-5 w-5 text-green-600" /></div><div className="font-medium text-sm text-green-700">Success</div><div className="text-xs text-muted-foreground">{biometricType === 'fingerprint' ? `${FINGER_LABELS[fingerId]} enrolled` : 'Face enrolled'}</div></div>}
             {phase === 'failed' && errorInfo && <div><div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-2"><AlertCircle className="h-5 w-5 text-red-600" /></div><div className="font-medium text-sm text-red-700">{errorInfo.label}</div><div className="text-xs text-muted-foreground">{errorInfo.description}</div></div>}
           </div>
@@ -519,14 +549,14 @@ function EnrollContent({ user, onSuccess }: EnrollContentProps) {
                   size="sm"
                   className="w-full"
                   onClick={handleRecovery}
-                  disabled={recoveryPending}
+                  disabled={isPullingTemplate}
                 >
-                  {recoveryPending ? (
+                  {isPullingTemplate ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
                   ) : (
                     <RotateCcw className="h-3.5 w-3.5 mr-2" />
                   )}
-                  Request template from device
+                  {isPullingTemplate ? 'Pulling template…' : 'Request template from device'}
                 </Button>
               )}
             </div>
