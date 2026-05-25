@@ -1,12 +1,20 @@
 import { useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, type UserEntry, UserOperationLockedError } from '@/services/user-service'
+import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, UserOperationLockedError } from '@/services/user-service'
 import { PhotoService } from '@/services/photo-service'
-import { toast } from 'sonner'
+import {
+  notifyInfo,
+  notifyOperationFailed,
+  notifySuccess,
+  notifyUserOperationLocked,
+} from '@/lib/toast'
 
 export function useSyncCancel() {
   return {
-    cancel: () => setGlobalCancel(true),
+    cancel: () => {
+      setGlobalCancel(true)
+      notifyInfo('Cancelling sync', 'In-flight device steps will stop after the current command.')
+    },
     reset: () => setGlobalCancel(false),
     isCancelling: getGlobalCancel().value,
   }
@@ -75,21 +83,7 @@ export function useCommandQueue(userId: string, limit: number = 10, options?: { 
   })
 }
 
-// Hook: Create user
-export function useCreateUser() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (user: Partial<UserEntry>) => UserService.createUser(user),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: userKeys.lists() })
-      toast.success('User created successfully')
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to create user: ${error.message}`)
-    },
-  })
-}
+export { useCreateUser, useDeleteBiometric, useStartEnrollment } from './use-mutations'
 
 // Hook: Sync user to devices
 export function useSyncUser() {
@@ -120,7 +114,10 @@ export function useSyncUser() {
           const result = await PhotoService.processAndStorePhoto(userId, photoUrl)
           if (!result.success) {
             console.warn('[useSyncUser] Photo processing failed:', result.message)
-            toast.warning(result.message || 'Photo processing failed, continuing without photo')
+            notifyInfo(
+              'Photo skipped',
+              result.message || 'Photo processing failed; continuing sync without photo.'
+            )
           }
         } catch (error) {
           console.error('[useSyncUser] Photo processing error:', error)
@@ -189,23 +186,17 @@ export function useSyncUser() {
       setSyncState({ active: false, lastSyncTriggered: null })
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
-      toast.success('Sync completed')
+      notifySuccess('Sync completed')
     },
     onError: (error: Error) => {
       console.error('[useSyncUser] onError triggered:', error.message)
       setSyncState({ active: false, lastSyncTriggered: null })
       if (error.message === 'Sync cancelled') {
-        toast.info('Sync cancelled')
+        notifyInfo('Sync cancelled')
       } else if (error instanceof UserOperationLockedError) {
-        // Handle user operation lock with countdown
-        const startedTime = error.startedAt ? new Date(error.startedAt).toLocaleTimeString() : 'unknown'
-        const operationName = error.existingOperation || 'Another operation'
-        toast.error(
-          `User operation in progress: ${operationName} is running (started at ${startedTime}). Please wait ${error.retryAfter} seconds and try again.`,
-          { duration: 5000 }
-        )
+        notifyUserOperationLocked(error, 'sync')
       } else {
-        toast.error(`Failed to sync user: ${error.message}`)
+        notifyOperationFailed('sync user', error)
       }
       setGlobalCancel(false)
       queryClient.invalidateQueries({ queryKey: userKeys.details() })
@@ -249,39 +240,6 @@ export function useDriftStatus(userId: string) {
     queryFn: () => UserService.getDriftStatus(userId),
     enabled: !!userId,
     refetchInterval: 10000, // Auto-refresh every 10 seconds
-  })
-}
-
-// Hook: Start biometric enrollment on a device
-export function useStartEnrollment() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async ({
-      userId,
-      deviceSn,
-      biometricType,
-      fingerId,
-    }: {
-      userId: string
-      deviceSn: string
-      biometricType: 'fingerprint' | 'face'
-      fingerId?: number
-    }) => {
-      return UserService.startEnrollment(userId, deviceSn, biometricType, fingerId)
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
-      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
-      queryClient.invalidateQueries({ queryKey: userKeys.enrollmentStatus(variables.userId) })
-    },
-    onError: (error: Error) => {
-      if (error instanceof UserOperationLockedError) {
-        showLockErrorToast(error)
-        return
-      }
-      toast.error(`Enrollment failed: ${error.message}`)
-    },
   })
 }
 
@@ -333,10 +291,12 @@ export function useClearPendingCommands() {
         queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
         queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       }
-      toast.success(`Cleared ${result.cleared} pending command${result.cleared !== 1 ? 's' : ''}`)
+      notifySuccess(
+        `Cleared ${result.cleared} pending command${result.cleared !== 1 ? 's' : ''}`
+      )
     },
     onError: (error: Error) => {
-      toast.error(`Failed to clear commands: ${error.message}`)
+      notifyOperationFailed('clear commands', error)
     },
   })
 }
@@ -351,24 +311,6 @@ export function useDeviceState(deviceSn: string) {
   })
 }
 
-// Hook: Delete a biometric template
-export function useDeleteBiometric() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ userId, type, fingerId }: { userId: string; type: 'fingerprint' | 'face'; fingerId?: number }) =>
-      UserService.deleteBiometric(userId, type, fingerId),
-    onSuccess: (result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['user-biometrics', variables.userId] })
-      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
-      toast.success(`Deleted ${variables.type} template${result.commandsQueued > 0 ? `, ${result.commandsQueued} device delete command(s) queued` : ''}`)
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to delete biometric: ${error.message}`)
-    },
-  })
-}
-
 // Hook: Cancel pending enrollment
 export function useCancelEnrollment() {
   const queryClient = useQueryClient()
@@ -380,36 +322,19 @@ export function useCancelEnrollment() {
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.enrollmentStatus(userId) })
       queryClient.invalidateQueries({ queryKey: ['user-sync-summary', userId] })
-      toast.success(result.message)
-      toast.info('If a scan was captured on the device, it will be removed automatically.')
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to cancel enrollment: ${error.message}`)
-    },
-  })
-}
-
-// Hook: Retry failed sync
-export function useRetryUserSync() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ userId, deviceSns }: { userId: string; deviceSns?: string[] }) =>
-      UserService.retryUserSync(userId, deviceSns),
-    onSuccess: (result, variables) => {
-      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
-      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
-      toast.success(`Retry initiated for ${result.commandsQueued} device(s)`)
-    },
-    onError: (error: Error) => {
-      if (error instanceof UserOperationLockedError) {
-        showLockErrorToast(error)
+      if (result.detail) {
+        notifySuccess(result.message, result.detail)
       } else {
-        toast.error(`Failed to retry sync: ${error.message}`)
+        notifySuccess(result.message)
       }
     },
+    onError: (error: Error) => {
+      notifyOperationFailed('cancel enrollment', error)
+    },
   })
 }
+
+export { useRetryUserSync, useForceUserSync } from './use-mutations'
 
 // Hook: Check if user has active operation lock
 export function useUserLockStatus(userId: string) {
@@ -446,62 +371,15 @@ export function useReconcileUserSync() {
     onSuccess: (result, userId) => {
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
-      toast.success(
+      notifySuccess(
         result.cancelled > 0
-          ? `Cleared ${result.cancelled} stale command(s) (admin cleanup)`
-          : 'Sync state reconciled'
+          ? `Cleared ${result.cancelled} stale command(s)`
+          : 'Sync state reconciled',
+        result.cancelled > 0 ? 'Admin cleanup of orphan queue entries' : undefined
       )
     },
     onError: (error: Error) => {
-      toast.error(`Reconcile failed: ${error.message}`)
+      notifyOperationFailed('reconcile sync', error)
     },
   })
 }
-
-export function useForceUserSync() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ userId, deviceSns }: { userId: string; deviceSns?: string[] }) =>
-      UserService.forceUserSync(userId, deviceSns),
-    onSuccess: (result, variables) => {
-      queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
-      queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
-      toast.success(`Force sync initiated for ${result.commandsQueued} device(s)`)
-    },
-    onError: (error: Error) => {
-      if (error instanceof UserOperationLockedError) {
-        const startedTime = error.startedAt ? new Date(error.startedAt).toLocaleTimeString() : 'unknown'
-        const operationName = error.existingOperation || 'Another operation'
-        toast.error(
-          `Cannot force sync: ${operationName} is running (started at ${startedTime}). Please wait ${error.retryAfter} seconds.`,
-          { duration: 5000 }
-        )
-      } else {
-        toast.error(`Failed to force sync: ${error.message}`)
-      }
-    },
-  })
-}
-
-// Helper function to show lock error toast
-function showLockErrorToast(error: UserOperationLockedError) {
-  const startedTime = error.startedAt
-    ? new Date(error.startedAt).toLocaleTimeString()
-    : null
-  const operationName = error.existingOperation
-    ? error.existingOperation.replace(/_/g, ' ').toLowerCase()
-    : null
-  const detail = operationName && startedTime
-    ? `${operationName} (since ${startedTime})`
-    : operationName
-      ? operationName
-      : error.message.includes('Cannot start')
-        ? error.message
-        : 'another operation'
-  toast.error(
-    `Cannot enroll: ${detail}. Wait ${error.retryAfter}s or cancel sync, then try again.`,
-    { duration: 6000 }
-  )
-}
-

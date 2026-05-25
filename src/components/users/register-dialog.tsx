@@ -6,7 +6,7 @@ import { Loader2 } from 'lucide-react'
 import { UserService } from '@/services/user-service'
 import type { UserEntry } from '@/services/user-service'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { notifyError, notifySuccess } from '@/lib/toast'
 
 interface RegisterDialogProps {
   employee: UserEntry | null
@@ -53,14 +53,13 @@ export function RegisterDialog({ employee, open, onOpenChange }: RegisterDialogP
       // Close modal with success - user can check sync status in user details
       onOpenChange(false)
       
-      toast.success('Employee Registered', {
-        description: `${employee?.name} registered. Syncing to devices...`,
-      })
+      notifySuccess(
+        'Employee registered',
+        `${employee?.name} registered. Syncing to devices…`
+      )
     },
     onError: (error: Error) => {
-      toast.error('Registration Failed', {
-        description: error.message || 'Failed to register employee',
-      })
+      notifyError('Registration failed', error.message || 'Failed to register employee')
     },
   })
 

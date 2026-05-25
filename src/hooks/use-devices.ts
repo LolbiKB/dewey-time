@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { DeviceService, type DeviceFilters } from '@/services/device-service'
 
 // Query key factory
@@ -70,60 +70,5 @@ export function useDevice(serialNumber: string) {
   })
 }
 
-/**
- * Hook to retry a failed command
- */
-export function useRetryCommand() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (commandId: number) => DeviceService.retryCommand(commandId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['device'] })
-    },
-  })
-}
-
-/**
- * Hook to clear a specific command
- */
-export function useClearDeviceCommands() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ deviceSn, commandId }: { deviceSn: string; commandId: number }) =>
-      DeviceService.clearCommand(deviceSn, commandId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['device'] })
-    },
-  })
-}
-
-  /**
-   * Hook to update device configuration
-   */
-  export function useUpdateDevice() {
-    const queryClient = useQueryClient()
-  
-    return useMutation({
-      mutationFn: ({
-        serialNumber,
-        updates,
-      }: {
-        serialNumber: string
-        updates: {
-          name?: string
-          location?: string
-          is_registrar?: boolean
-          registrar_capabilities?: string[]
-        }
-      }) => DeviceService.updateDevice(serialNumber, updates),
-      onSuccess: () => {
-        // Invalidate all device queries regardless of filters
-        queryClient.invalidateQueries({ 
-          queryKey: ['devices'],
-          exact: false,
-        })
-      },
-    })
-  }
+/** Canonical implementations with notifications — see use-mutations.ts */
+export { useRetryCommand, useClearDeviceCommands } from './use-mutations'

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { PhotoService, type ProcessPhotoResult } from '@/services/photo-service'
-import { toast } from 'sonner'
+import { notifyError, notifyOperationFailed, notifySuccess } from '@/lib/toast'
 
 // Query key factory
 export const photoKeys = {
@@ -28,17 +28,16 @@ export function useProcessPhoto() {
       queryClient.invalidateQueries({ queryKey: ['user-photo', variables.userId] })
       
       if (result.success) {
-        toast.success('Photo processed successfully', {
-          description: `Size: ${result.processedImage?.size ? (result.processedImage.size / 1024).toFixed(1) : '?'}KB, Dimensions: ${result.processedImage?.width}x${result.processedImage?.height}`,
-        })
+        notifySuccess(
+          'Photo processed successfully',
+          `Size: ${result.processedImage?.size ? (result.processedImage.size / 1024).toFixed(1) : '?'}KB, ${result.processedImage?.width}x${result.processedImage?.height}`
+        )
       } else {
-        toast.error('Photo processing failed', {
-          description: result.message,
-        })
+        notifyError('Photo processing failed', result.message)
       }
     },
     onError: (error: Error) => {
-      toast.error(`Photo processing failed: ${error.message}`)
+      notifyOperationFailed('process photo', error)
     },
   })
 }

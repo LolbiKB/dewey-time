@@ -56,19 +56,20 @@ export {
   useDeleteUser,
   useSendDeviceCommand,
   useUpdateDevice,
-  useProcessPhoto,
-  // useRefreshPhoto, // TODO: fix or remove
-  useSyncCancel,
-  getGlobalCancel,
   useRetryCommand,
   useClearDeviceCommands,
+  useForceUserSync,
+  useRetryUserSync,
 } from './use-mutations'
+
+export { useSyncCancel } from './use-users'
+export { useProcessPhoto } from './use-photo'
+export { getGlobalCancel, setGlobalCancel } from '@/services/user-service'
 
 // Query Keys (Central registry)
 export { queryKeys, legacyKeyMap } from '@/lib/query-keys'
 
-// Legacy hooks (for backward compatibility during migration)
-// These will be removed after full refactor
+// User queries + user-specific mutations (sync pipeline, enrollment cancel, reconcile)
 export * from './use-users'
 export * from './use-devices'
 export * from './use-attendance-logs'

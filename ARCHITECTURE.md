@@ -13,7 +13,7 @@ We've implemented a centralized TanStack Query architecture that provides:
 ```
 ┌─────────────────────────────────────────┐
 │           UI COMPONENTS                 │
-│  (DeviceDetailDialog, SyncStatusDialog) │
+│  (DeviceDetailDialog, UserDetailModal)   │
 └─────────────┬───────────────────────────┘
               │ uses
 ┌─────────────▼───────────────────────────┐
@@ -243,6 +243,25 @@ Use React Query DevTools (already enabled in App.tsx):
 - See cache state, query status, and timing
 - Manually invalidate or refetch queries
 
+## Notifications (Sonner)
+
+This dashboard uses **[Sonner](https://sonner.emilkowal.ski/)** via shadcn’s `sonner` component — not the deprecated Radix `toast` + `useToast` stack.
+
+| Rule | Detail |
+|------|--------|
+| Mount once | `<Toaster />` from [`src/components/ui/sonner.tsx`](src/components/ui/sonner.tsx) in [`App.tsx`](src/App.tsx) |
+| Mutations toast | Success/error feedback lives in **`use-mutations.ts`** `onSuccess` / `onError` (one toast per operation) |
+| Helpers | [`src/lib/toast.ts`](src/lib/toast.ts) — `notifySuccess(title, description?)`, `notifyError`, `notifyOperationFailed`, lock errors |
+| Components | Toast only for non-mutation UX (e.g. “PIN copied”, background job completion) — avoid duplicating hook toasts |
+| Style | **Title** = outcome; **description** = detail or error message |
+
+```typescript
+import { notifySuccess, notifyError } from '@/lib/toast'
+
+notifySuccess('Employee registered', 'Syncing to devices…')
+notifyError('Registration failed', error.message)
+```
+
 ## Best Practices
 
 1. **Always use derived hooks** - Don't fetch raw data when a derived hook exists
@@ -250,6 +269,7 @@ Use React Query DevTools (already enabled in App.tsx):
 3. **Use optimistic updates** - They provide better UX
 4. **Check `isLoading`** - Always handle loading states
 5. **Handle errors** - Mutations return error states
+6. **One toast per mutation** - Do not toast again in the caller after `mutateAsync` from centralized hooks
 
 ## Questions?
 

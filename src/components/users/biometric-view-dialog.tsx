@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Fingerprint, ScanFace, Trash2, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { useDeleteBiometric } from '@/hooks/use-users'
+import { useDeleteBiometric } from '@/hooks'
 import { protocolFingerLabel } from '@/lib/zk-finger-fid'
 
 interface BiometricViewDialogProps {

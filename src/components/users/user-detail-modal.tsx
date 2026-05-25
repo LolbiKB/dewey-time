@@ -32,7 +32,6 @@ import {
   CheckCircle2,
   AlertCircle,
   RotateCcw,
-  Zap,
   X,
   Users,
   UserPlus,
@@ -54,7 +53,7 @@ import {
   useRequireDeviceOnline,
   enrichSyncStatusWithPresence,
 } from '@/hooks/use-device-presence'
-import { toast } from 'sonner'
+import { notifyError, notifyInfo, notifySuccess, notifyWarning } from '@/lib/toast'
 import {
   useSyncStatus,
   useSyncUser,
@@ -71,6 +70,7 @@ import {
 } from '@/hooks/use-users'
 import { UserService, type UserEntry, type SyncStatusEntry } from '@/services/user-service'
 import { deriveEnrollPhase, type EnrollPhase } from '@/lib/enrollment-phase'
+import { SyncToolbarActions } from '@/components/users/sync-toolbar-actions'
 import {
   ZK_PROTOCOL_FINGER_ORDER,
   ZK_PROTOCOL_FINGER_GRID_LETTERS,
@@ -174,6 +174,12 @@ interface DeviceCardProps {
     recovery_command_id?: number | null
     device_sn?: string
   } | null
+  enrollmentCleanup?: {
+    cleanupPending?: boolean
+    rogueRisk?: boolean
+    deviceSn?: string
+  } | null
+  onForceEnrollmentCleanup?: () => void
   status: any
   device: any
   commands: any[]
@@ -217,6 +223,8 @@ function DeviceCard({
   hasFace,
   fingerprints = [],
   enrollmentSession,
+  enrollmentCleanup,
+  onForceEnrollmentCleanup,
 }: DeviceCardProps) {
   const isOnline = status.is_online
   const deviceCommands = commands.filter((c: any) => c.device_sn === status.device_sn)
@@ -248,6 +256,33 @@ function DeviceCard({
           </div>
         </AccordionTrigger>
         <AccordionContent className="px-4 pb-3 pt-2">
+          {enrollmentCleanup?.cleanupPending && enrollmentCleanup.deviceSn === status.device_sn && (
+            <div className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
+              <p className="font-medium">Enrollment cleanup in progress</p>
+              <p className="text-blue-700/90 dark:text-blue-300/90 mt-0.5">
+                A cancelled enrollment may still have a fingerprint on this device. Sync will not remove it — wait for
+                cleanup or use retry below.
+              </p>
+              {onForceEnrollmentCleanup && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 h-7 text-xs"
+                  onClick={onForceEnrollmentCleanup}
+                >
+                  Retry remove from device
+                </Button>
+              )}
+            </div>
+          )}
+          {enrollmentCleanup?.rogueRisk &&
+            !enrollmentCleanup?.cleanupPending &&
+            enrollmentCleanup.deviceSn === status.device_sn && (
+              <p className="mb-2 text-[11px] text-amber-700 dark:text-amber-400">
+                Possible fingerprint on device without cloud record — enrollment cleanup may be needed.
+              </p>
+            )}
           {staleCommands.length > 0 && (
             <p className="text-[11px] text-amber-700 dark:text-amber-400 mb-2">
               {staleCommands[0].command_type} #{staleCommands[0].id}:{' '}
@@ -264,7 +299,14 @@ function DeviceCard({
             <SyncComponentTile component="photo" status={status} icon={Image} label="Photo" options={syncOptions} />
           </div>
           <div className="flex justify-end mt-3">
-            <Button variant="outline" size="sm" onClick={() => onSync(status.device_sn)} disabled={isSyncing || hasActiveCommands} className="h-7 gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSync(status.device_sn)}
+              disabled={!isOnline || isSyncing || hasActiveCommands}
+              title={!isOnline ? 'Device is offline' : undefined}
+              className="h-7 gap-1.5"
+            >
               {hasActiveCommands ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
               {hasActiveCommands ? 'Syncing...' : 'Sync'}
             </Button>
@@ -277,6 +319,20 @@ function DeviceCard({
 
 /** Minimum time on Process so Capture → Done does not skip a visible step */
 const ENROLL_PROCESS_MIN_MS = 2500
+
+const ENROLL_ACTIVE_PHASES: EnrollPhase[] = ['queued', 'enrolling', 'accepted']
+
+const ENROLL_CANCEL_CONFIRM = {
+  title: 'Cancel enrollment?',
+  message:
+    'This stops the device session. If a fingerprint was captured on the device, we will queue removal from the registrar.',
+  confirmLabel: 'Cancel enrollment',
+  cancelLabel: 'Keep enrolling',
+} as const
+
+function isActiveEnrollPhase(phase: EnrollPhase): boolean {
+  return ENROLL_ACTIVE_PHASES.includes(phase)
+}
 
 /** Hold Process step briefly before Done when cloud template arrives quickly */
 function applyProcessMinDisplay(
@@ -305,6 +361,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
   const { data: syncData } = useSyncStatus(user.id || '')
   const startEnrollment = useStartEnrollment()
   const cancelEnrollment = useCancelEnrollment()
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false)
 
   const [biometricType, setBiometricType] = useState<'fingerprint' | 'face'>('fingerprint')
   const [fingerId, setFingerId] = useState<number>(5)
@@ -430,10 +487,10 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
       setRecoveryPending(true)
       try {
         const result = await UserService.triggerEnrollmentRecovery(user.id!)
-        toast.info(result.message || 'Pulling template from device…')
+        notifyInfo('Pulling template', result.message || 'Request sent to the registrar device.')
       } catch (e: any) {
         autoRecoveryTriggeredRef.current = false
-        toast.error(e.message || 'Auto-recovery failed')
+        notifyError('Auto-recovery failed', e.message)
       } finally {
         setRecoveryPending(false)
       }
@@ -522,7 +579,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
   const handleStart = () => {
     if (!user?.id || !deviceSn) return
     if (!enrollmentPresence.canRunLiveDeviceAction) {
-      toast.error(enrollmentPresence.blockReason ?? 'Device is offline')
+      notifyError('Cannot enroll', enrollmentPresence.blockReason ?? 'Device is offline')
       return
     }
     setActiveCommandId(null)
@@ -550,8 +607,9 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
     }
   }, [open])
 
-  const handleCancel = () => {
+  const handleConfirmCancel = () => {
     if (!user?.id) return
+    setCancelConfirmOpen(false)
     cancelEnrollment.mutate(user.id, {
       onSuccess: () => handleReset(),
     })
@@ -562,9 +620,9 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
     setRecoveryPending(true)
     try {
       const result = await UserService.triggerEnrollmentRecovery(user.id)
-      toast.success(result.message)
+      notifySuccess(result.message)
     } catch (e: any) {
-      toast.error(e.message || 'Recovery failed')
+      notifyError('Recovery failed', e.message)
     } finally {
       setRecoveryPending(false)
     }
@@ -577,10 +635,10 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
         user.id,
         deviceSn || enrollmentStatusData?.data?.session?.device_sn
       )
-      toast.success(result.message)
+      notifySuccess(result.message)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Force cleanup failed'
-      toast.error(msg)
+      notifyError('Force cleanup failed', msg)
     }
   }
 
@@ -814,7 +872,11 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
           )}
 
           <div className="flex gap-2">
-            {(phase === 'enrolling' || phase === 'queued' || phase === 'accepted') && <Button variant="outline" onClick={handleCancel} className="flex-1">Cancel</Button>}
+            {(phase === 'enrolling' || phase === 'queued' || phase === 'accepted') && (
+              <Button variant="outline" onClick={() => setCancelConfirmOpen(true)} className="flex-1">
+                Cancel
+              </Button>
+            )}
             {phase === 'success' && (
               <>
                 <Button variant="outline" onClick={handleReset} className="flex-1 gap-1.5">
@@ -845,6 +907,18 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
           </div>
         </div>
       )}
+
+      <ConfirmationDialog
+        isOpen={cancelConfirmOpen}
+        title={ENROLL_CANCEL_CONFIRM.title}
+        message={ENROLL_CANCEL_CONFIRM.message}
+        confirmLabel={ENROLL_CANCEL_CONFIRM.confirmLabel}
+        cancelLabel={ENROLL_CANCEL_CONFIRM.cancelLabel}
+        variant="destructive"
+        isProcessing={cancelEnrollment.isPending}
+        onConfirm={handleConfirmCancel}
+        onCancel={() => setCancelConfirmOpen(false)}
+      />
     </div>
   )
 }
@@ -852,6 +926,8 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
 export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: UserDetailModalProps) {
   const [activeTab, setActiveTab] = useState('sync')
   const [enrollOpen, setEnrollOpen] = useState(false)
+  const [enrollCancelConfirmOpen, setEnrollCancelConfirmOpen] = useState(false)
+  const cancelEnrollment = useCancelEnrollment()
   const [copiedPin, setCopiedPin] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; bioId?: string; type?: 'fingerprint' | 'face'; fingerId?: number }>({ open: false })
   const lastEnrollmentPhaseRef = useRef<string | null>(null)
@@ -875,7 +951,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
 
     if (lastEnrollmentPhaseRef.current && phase === 'completed') {
       if (!enrollOpen) {
-        toast.success('Biometric enrollment completed')
+        notifySuccess('Biometric enrollment completed')
       }
       refetchBiometrics()
       onRefreshList?.()
@@ -885,11 +961,15 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
     ) {
       const cleanupPending = backgroundEnrollment?.data?.cleanupPending
       if (cleanupPending) {
-        toast.info('Enrollment ended — removing fingerprint from device…')
+        notifyInfo(
+          'Enrollment ended',
+          'Removing fingerprint from the registrar device…'
+        )
       } else {
-        toast.error(
+        notifyError(
+          'Enrollment did not complete',
           backgroundEnrollment?.data?.session?.error_message ||
-            'Enrollment did not complete — template was not received from the device'
+            'Template was not received from the device.'
         )
       }
     }
@@ -974,21 +1054,89 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
     
     const cleaning = syncStatus.filter(s => s.actual_state === 'cleaning').length
     
-    return { total: syncStatus.length, synced, syncing, notSynced, cleaning, staleCount }
+    const hasFailedCommands = commands.some((c: { status: string }) => c.status === 'failed')
+    const hasFailedDevices = syncStatus.some(
+      (s) => s.actual_state === 'failed' || s.error_message != null
+    )
+
+    return {
+      total: syncStatus.length,
+      synced,
+      syncing,
+      notSynced,
+      cleaning,
+      staleCount,
+      hasFailedCommands,
+      hasFailedDevices,
+    }
   }, [syncStatus, commands, fingerprints, faces])
+
+  const deviceSns = useMemo(() => syncStatus.map((s) => s.device_sn), [syncStatus])
+  const onlineDeviceSns = useMemo(
+    () => syncStatus.filter((s) => s.is_online).map((s) => s.device_sn),
+    [syncStatus]
+  )
+
+  const enrollmentStatusPayload = backgroundEnrollment?.data
 
   const handleCopyPin = async () => {
     if (user?.pin) {
       await navigator.clipboard.writeText(user.pin)
       setCopiedPin(true)
-      toast.success('PIN copied')
+      notifySuccess('PIN copied')
       setTimeout(() => setCopiedPin(false), 2000)
     }
   }
 
   const handleSyncToDevice = (deviceSn: string) => {
     if (!user?.id) return
-    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn] })
+    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn], photoUrl: user.photo_url })
+  }
+
+  const handleSyncAllDevices = () => {
+    if (!user?.id || deviceSns.length === 0) return
+    const targets = onlineDeviceSns.length > 0 ? onlineDeviceSns : deviceSns
+    if (onlineDeviceSns.length === 0 && deviceSns.length > 0) {
+      notifyWarning(
+        'Devices offline',
+        'Sync queued for configured devices anyway.'
+      )
+    }
+    syncUser.mutate({ userId: user.id, deviceSns: targets, photoUrl: user.photo_url })
+  }
+
+  const confirmCloseEnrollDialog = async () => {
+    setEnrollCancelConfirmOpen(false)
+    if (!user?.id) {
+      setEnrollOpen(false)
+      return
+    }
+    try {
+      const status = await UserService.getEnrollmentStatus(user.id)
+      const sessionPhase = status.data?.session?.phase
+      const isActive =
+        sessionPhase === 'queued' ||
+        sessionPhase === 'awaiting_upload' ||
+        status.data?.isActive
+      if (isActive) {
+        await cancelEnrollment.mutateAsync(user.id)
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Cancel failed'
+      notifyError('Could not cancel enrollment', msg)
+      return
+    }
+    setEnrollOpen(false)
+  }
+
+  const handleForceEnrollmentCleanupForDevice = async (deviceSn: string) => {
+    if (!user?.id) return
+    try {
+      const result = await UserService.forceEnrollmentCleanup(user.id, deviceSn)
+      notifySuccess(result.message)
+    } catch (err: unknown) {
+      notifyError('Cleanup failed', err instanceof Error ? err.message : undefined)
+    }
   }
 
   const handleDeleteBiometric = (bioId: string, type: 'fingerprint' | 'face', fingerId?: number) => {
@@ -1116,29 +1264,24 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
                         </div>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button size="sm" variant="outline" onClick={() => syncStatus.forEach(s => syncUser.mutate({ userId: user.id!, deviceSns: [s.device_sn] }))} disabled={isSyncing || stats.total === 0} className="h-8 gap-1.5 text-xs">
-                        <RefreshCw className="h-3 w-3" /> Sync All
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => retryUserSync.mutate({ userId: user.id!, deviceSns: syncStatus.map(s => s.device_sn) })} className="h-8 text-xs">
-                        <RotateCcw className="h-3 w-3" />
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => forceUserSync.mutate({ userId: user.id!, deviceSns: syncStatus.map(s => s.device_sn) })} className="h-8 text-xs text-orange-600">
-                        <Zap className="h-3 w-3" />
-                      </Button>
-                      {(stats.staleCount > 0 || stats.syncing > 0) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => reconcileUserSync.mutate(user.id!)}
-                          disabled={reconcileUserSync.isPending}
-                          className="h-8 text-xs text-amber-700"
-                          title="Clear stale commands and rebuild sync flags"
-                        >
-                          {reconcileUserSync.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertCircle className="h-3 w-3" />}
-                        </Button>
-                      )}
-                    </div>
+                    <SyncToolbarActions
+                      deviceSns={deviceSns}
+                      onlineDeviceSns={onlineDeviceSns}
+                      isSyncing={isSyncing}
+                      showResetFailed={stats.hasFailedCommands || stats.hasFailedDevices}
+                      showClearStuck={stats.staleCount > 0 || stats.syncing > 0}
+                      onSyncAll={handleSyncAllDevices}
+                      onResetFailed={() =>
+                        retryUserSync.mutate({ userId: user.id!, deviceSns: deviceSns })
+                      }
+                      onForceSync={() =>
+                        forceUserSync.mutate({ userId: user.id!, deviceSns: deviceSns })
+                      }
+                      onClearStuck={() => reconcileUserSync.mutate(user.id!)}
+                      resetPending={retryUserSync.isPending}
+                      forcePending={forceUserSync.isPending}
+                      clearPending={reconcileUserSync.isPending}
+                    />
                   </div>
 
                   <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1159,9 +1302,21 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
                             hasFace={faces.length > 0}
                             fingerprints={fingerprints}
                             enrollmentSession={
-                              backgroundEnrollment?.data?.session?.device_sn === status.device_sn
-                                ? backgroundEnrollment.data.session
+                              enrollmentStatusPayload?.session?.device_sn === status.device_sn
+                                ? enrollmentStatusPayload.session
                                 : null
+                            }
+                            enrollmentCleanup={
+                              enrollmentStatusPayload?.session?.device_sn === status.device_sn
+                                ? {
+                                    cleanupPending: enrollmentStatusPayload.cleanupPending,
+                                    rogueRisk: enrollmentStatusPayload.rogueRisk,
+                                    deviceSn: status.device_sn,
+                                  }
+                                : null
+                            }
+                            onForceEnrollmentCleanup={() =>
+                              handleForceEnrollmentCleanupForDevice(status.device_sn)
                             }
                           />
                         ))}
@@ -1240,35 +1395,16 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
       {/* Enroll Dialog */}
       <Dialog
         open={enrollOpen}
-        onOpenChange={async (nextOpen) => {
-          if (!nextOpen) {
-            const p = enrollPhaseRef.current
-            if (p === 'queued' || p === 'enrolling' || p === 'accepted') {
-              const confirmed = window.confirm(
-                'Cancel enrollment in progress? The device session will be stopped.'
-              )
-              if (!confirmed) return
-              if (user?.id) {
-                try {
-                  const status = await UserService.getEnrollmentStatus(user.id)
-                  const sessionPhase = status.data?.session?.phase
-                  const isActive =
-                    sessionPhase === 'queued' ||
-                    sessionPhase === 'awaiting_upload' ||
-                    status.data?.isActive
-                  if (isActive) {
-                    await UserService.cancelEnrollment(user.id)
-                  }
-                } catch (err: unknown) {
-                  const msg = err instanceof Error ? err.message : 'Cancel failed'
-                  toast.error(`Could not cancel enrollment: ${msg}`)
-                }
-              }
-            }
-            setEnrollOpen(false)
+        onOpenChange={(nextOpen) => {
+          if (nextOpen) {
+            setEnrollOpen(true)
             return
           }
-          setEnrollOpen(true)
+          if (isActiveEnrollPhase(enrollPhaseRef.current)) {
+            setEnrollCancelConfirmOpen(true)
+            return
+          }
+          setEnrollOpen(false)
         }}
       >
         <DialogContent className="max-w-sm">
@@ -1300,6 +1436,18 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
           />
         </DialogContent>
       </Dialog>
+
+      <ConfirmationDialog
+        isOpen={enrollCancelConfirmOpen}
+        title={ENROLL_CANCEL_CONFIRM.title}
+        message={ENROLL_CANCEL_CONFIRM.message}
+        confirmLabel={ENROLL_CANCEL_CONFIRM.confirmLabel}
+        cancelLabel={ENROLL_CANCEL_CONFIRM.cancelLabel}
+        variant="destructive"
+        isProcessing={cancelEnrollment.isPending}
+        onConfirm={confirmCloseEnrollDialog}
+        onCancel={() => setEnrollCancelConfirmOpen(false)}
+      />
 
       <ConfirmationDialog
         isOpen={deleteConfirm.open}

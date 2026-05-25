@@ -1,3 +1,8 @@
+/**
+ * shadcn Sonner wrapper — mount `<Toaster />` once at the app root.
+ * Call sites: `import { notifySuccess, toast } from '@/lib/toast'` (or `from 'sonner'`).
+ * Do not use legacy Radix `@/components/ui/toast` + `useToast`.
+ */
 import { useTheme } from "next-themes"
 import { Toaster as Sonner } from "sonner"
 

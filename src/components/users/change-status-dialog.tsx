@@ -21,7 +21,7 @@ import { AlertCircle, Loader2 } from 'lucide-react'
 import type { UserEntry } from '@/services/user-service'
 import { UserService } from '@/services/user-service'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { notifyError, notifySuccess } from '@/lib/toast'
 
 interface ChangeStatusDialogProps {
   user: UserEntry | null
@@ -54,15 +54,11 @@ export function ChangeStatusDialog({ user, open, onOpenChange }: ChangeStatusDia
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] })
-      toast.success('Status Updated', {
-        description: `User status changed to ${selectedStatus}.`,
-      })
+      notifySuccess('Status updated', `User status changed to ${selectedStatus}.`)
       onOpenChange(false)
     },
     onError: (error: Error) => {
-      toast.error('Update Failed', {
-        description: error.message || 'Failed to update user status',
-      })
+      notifyError('Update failed', error.message || 'Failed to update user status')
     },
   })
 

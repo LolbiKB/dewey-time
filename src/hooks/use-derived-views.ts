@@ -229,7 +229,7 @@ export function useDeviceSyncSummary(deviceSn: string) {
 
 /**
  * User with all their devices and sync status
- * Used by: SyncStatusDialog
+ * Used by: UserDetailModal sync tab
  */
 export function useUserWithDevices(userId: string) {
   const { data: devicesResponse, isLoading: devicesLoading } = useDevices()

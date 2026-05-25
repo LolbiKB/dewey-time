@@ -28,12 +28,13 @@ import {
   ChevronLeft,
   ChevronRightIcon,
 } from 'lucide-react'
-import { useDeviceCommands, useClearDeviceCommands, type CommandFilters } from '@/hooks/use-devices'
+import { useClearDeviceCommands } from '@/hooks'
+import { notifySuccess } from '@/lib/toast'
+import { useDeviceCommands, type CommandFilters } from '@/hooks/use-devices'
 import { useDevice } from '@/hooks/use-core-data'
 import { useDevicePresence } from '@/hooks/use-device-presence'
 import { format, formatDistanceToNow } from 'date-fns'
 import { useState } from 'react'
-import { toast } from 'sonner'
 import { getCommandLabel } from '@/lib/command-types'
 
 interface CommandHistoryDialogProps {
@@ -141,13 +142,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
 
   const handleClear = (commandId: number) => {
     if (!deviceSn) return
-    clearCommands.mutate(
-      { deviceSn, commandId },
-      {
-        onSuccess: () => toast.success('Command cleared'),
-        onError: () => toast.error('Failed to clear'),
-      }
-    )
+    clearCommands.mutate({ deviceSn, commandId })
   }
 
   const handlePageChange = (newPage: number) => {
@@ -302,7 +297,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                               <button
                                 onClick={() => {
                                   navigator.clipboard?.writeText(cmd.command)
-                                  toast.success('Copied')
+                                  notifySuccess('Copied')
                                 }}
                                 className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
                               >

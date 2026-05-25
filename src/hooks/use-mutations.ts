@@ -3,9 +3,14 @@
 // They handle optimistic updates and cache invalidation
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import {
+  notifyInfo,
+  notifyOperationFailed,
+  notifySuccess,
+  notifyUserOperationLocked,
+} from '@/lib/toast'
 import { queryKeys } from '@/lib/query-keys'
-import { UserService } from '@/services/user-service'
+import { UserService, UserOperationLockedError } from '@/services/user-service'
 import { DeviceService } from '@/services/device-service'
 import { supabase } from '@/lib/supabase'
 
@@ -185,16 +190,29 @@ export function useForceSync() {
         queryClient.invalidateQueries({ queryKey: queryKeys.devices.users(sn, '') })
       })
 
-      toast.error(`Force sync failed: ${error.message}`)
+      if (error instanceof UserOperationLockedError) {
+        notifyUserOperationLocked(error, 'sync')
+      } else {
+        notifyOperationFailed('force sync', error)
+      }
     },
-    
-onSuccess: (data) => {
-      toast.success(`Force sync started for ${data.commandsQueued} command(s)`)
+
+    onSuccess: (data) => {
+      const skipped = data.skippedDevices ?? 0
+      const description =
+        skipped > 0 ? `${skipped} device(s) skipped — batch already running` : undefined
+      const title =
+        data.message ?? `Force sync queued on ${data.commandsQueued} device(s)`
+      notifySuccess(title, description)
     },
 
     onSettled: (_data, _error, variables) => {
       // Always refetch after error or success
       queryClient.invalidateQueries({ queryKey: queryKeys.users.syncStatus(variables.userId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.commands(variables.userId) })
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.users.detail(variables.userId), 'command-queue'],
+      })
       queryClient.invalidateQueries({ queryKey: ['sync-status', 'all'] })
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
       queryClient.invalidateQueries({ queryKey: queryKeys.system.syncHealth })
@@ -252,15 +270,34 @@ export function useRetrySync() {
       if (context?.previousStatus) {
         queryClient.setQueryData(queryKeys.users.syncStatus(variables.userId), context.previousStatus)
       }
-      toast.error(`Retry failed: ${error.message}`)
+      if (error instanceof UserOperationLockedError) {
+        notifyUserOperationLocked(error, 'sync')
+      } else {
+        notifyOperationFailed('retry sync', error)
+      }
     },
-    
-    onSuccess: () => {
-      toast.success('Retry initiated')
+
+    onSuccess: (result) => {
+      if (result.message) {
+        notifySuccess(result.message)
+      } else if ((result.resetCount ?? 0) > 0) {
+        notifySuccess(
+          `Reset ${result.resetCount} failed command(s)`,
+          'Devices will pick them up on the next poll.'
+        )
+      } else if (result.commandsQueued > 0) {
+        notifySuccess(`Queued fresh sync on ${result.commandsQueued} device(s)`)
+      } else {
+        notifyInfo('Sync retry requested', 'Watch device status for progress.')
+      }
     },
     
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.users.syncStatus(variables.userId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.commands(variables.userId) })
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.users.detail(variables.userId), 'command-queue'],
+      })
       queryClient.invalidateQueries({ queryKey: ['sync-status', 'all'] })
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
     },
@@ -313,11 +350,15 @@ export function useDeleteBiometric() {
           context.previousBiometrics
         )
       }
-      toast.error(`Failed to delete biometric: ${error.message}`)
+      notifyOperationFailed('delete biometric', error)
     },
-    
-    onSuccess: () => {
-      toast.success('Biometric deleted')
+
+    onSuccess: (result, variables) => {
+      const detail =
+        result.commandsQueued > 0
+          ? `${result.commandsQueued} device delete command(s) queued`
+          : undefined
+      notifySuccess(`Deleted ${variables.type} template`, detail)
     },
     
     onSettled: (_data, _error, variables) => {
@@ -346,14 +387,26 @@ export function useStartEnrollment() {
       return UserService.startEnrollment(userId, deviceSn, biometricType, fingerId)
     },
     
-    onSuccess: () => {
-      toast.success(`Enrollment started on device. Please follow instructions on the device.`)
+    onSuccess: (_data, variables) => {
+      notifySuccess(
+        'Enrollment started',
+        'Follow the prompts on the registrar device.'
+      )
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.syncStatus(variables.userId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.commands(variables.userId) })
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.users.detail(variables.userId), 'enrollment-status'],
+      })
     },
-    
+
     onError: (error) => {
-      toast.error(`Failed to start enrollment: ${error.message}`)
+      if (error instanceof UserOperationLockedError) {
+        notifyUserOperationLocked(error, 'enroll')
+      } else {
+        notifyOperationFailed('start enrollment', error)
+      }
     },
-    
+
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.byDevice(variables.deviceSn) })
@@ -380,11 +433,11 @@ export function useCreateUser() {
     },
     
     onSuccess: () => {
-      toast.success('User created successfully')
+      notifySuccess('User created successfully')
     },
-    
+
     onError: (error) => {
-      toast.error(`Failed to create user: ${error.message}`)
+      notifyOperationFailed('create user', error)
     },
     
     onSettled: () => {
@@ -410,11 +463,11 @@ export function useUpdateUser() {
     },
     
     onSuccess: () => {
-      toast.success('User updated successfully')
+      notifySuccess('User updated successfully')
     },
-    
+
     onError: (error) => {
-      toast.error(`Failed to update user: ${error.message}`)
+      notifyOperationFailed('update user', error)
     },
     
     onSettled: (_data, _error, variables) => {
@@ -433,11 +486,11 @@ export function useDeleteUser() {
     },
     
     onSuccess: () => {
-      toast.success('User deleted successfully')
+      notifySuccess('User deleted successfully')
     },
-    
+
     onError: (error) => {
-      toast.error(`Failed to delete user: ${error.message}`)
+      notifyOperationFailed('delete user', error)
     },
     
     onSettled: () => {
@@ -469,11 +522,11 @@ export function useSendDeviceCommand() {
     },
     
     onSuccess: (_, variables) => {
-      toast.success(`Command sent to ${variables.deviceSn}`)
+      notifySuccess('Command queued', `Sent to ${variables.deviceSn}. Executes on next device poll.`)
     },
-    
+
     onError: (error) => {
-      toast.error(`Failed to send command: ${error.message}`)
+      notifyOperationFailed('send command', error)
     },
     
     onSettled: (_data, _error, variables) => {
@@ -505,12 +558,12 @@ export function useUpdateDevice() {
       return data
     },
     
-    onSuccess: () => {
-      toast.success('Device updated successfully')
+    onSuccess: (_data, variables) => {
+      notifySuccess('Device updated', `Configuration saved for ${variables.deviceSn}.`)
     },
-    
+
     onError: (error) => {
-      toast.error(`Failed to update device: ${error.message}`)
+      notifyOperationFailed('update device', error)
     },
     
     onSettled: (_data, _error, variables) => {
@@ -521,73 +574,7 @@ export function useUpdateDevice() {
   })
 }
 
-// =====================================================
-// PHOTO MUTATIONS
-// =====================================================
-
-export function useProcessPhoto() {
-  const queryClient = useQueryClient()
-  
-  return useMutation({
-    mutationFn: async ({
-      userId,
-      photoUrl,
-    }: {
-      userId: string
-      photoUrl: string
-    }) => {
-      // Call photo service to process and store
-      const response = await fetch(`/admin/photo/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, photoUrl }),
-      })
-      
-      if (!response.ok) {
-        throw new Error('Failed to process photo')
-      }
-      
-      return response.json()
-    },
-    
-    onMutate: async ({ userId }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.photos.status(userId) })
-      
-      const previousStatus = queryClient.getQueryData(queryKeys.photos.status(userId))
-      
-      // Optimistically set to processing
-      queryClient.setQueryData(
-        queryKeys.photos.status(userId),
-        { status: 'processing', progress: 0 }
-      )
-      
-      return { previousStatus }
-    },
-    
-    onSuccess: () => {
-      toast.success('Photo processed successfully')
-    },
-    
-    onError: (error, variables, context) => {
-      if (context?.previousStatus) {
-        queryClient.setQueryData(
-          queryKeys.photos.status(variables.userId),
-          context.previousStatus
-        )
-      }
-      toast.error(`Failed to process photo: ${error.message}`)
-    },
-    
-    onSettled: (_data, _error, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.photos.status(variables.userId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.photos.detail(variables.userId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.users.detail(variables.userId) })
-    },
-  })
-}
-
-// TODO: fix or remove unused
-// export function useRefreshPhoto() { }
+// Photo processing: see use-photo.ts (canonical implementation)
 
 // =====================================================
 // DEVICE COMMAND MUTATIONS
@@ -598,49 +585,37 @@ export function useProcessPhoto() {
  */
 export function useRetryCommand() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
     mutationFn: (commandId: number) => DeviceService.retryCommand(commandId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
+      notifySuccess('Command retry queued')
+    },
+    onError: (error) => {
+      notifyOperationFailed('retry command', error)
     },
   })
 }
 
 /**
- * Clear commands for a device
+ * Clear a single command from a device queue
  */
 export function useClearDeviceCommands() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
-    mutationFn: ({ deviceSn, commandId }: { deviceSn: string; commandId: number }) => 
+    mutationFn: ({ deviceSn, commandId }: { deviceSn: string; commandId: number }) =>
       DeviceService.clearCommand(deviceSn, commandId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
+      notifySuccess('Command cleared')
+    },
+    onError: (error) => {
+      notifyOperationFailed('clear command', error)
     },
   })
 }
 
-// =====================================================
-// CANCELLATION
-// =====================================================
-
-let globalCancelFlag = { value: false }
-
-export function useSyncCancel() {
-  return {
-    cancel: () => {
-      globalCancelFlag.value = true
-      toast.info('Cancelling sync operations...')
-    },
-    reset: () => {
-      globalCancelFlag.value = false
-    },
-    isCancelling: () => globalCancelFlag.value,
-  }
-}
-
-export function getGlobalCancel() {
-  return globalCancelFlag
-}
+/** @deprecated Prefer useForceSync */
+export { useForceSync as useForceUserSync, useRetrySync as useRetryUserSync }

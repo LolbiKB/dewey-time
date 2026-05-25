@@ -35,7 +35,6 @@ import {
   MapPin,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { toast } from 'sonner'
 import { Sparkles } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useQueryClient } from '@tanstack/react-query'
@@ -372,20 +371,10 @@ export function DeviceDetailDialog({ deviceSn, open, onOpenChange }: DeviceDetai
 
   const handleForceSyncUser = async (userId: string) => {
     if (!deviceSn) return
-    
-    try {
-      const result = await forceSync.mutateAsync({
-        userId,
-        deviceSns: [deviceSn],
-      })
-      
-      if (result.success) {
-        toast.success(`Force sync initiated for user`)
-      }
-    } catch (error) {
-      console.error('Error forcing sync:', error)
-      toast.error('Failed to force sync user')
-    }
+    await forceSync.mutateAsync({
+      userId,
+      deviceSns: [deviceSn],
+    })
   }
 
   return (

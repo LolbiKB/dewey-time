@@ -96,6 +96,7 @@ export interface SyncStatusEntry {
   is_online?: boolean
   expected_state?: string
   actual_state?: string
+  error_message?: string | null
   devices?: {
     serial_number: string
     name?: string
@@ -339,19 +340,32 @@ export class UserService {
     return { success: result.success, commandsQueued: result.commandsQueued }
   }
 
-  static async retryUserSync(userId: string, deviceSns?: string[]): Promise<{ success: boolean; commandsQueued: number }> {
-    const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number }>(
-      `/admin/users/${userId}/sync/retry`,
-      { 
-        method: 'POST',
-        body: JSON.stringify({ device_sns: deviceSns }),
-      }
-    )
+  static async retryUserSync(
+    userId: string,
+    deviceSns?: string[]
+  ): Promise<{ success: boolean; commandsQueued: number; resetCount?: number; message?: string }> {
+    const result = await this.fetchApi<{
+      success: boolean
+      message: string
+      commandsQueued: number
+      resetCount?: number
+    }>(`/admin/users/${userId}/sync/retry`, {
+      method: 'POST',
+      body: JSON.stringify({ device_sns: deviceSns }),
+    })
 
-    return { success: result.success, commandsQueued: result.commandsQueued }
+    return {
+      success: result.success,
+      commandsQueued: result.commandsQueued,
+      resetCount: result.resetCount,
+      message: result.message,
+    }
   }
 
-  static async forceUserSync(userId: string, deviceSns?: string[]): Promise<{ success: boolean; commandsQueued: number }> {
+  static async forceUserSync(
+    userId: string,
+    deviceSns?: string[]
+  ): Promise<{ success: boolean; commandsQueued: number; skippedDevices?: number; message?: string }> {
     console.log('[forceUserSync] Calling API:', `/admin/users/${userId}/sync/force`, 'devices:', deviceSns)
     const result = await this.fetchApi<{ success: boolean; message: string; commandsQueued: number; skippedDevices?: number }>(
       `/admin/users/${userId}/sync/force`,
@@ -361,7 +375,12 @@ export class UserService {
       }
     )
     console.log('[forceUserSync] API result:', result)
-    return { success: result.success, commandsQueued: result.commandsQueued }
+    return {
+      success: result.success,
+      commandsQueued: result.commandsQueued,
+      skippedDevices: result.skippedDevices,
+      message: result.message,
+    }
   }
 
   static async getCommandStatus(commandId: number): Promise<CommandQueueEntry | null> {
@@ -386,12 +405,28 @@ export class UserService {
     return { commandId: result.commandId }
   }
 
-  static async cancelEnrollment(userId: string): Promise<{ cancelled: number; message: string }> {
-    const result = await this.fetchApi<{ success: boolean; cancelled: number; message: string }>(
-      `/admin/users/${userId}/enrollment/cancel`,
-      { method: 'POST' }
-    )
-    return { cancelled: result.cancelled, message: result.message }
+  static async cancelEnrollment(userId: string): Promise<{
+    cancelled: number
+    message: string
+    detail?: string
+    cleanupPending?: boolean
+    hasTemplateInDb?: boolean
+  }> {
+    const result = await this.fetchApi<{
+      success: boolean
+      cancelled: number
+      message: string
+      detail?: string
+      cleanupPending?: boolean
+      hasTemplateInDb?: boolean
+    }>(`/admin/users/${userId}/enrollment/cancel`, { method: 'POST' })
+    return {
+      cancelled: result.cancelled,
+      message: result.message,
+      detail: result.detail,
+      cleanupPending: result.cleanupPending,
+      hasTemplateInDb: result.hasTemplateInDb,
+    }
   }
 
   /** Re-queue registrar DELETE when cancel cleanup did not reach the device. */

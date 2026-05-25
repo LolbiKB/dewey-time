@@ -3,7 +3,6 @@ import { useState, useMemo } from 'react'
 import { 
   AlertCircle, 
 } from 'lucide-react'
-import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { createDeviceColumns } from '@/components/devices/columns'
 import { DeviceDataTable } from '@/components/devices/data-table'
@@ -15,13 +14,6 @@ import {
 import { EditDeviceDialog } from '@/components/devices/edit-device-dialog'
 import { DeviceDetailDialog } from '@/components/devices/device-detail-dialog'
 import type { DeviceFilters, DeviceEntry } from '@/services/device-service'
-
-const COMMAND_LABELS: Record<string, string> = {
-  reboot: 'Reboot',
-  info: 'Info request',
-  check: 'Force sync',
-  log: 'Push new logs',
-}
 
 export function Devices() {
   const [filters, setFilters] = useState<DeviceFilters>({
@@ -51,21 +43,11 @@ export function Devices() {
     commandType: string,
     commandBody: string
   ) => {
-    const label = COMMAND_LABELS[commandType] || commandType
-    try {
-      await deviceCommandMutation.mutateAsync({
-        deviceSn: serialNumber,
-        commandType,
-        command: commandBody,
-      })
-      toast.success(`${label} queued`, {
-        description: `Command sent to ${serialNumber}. Will execute on next poll.`,
-      })
-    } catch (err) {
-      toast.error('Error', {
-        description: `Failed to queue ${label} for ${serialNumber}.`,
-      })
-    }
+    await deviceCommandMutation.mutateAsync({
+      deviceSn: serialNumber,
+      commandType,
+      command: commandBody,
+    })
   }
 
   // Handle edit device
@@ -84,17 +66,7 @@ export function Devices() {
       registrar_capabilities?: string[]
     }
   ) => {
-    try {
-      await updateDeviceMutation.mutateAsync({ deviceSn: serialNumber, updates })
-      toast.success('Device updated', {
-        description: `Device ${serialNumber} configuration updated successfully.`,
-      })
-    } catch (err) {
-      toast.error('Error', {
-        description: 'Failed to update device. Please try again.',
-      })
-      throw err
-    }
+    await updateDeviceMutation.mutateAsync({ deviceSn: serialNumber, updates })
   }
 
   // Handle show device detail
