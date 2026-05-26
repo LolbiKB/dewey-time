@@ -136,14 +136,25 @@ function UserSyncRow({
             <StatusIcon status={user.fingerprintStatus} />
             <StatusIcon status={user.faceStatus} />
             <StatusIcon status={user.photoStatus} />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={(e) => { e.stopPropagation(); onForceSync(user.userId) }}
-              disabled={isSyncing}
-              title={isSyncing ? 'Sync in progress' : 'Force sync'}
-            >
-              {isSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+            {/* Avoid nested <button> inside AccordionTrigger (Radix Trigger is a <button>) */}
+            <Button variant="ghost" size="sm" asChild disabled={isSyncing} title={isSyncing ? 'Sync in progress' : 'Force sync'}>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onForceSync(user.userId)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onForceSync(user.userId)
+                  }
+                }}
+              >
+                {isSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+              </span>
             </Button>
           </div>
         </AccordionTrigger>

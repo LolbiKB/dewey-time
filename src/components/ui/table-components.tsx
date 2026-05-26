@@ -1,3 +1,4 @@
+import * as React from "react"
 import { format } from "date-fns"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -215,6 +216,8 @@ export function AvatarCell({
   fallbackText,
   size = 'md'
 }: AvatarCellProps) {
+  const [imageFailed, setImageFailed] = React.useState(false)
+
   const sizeClasses = {
     sm: 'h-8 w-8 text-xs',
     md: 'h-10 w-10 text-sm',
@@ -223,12 +226,16 @@ export function AvatarCell({
 
   // Resolve photo URL — uses Supabase Storage URL for cached photos,
   // proxy URL for uncached private Frappe photos, or null for no photo
+  const shouldAttemptPhoto =
+    !imageFailed &&
+    photoCacheStatus !== 'hr_no_photo' // avoid noisy 404s when HR has no photo
+
   const { photoUrl: displayUrl } = useUserPhoto({
     photoUrl,
     hasCachedPhoto,
     userId,
     frappeEmployeeId,
-    enabled: true,
+    enabled: shouldAttemptPhoto,
   })
 
   // Get initials from fallback text (max 2 characters)
@@ -257,6 +264,7 @@ export function AvatarCell({
           src={displayUrl || undefined}
           alt={fallbackText}
           className="object-cover"
+          onError={() => setImageFailed(true)}
         />
         <AvatarFallback className="bg-primary/10 text-primary font-medium">
           {initials}
