@@ -313,28 +313,6 @@ export function App() {
 
           <ScrollArea className="min-h-0 flex-1 px-4 pb-5">
             <div className="grid h-full grid-rows-[auto_1fr_auto] gap-3">
-              <Card className="border-border/60">
-                <CardContent className="pt-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium">At a glance</div>
-                      <div className="mt-1 font-mono text-[12px] leading-relaxed text-muted-foreground">
-                        <span className="text-foreground/85">{inspectingDay?.first_in ?? "—"}</span>{" "}
-                        <span className="text-muted-foreground">→</span>{" "}
-                        <span className="text-foreground/85">{inspectingDay?.last_out ?? "—"}</span>
-                      </div>
-                    </div>
-                    <div className="w-28">
-                      <DaySpanTrack
-                        firstIn={inspectingDay?.first_in ?? null}
-                        lastOut={inspectingDay?.last_out ?? null}
-                        worst={worstSeverity(inspectingDay?.flags ?? [])}
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
               {(() => {
                 const punches = inspectingDay?.checkins ?? [];
                 const flags = (inspectingDay?.flags ?? [])
@@ -349,9 +327,33 @@ export function App() {
 
                 return (
                   <Tabs defaultValue="timeline" className="min-h-0">
-                    <TabsList className="grid w-full grid-cols-2">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">Day summary</div>
+                        <div className="mt-1 font-mono text-[12px] leading-relaxed text-muted-foreground">
+                          <span className="text-foreground/85">{inspectingDay?.first_in ?? "—"}</span>{" "}
+                          <span className="text-muted-foreground">→</span>{" "}
+                          <span className="text-foreground/85">{inspectingDay?.last_out ?? "—"}</span>
+                        </div>
+                      </div>
+                      <div className="w-28">
+                        <DaySpanTrack
+                          firstIn={inspectingDay?.first_in ?? null}
+                          lastOut={inspectingDay?.last_out ?? null}
+                          worst={worstSeverity(inspectingDay?.flags ?? [])}
+                        />
+                      </div>
+                    </div>
+
+                    <TabsList className="mt-3 grid w-full grid-cols-3">
                       <TabsTrigger value="timeline" className="gap-2">
                         Timeline
+                        <Badge variant="secondary" className="h-5 rounded-full px-2 text-[11px]">
+                          {segments.length}
+                        </Badge>
+                      </TabsTrigger>
+                      <TabsTrigger value="punches" className="gap-2">
+                        Punches
                         <Badge variant="secondary" className="h-5 rounded-full px-2 text-[11px]">
                           {punches.length}
                         </Badge>
@@ -369,32 +371,7 @@ export function App() {
                         <CardContent className="pt-4">
                           <div className="grid grid-cols-[1fr_auto] gap-3">
                             <div className="min-w-0">
-                              <div className="text-xs text-muted-foreground">Punches</div>
-                              {punches.length === 0 ? (
-                                <div className="mt-2 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                                  No punches recorded for this day.
-                                </div>
-                              ) : (
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {punches.slice(0, 10).map((c, idx) => (
-                                    <Badge
-                                      key={(c as any).custom_supabase_log_id ?? `${c.time}-${idx}`}
-                                      variant="secondary"
-                                      className="rounded-full"
-                                    >
-                                      {format(parseDateTimeLocal(c.time), "h:mm a")}
-                                      {c.log_type ? ` ${c.log_type}` : ""}
-                                    </Badge>
-                                  ))}
-                                  {punches.length > 10 ? (
-                                    <Badge variant="outline" className="rounded-full">
-                                      +{punches.length - 10} more
-                                    </Badge>
-                                  ) : null}
-                                </div>
-                              )}
-
-                              <div className="mt-4 text-xs text-muted-foreground">Segments</div>
+                              <div className="text-xs text-muted-foreground">Segments</div>
                               {segments.length === 0 ? (
                                 <div className="mt-2 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
                                   No segments (missing pairs or no data).
@@ -429,6 +406,35 @@ export function App() {
                               <DayStackTrack checkins={punches} worst={worstSeverity(inspectingDay?.flags ?? [])} />
                             </div>
                           </div>
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+
+                    <TabsContent value="punches" className="mt-3 min-h-0">
+                      <Card className="border-border/60">
+                        <CardContent className="pt-4">
+                          <div className="text-xs text-muted-foreground">Punches</div>
+                          {punches.length === 0 ? (
+                            <div className="mt-2 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-6 text-center">
+                              <div className="text-sm font-medium">No punches</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                There are no checkins recorded for this day.
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {punches.map((c, idx) => (
+                                <Badge
+                                  key={(c as any).custom_supabase_log_id ?? `${c.time}-${idx}`}
+                                  variant="secondary"
+                                  className="rounded-full"
+                                >
+                                  {format(parseDateTimeLocal(c.time), "h:mm a")}
+                                  {c.log_type ? ` ${c.log_type}` : ""}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     </TabsContent>
@@ -566,9 +572,17 @@ function WeekView(props: {
                   <div className="text-xs font-medium text-muted-foreground">
                     {format(d, "EEE")}
                   </div>
-                  <div className="text-sm font-semibold tracking-tight">{format(d, "d")}</div>
+                  <div
+                    className={cn(
+                      "inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-sm font-semibold tracking-tight",
+                      isToday ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground"
+                    )}
+                    title={isToday ? "Today" : undefined}
+                  >
+                    {format(d, "d")}
+                  </div>
                 </div>
-                {isToday ? <span className="h-2 w-2 rounded-full bg-primary/70" title="Today" /> : null}
+                {isToday ? <span className="text-[11px] font-medium text-primary/80">Today</span> : null}
               </div>
 
               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
@@ -723,7 +737,7 @@ function DayCell(props: {
         "group relative min-h-0 border-b border-r border-border/60 p-3 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 focus:ring-2 focus:ring-ring/40",
         props.dense ? "h-full" : "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
-        props.today && "ring-1 ring-primary/30"
+        props.today && "bg-primary/3 ring-1 ring-primary/20"
       )}
     >
       <div className={cn("grid h-full gap-2", props.dense ? "grid-rows-[20px_1fr_16px]" : "grid-rows-[1fr_16px]")}>
@@ -810,6 +824,19 @@ function DayDayTrack(props: {
   const lateness = computeLateness(props.shift, props.firstIn);
   const adherence = computeAdherenceOpacity(props.shift, props.grossMinutes);
   const outline = severityOutlineClass(props.worst);
+  const unnotifiedAbsenceFlag = (props.flags ?? []).find((f) => f.flag_code === "UNNOTIFIED_ABSENCE") ?? null;
+  const absenceStartMin = parseTimeToMinutes(props.shift.start_time ?? null);
+  const firstInMin = minutesFromDateTime(props.firstIn);
+  const shouldShowUnnotifiedAbsence =
+    !!unnotifiedAbsenceFlag &&
+    props.shift.shift_assigned &&
+    ((props.checkins ?? []).length === 0 ||
+      (absenceStartMin != null && firstInMin != null && firstInMin > absenceStartMin + 120));
+  const absenceKind = !shouldShowUnnotifiedAbsence
+    ? null
+    : (props.checkins ?? []).length === 0
+      ? ("FULL_DAY" as const)
+      : ("PARTIAL_DAY" as const);
   const roguePunches = useMemo(() => {
     const checkins = props.checkins ?? [];
     if (checkins.length === 0) return [] as Checkin[];
@@ -846,6 +873,24 @@ function DayDayTrack(props: {
           className="absolute inset-y-2 w-px bg-border/60"
           style={{ left: "calc(50% - 0.5px)" }}
         />
+
+        {/* UNNOTIFIED_ABSENCE (clean but unmistakable) */}
+        {shouldShowUnnotifiedAbsence ? (
+          <>
+            <div
+              className="pointer-events-none absolute inset-0 rounded-xl bg-destructive/6"
+              aria-hidden="true"
+            />
+            <div className="pointer-events-none absolute left-2 top-2 z-10" aria-hidden="true">
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-destructive/25 bg-background/70 px-2 py-1 text-[11px] font-semibold text-destructive backdrop-blur">
+                <span className="uppercase tracking-wide">Absent</span>
+                <span className="text-destructive/70">
+                  {absenceKind === "FULL_DAY" ? "Full day" : "Partial"}
+                </span>
+              </div>
+            </div>
+          </>
+        ) : null}
 
         {/* Unpaired punch marker(s): single red vertical tick at punch time */}
         {roguePunches.map((c, idx) => {

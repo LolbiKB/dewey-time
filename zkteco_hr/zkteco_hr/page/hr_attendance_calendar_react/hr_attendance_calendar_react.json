@@ -5,14 +5,7 @@
   "title": "HR Attendance Calendar (React)",
   "icon": "octicon octicon-calendar",
   "restrict_to_domain": null,
-  "roles": [
-    {
-      "role": "HR User"
-    },
-    {
-      "role": "System Manager"
-    }
-  ],
+  "roles": [],
   "standard": "Yes"
 }
 
