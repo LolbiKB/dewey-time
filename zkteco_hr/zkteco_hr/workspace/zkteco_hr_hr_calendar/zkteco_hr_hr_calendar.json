@@ -1,0 +1,10 @@
+{
+  "doctype": "Workspace",
+  "title": "HR Attendance Calendar",
+  "icon": "calendar",
+  "module": "ZKTeco HR",
+  "is_standard": 1,
+  "public": 0,
+  "content": "[{\"type\":\"header\",\"data\":{\"text\":\"HR Attendance Calendar\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"HR Attendance Calendar\",\"label\":\"HR Attendance Calendar\",\"link_to\":\"hr-attendance-calendar\",\"link_type\":\"Page\",\"color\":\"Blue\",\"doc_view\":\"\",\"col\":4}}]"
+}
+
