@@ -2,30 +2,29 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
-// Build into the Frappe app `public/` folder using *.bundle.* names so:
-// - Direct URL works: /assets/zkteco_hr/hr_attendance.bundle.js
-// - `bench build` can also register them via assets.json (include_script/include_style)
+// Doppio-style: build into public/hr_attendance/, served at /assets/zkteco_hr/hr_attendance/
 export default defineConfig({
   plugins: [react()],
-  base: "/assets/zkteco_hr/",
+  base: "/assets/zkteco_hr/hr_attendance/",
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
   },
   build: {
-    outDir: path.resolve(__dirname, "../../public"),
-    emptyOutDir: false, // keep other public files if any
+    outDir: path.resolve(__dirname, "../../public/hr_attendance"),
+    emptyOutDir: true,
     sourcemap: true,
+    target: "es2015",
     rollupOptions: {
-      input: path.resolve(__dirname, "src/main.tsx"),
       output: {
-        entryFileNames: "hr_attendance.bundle.js",
-        chunkFileNames: "hr_attendance.[name].js",
+        // Stable names so Desk page can load the same bundle without parsing index.html.
+        entryFileNames: "assets/index.js",
+        chunkFileNames: "assets/[name].js",
         assetFileNames: (assetInfo) => {
           const name = assetInfo.name ?? "";
-          if (name.endsWith(".css")) return "hr_attendance.bundle.css";
-          return "hr_attendance.[name][extname]";
+          if (name.endsWith(".css")) return "assets/index.css";
+          return "assets/[name][extname]";
         },
       },
     },

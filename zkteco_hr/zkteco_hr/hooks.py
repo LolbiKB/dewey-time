@@ -22,6 +22,9 @@ website_route_rules = [
     {"from_route": "/hr-attendance", "to_route": "hr-attendance"},
 ]
 
+# Keep SPA assets available under sites/assets after every migrate.
+after_migrate = ["zkteco_hr.utils.sync_hr_attendance_assets.sync_hr_attendance_assets"]
+
 # Scheduled job (closeout-only MVP)
 scheduler_events = {
     "daily": [

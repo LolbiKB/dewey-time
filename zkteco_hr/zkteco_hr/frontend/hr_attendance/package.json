@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build --base=/assets/zkteco_hr/hr_attendance/ && node scripts/copy-html-entry.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

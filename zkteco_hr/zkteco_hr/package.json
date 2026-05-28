@@ -2,8 +2,9 @@
   "name": "zkteco_hr",
   "private": true,
   "scripts": {
+    "postinstall": "cd frontend/hr_attendance && npm install",
     "build": "cd frontend/hr_attendance && npm install && npm run build",
-    "dev:hr": "cd frontend/hr_attendance && npm install && npm run dev"
+    "dev:hr": "cd frontend/hr_attendance && npm run dev"
   }
 }
 

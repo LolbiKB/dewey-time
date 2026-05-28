@@ -3,11 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HR Attendance Frontend</title>
+    <title>HR Attendance</title>
+    <script>
+      window.csrf_token = "{{ frappe.session.csrf_token }}";
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
