@@ -8,9 +8,9 @@
   "standard": 1,
   "items": [
     {
-      "label": "HR Attendance Calendar",
-      "link_to": "hr-attendance-calendar",
-      "link_type": "Page",
+      "label": "ZKTeco HR",
+      "link_to": "ZKTeco HR",
+      "link_type": "Workspace",
       "type": "Link",
       "child": 0,
       "collapsible": 1,
