@@ -1,0 +1,12 @@
+{
+  "doctype": "Workspace",
+  "name": "ZKTeco HR",
+  "title": "ZKTeco HR",
+  "label": "ZKTeco HR",
+  "module": "ZKTeco HR",
+  "icon": "calendar",
+  "public": 1,
+  "is_standard": 1,
+  "content": "[{\"type\":\"header\",\"data\":{\"text\":\"ZKTeco HR\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"HR Attendance Calendar\",\"label\":\"HR Attendance Calendar\",\"link_to\":\"hr-attendance-calendar\",\"link_type\":\"Page\",\"color\":\"Blue\",\"doc_view\":\"\",\"col\":4}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Attendance Flag\",\"label\":\"Attendance Flag\",\"link_to\":\"Attendance Flag\",\"link_type\":\"DocType\",\"color\":\"Orange\",\"doc_view\":\"List\",\"col\":4}}]"
+}
+
