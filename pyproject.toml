@@ -13,5 +13,8 @@ license = { file = "LICENSE" }
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.package-dir]
+"" = "zkteco_hr"
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["zkteco_hr"]
