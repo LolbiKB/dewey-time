@@ -1,5 +1,7 @@
 {
   "doctype": "Workspace",
+  "name": "HR Attendance Calendar",
+  "label": "HR Attendance Calendar",
   "title": "HR Attendance Calendar",
   "icon": "calendar",
   "module": "ZKTeco HR",
