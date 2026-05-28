@@ -5,6 +5,8 @@ from datetime import timedelta
 import frappe
 from frappe.utils import get_datetime, getdate
 
+from zkteco_hr.attendance_engine.closeout import _get_shift_assignment, _get_shift_meta
+
 
 def _require_hr_role():
     user = frappe.session.user
@@ -16,6 +18,77 @@ def _require_hr_role():
     frappe.throw("Not permitted")
 
 
+def _format_time(value):
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%H:%M:%S")
+    text = str(value).strip()
+    if not text:
+        return None
+    return text.split(".")[0]
+
+
+def _format_datetime(value):
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
+
+
+def _shift_context_for_day(*, employee: str, attendance_date):
+    assignment = _get_shift_assignment(employee=employee, attendance_date=attendance_date)
+    if not assignment or not assignment.get("shift_type"):
+        return {"shift_assigned": False}
+
+    meta = _get_shift_meta(assignment["shift_type"])
+    if not meta:
+        return {"shift_assigned": False}
+
+    return {
+        "shift_assigned": True,
+        "shift_type": assignment["shift_type"],
+        "start_time": _format_time(meta.get("start_time")),
+        "end_time": _format_time(meta.get("end_time")),
+        "grace_minutes": meta.get("custom_grace_minutes") or 0,
+        "lunch_start": _format_time(meta.get("custom_lunch_start")),
+        "lunch_end": _format_time(meta.get("custom_lunch_end")),
+    }
+
+
+@frappe.whitelist()
+def list_calendar_employees():
+    """Active employees for the HR attendance calendar picker."""
+    _require_hr_role()
+
+    rows = (
+        frappe.get_all(
+            "Employee",
+            filters={"status": "Active"},
+            fields=["name", "employee_name", "designation", "department", "company", "image"],
+            order_by="employee_name asc",
+            limit_page_length=500,
+        )
+        or []
+    )
+
+    employees = []
+    for row in rows:
+        display_name = row.get("employee_name") or row.get("name")
+        employees.append(
+            {
+                "id": row["name"],
+                "label": f"{row['name']} · {display_name}",
+                "image": row.get("image"),
+                "title": row.get("designation"),
+                "department": row.get("department"),
+                "company": row.get("company"),
+            }
+        )
+    return employees
+
+
 @frappe.whitelist()
 def get_employee_calendar(employee: str, start_date: str, end_date: str):
     """
@@ -23,6 +96,7 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
     - checkins bucketed per day
     - computed first/last + gross minutes (simple heuristic)
     - flags per day (chips)
+    - shift context per day (when assigned)
     """
     _require_hr_role()
 
@@ -67,7 +141,12 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
     checkins_by_day = defaultdict(list)
     for c in checkins:
         d = getdate(c["time"])
-        checkins_by_day[str(d)].append(c)
+        checkins_by_day[str(d)].append(
+            {
+                **c,
+                "time": _format_datetime(c.get("time")),
+            }
+        )
 
     flags_by_day = defaultdict(list)
     for f in flags:
@@ -92,12 +171,16 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         last_out = day_checkins[-1]["time"] if day_checkins else None
 
         gross_minutes = None
-        if first_in and last_out and last_out >= first_in:
-            gross_minutes = int((last_out - first_in).total_seconds() / 60)
+        if first_in and last_out:
+            first_dt = get_datetime(first_in)
+            last_dt = get_datetime(last_out)
+            if last_dt >= first_dt:
+                gross_minutes = int((last_dt - first_dt).total_seconds() / 60)
 
         days.append(
             {
                 "date": key,
+                "shift": _shift_context_for_day(employee=employee, attendance_date=cur),
                 "checkins": day_checkins,
                 "first_in": first_in,
                 "last_out": last_out,
@@ -113,4 +196,3 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         "end_date": str(end),
         "days": days,
     }
-

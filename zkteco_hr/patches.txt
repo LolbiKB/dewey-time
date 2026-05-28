@@ -1,3 +1,4 @@
 zkteco_hr.patches.reset_zkteco_hr_navigation
 zkteco_hr.patches.remove_broken_hr_workspace
 zkteco_hr.patches.sync_hr_attendance_assets
+zkteco_hr.patches.remove_legacy_hr_attendance_pages

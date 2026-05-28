@@ -1,4 +1,9 @@
-import { EMPLOYEES, getMockMonth, type CalendarPayload } from "../mock/month";
+import {
+  useCalendarEmployees,
+  useDefaultEmployee,
+  useEmployeeCalendar,
+} from "@/hooks/useHrAttendanceData";
+import type { CalendarEmployee, CalendarPayload, Day, Flag, ShiftContext } from "@/types/calendar";
 import {
   addDays,
   format,
@@ -6,6 +11,7 @@ import {
   isSameMonth,
   startOfWeek,
 } from "date-fns";
+import { useFrappeAuth } from "frappe-react-sdk";
 import {
   CalendarIcon,
   ChevronLeftIcon,
@@ -51,27 +57,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 
 type Severity = "INFO" | "WARNING" | "CRITICAL";
 type FlagStatus = "OPEN" | "EXPLAINED" | "APPROVED" | "REJECTED" | "CLOSED";
-type Flag = {
-  name: string;
-  flag_code: string;
-  severity?: Severity;
-  status?: FlagStatus;
-  source?: "AUTO" | "EMPLOYEE" | "HR";
-  day_closed?: 0 | 1;
-  evidence?: unknown;
-  rule_version?: string;
-};
-type Checkin = {
-  name?: string;
-  time: string;
-  log_type?: "IN" | "OUT" | null;
-  device_id?: string | null;
-  custom_device_branch?: string | null;
-  custom_device_serial_number?: string | null;
-  custom_verify_type?: string | null;
-  custom_supabase_log_id?: string | null;
-  custom_bridge_env?: string | null;
-};
+type Checkin = NonNullable<Day["checkins"]>[number];
 type Segment = {
   start?: Checkin | null;
   end?: Checkin | null;
@@ -82,27 +68,39 @@ type Segment = {
   endPct?: number | null;
   branch?: string | null;
 };
-type ShiftContext = {
-  shift_assigned: boolean;
-  shift_type?: string;
-  start_time?: string;
-  end_time?: string;
-  grace_minutes?: number;
-  lunch_start?: string | null;
-  lunch_end?: string | null;
-};
-type Day = CalendarPayload["days"][number];
 
 const SEVERITY_ORDER: Severity[] = ["CRITICAL", "WARNING", "INFO"];
 
 export function App() {
-  // Week-only for now (month view disabled).
   const view: "week" = "week";
-  const [employee, setEmployee] = useState(() => EMPLOYEES[0]!.id);
+  const { currentUser, isLoading: authLoading } = useFrappeAuth();
+  const [employee, setEmployee] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<Date>(() => new Date());
 
-  const payload = useMemo(() => getMockMonth(employee, 2026, 5), [employee]);
-  const [anchor, setAnchor] = useState<Date>(() => new Date(payload.start_date));
-  const selectedEmployee = useMemo(() => EMPLOYEES.find((e) => e.id === employee) ?? EMPLOYEES[0]!, [employee]);
+  const { employees, error: employeesError, isLoading: employeesLoading } = useCalendarEmployees();
+  useDefaultEmployee(employees, employee, setEmployee);
+
+  const {
+    payload: apiPayload,
+    monthStart,
+    monthEnd,
+    error: calendarError,
+    isLoading: calendarLoading,
+  } = useEmployeeCalendar(employee, anchor);
+
+  const payload: CalendarPayload =
+    apiPayload ??
+    ({
+      employee: employee ?? "",
+      start_date: format(monthStart, "yyyy-MM-dd"),
+      end_date: format(monthEnd, "yyyy-MM-dd"),
+      days: [],
+    } as CalendarPayload);
+
+  const selectedEmployee = useMemo(
+    () => employees.find((e) => e.id === employee) ?? null,
+    [employee, employees]
+  );
 
   const [statusFilter, setStatusFilter] = useState<Set<FlagStatus>>(
     () => new Set<FlagStatus>(["OPEN", "EXPLAINED"])
@@ -120,9 +118,9 @@ export function App() {
     return m;
   }, [payload.days]);
 
-  // Keep anchor valid when employee changes (month stays constant).
-  const monthStartIso = payload.start_date;
-  const monthEndIso = payload.end_date;
+  // Keep anchor within the loaded month when employee or month changes.
+  const monthStartIso = format(monthStart, "yyyy-MM-dd");
+  const monthEndIso = format(monthEnd, "yyyy-MM-dd");
   useEffect(() => {
     const cur = anchor;
     const start = new Date(monthStartIso);
@@ -134,7 +132,7 @@ export function App() {
   const weekStart = startOfWeek(anchor, { weekStartsOn: 1 });
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
 
-  const scheduleStart = useMemo(() => new Date(payload.start_date), [payload.start_date]);
+  const scheduleStart = useMemo(() => monthStart, [monthStart]);
   const minWeekStart = startOfWeek(scheduleStart, { weekStartsOn: 1 });
   const maxWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 }); // don't navigate beyond present week
   const title = `Week of ${format(weekStart, "MMM d, yyyy")}`;
@@ -169,17 +167,57 @@ export function App() {
     [inspectingDay?.checkins]
   );
 
+  const isLoading = authLoading || employeesLoading || calendarLoading;
+  const loadError = employeesError ?? calendarError;
+
+  if (authLoading) {
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-background text-sm text-muted-foreground">
+        Loading session…
+      </div>
+    );
+  }
+
+  if (!currentUser || currentUser === "Guest") {
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-background px-4">
+        <Card className="max-w-md border-border/60">
+          <CardContent className="space-y-3 py-6 text-sm">
+            <div className="font-semibold">Sign in required</div>
+            <p className="text-muted-foreground">
+              HR Attendance uses your Frappe session and HR permissions. Log in to view live
+              checkins and flags.
+            </p>
+            <Button asChild size="sm">
+              <a href="/login?redirect-to=/hr-attendance">Log in</a>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="h-[100dvh] overflow-hidden bg-background text-foreground">
         <div className="mx-auto flex h-full max-w-7xl flex-col px-4 py-4 sm:px-6">
+          {loadError ? (
+            <Card className="mb-3 border-destructive/40 bg-destructive/5">
+              <CardContent className="py-3 text-sm text-destructive">
+                Could not load attendance data. Confirm you have HR User access and try again.
+              </CardContent>
+            </Card>
+          ) : null}
+          {isLoading ? (
+            <div className="mb-3 text-sm text-muted-foreground">Loading attendance…</div>
+          ) : null}
           <div className="flex min-h-0 flex-1 flex-col gap-3">
             <Card className="border-border/60">
               <CardContent className="py-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="relative size-11 shrink-0 overflow-hidden rounded-full border border-border/60 bg-muted/20">
-                      {selectedEmployee.image ? (
+                      {selectedEmployee?.image ? (
                         <img
                           src={selectedEmployee.image}
                           alt={selectedEmployee.label}
@@ -188,7 +226,7 @@ export function App() {
                         />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-muted-foreground">
-                          {(selectedEmployee.label.split("·")[1] ?? selectedEmployee.id)
+                          {(selectedEmployee?.label.split("·")[1] ?? selectedEmployee?.id ?? employee ?? "?")
                             .trim()
                             .split(" ")
                             .slice(0, 2)
@@ -202,26 +240,26 @@ export function App() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-semibold tracking-tight">
-                          {(selectedEmployee.label.split("·")[1] ?? selectedEmployee.id).trim()}
+                          {(selectedEmployee?.label.split("·")[1] ?? selectedEmployee?.id ?? employee ?? "Employee")
+                            .trim()}
                         </div>
-                        <Badge variant="secondary" className="h-6 rounded-full px-2 text-[11px]">
-                          {selectedEmployee.id}
-                        </Badge>
-                        <Badge variant="outline" className="h-6 rounded-full px-2 text-[11px]">
-                          mock
-                        </Badge>
+                        {selectedEmployee ? (
+                          <Badge variant="secondary" className="h-6 rounded-full px-2 text-[11px]">
+                            {selectedEmployee.id}
+                          </Badge>
+                        ) : null}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span className="font-medium text-foreground">{title}</span>
-                        {selectedEmployee.title ? <span>{selectedEmployee.title}</span> : null}
-                        {selectedEmployee.department ? <span>· {selectedEmployee.department}</span> : null}
-                        {selectedEmployee.company ? <span>· {selectedEmployee.company}</span> : null}
+                        {selectedEmployee?.title ? <span>{selectedEmployee.title}</span> : null}
+                        {selectedEmployee?.department ? <span>· {selectedEmployee.department}</span> : null}
+                        {selectedEmployee?.company ? <span>· {selectedEmployee.company}</span> : null}
                       </div>
                     </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <EmployeePicker value={employee} onChange={setEmployee} />
+                    <EmployeePicker employees={employees} value={employee} onChange={setEmployee} />
                     <DateJump anchor={anchor} onSelectDate={setAnchor} />
 
                     <DropdownMenu>
@@ -1268,15 +1306,19 @@ function deriveGaps(segments: Segment[]) {
   return gaps;
 }
 
-function EmployeePicker(props: { value: string; onChange: (v: string) => void }) {
-  const selected = EMPLOYEES.find((e) => e.id === props.value) ?? EMPLOYEES[0];
+function EmployeePicker(props: {
+  employees: CalendarEmployee[];
+  value: string | null;
+  onChange: (v: string) => void;
+}) {
+  const selected = props.employees.find((e) => e.id === props.value) ?? props.employees[0];
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="max-w-[260px] justify-start">
+        <Button variant="outline" size="sm" className="max-w-[260px] justify-start" disabled={!props.employees.length}>
           <UserRoundIcon className="mr-1 size-4" />
-          <span className="truncate">{selected?.label ?? props.value}</span>
+          <span className="truncate">{selected?.label ?? "Select employee"}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[320px] p-2">
@@ -1285,7 +1327,7 @@ function EmployeePicker(props: { value: string; onChange: (v: string) => void })
           <CommandList>
             <CommandEmpty>No results.</CommandEmpty>
             <CommandGroup heading="Employees">
-              {EMPLOYEES.map((e) => (
+              {props.employees.map((e) => (
                 <CommandItem
                   key={e.id}
                   data-checked={e.id === props.value}
