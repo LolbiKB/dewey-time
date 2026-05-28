@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HR Attendance</title>
+
+    {# Make CSRF available for frappe-react-sdk / manual calls #}
+    <script>
+      window.csrf_token = "{{ frappe.session.csrf_token }}";
+    </script>
+
+    <link rel="stylesheet" href="/assets/zkteco_hr/hr_attendance/assets/index.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/assets/zkteco_hr/hr_attendance/assets/index.js"></script>
+  </body>
+</html>
+
