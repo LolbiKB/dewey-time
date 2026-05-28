@@ -15,7 +15,19 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../../public/hr_attendance"),
     emptyOutDir: true,
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        // Stable filenames so Frappe Page can load them without a manifest parser.
+        entryFileNames: "assets/index.js",
+        chunkFileNames: "assets/chunk-[name].js",
+        assetFileNames: (assetInfo) => {
+          const name = assetInfo.name ?? "";
+          if (name.endsWith(".css")) return "assets/index.css";
+          return "assets/[name][extname]";
+        },
+      },
+    },
   }
 });
 

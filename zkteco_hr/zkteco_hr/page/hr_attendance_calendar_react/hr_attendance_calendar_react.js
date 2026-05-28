@@ -13,6 +13,16 @@ frappe.pages["hr-attendance-calendar-react"].on_page_load = function (wrapper) {
   // This file will exist after running `vite build` from the frontend folder.
   // We keep this dynamic so the page doesn’t break the build if assets aren't present yet.
   const entry = "/assets/zkteco_hr/hr_attendance/assets/index.js";
+  const css = "/assets/zkteco_hr/hr_attendance/assets/index.css";
+
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = css;
+  link.onerror = () => {
+    // CSS missing is non-fatal; JS will still render.
+  };
+  document.head.appendChild(link);
+
   const script = document.createElement("script");
   script.type = "module";
   script.src = entry;

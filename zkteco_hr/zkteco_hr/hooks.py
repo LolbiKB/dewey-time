@@ -11,7 +11,7 @@ add_to_apps_screen = [
     {
         "name": "zkteco_hr",
         "title": "ZKTeco HR",
-        "route": "/app/hr-attendance-calendar",
+        "route": "/app/hr-attendance-calendar-react",
     }
 ]
 
