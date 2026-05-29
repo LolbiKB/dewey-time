@@ -7,7 +7,6 @@ import {
   useEmployeeCalendar,
 } from "@/hooks/useHrAttendanceData";
 import type {
-  CalendarEmployee,
   CalendarPayload,
   Day,
   DeviceAlert,
@@ -16,40 +15,27 @@ import type {
 } from "@/types/calendar";
 import {
   addDays,
+  addMonths,
   format,
   isSameDay,
   isSameMonth,
+  parseISO,
   startOfWeek,
 } from "date-fns";
 import { useFrappeAuth } from "frappe-react-sdk";
 import {
   AlertTriangleIcon,
   ArrowRightIcon,
-  CalendarIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  ChevronsUpDownIcon,
   Loader2Icon,
   LogInIcon,
   LogOutIcon,
-  RefreshCwIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -64,11 +50,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import {
   computeDayTimeWindow,
+  computeWeekTimelineWindow,
   deriveSegments as deriveSegmentsFromCheckins,
   deriveTimelineGaps,
+  type Segment as AttendanceSegment,
   deriveUnpairedPunches,
   directionForCheckin,
+  shiftTimelinePolicyFromShift,
   sortCheckinsByTime as sortCheckinsByTimeLib,
+  weekTimelineCanvasHeightPct,
 } from "@/lib/attendancePunches";
 import {
   AttendanceHeaderSkeleton,
@@ -77,19 +67,10 @@ import {
   WeekViewAnimatedShell,
   WeekViewSkeleton,
 } from "@/ui/AttendanceLoading";
+import { AttendanceToolbar } from "@/ui/AttendanceToolbar";
 
 type Severity = "INFO" | "WARNING" | "CRITICAL";
 type Checkin = NonNullable<Day["checkins"]>[number];
-type Segment = {
-  start?: Checkin | null;
-  end?: Checkin | null;
-  minutes?: number | null;
-  startMin?: number | null;
-  endMin?: number | null;
-  startPct?: number | null;
-  endPct?: number | null;
-  branch?: string | null;
-};
 type AwayGap = {
   start?: Checkin | null;
   end?: Checkin | null;
@@ -100,7 +81,7 @@ type AwayGap = {
   heightPct?: number;
 };
 type SegmentInspectorItem =
-  | { kind: "segment"; segment: Segment }
+  | { kind: "segment"; segment: AttendanceSegment }
   | { kind: "away"; gap: AwayGap };
 
 const SEVERITY_ORDER: Severity[] = ["CRITICAL", "WARNING", "INFO"];
@@ -183,12 +164,40 @@ export function App() {
     [payload.device_alerts]
   );
 
-  const scheduleStart = useMemo(() => monthStart, [monthStart]);
-  const minWeekStart = startOfWeek(scheduleStart, { weekStartsOn: 1 });
-  const maxWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 }); // don't navigate beyond present week
+  const selectedEmployee = useMemo(
+    () => employees.find((e) => e.id === employee) ?? null,
+    [employees, employee]
+  );
+
+  const scheduleStart = useMemo(() => {
+    if (selectedEmployee?.schedule_min_date) {
+      return parseISO(selectedEmployee.schedule_min_date);
+    }
+    return monthStart;
+  }, [monthStart, selectedEmployee?.schedule_min_date]);
+
+  const minWeekStart = useMemo(
+    () => startOfWeek(scheduleStart, { weekStartsOn: 1 }),
+    [scheduleStart]
+  );
+
+  const maxWeekStart = useMemo(() => {
+    if (selectedEmployee?.schedule_max_date) {
+      return startOfWeek(parseISO(selectedEmployee.schedule_max_date), { weekStartsOn: 1 });
+    }
+    if (selectedEmployee?.has_shift_assignment) {
+      return startOfWeek(addMonths(new Date(), 12), { weekStartsOn: 1 });
+    }
+    return startOfWeek(new Date(), { weekStartsOn: 1 });
+  }, [selectedEmployee]);
 
   const canGoPrev = weekStart > minWeekStart;
   const canGoNext = weekStart < maxWeekStart;
+
+  const weekAssignedShiftDays = useMemo(
+    () => countWeekAssignedShiftDays(weekDates, daysByDate),
+    [daysByDate, weekDates]
+  );
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
   const loadError = employeesError ?? calendarError;
@@ -218,8 +227,11 @@ export function App() {
     if (isCalendarLoading) return;
     setWeekNavDirection("jump");
     const today = new Date();
-    const clamped = today < scheduleStart ? scheduleStart : today;
-    setAnchor(clamped);
+    let target = today;
+    if (target < scheduleStart) target = scheduleStart;
+    const maxAnchor = addDays(maxWeekStart, 6);
+    if (target > maxAnchor) target = maxAnchor;
+    setAnchor(target);
   }
 
   function selectAnchor(date: Date) {
@@ -234,7 +246,12 @@ export function App() {
     [inspectingDay?.checkins]
   );
   const segmentInspectorItems = useMemo(
-    () => buildSegmentInspectorItems(segments, inspectingDay?.checkins ?? []),
+    () =>
+      buildSegmentInspectorItems(
+        segments,
+        inspectingDay?.checkins ?? [],
+        inspectingDay?.shift
+      ),
     [inspectingDay?.checkins, segments]
   );
 
@@ -279,47 +296,28 @@ export function App() {
             {isBootstrapping ? (
               <AttendanceHeaderSkeleton />
             ) : (
-              <Card className="animate-in fade-in slide-in-from-top-1 border-border/60 duration-300">
-                <CardContent className="py-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <EmployeePicker
-                      employees={employees}
-                      value={employee}
-                      onChange={setEmployee}
-                      isLoading={employeeLoading && isCalendarLoading}
-                    />
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <DateJump anchor={anchor} onSelectDate={selectAnchor} />
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void refetchPage()}
-                      disabled={isRefreshing || isCalendarLoading}
-                      title="Reload attendance data"
-                    >
-                      <RefreshCwIcon
-                        className={cn("mr-1 size-4", isRefreshing && "animate-spin")}
-                      />
-                      Refresh
-                    </Button>
-
-                    <Separator orientation="vertical" className="hidden h-7 md:block" />
-
-                    <Button variant="outline" size="sm" onClick={goToday} disabled={isCalendarLoading}>
-                      Today
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={goPrev} disabled={!canGoPrev || isCalendarLoading}>
-                      <ChevronLeftIcon className="mr-1 size-4" /> Prev
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={goNext} disabled={!canGoNext || isCalendarLoading}>
-                      Next <ChevronRightIcon className="ml-1 size-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+              <div className="shrink-0 animate-in fade-in slide-in-from-top-1 duration-300">
+                <AttendanceToolbar
+                  employees={employees}
+                  employee={employee}
+                  onEmployeeChange={setEmployee}
+                  employeeLoading={employeeLoading && isCalendarLoading}
+                  weekDates={weekDates}
+                  weekAssignedShiftDays={weekAssignedShiftDays}
+                  showWeekScheduleHint={!!employee && !isCalendarLoading}
+                  daysByDate={daysByDate}
+                  anchor={anchor}
+                  onSelectDate={selectAnchor}
+                  onPrevWeek={goPrev}
+                  onNextWeek={goNext}
+                  onToday={goToday}
+                  onRefresh={() => void refetchPage()}
+                  canGoPrev={canGoPrev}
+                  canGoNext={canGoNext}
+                  isRefreshing={isRefreshing}
+                  isCalendarLoading={isCalendarLoading}
+                />
+              </div>
             )}
 
             {isBootstrapping ? (
@@ -569,6 +567,49 @@ function DeviceAlertRow({ alert }: { alert: DeviceAlert }) {
   );
 }
 
+function WeekDayDateBadge(props: {
+  dayNum: string;
+  isToday: boolean;
+  isOffDay: boolean;
+  hasOffShiftPunch?: boolean;
+}) {
+  const badge = (
+    <div
+      className={cn(
+        "inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-sm tracking-tight",
+        props.isToday && "bg-primary font-semibold text-primary-foreground shadow-sm",
+        !props.isToday &&
+          props.isOffDay &&
+          "bg-destructive/10 font-normal text-destructive ring-1 ring-inset ring-destructive/35",
+        !props.isToday && !props.isOffDay && "font-semibold text-foreground"
+      )}
+      title={props.isToday ? "Today" : undefined}
+    >
+      {props.dayNum}
+    </div>
+  );
+
+  if (props.isOffDay && !props.isToday) {
+    const tip = props.hasOffShiftPunch
+      ? "Off shift — punches recorded (OFF_SHIFT_PUNCH)"
+      : "No shift scheduled";
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{badge}</TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs">
+          {tip}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return badge;
+}
+
+function dayOffShiftPunchFlag(day?: Day): Flag | undefined {
+  return (day?.flags ?? []).find((flag) => flag.flag_code === "OFF_SHIFT_PUNCH");
+}
+
 function WeekView(props: {
   weekDates: Date[];
   anchor: Date;
@@ -577,11 +618,8 @@ function WeekView(props: {
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 }) {
-  // Calendar-style working-hours viewport.
-  // The scroll viewport = card section height. We map exactly `visibleHours` of time onto that
-  // height by sizing the inner canvas to (weekSpan / visibleHours) × 100% of the viewport.
-  // This guarantees overflow whenever the week span exceeds `visibleHours` — no JS measurement needed.
-  const visibleHours = 10;
+  // 10 hours of time = full scroll viewport height; week span ≤10h stretches to fill columns.
+  // When span >10h the inner canvas grows and this section scrolls (page stays fixed height).
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const weekWindow = useMemo(() => {
@@ -602,27 +640,14 @@ function WeekView(props: {
         if (m != null) mins.push(m);
       }
     }
-    if (mins.length === 0) {
-      // fallback to a reasonable "workday" window
-      return { startMin: 8 * 60, endMin: 18 * 60 };
-    }
-    const min = Math.min(...mins);
-    const max = Math.max(...mins);
-    const margin = 30;
-    return {
-      startMin: clamp(min - margin, 0, 24 * 60),
-      endMin: clamp(max + margin, 0, 24 * 60),
-    };
+    return computeWeekTimelineWindow(mins);
   }, [props.daysByDate, props.weekDates]);
 
-  const weekSpanMinutes = Math.max(60, weekWindow.endMin - weekWindow.startMin);
-  // Map 10 hours of time to the full scroll viewport height; grow taller when the week spans >10h.
-  const canvasHeightPct = Math.max(100, (weekSpanMinutes / (visibleHours * 60)) * 100);
+  const canvasHeightPct = weekTimelineCanvasHeightPct(weekWindow.spanMinutes);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // Snap scroll to the top of the week window when the week changes.
     el.scrollTop = 0;
   }, [weekWindow.startMin, weekWindow.endMin]);
   return (
@@ -632,32 +657,62 @@ function WeekView(props: {
           const key = format(d, "yyyy-MM-dd");
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
+          const isOffDay = info?.shift?.shift_assigned !== true;
+          const offShiftFlag = dayOffShiftPunchFlag(info);
           const timeRange = formatDayCheckinTimeRange(info);
           return (
-            <div key={key} className="px-3 py-2">
+            <div
+              key={key}
+              className={cn(
+                "px-3 py-2",
+                isOffDay && !isToday && "bg-destructive/[0.06]"
+              )}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-baseline gap-2">
-                  <div className="text-xs font-medium text-muted-foreground">
-                    {format(d, "EEE")}
-                  </div>
                   <div
                     className={cn(
-                      "inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-sm font-semibold tracking-tight",
-                      isToday ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground"
+                      "text-xs font-medium",
+                      isOffDay && !isToday
+                        ? "text-destructive/60"
+                        : "text-muted-foreground"
                     )}
-                    title={isToday ? "Today" : undefined}
                   >
-                    {format(d, "d")}
+                    {format(d, "EEE")}
                   </div>
+                  <WeekDayDateBadge
+                    dayNum={format(d, "d")}
+                    isToday={isToday}
+                    isOffDay={isOffDay}
+                    hasOffShiftPunch={offShiftFlag != null}
+                  />
                 </div>
                 {isToday ? <span className="text-[11px] font-medium text-primary/80">Today</span> : null}
               </div>
 
-              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                {timeRange ? <span>{timeRange}</span> : null}
+              <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                {timeRange ? <span title="Actual punches">{timeRange}</span> : null}
               </div>
 
-              <div className="mt-1 flex items-center gap-1.5">
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {info?.leave?.on_leave ? (
+                  <span
+                    className="inline-flex max-w-full items-center truncate rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-900 dark:text-sky-100"
+                    title={info.leave.leave_type ? `On leave · ${info.leave.leave_type}` : "On leave"}
+                  >
+                    Leave
+                  </span>
+                ) : null}
+                {offShiftFlag ? (
+                  <button
+                    type="button"
+                    onClick={() => props.onInspectFlag(key, offShiftFlag)}
+                    className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
+                    title="Off-shift punches recorded"
+                  >
+                    OFF_SHIFT
+                  </button>
+                ) : null}
                 {(props.alertsByDate.get(key) ?? []).length > 0 ? (
                   <span
                     className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[10px] font-semibold text-amber-800 dark:text-amber-200"
@@ -675,11 +730,9 @@ function WeekView(props: {
       <div
         ref={scrollRef}
         className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        aria-label="Week attendance timeline"
       >
-        <div
-          className="grid min-h-full grid-cols-7"
-          style={{ height: `${canvasHeightPct}%` }}
-        >
+        <div className="grid grid-cols-7" style={{ height: `${canvasHeightPct}%` }}>
           {props.weekDates.map((d) => {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
@@ -692,6 +745,8 @@ function WeekView(props: {
                 today={isToday}
                 info={info}
                 dense={false}
+                timelineStartMin={weekWindow.startMin}
+                timelineEndMin={weekWindow.endMin}
                 onInspectDay={() => props.onInspectDay(key)}
                 onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
               />
@@ -750,6 +805,8 @@ function DayCell(props: {
   today: boolean;
   info?: Day;
   dense: boolean;
+  timelineStartMin?: number;
+  timelineEndMin?: number;
   onInspectDay: () => void;
   onInspectFlag: (flag: Flag) => void;
 }) {
@@ -794,6 +851,8 @@ function DayCell(props: {
             shift={props.info?.shift ?? { shift_assigned: false }}
             grossMinutes={props.info?.gross_minutes ?? null}
             dense={props.dense}
+            windowStartMin={props.timelineStartMin}
+            windowEndMin={props.timelineEndMin}
           />
         </div>
       </div>
@@ -819,9 +878,13 @@ function DayDayTrack(props: {
     () => deriveUnpairedPunches(props.checkins ?? [], parseDateTimeLocal),
     [props.checkins]
   );
+  const shiftPolicy = useMemo(
+    () => shiftTimelinePolicyFromShift(props.shift),
+    [props.shift]
+  );
   const gaps = useMemo(
-    () => deriveTimelineGaps(segments, roguePunches, minutesFromDateTime),
-    [roguePunches, segments]
+    () => deriveTimelineGaps(segments, roguePunches, minutesFromDateTime, shiftPolicy),
+    [roguePunches, segments, shiftPolicy]
   );
   const expected = computeExpectedWindowPct(props.shift);
   const lunch = computeLunchWindowPct(props.shift);
@@ -830,8 +893,18 @@ function DayDayTrack(props: {
 
   const window = useMemo(() => {
     if (props.dense) return null;
+    if (props.windowStartMin != null && props.windowEndMin != null) {
+      const span = props.windowEndMin - props.windowStartMin;
+      if (span > 0) {
+        return {
+          startMin: props.windowStartMin,
+          endMin: props.windowEndMin,
+          span,
+        };
+      }
+    }
     return computeDayTimeWindow(props.checkins ?? [], minutesFromDateTime);
-  }, [props.checkins, props.dense]);
+  }, [props.checkins, props.dense, props.windowEndMin, props.windowStartMin]);
 
   function pctFromMinute(min: number) {
     if (!window) return clamp((min / (24 * 60)) * 100, 0, 100);
@@ -1066,7 +1139,7 @@ function formatCheckinTime(value: string | null | undefined) {
   return format(parseDateTimeLocal(value), "h:mm a");
 }
 
-function SegmentInspectorRow(props: { segment: Segment }) {
+function SegmentInspectorRow(props: { segment: AttendanceSegment }) {
   const { segment } = props;
   const branch = formatBranchLabel(segment.branch);
   const startType = "IN";
@@ -1223,16 +1296,25 @@ function LegendPill({ severity }: { severity: Severity }) {
   );
 }
 
-function buildSegmentInspectorItems(segments: Segment[], checkins: Checkin[]): SegmentInspectorItem[] {
+function buildSegmentInspectorItems(
+  segments: AttendanceSegment[],
+  checkins: Checkin[],
+  shift?: ShiftContext
+): SegmentInspectorItem[] {
   if (!segments.length && !checkins.length) return [];
 
   const sorted = [...segments].sort((a, b) => (a.startMin ?? 0) - (b.startMin ?? 0));
   const unpaired = deriveUnpairedPunches(checkins, parseDateTimeLocal);
-  const timelineGaps = deriveTimelineGaps(sorted, unpaired, minutesFromDateTime);
+  const timelineGaps = deriveTimelineGaps(
+    sorted,
+    unpaired,
+    minutesFromDateTime,
+    shiftTimelinePolicyFromShift(shift)
+  );
   const items: SegmentInspectorItem[] = [];
 
   type Entry =
-    | { kind: "segment"; segment: Segment; orderMin: number }
+    | { kind: "segment"; segment: AttendanceSegment; orderMin: number }
     | { kind: "away"; gap: AwayGap; orderMin: number };
 
   const entries: Entry[] = [];
@@ -1265,146 +1347,13 @@ function buildSegmentInspectorItems(segments: Segment[], checkins: Checkin[]): S
   return items;
 }
 
-function employeeDisplayName(employee: CalendarEmployee | null | undefined, fallbackId?: string | null) {
-  if (!employee) return fallbackId ?? "Select employee";
-  const parts = employee.label.split("·");
-  return (parts[1] ?? parts[0] ?? employee.id).trim();
-}
-
-function employeeInitials(employee: CalendarEmployee | null | undefined, fallbackId?: string | null) {
-  const name = employeeDisplayName(employee, fallbackId);
-  return (
-    name
-      .split(" ")
-      .slice(0, 2)
-      .map((part) => part[0])
-      .join("")
-      .toUpperCase() || "?"
-  );
-}
-
-function EmployeePicker(props: {
-  employees: CalendarEmployee[];
-  value: string | null;
-  onChange: (v: string) => void;
-  isLoading?: boolean;
-}) {
-  const selected = props.employees.find((e) => e.id === props.value) ?? props.employees[0] ?? null;
-  const [open, setOpen] = useState(false);
-  const displayName = employeeDisplayName(selected, props.value);
-  const subtitle = [selected?.title, selected?.department].filter(Boolean).join(" · ");
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={!props.employees.length || props.isLoading}
-          className={cn(
-            "group flex min-w-0 max-w-full items-center gap-3 rounded-xl border border-transparent px-1 py-1 text-left transition-colors",
-            "hover:border-border/60 hover:bg-muted/30 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/40",
-            (!props.employees.length || props.isLoading) && "pointer-events-none opacity-80"
-          )}
-        >
-          <div
-            className={cn(
-              "relative size-11 shrink-0 overflow-hidden rounded-full border border-border/60 bg-muted/20",
-              props.isLoading && "ring-2 ring-primary/20 ring-offset-2 ring-offset-background"
-            )}
-          >
-            {selected?.image ? (
-              <img
-                src={selected.image}
-                alt={displayName}
-                className={cn("h-full w-full object-cover transition-opacity", props.isLoading && "opacity-70")}
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-muted-foreground">
-                {employeeInitials(selected, props.value)}
-              </div>
-            )}
-            {props.isLoading ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-background/35">
-                <Loader2Icon className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
-              </div>
-            ) : null}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold tracking-tight">{displayName}</span>
-              {selected ? (
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{selected.id}</span>
-              ) : null}
-              {props.isLoading ? (
-                <Loader2Icon className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
-              ) : (
-                <ChevronsUpDownIcon
-                  className="size-3.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-muted-foreground"
-                  aria-hidden="true"
-                />
-              )}
-            </div>
-            {subtitle ? (
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>
-            ) : null}
-          </div>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-[320px] p-2">
-        <Command>
-          <CommandInput placeholder="Search employee…" />
-          <CommandList>
-            <CommandEmpty>No results.</CommandEmpty>
-            <CommandGroup heading="Employees">
-              {props.employees.map((e) => (
-                <CommandItem
-                  key={e.id}
-                  data-checked={e.id === props.value}
-                  onSelect={() => {
-                    props.onChange(e.id);
-                    setOpen(false);
-                  }}
-                >
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate font-medium">{employeeDisplayName(e)}</span>
-                    <span className="truncate font-mono text-[11px] text-muted-foreground">{e.id}</span>
-                  </div>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function DateJump(props: { anchor: Date; onSelectDate: (d: Date) => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm">
-          <CalendarIcon className="mr-1 size-4" />
-          {format(props.anchor, "MMM d, yyyy")}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-2">
-        <Calendar
-          mode="single"
-          selected={props.anchor}
-          onSelect={(d) => {
-            if (!d) return;
-            props.onSelectDate(d);
-            setOpen(false);
-          }}
-          weekStartsOn={1}
-        />
-      </PopoverContent>
-    </Popover>
-  );
+function countWeekAssignedShiftDays(weekDates: Date[], daysByDate: Map<string, Day>) {
+  let assigned = 0;
+  for (const date of weekDates) {
+    const key = format(date, "yyyy-MM-dd");
+    if (daysByDate.get(key)?.shift?.shift_assigned) assigned += 1;
+  }
+  return assigned;
 }
 
 function formatDurationMinutes(
@@ -1448,7 +1397,7 @@ function parseDateTimeLocal(value: string) {
   return new Date(isoish);
 }
 
-function deriveSegments(checkins: Checkin[]): Segment[] {
+function deriveSegments(checkins: Checkin[]): AttendanceSegment[] {
   return deriveSegmentsFromCheckins(checkins, {
     parseTime: parseDateTimeLocal,
     minutesFromDateTime,

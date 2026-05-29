@@ -21,29 +21,19 @@ export function LoadingIndicator(props: { label?: string; className?: string }) 
 
 export function AttendanceHeaderSkeleton() {
   return (
-    <Card className="border-border/60">
-      <CardContent className="py-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <Skeleton className="size-11 shrink-0 rounded-full" />
-            <div className="min-w-0 space-y-2">
-              <div className="flex items-center gap-2">
-                <Skeleton className="h-4 w-36" />
-                <Skeleton className="h-3 w-16" />
-              </div>
-              <Skeleton className="h-3 w-48" />
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Skeleton className="h-7 w-[132px] rounded-lg" />
-            <Skeleton className="h-7 w-[88px] rounded-lg" />
-            <Skeleton className="h-7 w-[72px] rounded-lg" />
-            <Skeleton className="h-7 w-[68px] rounded-lg" />
-            <Skeleton className="h-7 w-[68px] rounded-lg" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex w-full gap-2 sm:max-w-lg">
+        <Skeleton className="h-11 min-w-0 flex-1 rounded-md" />
+        <Skeleton className="h-11 w-14 shrink-0 rounded-md" />
+      </div>
+      <div className="flex items-center gap-1 self-stretch sm:self-auto">
+        <Skeleton className="size-8 shrink-0 rounded-md" />
+        <Skeleton className="h-8 min-w-0 flex-1 rounded-md sm:w-36 sm:flex-none" />
+        <Skeleton className="size-8 shrink-0 rounded-md" />
+        <Skeleton className="ml-1 hidden h-8 w-12 rounded-md sm:block" />
+        <Skeleton className="size-8 shrink-0 rounded-md" />
+      </div>
+    </div>
   );
 }
 
@@ -60,7 +50,7 @@ export function WeekViewSkeleton() {
               </div>
               <Skeleton className="h-3 w-8" />
             </div>
-            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-2.5 w-20" />
             <Skeleton className="h-4 w-10 rounded-full" />
           </div>
         ))}

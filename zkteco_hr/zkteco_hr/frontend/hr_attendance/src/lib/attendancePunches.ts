@@ -167,14 +167,107 @@ export function deriveUnpairedPunches(
   return unpaired;
 }
 
+export type ShiftTimelinePolicy = {
+  startMin?: number | null;
+  endMin?: number | null;
+  graceMinutes?: number;
+  lunchStartMin?: number | null;
+  lunchEndMin?: number | null;
+};
+
+export function parseShiftTimeToMinutes(time: string | null | undefined): number | null {
+  if (!time) return null;
+  const m = time.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
+
+export function shiftTimelinePolicyFromShift(shift: {
+  shift_assigned?: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
+  grace_minutes?: number;
+  lunch_start?: string | null;
+  lunch_end?: string | null;
+} | null | undefined): ShiftTimelinePolicy | null {
+  if (!shift?.shift_assigned) return null;
+  const graceMinutes = Number.isFinite(shift.grace_minutes) ? Number(shift.grace_minutes) : 0;
+  return {
+    startMin: parseShiftTimeToMinutes(shift.start_time ?? null),
+    endMin: parseShiftTimeToMinutes(shift.end_time ?? null),
+    graceMinutes,
+    lunchStartMin: parseShiftTimeToMinutes(shift.lunch_start ?? null),
+    lunchEndMin: parseShiftTimeToMinutes(shift.lunch_end ?? null),
+  };
+}
+
+/** Minutes not counted as unaccounted away time (shift start grace + scheduled lunch + lunch-end grace). */
+export function buildShiftExemptIntervals(
+  policy: ShiftTimelinePolicy
+): Array<{ startMin: number; endMin: number }> {
+  const exempt: Array<{ startMin: number; endMin: number }> = [];
+  const grace = Math.max(0, policy.graceMinutes ?? 0);
+
+  if (policy.startMin != null && Number.isFinite(policy.startMin)) {
+    exempt.push({ startMin: policy.startMin, endMin: policy.startMin + grace });
+  }
+
+  if (
+    policy.lunchStartMin != null &&
+    policy.lunchEndMin != null &&
+    policy.lunchEndMin > policy.lunchStartMin
+  ) {
+    exempt.push({
+      startMin: policy.lunchStartMin,
+      endMin: policy.lunchEndMin + grace,
+    });
+  }
+
+  return exempt;
+}
+
+export function subtractExemptFromGap(
+  gap: { startMin: number; endMin: number },
+  exemptIntervals: Array<{ startMin: number; endMin: number }>
+): Array<{ startMin: number; endMin: number }> {
+  let parts = [{ startMin: gap.startMin, endMin: gap.endMin }];
+
+  for (const exempt of exemptIntervals) {
+    const next: Array<{ startMin: number; endMin: number }> = [];
+    for (const part of parts) {
+      const overlapStart = Math.max(part.startMin, exempt.startMin);
+      const overlapEnd = Math.min(part.endMin, exempt.endMin);
+      if (overlapEnd <= overlapStart) {
+        next.push(part);
+        continue;
+      }
+      if (part.startMin < overlapStart) {
+        next.push({ startMin: part.startMin, endMin: overlapStart });
+      }
+      if (overlapEnd < part.endMin) {
+        next.push({ startMin: overlapEnd, endMin: part.endMin });
+      }
+    }
+    parts = next;
+  }
+
+  return parts.filter((p) => p.endMin > p.startMin);
+}
+
 /**
  * Away intervals between consecutive timeline blocks (segments and unpaired punches),
  * using minute-of-day positions so the UI can scale height linearly with elapsed time.
+ * When shift policy is provided, scheduled lunch and grace windows are excluded.
  */
 export function deriveTimelineGaps(
   segments: Segment[],
   unpaired: Checkin[],
-  minutesFromDateTime: (value: string | null | undefined) => number | null
+  minutesFromDateTime: (value: string | null | undefined) => number | null,
+  shiftPolicy?: ShiftTimelinePolicy | null
 ): TimelineGap[] {
   type Block =
     | { kind: "segment"; startMin: number; endMin: number }
@@ -218,7 +311,67 @@ export function deriveTimelineGaps(
     });
   }
 
-  return gaps;
+  if (!shiftPolicy) return gaps;
+
+  const exempt = buildShiftExemptIntervals(shiftPolicy);
+  if (!exempt.length) return gaps;
+
+  const filtered: TimelineGap[] = [];
+  for (const gap of gaps) {
+    for (const part of subtractExemptFromGap(gap, exempt)) {
+      const minutes = part.endMin - part.startMin;
+      if (minutes <= 0) continue;
+      filtered.push({
+        startMin: part.startMin,
+        endMin: part.endMin,
+        minutes,
+      });
+    }
+  }
+
+  return filtered;
+}
+
+/** Week timeline: 10 hours of time map to the full scroll viewport height. */
+export const TIMELINE_VIEWPORT_HOURS = 10;
+export const TIMELINE_VIEWPORT_MINUTES = TIMELINE_VIEWPORT_HOURS * 60;
+
+export const DEFAULT_TIMELINE_FALLBACK_WINDOW = {
+  startMin: 8 * 60,
+  endMin: 18 * 60,
+};
+
+export function computeWeekTimelineWindow(
+  minuteValues: number[],
+  marginMinutes = 30,
+  fallback: { startMin: number; endMin: number } = DEFAULT_TIMELINE_FALLBACK_WINDOW
+): { startMin: number; endMin: number; spanMinutes: number } {
+  if (!minuteValues.length) {
+    const spanMinutes = fallback.endMin - fallback.startMin;
+    return { startMin: fallback.startMin, endMin: fallback.endMin, spanMinutes };
+  }
+
+  const min = Math.min(...minuteValues);
+  const max = Math.max(...minuteValues);
+  const startMin = Math.max(0, min - marginMinutes);
+  const endMin = Math.min(24 * 60, max + marginMinutes);
+  const spanMinutes = Math.max(60, endMin - startMin);
+  return { startMin, endMin, spanMinutes };
+}
+
+/** Inner week canvas height (% of scroll viewport). Grows when span exceeds 10 hours. */
+export function weekTimelineCanvasHeightPct(
+  spanMinutes: number,
+  viewportMinutes = TIMELINE_VIEWPORT_MINUTES
+): number {
+  return Math.max(100, (spanMinutes / viewportMinutes) * 100);
+}
+
+export function weekTimelineNeedsScroll(
+  spanMinutes: number,
+  viewportMinutes = TIMELINE_VIEWPORT_MINUTES
+): boolean {
+  return spanMinutes > viewportMinutes;
 }
 
 export function computeDayTimeWindow(

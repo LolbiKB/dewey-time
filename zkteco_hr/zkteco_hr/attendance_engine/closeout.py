@@ -8,6 +8,8 @@ import frappe
 from frappe.utils import add_days, get_datetime, getdate, now_datetime, nowdate
 
 from zkteco_hr.attendance_engine.bridge_auth import validate_bridge_request
+# Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
+from zkteco_hr.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
 
 
 CLOSEOUT_STATUSES = frozenset({"closed", "deferred_offline", "closure_failed"})
@@ -476,16 +478,6 @@ def _parse_undelivered(undelivered, *, status: str):
         frappe.throw("undelivered JSON must be a list of objects")
 
     frappe.throw("undelivered must be a JSON list when provided")
-
-
-def _get_shift_assignment(*, employee: str, attendance_date):
-    rows = frappe.get_all(
-        "Shift Assignment",
-        filters={"employee": employee, "start_date": attendance_date},
-        fields=["name", "shift_type", "start_date"],
-        limit=1,
-    )
-    return rows[0] if rows else None
 
 
 def _get_shift_meta(shift_type: str):

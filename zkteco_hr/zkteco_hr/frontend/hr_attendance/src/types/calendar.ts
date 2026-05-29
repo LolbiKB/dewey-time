@@ -40,9 +40,15 @@ export type Flag = {
   evidence?: unknown;
 };
 
+export type LeaveContext = {
+  on_leave: boolean;
+  leave_type?: string | null;
+};
+
 export type Day = {
   date: string;
   shift?: ShiftContext;
+  leave?: LeaveContext;
   checkins?: Checkin[];
   first_in?: string | null;
   last_out?: string | null;
@@ -61,8 +67,19 @@ export type CalendarPayload = {
 export type CalendarEmployee = {
   id: string;
   label: string;
+  /** ERPNext Employee.employee_name */
+  employee_name?: string | null;
   image?: string | null;
   title?: string | null;
   department?: string | null;
   company?: string | null;
+  employment_type?: string | null;
+  is_full_time?: boolean;
+  /** Enabled Shift Schedule Assignment (HR Setup) — same as has_shift_assignment */
+  has_shift_schedule_assignment?: boolean;
+  /** True when employee has enabled Shift Schedule Assignment */
+  has_shift_assignment?: boolean;
+  shift_schedule_assignment?: string | null;
+  schedule_min_date?: string | null;
+  schedule_max_date?: string | null;
 };

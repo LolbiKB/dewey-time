@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from collections import defaultdict
 from datetime import timedelta
@@ -5,7 +7,11 @@ from datetime import timedelta
 import frappe
 from frappe.utils import get_datetime, getdate
 
-from zkteco_hr.attendance_engine.closeout import _get_shift_assignment, _get_shift_meta
+from zkteco_hr.attendance_engine.closeout import _get_shift_meta
+from zkteco_hr.attendance_engine.shift_assignment import (
+    get_shift_assignment as _get_shift_assignment,
+    shift_assignment_bounds_by_employee,
+)
 
 
 def _require_hr_role():
@@ -16,6 +22,16 @@ def _require_hr_role():
     if "System Manager" in roles or "HR User" in roles:
         return
     frappe.throw("Not permitted")
+
+
+def _coerce_bool(value, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes")
 
 
 def _format_time(value):
@@ -35,6 +51,102 @@ def _format_datetime(value):
     if hasattr(value, "strftime"):
         return value.strftime("%Y-%m-%d %H:%M:%S")
     return str(value)
+
+
+def is_full_time_employment(employment_type: str | None) -> bool:
+    """True when employment_type looks like full-time (not part-time / contract variants)."""
+    if not employment_type:
+        return False
+    normalized = str(employment_type).strip().lower().replace("-", " ")
+    if "part" in normalized:
+        return False
+    return "full" in normalized
+
+
+def _shift_schedule_assignment_metadata_by_employee(employee_ids: list[str]) -> dict[str, dict]:
+    """Enabled Shift Schedule Assignment rows (HR Setup), keyed by employee."""
+    if not employee_ids or not frappe.db.table_exists("Shift Schedule Assignment"):
+        return {}
+
+    fields = ["employee", "name", "end_date"]
+    if frappe.db.has_column("Shift Schedule Assignment", "from_date"):
+        fields.append("from_date")
+
+    filters: dict = {"employee": ["in", employee_ids]}
+    if frappe.db.has_column("Shift Schedule Assignment", "enabled"):
+        filters["enabled"] = 1
+
+    today = getdate()
+    by_employee: dict[str, dict] = {}
+    rows = (
+        frappe.get_all(
+            "Shift Schedule Assignment",
+            filters=filters,
+            fields=fields,
+            order_by="from_date desc, creation desc",
+        )
+        or []
+    )
+
+    for row in rows:
+        emp = row.get("employee")
+        if not emp or emp in by_employee:
+            continue
+        end_date = row.get("end_date")
+        if end_date and getdate(end_date) < today:
+            continue
+        from_date = row.get("from_date")
+        by_employee[emp] = {
+            "has_shift_assignment": True,
+            "has_shift_schedule_assignment": True,
+            "shift_schedule_assignment": row.get("name"),
+            "schedule_min_date": str(getdate(from_date)) if from_date else None,
+            "schedule_max_date": str(getdate(end_date)) if end_date else None,
+        }
+    return by_employee
+
+
+def employee_has_active_shift_schedule_assignment(employee: str) -> bool:
+    """Whether the employee has an enabled Shift Schedule Assignment (metadata only)."""
+    return employee in _shift_schedule_assignment_metadata_by_employee([employee])
+
+
+def _active_shift_schedule_assignment_employees(employee_ids: list[str]) -> set[str]:
+    return set(_shift_schedule_assignment_metadata_by_employee(employee_ids).keys())
+
+
+def _leave_by_date_for_range(*, employee: str, start, end) -> dict[str, dict]:
+    """Approved leave applications overlapping [start, end], keyed by yyyy-mm-dd."""
+    if not frappe.db.table_exists("Leave Application"):
+        return {}
+
+    rows = (
+        frappe.get_all(
+            "Leave Application",
+            filters={
+                "employee": employee,
+                "docstatus": 1,
+                "status": "Approved",
+                "from_date": ["<=", end],
+                "to_date": [">=", start],
+            },
+            fields=["from_date", "to_date", "leave_type"],
+        )
+        or []
+    )
+
+    by_date: dict[str, dict] = {}
+    for row in rows:
+        from_d = getdate(row["from_date"])
+        to_d = getdate(row["to_date"])
+        leave_type = row.get("leave_type")
+        cur = from_d if from_d > start else start
+        end_d = to_d if to_d < end else end
+        while cur <= end_d:
+            key = str(cur)
+            by_date[key] = {"on_leave": True, "leave_type": leave_type}
+            cur = cur + timedelta(days=1)
+    return by_date
 
 
 def _shift_context_for_day(*, employee: str, attendance_date):
@@ -58,34 +170,77 @@ def _shift_context_for_day(*, employee: str, attendance_date):
 
 
 @frappe.whitelist()
-def list_calendar_employees():
-    """Active employees for the HR attendance calendar picker."""
+def list_calendar_employees(include_without_shifts=True):
+    """
+    Active employees for the HR attendance calendar picker.
+
+    include_without_shifts: when false, omit employees with no enabled Shift Schedule Assignment.
+    """
     _require_hr_role()
+    include_all = _coerce_bool(include_without_shifts, default=True)
+
+    fields = ["name", "employee_name", "designation", "department", "company", "image"]
+    if frappe.db.has_column("Employee", "employment_type"):
+        fields.append("employment_type")
 
     rows = (
         frappe.get_all(
             "Employee",
             filters={"status": "Active"},
-            fields=["name", "employee_name", "designation", "department", "company", "image"],
+            fields=fields,
             order_by="employee_name asc",
             limit_page_length=500,
         )
         or []
     )
 
+    employee_ids = [row["name"] for row in rows]
+    ssa_by_employee = _shift_schedule_assignment_metadata_by_employee(employee_ids)
+    assignment_bounds = shift_assignment_bounds_by_employee(employee_ids)
+
     employees = []
     for row in rows:
-        display_name = row.get("employee_name") or row.get("name")
+        emp_id = row["name"]
+        ssa = ssa_by_employee.get(emp_id, {})
+        bounds = assignment_bounds.get(emp_id, {})
+        has_shift_assignment = ssa.get("has_shift_assignment") is True
+        if not include_all and not has_shift_assignment:
+            continue
+
+        display_name = row.get("employee_name") or emp_id
+        employment_type = row.get("employment_type")
+        schedule_min_date = bounds.get("schedule_min_date") or ssa.get("schedule_min_date")
+        schedule_max_date = bounds.get("schedule_max_date")
+        if schedule_max_date is None and bounds.get("schedule_min_date"):
+            schedule_max_date = None
+        elif schedule_max_date is None:
+            schedule_max_date = ssa.get("schedule_max_date")
+
         employees.append(
             {
-                "id": row["name"],
-                "label": f"{row['name']} · {display_name}",
+                "id": emp_id,
+                "label": f"{emp_id} · {display_name}",
+                "employee_name": display_name,
                 "image": row.get("image"),
                 "title": row.get("designation"),
                 "department": row.get("department"),
                 "company": row.get("company"),
+                "employment_type": employment_type,
+                "is_full_time": is_full_time_employment(employment_type),
+                "has_shift_schedule_assignment": has_shift_assignment,
+                "has_shift_assignment": has_shift_assignment,
+                "shift_schedule_assignment": ssa.get("shift_schedule_assignment"),
+                "schedule_min_date": schedule_min_date,
+                "schedule_max_date": schedule_max_date,
             }
         )
+
+    employees.sort(
+        key=lambda e: (
+            0 if e.get("has_shift_assignment") else 1,
+            (e.get("employee_name") or e.get("id") or "").lower(),
+        )
+    )
     return employees
 
 
@@ -188,6 +343,8 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             }
         )
 
+    leave_by_date = _leave_by_date_for_range(employee=employee, start=start, end=end)
+
     days = []
     cur = start
     while cur <= end:
@@ -207,6 +364,7 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             {
                 "date": key,
                 "shift": _shift_context_for_day(employee=employee, attendance_date=cur),
+                "leave": leave_by_date.get(key, {"on_leave": False}),
                 "checkins": day_checkins,
                 "first_in": first_in,
                 "last_out": last_out,

@@ -48,7 +48,10 @@ generate_auto_flags_for_device_date("DEVICE-SN", "2026-05-28", undelivered=[])
 
 HR calendar API:
 
+- `zkteco_hr.attendance_engine.hr_calendar.list_calendar_employees(include_without_shifts=True)`
 - `zkteco_hr.attendance_engine.hr_calendar.get_employee_calendar(employee, start_date, end_date)`
+
+Calendar filter semantics (Shift Assignment docstatus, leave, flags): see `zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md`.
 
 ## React + Vite HR Attendance (local dev)
 

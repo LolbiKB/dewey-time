@@ -158,7 +158,8 @@ HR calendar **segments** are derived from punches (not stored). Rules:
 4. Within each **named** branch run only, pair punches **IN → OUT** using the MVP order heuristic (earliest = IN, latest = OUT, middle alternates). Each pair is one segment; segment `branch` is that run’s branch.
 5. **Never** pair punches across different branches (e.g. OUT at site A must not close an IN at site B).
 6. **Unpaired punch**: any rogue (no branch) punch, or the last punch in a named branch run when that run has an odd count (week timeline red tick).
-7. **Away gaps** (UI): elapsed time between consecutive timeline blocks — segment end → next segment start, segment end → unpaired punch, or unpaired → segment start. Height is linear in minutes (per-day time axis with padding).
+7. **Away gaps** (UI): elapsed time between consecutive timeline blocks — segment end → next segment start, segment end → unpaired punch, or unpaired → segment start — **minus** exempt windows when a shift is assigned: `[shift_start, shift_start + grace]` and `[lunch_start, lunch_end + grace]` (same `custom_grace_minutes` as late-start / late-from-lunch). Gaps fully inside lunch are not shown. Remaining intervals are labeled **Unaccounted time** in the inspector.
+8. **Week timeline scale** (UI): one time window for the whole week (earliest→latest punch ±30 min). **10 hours** of time map to the full viewport height; if the week span is shorter, that span is stretched to fill the column; if longer, the week grid grows taller and the week section scrolls internally (page stays `100dvh` without page scroll).
 
 `Employee Checkin.log_type` is not used for segments in MVP (same as punch list IN/OUT labels).
 
