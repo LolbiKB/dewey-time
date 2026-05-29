@@ -1,8 +1,6 @@
 import {
-  dayHasAttention,
   deviceAlertsByDate,
   deviceAlertsForWeek,
-  filterFlagsForDisplay,
   formatDeviceAlertStatus,
   useCalendarEmployees,
   useDefaultEmployee,
@@ -13,7 +11,6 @@ import type {
   CalendarPayload,
   Day,
   DeviceAlert,
-  FilterPreset,
   Flag,
   ShiftContext,
 } from "@/types/calendar";
@@ -32,10 +29,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronsUpDownIcon,
-  FilterIcon,
   Loader2Icon,
   LogInIcon,
   LogOutIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -52,14 +49,6 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -74,6 +63,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import {
+  computeDayTimeWindow,
+  deriveSegments as deriveSegmentsFromCheckins,
+  deriveTimelineGaps,
+  deriveUnpairedPunches,
+  directionForCheckin,
+  sortCheckinsByTime as sortCheckinsByTimeLib,
+} from "@/lib/attendancePunches";
+import {
   AttendanceHeaderSkeleton,
   AttendancePageSkeleton,
   LoadingIndicator,
@@ -82,7 +79,6 @@ import {
 } from "@/ui/AttendanceLoading";
 
 type Severity = "INFO" | "WARNING" | "CRITICAL";
-type FlagStatus = "OPEN" | "EXPLAINED" | "APPROVED" | "REJECTED" | "CLOSED";
 type Checkin = NonNullable<Day["checkins"]>[number];
 type Segment = {
   start?: Checkin | null;
@@ -117,7 +113,12 @@ export function App() {
   const [weekNavDirection, setWeekNavDirection] = useState<"prev" | "next" | "jump">("jump");
   const [employeeLoading, setEmployeeLoading] = useState(false);
 
-  const { employees, error: employeesError, isLoading: employeesLoading } = useCalendarEmployees();
+  const {
+    employees,
+    error: employeesError,
+    isLoading: employeesLoading,
+    refresh: refreshEmployees,
+  } = useCalendarEmployees();
   useDefaultEmployee(employees, employee, setEmployee);
 
   const {
@@ -126,7 +127,9 @@ export function App() {
     monthEnd,
     error: calendarError,
     isLoading: calendarLoading,
+    refresh: refreshCalendar,
   } = useEmployeeCalendar(employee, anchor);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     if (!employee) return;
@@ -146,14 +149,6 @@ export function App() {
       days: [],
       device_alerts: [],
     } as CalendarPayload);
-
-  const [filterPreset, setFilterPreset] = useState<FilterPreset>("default");
-  const [statusFilter, setStatusFilter] = useState<Set<FlagStatus>>(
-    () => new Set<FlagStatus>(["OPEN", "EXPLAINED"])
-  );
-  const [severityFilter, setSeverityFilter] = useState<Set<Severity>>(
-    () => new Set<Severity>(["CRITICAL", "WARNING", "INFO"])
-  );
 
   const [inspectingDate, setInspectingDate] = useState<string | null>(null);
   const [inspectingFlag, setInspectingFlag] = useState<Flag | null>(null);
@@ -197,8 +192,17 @@ export function App() {
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
   const loadError = employeesError ?? calendarError;
-  const filtersActive =
-    filterPreset !== "default" || statusFilter.size !== 2 || severityFilter.size !== 3;
+
+  async function refetchPage() {
+    setIsRefreshing(true);
+    try {
+      const tasks: Promise<unknown>[] = [refreshEmployees()];
+      if (employee) tasks.push(refreshCalendar());
+      await Promise.all(tasks);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
 
   function goPrev() {
     if (!canGoPrev || isCalendarLoading) return;
@@ -224,21 +228,14 @@ export function App() {
     setAnchor(date);
   }
 
-  function toggleSetItem<T extends string>(set: Set<T>, v: T) {
-    const next = new Set(set);
-    if (next.has(v)) next.delete(v);
-    else next.add(v);
-    return next;
-  }
-
   const inspectingDay = inspectingDate ? daysByDate.get(inspectingDate) : undefined;
   const segments = useMemo(
     () => deriveSegments(inspectingDay?.checkins ?? []),
     [inspectingDay?.checkins]
   );
   const segmentInspectorItems = useMemo(
-    () => buildSegmentInspectorItems(segments),
-    [segments]
+    () => buildSegmentInspectorItems(segments, inspectingDay?.checkins ?? []),
+    [inspectingDay?.checkins, segments]
   );
 
   if (authLoading) {
@@ -296,53 +293,17 @@ export function App() {
                       <DateJump anchor={anchor} onSelectDate={selectAnchor} />
 
                     <Button
-                      variant={filterPreset === "needs_attention" ? "default" : "outline"}
+                      variant="outline"
                       size="sm"
-                      onClick={() =>
-                        setFilterPreset((cur) =>
-                          cur === "needs_attention" ? "default" : "needs_attention"
-                        )
-                      }
+                      onClick={() => void refetchPage()}
+                      disabled={isRefreshing || isCalendarLoading}
+                      title="Reload attendance data"
                     >
-                      Needs attention
+                      <RefreshCwIcon
+                        className={cn("mr-1 size-4", isRefreshing && "animate-spin")}
+                      />
+                      Refresh
                     </Button>
-
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm">
-                          <FilterIcon className="mr-1 size-4" />
-                          Filters
-                          {filtersActive && (
-                            <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                              active
-                            </span>
-                          )}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-64">
-                        <DropdownMenuLabel>Status</DropdownMenuLabel>
-                        {(["OPEN", "EXPLAINED", "APPROVED", "REJECTED", "CLOSED"] as const).map((s) => (
-                          <DropdownMenuCheckboxItem
-                            key={s}
-                            checked={statusFilter.has(s)}
-                            onCheckedChange={() => setStatusFilter((cur) => toggleSetItem(cur, s))}
-                          >
-                            {s}
-                          </DropdownMenuCheckboxItem>
-                        ))}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuLabel>Severity</DropdownMenuLabel>
-                        {(["CRITICAL", "WARNING", "INFO"] as const).map((s) => (
-                          <DropdownMenuCheckboxItem
-                            key={s}
-                            checked={severityFilter.has(s)}
-                            onCheckedChange={() => setSeverityFilter((cur) => toggleSetItem(cur, s))}
-                          >
-                            {s}
-                          </DropdownMenuCheckboxItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
 
                     <Separator orientation="vertical" className="hidden h-7 md:block" />
 
@@ -381,9 +342,6 @@ export function App() {
                     anchor={anchor}
                     daysByDate={daysByDate}
                     alertsByDate={alertsByDate}
-                    filterPreset={filterPreset}
-                    statusFilter={statusFilter}
-                    severityFilter={severityFilter}
                     onInspectDay={(date) => {
                     setInspectingDate(date);
                     setInspectingFlag(null);
@@ -418,12 +376,7 @@ export function App() {
               {(() => {
                 const punches = sortCheckinsByTime(inspectingDay?.checkins ?? []);
                 const dayAlerts = inspectingDate ? (alertsByDate.get(inspectingDate) ?? []) : [];
-                const flags = filterFlagsForDisplay(
-                  inspectingDay?.flags,
-                  filterPreset,
-                  statusFilter,
-                  severityFilter
-                ).sort((a, b) => {
+                const flags = [...(inspectingDay?.flags ?? [])].sort((a, b) => {
                     const aIdx = SEVERITY_ORDER.indexOf((a.severity ?? "WARNING") as Severity);
                     const bIdx = SEVERITY_ORDER.indexOf((b.severity ?? "WARNING") as Severity);
                     if (aIdx !== bIdx) return aIdx - bIdx;
@@ -495,7 +448,7 @@ export function App() {
                                   key={checkin.name ?? `${checkin.time}-${idx}`}
                                   checkin={checkin}
                                   index={idx + 1}
-                                  direction={inferCheckinDirection(idx, punches.length)}
+                                  direction={directionForCheckin(punches, checkin)}
                                 />
                               ))}
                             </div>
@@ -522,7 +475,7 @@ export function App() {
                             <div className="mt-3 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-6 text-center">
                               <div className="text-sm font-medium">No flags</div>
                               <div className="mt-1 text-xs text-muted-foreground">
-                                Nothing to review for the current filters.
+                                No attendance flags for this day.
                               </div>
                             </div>
                           ) : flags.length > 0 ? (
@@ -621,9 +574,6 @@ function WeekView(props: {
   anchor: Date;
   daysByDate: Map<string, Day>;
   alertsByDate: Map<string, DeviceAlert[]>;
-  filterPreset: FilterPreset;
-  statusFilter: Set<FlagStatus>;
-  severityFilter: Set<Severity>;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 }) {
@@ -682,19 +632,9 @@ function WeekView(props: {
           const key = format(d, "yyyy-MM-dd");
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
-          const hasPair = !!(info?.first_in && info?.last_out);
-          const hasAttention = dayHasAttention(
-            info,
-            props.alertsByDate.get(key) ?? [],
-            props.filterPreset,
-            props.statusFilter,
-            props.severityFilter
-          );
+          const timeRange = formatDayCheckinTimeRange(info);
           return (
-            <div
-              key={key}
-              className={cn("px-3 py-2", props.filterPreset === "needs_attention" && !hasAttention && "opacity-40")}
-            >
+            <div key={key} className="px-3 py-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-baseline gap-2">
                   <div className="text-xs font-medium text-muted-foreground">
@@ -714,12 +654,7 @@ function WeekView(props: {
               </div>
 
               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                {hasPair ? (
-                  <span>
-                    {format(parseDateTimeLocal(info!.first_in as string), "h:mm a")} –{" "}
-                    {format(parseDateTimeLocal(info!.last_out as string), "h:mm a")}
-                  </span>
-                ) : null}
+                {timeRange ? <span>{timeRange}</span> : null}
               </div>
 
               <div className="mt-1 flex items-center gap-1.5">
@@ -749,14 +684,6 @@ function WeekView(props: {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
             const isToday = isSameDay(d, new Date());
-            const dayAlerts = props.alertsByDate.get(key) ?? [];
-            const hasAttention = dayHasAttention(
-              info,
-              dayAlerts,
-              props.filterPreset,
-              props.statusFilter,
-              props.severityFilter
-            );
             return (
               <DayCell
                 key={key}
@@ -765,12 +692,6 @@ function WeekView(props: {
                 today={isToday}
                 info={info}
                 dense={false}
-                dimmed={props.filterPreset === "needs_attention" && !hasAttention}
-                filterPreset={props.filterPreset}
-                statusFilter={props.statusFilter}
-                severityFilter={props.severityFilter}
-                windowStartMin={weekWindow.startMin}
-                windowEndMin={weekWindow.endMin}
                 onInspectDay={() => props.onInspectDay(key)}
                 onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
               />
@@ -786,8 +707,6 @@ function MonthView(props: {
   monthGrid: Date[];
   anchor: Date;
   daysByDate: Map<string, Day>;
-  statusFilter: Set<FlagStatus>;
-  severityFilter: Set<Severity>;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 }) {
@@ -815,8 +734,6 @@ function MonthView(props: {
               today={isToday}
               info={info}
               dense={true}
-              statusFilter={props.statusFilter}
-              severityFilter={props.severityFilter}
               onInspectDay={() => props.onInspectDay(key)}
               onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
             />
@@ -833,19 +750,11 @@ function DayCell(props: {
   today: boolean;
   info?: Day;
   dense: boolean;
-  dimmed?: boolean;
-  filterPreset?: FilterPreset;
-  statusFilter: Set<FlagStatus>;
-  severityFilter: Set<Severity>;
-  windowStartMin?: number;
-  windowEndMin?: number;
   onInspectDay: () => void;
   onInspectFlag: (flag: Flag) => void;
 }) {
-  const preset = props.filterPreset ?? "default";
   const checkins = props.info?.checkins ?? [];
-  const hasUnpairedPunch =
-    checkins.length > 0 && checkins.length % 2 === 1;
+  const hasUnpairedPunch = deriveUnpairedPunches(checkins, parseDateTimeLocal).length > 0;
 
   return (
     <button
@@ -855,8 +764,7 @@ function DayCell(props: {
         "group relative min-h-0 border-b border-r border-border/60 p-3 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 focus:ring-2 focus:ring-ring/40",
         props.dense ? "h-full" : "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
-        props.today && "bg-primary/3 ring-1 ring-primary/20",
-        props.dimmed && "opacity-40"
+        props.today && "bg-primary/3 ring-1 ring-primary/20"
       )}
     >
       <div className={cn("grid h-full gap-2", props.dense ? "grid-rows-[20px_1fr]" : "grid-rows-[1fr]")}>
@@ -886,8 +794,6 @@ function DayCell(props: {
             shift={props.info?.shift ?? { shift_assigned: false }}
             grossMinutes={props.info?.gross_minutes ?? null}
             dense={props.dense}
-            windowStartMin={props.windowStartMin}
-            windowEndMin={props.windowEndMin}
           />
         </div>
       </div>
@@ -909,29 +815,23 @@ function DayDayTrack(props: {
 
   const span = computeDaySpan(props.firstIn, props.lastOut);
   const segments = deriveSegments(props.checkins);
-  const gaps = deriveGaps(segments);
+  const roguePunches = useMemo(
+    () => deriveUnpairedPunches(props.checkins ?? [], parseDateTimeLocal),
+    [props.checkins]
+  );
+  const gaps = useMemo(
+    () => deriveTimelineGaps(segments, roguePunches, minutesFromDateTime),
+    [roguePunches, segments]
+  );
   const expected = computeExpectedWindowPct(props.shift);
   const lunch = computeLunchWindowPct(props.shift);
   const lateness = computeLateness(props.shift, props.firstIn);
   const adherence = computeAdherenceOpacity(props.shift, props.grossMinutes);
 
-  const roguePunches = useMemo(() => {
-    const checkins = props.checkins ?? [];
-    if (checkins.length === 0) return [] as Checkin[];
-    const sorted = [...checkins].sort(
-      (a, b) => parseDateTimeLocal(a.time).getTime() - parseDateTimeLocal(b.time).getTime()
-    );
-    if (sorted.length % 2 === 1) return [sorted[sorted.length - 1]!];
-    return [] as Checkin[];
-  }, [props.checkins]);
-
   const window = useMemo(() => {
     if (props.dense) return null;
-    const startMin = props.windowStartMin ?? 0;
-    const endMin = props.windowEndMin ?? 24 * 60;
-    if (endMin <= startMin) return null;
-    return { startMin, endMin, span: endMin - startMin };
-  }, [props.dense, props.windowEndMin, props.windowStartMin]);
+    return computeDayTimeWindow(props.checkins ?? [], minutesFromDateTime);
+  }, [props.checkins, props.dense]);
 
   function pctFromMinute(min: number) {
     if (!window) return clamp((min / (24 * 60)) * 100, 0, 100);
@@ -1040,16 +940,10 @@ function DayDayTrack(props: {
 
         {/* Away gaps (solid + thicker outline). Edge-to-edge with adjacent segments. */}
         {gaps.slice(0, props.dense ? 3 : 6).map((g, idx) => {
-          const topPct =
-            g.startMin != null ? pctFromMinute(g.startMin) : g.topPct ?? null;
-          const endPct =
-            g.endMin != null
-              ? pctFromMinute(g.endMin)
-              : g.topPct != null && g.heightPct != null
-                ? g.topPct + g.heightPct
-                : null;
-          if (topPct == null || endPct == null) return null;
-          const heightPct = Math.max(0.5, endPct - topPct);
+          const topPct = pctFromMinute(g.startMin);
+          const endPct = pctFromMinute(g.endMin);
+          const heightPct = endPct - topPct;
+          if (heightPct <= 0) return null;
           return (
             <HoverCard key={idx} openDelay={220} closeDelay={120}>
               <HoverCardTrigger asChild>
@@ -1063,7 +957,7 @@ function DayDayTrack(props: {
               </HoverCardTrigger>
               <HoverCardContent className="w-auto p-2">
                 <div className="text-xs">
-                  Away{g.minutes != null ? ` · ${formatDurationMinutes(g.minutes)}` : ""}
+                  Away · {formatDurationMinutes(g.minutes)}
                 </div>
               </HoverCardContent>
             </HoverCard>
@@ -1073,10 +967,11 @@ function DayDayTrack(props: {
         {/* Rectangular segments (primary) */}
         {segments.length === 0 ? null : (
           segments.slice(0, props.dense ? 3 : 6).map((s, idx) => {
-            const topPct = s.startMin != null ? pctFromMinute(s.startMin) : (s.startPct ?? null);
-            const endPct = s.endMin != null ? pctFromMinute(s.endMin) : (s.endPct ?? null);
-            if (topPct == null || endPct == null) return null;
-            const heightPct = Math.max(1.5, endPct - topPct);
+            if (s.startMin == null || s.endMin == null) return null;
+            const topPct = pctFromMinute(s.startMin);
+            const endPct = pctFromMinute(s.endMin);
+            const heightPct = endPct - topPct;
+            if (heightPct <= 0) return null;
             const branch = s.branch ?? null;
             const branchShort = branch ? branch.replace(/^BRANCH-/, "") : "";
             const startLabel = s.start?.time ? format(new Date(s.start.time), "h:mma") : "—";
@@ -1146,6 +1041,19 @@ function DayDayTrack(props: {
       </div>
     </div>
   );
+}
+
+/** First–last time label; only when there are at least two punches and they differ. */
+function formatDayCheckinTimeRange(day?: Day): string | null {
+  const checkins = day?.checkins ?? [];
+  if (checkins.length < 2 || !day?.first_in || !day?.last_out) return null;
+
+  const first = parseDateTimeLocal(day.first_in);
+  const last = parseDateTimeLocal(day.last_out);
+  if (!Number.isFinite(first.getTime()) || !Number.isFinite(last.getTime())) return null;
+  if (first.getTime() === last.getTime()) return null;
+
+  return `${format(first, "h:mm a")} – ${format(last, "h:mm a")}`;
 }
 
 function formatBranchLabel(branch: string | null | undefined) {
@@ -1232,7 +1140,7 @@ function AwayInspectorRow(props: { gap: AwayGap }) {
           >
             Away
           </Badge>
-          <span className="shrink-0 text-right text-xs text-muted-foreground">Between segments</span>
+          <span className="shrink-0 text-right text-xs text-muted-foreground">Unaccounted time</span>
         </div>
       </div>
     </div>
@@ -1315,104 +1223,46 @@ function LegendPill({ severity }: { severity: Severity }) {
   );
 }
 
-function sortCheckinsByTime(checkins: Checkin[]): Checkin[] {
-  return [...checkins].sort(
-    (a, b) => parseDateTimeLocal(a.time).getTime() - parseDateTimeLocal(b.time).getTime()
-  );
-}
+function buildSegmentInspectorItems(segments: Segment[], checkins: Checkin[]): SegmentInspectorItem[] {
+  if (!segments.length && !checkins.length) return [];
 
-/** MVP punch direction from chronological order; ignores Employee Checkin.log_type. */
-function inferCheckinDirection(sortedIndex: number, totalCheckins: number): "IN" | "OUT" {
-  if (totalCheckins <= 0) return "IN";
-  if (sortedIndex === 0) return "IN";
-  if (sortedIndex === totalCheckins - 1) return "OUT";
-  return sortedIndex % 2 === 0 ? "IN" : "OUT";
-}
-
-function deriveSegments(checkins: Checkin[]): Segment[] {
-  const sorted = sortCheckinsByTime(checkins);
-  if (sorted.length < 2) return [];
-
-  const out: Segment[] = [];
-  for (let i = 0; i < sorted.length - 1; i += 2) {
-    const start = sorted[i] ?? null;
-    const end = sorted[i + 1] ?? null;
-    let minutes: number | null = null;
-    if (start?.time && end?.time) {
-      const delta = parseDateTimeLocal(end.time).getTime() - parseDateTimeLocal(start.time).getTime();
-      if (Number.isFinite(delta) && delta >= 0) minutes = Math.round(delta / 60000);
-    }
-    const startMin = minutesFromDateTime(start?.time);
-    const endMin = minutesFromDateTime(end?.time);
-    const startPct = startMin != null ? clamp((startMin / (24 * 60)) * 100, 0, 100) : null;
-    const endPct = endMin != null ? clamp((endMin / (24 * 60)) * 100, 0, 100) : null;
-    const branch = start?.custom_device_branch ?? end?.custom_device_branch ?? null;
-    out.push({ start, end, minutes, startMin, endMin, startPct, endPct, branch });
-  }
-  return out;
-}
-
-function buildSegmentInspectorItems(segments: Segment[]): SegmentInspectorItem[] {
-  if (!segments.length) return [];
-
-  const sorted = [...segments].sort(
-    (a, b) => (a.startMin ?? a.startPct ?? 0) - (b.startMin ?? b.startPct ?? 0)
-  );
+  const sorted = [...segments].sort((a, b) => (a.startMin ?? 0) - (b.startMin ?? 0));
+  const unpaired = deriveUnpairedPunches(checkins, parseDateTimeLocal);
+  const timelineGaps = deriveTimelineGaps(sorted, unpaired, minutesFromDateTime);
   const items: SegmentInspectorItem[] = [];
 
-  for (let i = 0; i < sorted.length; i++) {
-    items.push({ kind: "segment", segment: sorted[i] });
-    if (i < sorted.length - 1) {
-      const gap = computeGapBetween(sorted[i], sorted[i + 1]);
-      if (gap) items.push({ kind: "away", gap });
-    }
+  type Entry =
+    | { kind: "segment"; segment: Segment; orderMin: number }
+    | { kind: "away"; gap: AwayGap; orderMin: number };
+
+  const entries: Entry[] = [];
+
+  for (const segment of sorted) {
+    entries.push({ kind: "segment", segment, orderMin: segment.startMin ?? 0 });
+  }
+
+  for (const gap of timelineGaps) {
+    entries.push({
+      kind: "away",
+      orderMin: gap.startMin,
+      gap: {
+        start: checkinAtMinuteOfDay(checkins, gap.startMin),
+        end: checkinAtMinuteOfDay(checkins, gap.endMin),
+        minutes: gap.minutes,
+        startMin: gap.startMin,
+        endMin: gap.endMin,
+      },
+    });
+  }
+
+  entries.sort((a, b) => a.orderMin - b.orderMin);
+
+  for (const entry of entries) {
+    if (entry.kind === "segment") items.push({ kind: "segment", segment: entry.segment });
+    else items.push({ kind: "away", gap: entry.gap });
   }
 
   return items;
-}
-
-function computeGapBetween(a: Segment, b: Segment): AwayGap | null {
-  if (!a.end?.time || !b.start?.time) return null;
-
-  const delta = parseDateTimeLocal(b.start.time).getTime() - parseDateTimeLocal(a.end.time).getTime();
-  if (!Number.isFinite(delta) || delta <= 0) return null;
-
-  const minutes = Math.round(delta / 60000);
-  if (minutes <= 0) return null;
-
-  const startMin = a.endMin ?? minutesFromDateTime(a.end.time);
-  const endMin = b.startMin ?? minutesFromDateTime(b.start.time);
-  const startPct = a.endPct ?? (startMin != null ? clamp((startMin / (24 * 60)) * 100, 0, 100) : null);
-  const endPct = b.startPct ?? (endMin != null ? clamp((endMin / (24 * 60)) * 100, 0, 100) : null);
-  const topPct = startPct ?? undefined;
-  const heightPct =
-    topPct != null && endPct != null && endPct > topPct ? endPct - topPct : undefined;
-
-  return {
-    start: a.end,
-    end: b.start,
-    minutes,
-    startMin,
-    endMin,
-    topPct,
-    heightPct,
-  };
-}
-
-function deriveGaps(segments: Segment[]): AwayGap[] {
-  if (!segments || segments.length < 2) return [];
-
-  const sorted = [...segments].sort(
-    (a, b) => (a.startMin ?? a.startPct ?? 0) - (b.startMin ?? b.startPct ?? 0)
-  );
-  const gaps: AwayGap[] = [];
-
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const gap = computeGapBetween(sorted[i], sorted[i + 1]);
-    if (gap && (gap.heightPct == null || gap.heightPct >= 0.5)) gaps.push(gap);
-  }
-
-  return gaps;
 }
 
 function employeeDisplayName(employee: CalendarEmployee | null | undefined, fallbackId?: string | null) {
@@ -1598,11 +1448,35 @@ function parseDateTimeLocal(value: string) {
   return new Date(isoish);
 }
 
+function deriveSegments(checkins: Checkin[]): Segment[] {
+  return deriveSegmentsFromCheckins(checkins, {
+    parseTime: parseDateTimeLocal,
+    minutesFromDateTime,
+    clamp,
+  });
+}
+
+function sortCheckinsByTime(checkins: Checkin[]): Checkin[] {
+  return sortCheckinsByTimeLib(checkins, parseDateTimeLocal);
+}
+
 function minutesFromDateTime(value: string | null | undefined) {
   if (!value) return null;
   const d = parseDateTimeLocal(value);
   const m = minutesSinceMidnight(d);
   return Number.isFinite(m) ? m : null;
+}
+
+/** Real punch at this minute, or a display-only stub using the day's date from checkins. */
+function checkinAtMinuteOfDay(checkins: Checkin[], min: number): Checkin {
+  const match = checkins.find((c) => minutesFromDateTime(c.time) === min);
+  if (match) return match;
+
+  const ref = checkins.find((c) => c.time)?.time;
+  const base = ref ? parseDateTimeLocal(ref) : new Date();
+  const d = new Date(base);
+  d.setHours(Math.floor(min / 60), min % 60, 0, 0);
+  return { time: format(d, "yyyy-MM-dd HH:mm:ss") } as Checkin;
 }
 
 function computeDaySpan(firstIn: string | null, lastOut: string | null) {

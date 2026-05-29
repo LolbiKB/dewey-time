@@ -2,15 +2,7 @@ import { endOfMonth, format, startOfMonth } from "date-fns";
 import { useFrappeGetCall } from "frappe-react-sdk";
 import { useEffect, useMemo } from "react";
 
-import type {
-  CalendarEmployee,
-  CalendarPayload,
-  DeviceAlert,
-  FilterPreset,
-  Flag,
-  FlagStatus,
-  Severity,
-} from "@/types/calendar";
+import type { CalendarEmployee, CalendarPayload, DeviceAlert } from "@/types/calendar";
 
 const EMPLOYEES_METHOD = "zkteco_hr.attendance_engine.hr_calendar.list_calendar_employees";
 const CALENDAR_METHOD = "zkteco_hr.attendance_engine.hr_calendar.get_employee_calendar";
@@ -97,39 +89,6 @@ export function deviceAlertsByDate(alerts: DeviceAlert[]): Map<string, DeviceAle
     map.set(key, [...(map.get(key) ?? []), alert]);
   }
   return map;
-}
-
-export function filterFlagsForDisplay(
-  flags: Flag[] | undefined,
-  preset: FilterPreset,
-  statusFilter: Set<FlagStatus>,
-  severityFilter: Set<Severity>
-): Flag[] {
-  return (flags ?? []).filter((flag) => {
-    const severity = (flag.severity ?? "WARNING") as Severity;
-    if (!severityFilter.has(severity)) return false;
-
-    if (preset === "needs_attention") {
-      if (flag.flag_code === "DELIVERY_FAILED") return true;
-      return (flag.status ?? "OPEN") === "OPEN";
-    }
-
-    return statusFilter.has((flag.status ?? "OPEN") as FlagStatus);
-  });
-}
-
-export function dayHasAttention(
-  day: { flags?: Flag[] } | undefined,
-  alertsOnDay: DeviceAlert[],
-  preset: FilterPreset,
-  statusFilter: Set<FlagStatus>,
-  severityFilter: Set<Severity>
-): boolean {
-  if (preset !== "needs_attention") return true;
-  if (alertsOnDay.length > 0) return true;
-  return (
-    filterFlagsForDisplay(day?.flags, preset, statusFilter, severityFilter).length > 0
-  );
 }
 
 export function formatDeviceAlertStatus(status: string): string {

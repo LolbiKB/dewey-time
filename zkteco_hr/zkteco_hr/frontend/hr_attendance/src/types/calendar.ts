@@ -58,8 +58,6 @@ export type CalendarPayload = {
   device_alerts?: DeviceAlert[];
 };
 
-export type FilterPreset = "default" | "needs_attention";
-
 export type CalendarEmployee = {
   id: string;
   label: string;

@@ -148,6 +148,22 @@ Later:
 
 - cap extreme spans, handle multiple intervals, handle cross-midnight.
 
+### 9) Work segments (UI / derived intervals)
+
+HR calendar **segments** are derived from punches (not stored). Rules:
+
+1. Sort checkins by `time` ascending.
+2. Split into **branch runs**: consecutive punches with the same `custom_device_branch`. A branch change starts a new run.
+3. **Missing branch** (`custom_device_branch` empty): treated as **rogue** — never grouped with other punches and never paired (each shows as an unpaired marker on the timeline). Does not pair with named branches either.
+4. Within each **named** branch run only, pair punches **IN → OUT** using the MVP order heuristic (earliest = IN, latest = OUT, middle alternates). Each pair is one segment; segment `branch` is that run’s branch.
+5. **Never** pair punches across different branches (e.g. OUT at site A must not close an IN at site B).
+6. **Unpaired punch**: any rogue (no branch) punch, or the last punch in a named branch run when that run has an odd count (week timeline red tick).
+7. **Away gaps** (UI): elapsed time between consecutive timeline blocks — segment end → next segment start, segment end → unpaired punch, or unpaired → segment start. Height is linear in minutes (per-day time axis with padding).
+
+`Employee Checkin.log_type` is not used for segments in MVP (same as punch list IN/OUT labels).
+
+**Flags vs segments:** `MISSING_IN_OR_OUT` (closeout) applies when the **day** has only one punch total; segment logic may still show zero segments or one unpaired marker. `NON_PRIMARY_SITE_PUNCH` is per punch vs `Employee.branch`, not per segment pairing.
+
 ## Decisions deferred (explicitly out of MVP)
 
 - Payroll statuses: Present / Half Day / Absent (based on working hours thresholds).
