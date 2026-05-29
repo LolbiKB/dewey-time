@@ -157,10 +157,12 @@ Later:
 
 ## Review + approval workflow (proposed)
 
-### Async on punch + nightly closeout
+### Async on punch + intraday + closeout
 
-- **After each checkin:** worker refreshes AUTO `Attendance Flag` rows for that employee/date (coalesced).
-- **Nightly / closeout:** absence flags for yesterday; set `day_closed` on AUTO flags.
+- **After each checkin:** enqueue `refresh_intraday_flags_for_employee_date` (coalesced per employee+date).
+- **Intraday (provisional):** `day_closed = 0` — `LATE_START`, `NO_CHECKIN_YET`, `NON_PRIMARY_SITE_PUNCH` only. No `UNNOTIFIED_ABSENCE`.
+- **Scheduler:** every 30 minutes during business hours → `refresh_intraday_flags_for_date(today)` (site config: `intraday_business_start_hour`, `intraday_business_end_hour`, `intraday_no_checkin_grace_hours`).
+- **Device/company closeout (final):** delete AUTO flags with `day_closed = 0`, then write final AUTO flags with `day_closed = 1` (includes `UNNOTIFIED_ABSENCE` only on company fallback).
 - Never mutate historical **Employee Checkin** rows.
 
 ### HR review

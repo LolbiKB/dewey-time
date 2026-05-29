@@ -25,10 +25,21 @@ website_route_rules = [
 # Keep SPA assets available under sites/assets after every migrate.
 after_migrate = ["zkteco_hr.utils.sync_hr_attendance_assets.sync_hr_attendance_assets"]
 
-# Scheduled job (closeout-only MVP)
+# Scheduled job: company fallback UNNOTIFIED_ABSENCE (~03:00 per company timezone)
 scheduler_events = {
     "daily": [
-        "zkteco_hr.attendance_engine.closeout.run_yesterday_closeout",
+        "zkteco_hr.attendance_engine.closeout.run_company_fallback_closeout",
     ],
+    "cron": {
+        "*/30 * * * *": [
+            "zkteco_hr.attendance_engine.intraday.run_intraday_scheduler",
+        ],
+    },
+}
+
+doc_events = {
+    "Employee Checkin": {
+        "after_insert": "zkteco_hr.attendance_engine.intraday.on_employee_checkin_after_insert",
+    },
 }
 

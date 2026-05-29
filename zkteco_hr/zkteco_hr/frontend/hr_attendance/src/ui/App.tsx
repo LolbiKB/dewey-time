@@ -1,9 +1,22 @@
 import {
+  dayHasAttention,
+  deviceAlertsByDate,
+  deviceAlertsForWeek,
+  filterFlagsForDisplay,
+  formatDeviceAlertStatus,
   useCalendarEmployees,
   useDefaultEmployee,
   useEmployeeCalendar,
 } from "@/hooks/useHrAttendanceData";
-import type { CalendarEmployee, CalendarPayload, Day, Flag, ShiftContext } from "@/types/calendar";
+import type {
+  CalendarEmployee,
+  CalendarPayload,
+  Day,
+  DeviceAlert,
+  FilterPreset,
+  Flag,
+  ShiftContext,
+} from "@/types/calendar";
 import {
   addDays,
   format,
@@ -13,16 +26,22 @@ import {
 } from "date-fns";
 import { useFrappeAuth } from "frappe-react-sdk";
 import {
+  AlertTriangleIcon,
+  ArrowRightIcon,
   CalendarIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronsUpDownIcon,
   FilterIcon,
-  UserRoundIcon,
+  Loader2Icon,
+  LogInIcon,
+  LogOutIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -54,6 +73,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import {
+  AttendanceHeaderSkeleton,
+  AttendancePageSkeleton,
+  LoadingIndicator,
+  WeekViewAnimatedShell,
+  WeekViewSkeleton,
+} from "@/ui/AttendanceLoading";
 
 type Severity = "INFO" | "WARNING" | "CRITICAL";
 type FlagStatus = "OPEN" | "EXPLAINED" | "APPROVED" | "REJECTED" | "CLOSED";
@@ -68,6 +94,18 @@ type Segment = {
   endPct?: number | null;
   branch?: string | null;
 };
+type AwayGap = {
+  start?: Checkin | null;
+  end?: Checkin | null;
+  minutes: number | null;
+  startMin?: number | null;
+  endMin?: number | null;
+  topPct?: number;
+  heightPct?: number;
+};
+type SegmentInspectorItem =
+  | { kind: "segment"; segment: Segment }
+  | { kind: "away"; gap: AwayGap };
 
 const SEVERITY_ORDER: Severity[] = ["CRITICAL", "WARNING", "INFO"];
 
@@ -76,6 +114,8 @@ export function App() {
   const { currentUser, isLoading: authLoading } = useFrappeAuth();
   const [employee, setEmployee] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<Date>(() => new Date());
+  const [weekNavDirection, setWeekNavDirection] = useState<"prev" | "next" | "jump">("jump");
+  const [employeeLoading, setEmployeeLoading] = useState(false);
 
   const { employees, error: employeesError, isLoading: employeesLoading } = useCalendarEmployees();
   useDefaultEmployee(employees, employee, setEmployee);
@@ -88,6 +128,15 @@ export function App() {
     isLoading: calendarLoading,
   } = useEmployeeCalendar(employee, anchor);
 
+  useEffect(() => {
+    if (!employee) return;
+    setEmployeeLoading(true);
+  }, [employee]);
+
+  useEffect(() => {
+    if (!calendarLoading) setEmployeeLoading(false);
+  }, [calendarLoading]);
+
   const payload: CalendarPayload =
     apiPayload ??
     ({
@@ -95,13 +144,10 @@ export function App() {
       start_date: format(monthStart, "yyyy-MM-dd"),
       end_date: format(monthEnd, "yyyy-MM-dd"),
       days: [],
+      device_alerts: [],
     } as CalendarPayload);
 
-  const selectedEmployee = useMemo(
-    () => employees.find((e) => e.id === employee) ?? null,
-    [employee, employees]
-  );
-
+  const [filterPreset, setFilterPreset] = useState<FilterPreset>("default");
   const [statusFilter, setStatusFilter] = useState<Set<FlagStatus>>(
     () => new Set<FlagStatus>(["OPEN", "EXPLAINED"])
   );
@@ -130,28 +176,52 @@ export function App() {
   }, [anchor, employee, monthEndIso, monthStartIso]);
 
   const weekStart = startOfWeek(anchor, { weekStartsOn: 1 });
+  const weekKey = format(weekStart, "yyyy-MM-dd");
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+
+  const weekDeviceAlerts = useMemo(
+    () => deviceAlertsForWeek(payload.device_alerts, weekDates),
+    [payload.device_alerts, weekDates]
+  );
+  const alertsByDate = useMemo(
+    () => deviceAlertsByDate(payload.device_alerts ?? []),
+    [payload.device_alerts]
+  );
 
   const scheduleStart = useMemo(() => monthStart, [monthStart]);
   const minWeekStart = startOfWeek(scheduleStart, { weekStartsOn: 1 });
   const maxWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 }); // don't navigate beyond present week
-  const title = `Week of ${format(weekStart, "MMM d, yyyy")}`;
 
   const canGoPrev = weekStart > minWeekStart;
   const canGoNext = weekStart < maxWeekStart;
+  const isBootstrapping = employeesLoading && employees.length === 0;
+  const isCalendarLoading = calendarLoading && !!employee;
+  const loadError = employeesError ?? calendarError;
+  const filtersActive =
+    filterPreset !== "default" || statusFilter.size !== 2 || severityFilter.size !== 3;
 
   function goPrev() {
-    if (!canGoPrev) return;
+    if (!canGoPrev || isCalendarLoading) return;
+    setWeekNavDirection("prev");
     setAnchor((d) => addDays(d, -7));
   }
   function goNext() {
-    if (!canGoNext) return;
+    if (!canGoNext || isCalendarLoading) return;
+    setWeekNavDirection("next");
     setAnchor((d) => addDays(d, 7));
   }
   function goToday() {
+    if (isCalendarLoading) return;
+    setWeekNavDirection("jump");
     const today = new Date();
     const clamped = today < scheduleStart ? scheduleStart : today;
     setAnchor(clamped);
+  }
+
+  function selectAnchor(date: Date) {
+    if (isCalendarLoading) return;
+    setWeekNavDirection("jump");
+    setAnchor(date);
   }
 
   function toggleSetItem<T extends string>(set: Set<T>, v: T) {
@@ -166,19 +236,19 @@ export function App() {
     () => deriveSegments(inspectingDay?.checkins ?? []),
     [inspectingDay?.checkins]
   );
-
-  const isLoading = authLoading || employeesLoading || calendarLoading;
-  const loadError = employeesError ?? calendarError;
+  const segmentInspectorItems = useMemo(
+    () => buildSegmentInspectorItems(segments),
+    [segments]
+  );
 
   if (authLoading) {
-    return (
-      <div className="flex h-[100dvh] items-center justify-center bg-background text-sm text-muted-foreground">
-        Loading session…
-      </div>
-    );
+    return <AttendancePageSkeleton label="Starting session…" />;
   }
 
   if (!currentUser || currentUser === "Guest") {
+    const loginRedirect = import.meta.env.DEV
+      ? `${window.location.origin}${window.location.pathname}`
+      : "/hr-attendance";
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-background px-4">
         <Card className="max-w-md border-border/60">
@@ -189,7 +259,7 @@ export function App() {
               checkins and flags.
             </p>
             <Button asChild size="sm">
-              <a href="/login?redirect-to=/hr-attendance">Log in</a>
+              <a href={`/login?redirect-to=${encodeURIComponent(loginRedirect)}`}>Log in</a>
             </Button>
           </CardContent>
         </Card>
@@ -202,72 +272,47 @@ export function App() {
       <div className="h-[100dvh] overflow-hidden bg-background text-foreground">
         <div className="mx-auto flex h-full max-w-7xl flex-col px-4 py-4 sm:px-6">
           {loadError ? (
-            <Card className="mb-3 border-destructive/40 bg-destructive/5">
+            <Card className="mb-3 border-destructive/40 bg-destructive/5 animate-in fade-in duration-300">
               <CardContent className="py-3 text-sm text-destructive">
                 Could not load attendance data. Confirm you have HR User access and try again.
               </CardContent>
             </Card>
           ) : null}
-          {isLoading ? (
-            <div className="mb-3 text-sm text-muted-foreground">Loading attendance…</div>
-          ) : null}
           <div className="flex min-h-0 flex-1 flex-col gap-3">
-            <Card className="border-border/60">
-              <CardContent className="py-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="relative size-11 shrink-0 overflow-hidden rounded-full border border-border/60 bg-muted/20">
-                      {selectedEmployee?.image ? (
-                        <img
-                          src={selectedEmployee.image}
-                          alt={selectedEmployee.label}
-                          className="h-full w-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-muted-foreground">
-                          {(selectedEmployee?.label.split("·")[1] ?? selectedEmployee?.id ?? employee ?? "?")
-                            .trim()
-                            .split(" ")
-                            .slice(0, 2)
-                            .map((p) => p[0])
-                            .join("")
-                            .toUpperCase()}
-                        </div>
-                      )}
-                    </div>
+            {isBootstrapping ? (
+              <AttendanceHeaderSkeleton />
+            ) : (
+              <Card className="animate-in fade-in slide-in-from-top-1 border-border/60 duration-300">
+                <CardContent className="py-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <EmployeePicker
+                      employees={employees}
+                      value={employee}
+                      onChange={setEmployee}
+                      isLoading={employeeLoading && isCalendarLoading}
+                    />
 
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-semibold tracking-tight">
-                          {(selectedEmployee?.label.split("·")[1] ?? selectedEmployee?.id ?? employee ?? "Employee")
-                            .trim()}
-                        </div>
-                        {selectedEmployee ? (
-                          <Badge variant="secondary" className="h-6 rounded-full px-2 text-[11px]">
-                            {selectedEmployee.id}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground">{title}</span>
-                        {selectedEmployee?.title ? <span>{selectedEmployee.title}</span> : null}
-                        {selectedEmployee?.department ? <span>· {selectedEmployee.department}</span> : null}
-                        {selectedEmployee?.company ? <span>· {selectedEmployee.company}</span> : null}
-                      </div>
-                    </div>
-                  </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <DateJump anchor={anchor} onSelectDate={selectAnchor} />
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <EmployeePicker employees={employees} value={employee} onChange={setEmployee} />
-                    <DateJump anchor={anchor} onSelectDate={setAnchor} />
+                    <Button
+                      variant={filterPreset === "needs_attention" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() =>
+                        setFilterPreset((cur) =>
+                          cur === "needs_attention" ? "default" : "needs_attention"
+                        )
+                      }
+                    >
+                      Needs attention
+                    </Button>
 
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" size="sm">
                           <FilterIcon className="mr-1 size-4" />
                           Filters
-                          {(statusFilter.size !== 2 || severityFilter.size !== 3) && (
+                          {filtersActive && (
                             <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                               active
                             </span>
@@ -301,37 +346,56 @@ export function App() {
 
                     <Separator orientation="vertical" className="hidden h-7 md:block" />
 
-                    <Button variant="outline" size="sm" onClick={goToday}>
+                    <Button variant="outline" size="sm" onClick={goToday} disabled={isCalendarLoading}>
                       Today
                     </Button>
-                    <Button variant="outline" size="sm" onClick={goPrev} disabled={!canGoPrev}>
+                    <Button variant="outline" size="sm" onClick={goPrev} disabled={!canGoPrev || isCalendarLoading}>
                       <ChevronLeftIcon className="mr-1 size-4" /> Prev
                     </Button>
-                    <Button variant="outline" size="sm" onClick={goNext} disabled={!canGoNext}>
+                    <Button variant="outline" size="sm" onClick={goNext} disabled={!canGoNext || isCalendarLoading}>
                       Next <ChevronRightIcon className="ml-1 size-4" />
                     </Button>
                   </div>
                 </div>
               </CardContent>
             </Card>
+            )}
 
-            <div className="min-h-0 flex-1">
-              <WeekView
-                weekDates={weekDates}
-                anchor={anchor}
-                daysByDate={daysByDate}
-                statusFilter={statusFilter}
-                severityFilter={severityFilter}
-                onInspectDay={(date) => {
-                  setInspectingDate(date);
-                  setInspectingFlag(null);
-                }}
-                onInspectFlag={(date, flag) => {
-                  setInspectingDate(date);
-                  setInspectingFlag(flag);
-                }}
-              />
-            </div>
+            {isBootstrapping ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-3">
+                <WeekViewSkeleton />
+                <LoadingIndicator label="Loading attendance…" className="justify-center pb-1" />
+              </div>
+            ) : (
+              <>
+                {weekDeviceAlerts.length > 0 ? (
+                  <DeviceCloseoutBanner alerts={weekDeviceAlerts} />
+                ) : null}
+                <WeekViewAnimatedShell
+                  loading={isCalendarLoading}
+                  weekKey={weekKey}
+                  direction={weekNavDirection}
+                >
+                  <WeekView
+                    weekDates={weekDates}
+                    anchor={anchor}
+                    daysByDate={daysByDate}
+                    alertsByDate={alertsByDate}
+                    filterPreset={filterPreset}
+                    statusFilter={statusFilter}
+                    severityFilter={severityFilter}
+                    onInspectDay={(date) => {
+                    setInspectingDate(date);
+                    setInspectingFlag(null);
+                  }}
+                  onInspectFlag={(date, flag) => {
+                    setInspectingDate(date);
+                    setInspectingFlag(flag);
+                  }}
+                  />
+                </WeekViewAnimatedShell>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -352,11 +416,14 @@ export function App() {
           <ScrollArea className="min-h-0 flex-1 px-4 pb-5">
             <div className="grid h-full grid-rows-[auto_1fr_auto] gap-3">
               {(() => {
-                const punches = inspectingDay?.checkins ?? [];
-                const flags = (inspectingDay?.flags ?? [])
-                  .filter((f) => statusFilter.has(f.status ?? "OPEN"))
-                  .filter((f) => severityFilter.has((f.severity ?? "WARNING") as Severity))
-                  .sort((a, b) => {
+                const punches = sortCheckinsByTime(inspectingDay?.checkins ?? []);
+                const dayAlerts = inspectingDate ? (alertsByDate.get(inspectingDate) ?? []) : [];
+                const flags = filterFlagsForDisplay(
+                  inspectingDay?.flags,
+                  filterPreset,
+                  statusFilter,
+                  severityFilter
+                ).sort((a, b) => {
                     const aIdx = SEVERITY_ORDER.indexOf((a.severity ?? "WARNING") as Severity);
                     const bIdx = SEVERITY_ORDER.indexOf((b.severity ?? "WARNING") as Severity);
                     if (aIdx !== bIdx) return aIdx - bIdx;
@@ -365,29 +432,11 @@ export function App() {
 
                 return (
                   <Tabs defaultValue="timeline" className="min-h-0">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium">Day summary</div>
-                        <div className="mt-1 font-mono text-[12px] leading-relaxed text-muted-foreground">
-                          <span className="text-foreground/85">{inspectingDay?.first_in ?? "—"}</span>{" "}
-                          <span className="text-muted-foreground">→</span>{" "}
-                          <span className="text-foreground/85">{inspectingDay?.last_out ?? "—"}</span>
-                        </div>
-                      </div>
-                      <div className="w-28">
-                        <DaySpanTrack
-                          firstIn={inspectingDay?.first_in ?? null}
-                          lastOut={inspectingDay?.last_out ?? null}
-                          worst={worstSeverity(inspectingDay?.flags ?? [])}
-                        />
-                      </div>
-                    </div>
-
-                    <TabsList className="mt-3 grid w-full grid-cols-3">
+                    <TabsList className="grid w-full grid-cols-3">
                       <TabsTrigger value="timeline" className="gap-2">
-                        Timeline
+                        Segments
                         <Badge variant="secondary" className="h-5 rounded-full px-2 text-[11px]">
-                          {segments.length}
+                          {segmentInspectorItems.length}
                         </Badge>
                       </TabsTrigger>
                       <TabsTrigger value="punches" className="gap-2">
@@ -399,51 +448,32 @@ export function App() {
                       <TabsTrigger value="flags" className="gap-2">
                         Flags
                         <Badge variant="secondary" className="h-5 rounded-full px-2 text-[11px]">
-                          {flags.length}
+                          {flags.length + dayAlerts.length}
                         </Badge>
                       </TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="timeline" className="mt-3 min-h-0">
                       <Card className="border-border/60">
-                        <CardContent className="pt-4">
-                          <div className="grid grid-cols-[1fr_auto] gap-3">
-                            <div className="min-w-0">
-                              <div className="text-xs text-muted-foreground">Segments</div>
-                              {segments.length === 0 ? (
-                                <div className="mt-2 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                                  No segments (missing pairs or no data).
-                                </div>
-                              ) : (
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {segments.slice(0, 8).map((s, idx) => (
-                                    <Tooltip key={idx}>
-                                      <TooltipTrigger asChild>
-                                        <span className="inline-flex">
-                                          <Badge variant="outline" className="rounded-full bg-muted/20">
-                                            {s.start?.time ? format(parseDateTimeLocal(s.start.time), "h:mm a") : "—"}–
-                                            {s.end?.time ? format(parseDateTimeLocal(s.end.time), "h:mm a") : "—"}
-                                          </Badge>
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <div className="text-xs">
-                                          <div className="font-medium">{s.minutes != null ? `${s.minutes} min` : "—"}</div>
-                                          <div className="text-muted-foreground">
-                                            {s.branch ? `Branch: ${s.branch}` : "Branch: —"}
-                                          </div>
-                                        </div>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  ))}
-                                </div>
+                        <CardContent className="space-y-3 pt-4">
+                          {segments.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-6 text-center">
+                              <div className="text-sm font-medium">No segments</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                Not enough punches to form segments for this day.
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {segmentInspectorItems.map((item, idx) =>
+                                item.kind === "segment" ? (
+                                  <SegmentInspectorRow key={`segment-${idx}`} segment={item.segment} />
+                                ) : (
+                                  <AwayInspectorRow key={`away-${idx}`} gap={item.gap} />
+                                )
                               )}
                             </div>
-
-                            <div className="w-10">
-                              <DayStackTrack checkins={punches} worst={worstSeverity(inspectingDay?.flags ?? [])} />
-                            </div>
-                          </div>
+                          )}
                         </CardContent>
                       </Card>
                     </TabsContent>
@@ -451,25 +481,22 @@ export function App() {
                     <TabsContent value="punches" className="mt-3 min-h-0">
                       <Card className="border-border/60">
                         <CardContent className="pt-4">
-                          <div className="text-xs text-muted-foreground">Punches</div>
                           {punches.length === 0 ? (
-                            <div className="mt-2 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-6 text-center">
+                            <div className="rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-6 text-center">
                               <div className="text-sm font-medium">No punches</div>
                               <div className="mt-1 text-xs text-muted-foreground">
                                 There are no checkins recorded for this day.
                               </div>
                             </div>
                           ) : (
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {punches.map((c, idx) => (
-                                <Badge
-                                  key={(c as any).custom_supabase_log_id ?? `${c.time}-${idx}`}
-                                  variant="secondary"
-                                  className="rounded-full"
-                                >
-                                  {format(parseDateTimeLocal(c.time), "h:mm a")}
-                                  {c.log_type ? ` ${c.log_type}` : ""}
-                                </Badge>
+                            <div className="space-y-2">
+                              {punches.map((checkin, idx) => (
+                                <PunchInspectorRow
+                                  key={checkin.name ?? `${checkin.time}-${idx}`}
+                                  checkin={checkin}
+                                  index={idx + 1}
+                                  direction={inferCheckinDirection(idx, punches.length)}
+                                />
                               ))}
                             </div>
                           )}
@@ -481,14 +508,24 @@ export function App() {
                       <Card className="border-border/60">
                         <CardContent className="pt-4">
                           <div className="text-sm font-medium">Flags</div>
-                          {flags.length === 0 ? (
+                          {dayAlerts.length > 0 ? (
+                            <div className="mt-3 space-y-2">
+                              <div className="text-xs font-medium text-muted-foreground">
+                                Device closeout
+                              </div>
+                              {dayAlerts.map((alert) => (
+                                <DeviceAlertRow key={`${alert.device_sn}-${alert.local_date}`} alert={alert} />
+                              ))}
+                            </div>
+                          ) : null}
+                          {flags.length === 0 && dayAlerts.length === 0 ? (
                             <div className="mt-3 rounded-xl border border-dashed border-border/60 bg-muted/10 px-3 py-6 text-center">
                               <div className="text-sm font-medium">No flags</div>
                               <div className="mt-1 text-xs text-muted-foreground">
                                 Nothing to review for the current filters.
                               </div>
                             </div>
-                          ) : (
+                          ) : flags.length > 0 ? (
                             <div className="mt-3 flex flex-wrap gap-1.5">
                               {flags.slice(0, 14).map((f) => (
                                 <Tooltip key={f.name}>
@@ -512,7 +549,7 @@ export function App() {
                                 </Tooltip>
                               ))}
                             </div>
-                          )}
+                          ) : null}
 
                           {inspectingFlag ? (
                             <div className="mt-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-2">
@@ -537,10 +574,54 @@ export function App() {
   );
 }
 
+function DeviceCloseoutBanner({ alerts }: { alerts: DeviceAlert[] }) {
+  return (
+    <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in duration-300">
+      <CardContent className="flex gap-3 py-3">
+        <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="min-w-0 space-y-2 text-sm">
+          <div className="font-medium text-amber-950 dark:text-amber-100">
+            Device closeout pending ({alerts.length})
+          </div>
+          <ul className="space-y-1.5 text-xs text-muted-foreground">
+            {alerts.map((alert) => (
+              <li key={`${alert.device_sn}-${alert.local_date}`} className="truncate">
+                <span className="font-medium text-foreground">{alert.local_date}</span>
+                {" · "}
+                {alert.device_sn}
+                {" · "}
+                {formatDeviceAlertStatus(alert.status)}
+                {alert.last_error ? ` — ${alert.last_error}` : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeviceAlertRow({ alert }: { alert: DeviceAlert }) {
+  return (
+    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+      <div className="font-medium text-foreground">{alert.device_sn}</div>
+      <div className="mt-0.5 text-muted-foreground">
+        {formatDeviceAlertStatus(alert.status)}
+        {alert.branch ? ` · ${alert.branch}` : null}
+      </div>
+      {alert.last_error ? (
+        <div className="mt-1 text-muted-foreground">{alert.last_error}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function WeekView(props: {
   weekDates: Date[];
   anchor: Date;
   daysByDate: Map<string, Day>;
+  alertsByDate: Map<string, DeviceAlert[]>;
+  filterPreset: FilterPreset;
   statusFilter: Set<FlagStatus>;
   severityFilter: Set<Severity>;
   onInspectDay: (date: string) => void;
@@ -585,8 +666,8 @@ function WeekView(props: {
   }, [props.daysByDate, props.weekDates]);
 
   const weekSpanMinutes = Math.max(60, weekWindow.endMin - weekWindow.startMin);
-  const canvasHeightRatio = weekSpanMinutes / (visibleHours * 60); // 1.0 = exactly 10h
-  const canvasHeightPct = canvasHeightRatio * 100;
+  // Map 10 hours of time to the full scroll viewport height; grow taller when the week spans >10h.
+  const canvasHeightPct = Math.max(100, (weekSpanMinutes / (visibleHours * 60)) * 100);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -595,16 +676,25 @@ function WeekView(props: {
     el.scrollTop = 0;
   }, [weekWindow.startMin, weekWindow.endMin]);
   return (
-    <div className="grid h-full grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border/60 bg-card">
-      <div className="grid grid-cols-7 border-b border-border/60">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">
+      <div className="grid shrink-0 grid-cols-7 border-b border-border/60">
         {props.weekDates.map((d) => {
           const key = format(d, "yyyy-MM-dd");
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
           const hasPair = !!(info?.first_in && info?.last_out);
-          const counts = countFlagsBySeverity(info?.flags ?? []);
+          const hasAttention = dayHasAttention(
+            info,
+            props.alertsByDate.get(key) ?? [],
+            props.filterPreset,
+            props.statusFilter,
+            props.severityFilter
+          );
           return (
-            <div key={key} className="px-3 py-2">
+            <div
+              key={key}
+              className={cn("px-3 py-2", props.filterPreset === "needs_attention" && !hasAttention && "opacity-40")}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-baseline gap-2">
                   <div className="text-xs font-medium text-muted-foreground">
@@ -633,28 +723,12 @@ function WeekView(props: {
               </div>
 
               <div className="mt-1 flex items-center gap-1.5">
-                {counts.CRITICAL > 0 ? (
+                {(props.alertsByDate.get(key) ?? []).length > 0 ? (
                   <span
-                    className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground"
-                    title={`${counts.CRITICAL} critical flags`}
+                    className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[10px] font-semibold text-amber-800 dark:text-amber-200"
+                    title="Device closeout pending"
                   >
-                    {counts.CRITICAL}
-                  </span>
-                ) : null}
-                {counts.WARNING > 0 ? (
-                  <span
-                    className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white"
-                    title={`${counts.WARNING} warning flags`}
-                  >
-                    {counts.WARNING}
-                  </span>
-                ) : null}
-                {counts.INFO > 0 ? (
-                  <span
-                    className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-foreground/30 px-1 text-[10px] font-semibold text-foreground"
-                    title={`${counts.INFO} info flags`}
-                  >
-                    {counts.INFO}
+                    !
                   </span>
                 ) : null}
               </div>
@@ -665,16 +739,24 @@ function WeekView(props: {
 
       <div
         ref={scrollRef}
-        className="relative min-h-0 h-full max-h-full overflow-y-auto overscroll-contain"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
         <div
-          className="grid grid-cols-7"
+          className="grid min-h-full grid-cols-7"
           style={{ height: `${canvasHeightPct}%` }}
         >
           {props.weekDates.map((d) => {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
             const isToday = isSameDay(d, new Date());
+            const dayAlerts = props.alertsByDate.get(key) ?? [];
+            const hasAttention = dayHasAttention(
+              info,
+              dayAlerts,
+              props.filterPreset,
+              props.statusFilter,
+              props.severityFilter
+            );
             return (
               <DayCell
                 key={key}
@@ -683,6 +765,8 @@ function WeekView(props: {
                 today={isToday}
                 info={info}
                 dense={false}
+                dimmed={props.filterPreset === "needs_attention" && !hasAttention}
+                filterPreset={props.filterPreset}
                 statusFilter={props.statusFilter}
                 severityFilter={props.severityFilter}
                 windowStartMin={weekWindow.startMin}
@@ -749,6 +833,8 @@ function DayCell(props: {
   today: boolean;
   info?: Day;
   dense: boolean;
+  dimmed?: boolean;
+  filterPreset?: FilterPreset;
   statusFilter: Set<FlagStatus>;
   severityFilter: Set<Severity>;
   windowStartMin?: number;
@@ -756,16 +842,10 @@ function DayCell(props: {
   onInspectDay: () => void;
   onInspectFlag: (flag: Flag) => void;
 }) {
-  const worst = worstSeverity(props.info?.flags ?? []);
-  const flags = (props.info?.flags ?? [])
-    .filter((f) => props.statusFilter.has(f.status ?? "OPEN"))
-    .filter((f) => props.severityFilter.has((f.severity ?? "WARNING") as Severity));
-  const sortedFlags = [...flags].sort((a, b) => {
-    const aIdx = SEVERITY_ORDER.indexOf((a.severity ?? "WARNING") as Severity);
-    const bIdx = SEVERITY_ORDER.indexOf((b.severity ?? "WARNING") as Severity);
-    if (aIdx !== bIdx) return aIdx - bIdx;
-    return (a.flag_code ?? "").localeCompare(b.flag_code ?? "");
-  });
+  const preset = props.filterPreset ?? "default";
+  const checkins = props.info?.checkins ?? [];
+  const hasUnpairedPunch =
+    checkins.length > 0 && checkins.length % 2 === 1;
 
   return (
     <button
@@ -775,23 +855,18 @@ function DayCell(props: {
         "group relative min-h-0 border-b border-r border-border/60 p-3 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 focus:ring-2 focus:ring-ring/40",
         props.dense ? "h-full" : "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
-        props.today && "bg-primary/3 ring-1 ring-primary/20"
+        props.today && "bg-primary/3 ring-1 ring-primary/20",
+        props.dimmed && "opacity-40"
       )}
     >
-      <div className={cn("grid h-full gap-2", props.dense ? "grid-rows-[20px_1fr_16px]" : "grid-rows-[1fr_16px]")}>
+      <div className={cn("grid h-full gap-2", props.dense ? "grid-rows-[20px_1fr]" : "grid-rows-[1fr]")}>
         {props.dense ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span
                 className={cn(
                   "h-4 w-1 rounded-full",
-                  worst === "CRITICAL"
-                    ? "bg-destructive"
-                    : worst === "WARNING"
-                      ? "bg-amber-500"
-                      : worst === "INFO"
-                        ? "bg-foreground/30"
-                        : "bg-muted/40"
+                  hasUnpairedPunch ? "bg-destructive" : "bg-muted/40"
                 )}
                 aria-hidden="true"
               />
@@ -803,27 +878,16 @@ function DayCell(props: {
           </div>
         ) : null}
 
-        <div className="min-h-0">
+        <div className="min-h-0 h-full">
           <DayDayTrack
             firstIn={props.info?.first_in ?? null}
             lastOut={props.info?.last_out ?? null}
-            checkins={props.info?.checkins ?? []}
-            worst={worst}
-            flags={props.info?.flags ?? []}
+            checkins={checkins}
             shift={props.info?.shift ?? { shift_assigned: false }}
             grossMinutes={props.info?.gross_minutes ?? null}
             dense={props.dense}
             windowStartMin={props.windowStartMin}
             windowEndMin={props.windowEndMin}
-          />
-        </div>
-
-        {/* Indicators anchored at bottom (week + month) */}
-        <div className="min-h-0 overflow-hidden">
-          <DayIndicators
-            flags={sortedFlags}
-            dense={props.dense}
-            onClickFlag={(f) => props.onInspectFlag(f)}
           />
         </div>
       </div>
@@ -835,54 +899,29 @@ function DayDayTrack(props: {
   firstIn: string | null;
   lastOut: string | null;
   checkins: Checkin[];
-  worst: Severity | null;
-  flags: Flag[];
   shift: ShiftContext;
   grossMinutes: number | null;
   dense: boolean;
   windowStartMin?: number;
   windowEndMin?: number;
 }) {
-  const color =
-    props.worst === "CRITICAL"
-      ? "bg-destructive"
-      : props.worst === "WARNING"
-        ? "bg-amber-500"
-        : props.worst === "INFO"
-          ? "bg-foreground/30"
-          : "bg-emerald-600";
+  const color = "bg-emerald-600";
 
   const span = computeDaySpan(props.firstIn, props.lastOut);
   const segments = deriveSegments(props.checkins);
   const gaps = deriveGaps(segments);
   const expected = computeExpectedWindowPct(props.shift);
   const lunch = computeLunchWindowPct(props.shift);
-  const hasMissingLunch = (props.flags ?? []).some((f) => f.flag_code === "MISSING_LUNCH");
-  const hasLateFromLunch = (props.flags ?? []).some((f) => f.flag_code === "LATE_FROM_LUNCH");
   const lateness = computeLateness(props.shift, props.firstIn);
   const adherence = computeAdherenceOpacity(props.shift, props.grossMinutes);
-  const outline = severityOutlineClass(props.worst);
-  const unnotifiedAbsenceFlag = (props.flags ?? []).find((f) => f.flag_code === "UNNOTIFIED_ABSENCE") ?? null;
-  const absenceStartMin = parseTimeToMinutes(props.shift.start_time ?? null);
-  const firstInMin = minutesFromDateTime(props.firstIn);
-  const shouldShowUnnotifiedAbsence =
-    !!unnotifiedAbsenceFlag &&
-    props.shift.shift_assigned &&
-    ((props.checkins ?? []).length === 0 ||
-      (absenceStartMin != null && firstInMin != null && firstInMin > absenceStartMin + 120));
-  const absenceKind = !shouldShowUnnotifiedAbsence
-    ? null
-    : (props.checkins ?? []).length === 0
-      ? ("FULL_DAY" as const)
-      : ("PARTIAL_DAY" as const);
+
   const roguePunches = useMemo(() => {
     const checkins = props.checkins ?? [];
     if (checkins.length === 0) return [] as Checkin[];
     const sorted = [...checkins].sort(
       (a, b) => parseDateTimeLocal(a.time).getTime() - parseDateTimeLocal(b.time).getTime()
     );
-    // If checkins are odd, the last one is unpaired (common real-world rogue case).
-    if (sorted.length % 2 === 1) return [sorted[sorted.length - 1]];
+    if (sorted.length % 2 === 1) return [sorted[sorted.length - 1]!];
     return [] as Checkin[];
   }, [props.checkins]);
 
@@ -912,25 +951,7 @@ function DayDayTrack(props: {
           style={{ left: "calc(50% - 0.5px)" }}
         />
 
-        {/* UNNOTIFIED_ABSENCE (clean but unmistakable) */}
-        {shouldShowUnnotifiedAbsence ? (
-          <>
-            <div
-              className="pointer-events-none absolute inset-0 rounded-xl bg-destructive/6"
-              aria-hidden="true"
-            />
-            <div className="pointer-events-none absolute left-2 top-2 z-10" aria-hidden="true">
-              <div className="inline-flex items-center gap-1.5 rounded-full border border-destructive/25 bg-background/70 px-2 py-1 text-[11px] font-semibold text-destructive backdrop-blur">
-                <span className="uppercase tracking-wide">Absent</span>
-                <span className="text-destructive/70">
-                  {absenceKind === "FULL_DAY" ? "Full day" : "Partial"}
-                </span>
-              </div>
-            </div>
-          </>
-        ) : null}
-
-        {/* Unpaired punch marker(s): single red vertical tick at punch time */}
+        {/* Unpaired punch marker(s): single red tick at punch time */}
         {roguePunches.map((c, idx) => {
           const m = minutesFromDateTime(c.time);
           if (m == null) return null;
@@ -966,17 +987,7 @@ function DayDayTrack(props: {
               height: `calc(${lunch.heightPct}% - 16px)`,
             }}
             title={`Lunch: ${props.shift.lunch_start ?? ""}–${props.shift.lunch_end ?? ""}`}
-          >
-            {hasMissingLunch || hasLateFromLunch ? (
-              <div
-                className={cn(
-                  "absolute inset-x-0 top-0 h-0.5 rounded-t-md",
-                  hasMissingLunch ? "bg-destructive" : "bg-amber-500"
-                )}
-                aria-hidden="true"
-              />
-            ) : null}
-          </div>
+          />
         ) : null}
 
         {/* (Intentionally no lateness threshold hairline marker) */}
@@ -1029,8 +1040,15 @@ function DayDayTrack(props: {
 
         {/* Away gaps (solid + thicker outline). Edge-to-edge with adjacent segments. */}
         {gaps.slice(0, props.dense ? 3 : 6).map((g, idx) => {
-          const topPct = g.startMin != null ? pctFromMinute(g.startMin) : g.topPct;
-          const endPct = g.endMin != null ? pctFromMinute(g.endMin) : g.topPct + g.heightPct;
+          const topPct =
+            g.startMin != null ? pctFromMinute(g.startMin) : g.topPct ?? null;
+          const endPct =
+            g.endMin != null
+              ? pctFromMinute(g.endMin)
+              : g.topPct != null && g.heightPct != null
+                ? g.topPct + g.heightPct
+                : null;
+          if (topPct == null || endPct == null) return null;
           const heightPct = Math.max(0.5, endPct - topPct);
           return (
             <HoverCard key={idx} openDelay={220} closeDelay={120}>
@@ -1044,7 +1062,9 @@ function DayDayTrack(props: {
                 />
               </HoverCardTrigger>
               <HoverCardContent className="w-auto p-2">
-                <div className="text-xs">Away{g.minutes != null ? ` · ${g.minutes}m` : ""}</div>
+                <div className="text-xs">
+                  Away{g.minutes != null ? ` · ${formatDurationMinutes(g.minutes)}` : ""}
+                </div>
               </HoverCardContent>
             </HoverCard>
           );
@@ -1063,9 +1083,11 @@ function DayDayTrack(props: {
             const endLabel = s.end?.time ? format(new Date(s.end.time), "h:mma") : "—";
             const compactTip = [
               `${startLabel}–${endLabel}`,
-              s.minutes != null ? `${s.minutes}m` : null,
+              s.minutes != null ? formatDurationMinutes(s.minutes) : null,
               branchShort ? `Branch ${branchShort}` : null,
-              lateness?.isLate && lateness.deltaMinutes != null ? `Late +${lateness.deltaMinutes}m` : null,
+              lateness?.isLate && lateness.deltaMinutes != null
+                ? `Late ${formatDurationMinutes(lateness.deltaMinutes, { signed: true })}`
+                : null,
             ]
               .filter(Boolean)
               .join(" · ");
@@ -1092,12 +1114,12 @@ function DayDayTrack(props: {
                         </div>
                         {heightPct >= 18 ? (
                           <div className="absolute right-2 top-1.5 text-[10px] font-medium text-white/85">
-                            {s.minutes != null ? `${s.minutes}m` : "—"}
+                            {formatDurationMinutes(s.minutes)}
                           </div>
                         ) : null}
                         {heightPct >= 22 && lateness?.isLate && lateness.deltaMinutes != null ? (
                           <div className="absolute right-2 bottom-1.5 text-[10px] font-medium text-white/85">
-                            +{lateness.deltaMinutes}m
+                            {formatDurationMinutes(lateness.deltaMinutes, { signed: true })}
                           </div>
                         ) : null}
                         {heightPct >= 24 ? (
@@ -1126,64 +1148,157 @@ function DayDayTrack(props: {
   );
 }
 
-function DaySpanTrack(props: { firstIn: string | null; lastOut: string | null; worst: Severity | null }) {
-  const span = computeDaySpan(props.firstIn, props.lastOut);
-  const color =
-    props.worst === "CRITICAL"
-      ? "bg-destructive"
-      : props.worst === "WARNING"
-        ? "bg-amber-500"
-        : props.worst === "INFO"
-          ? "bg-foreground/30"
-          : "bg-primary/40";
+function formatBranchLabel(branch: string | null | undefined) {
+  if (!branch) return null;
+  return branch.replace(/^BRANCH-/i, "");
+}
+
+function formatCheckinTime(value: string | null | undefined) {
+  if (!value) return "—";
+  return format(parseDateTimeLocal(value), "h:mm a");
+}
+
+function SegmentInspectorRow(props: { segment: Segment }) {
+  const { segment } = props;
+  const branch = formatBranchLabel(segment.branch);
+  const startType = "IN";
+  const endType = "OUT";
 
   return (
-    <div className="relative h-10 w-full rounded-xl bg-muted/25">
-      {span ? (
-        <div
-          className={cn("absolute inset-y-2 rounded-lg", color)}
-          style={{
-            left: `${span.topPct}%`,
-            right: `${100 - (span.topPct + span.heightPct)}%`,
-          }}
-        />
-      ) : (
-        <div className="absolute inset-2 rounded-lg border border-dashed border-border/60" />
-      )}
+    <div className="flex gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 shadow-xs">
+      <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
+        <div className="h-full min-h-10 w-1 rounded-full bg-emerald-600" aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold tracking-tight">
+              <span>{formatCheckinTime(segment.start?.time ?? null)}</span>
+              <ArrowRightIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+              <span>{formatCheckinTime(segment.end?.time ?? null)}</span>
+            </div>
+          </div>
+          <Badge variant="secondary" className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold">
+            {formatDurationMinutes(segment.minutes)}
+          </Badge>
+        </div>
+        <div className="flex items-end justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[10px] font-semibold">
+              {startType}
+            </Badge>
+            <ArrowRightIcon className="size-3 text-muted-foreground" aria-hidden="true" />
+            <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[10px] font-semibold">
+              {endType}
+            </Badge>
+          </div>
+          {branch ? (
+            <span className="shrink-0 text-right text-xs text-muted-foreground">{branch}</span>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
 
-function DayStackTrack(props: { checkins: Checkin[]; worst: Severity | null }) {
-  const rail =
-    props.worst === "CRITICAL"
-      ? "bg-destructive/20"
-      : props.worst === "WARNING"
-        ? "bg-amber-500/15"
-        : "bg-muted/25";
+function AwayInspectorRow(props: { gap: AwayGap }) {
+  const { gap } = props;
 
   return (
-    <div className={cn("relative h-24 w-full rounded-xl", rail)}>
+    <div className="flex gap-3 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-3 shadow-xs">
+      <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
+        <div className="h-full min-h-10 w-1 rounded-full bg-destructive/60" aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold tracking-tight text-destructive">
+              <span>{formatCheckinTime(gap.start?.time ?? null)}</span>
+              <ArrowRightIcon className="size-3.5 text-destructive/70" aria-hidden="true" />
+              <span>{formatCheckinTime(gap.end?.time ?? null)}</span>
+            </div>
+          </div>
+          <Badge
+            variant="outline"
+            className="shrink-0 rounded-md border-destructive/30 bg-background/80 px-2 py-0.5 text-[11px] font-semibold text-destructive"
+          >
+            {formatDurationMinutes(gap.minutes)}
+          </Badge>
+        </div>
+        <div className="flex items-end justify-between gap-3">
+          <Badge
+            variant="outline"
+            className="h-5 rounded-md border-destructive/30 bg-destructive/10 px-1.5 text-[10px] font-semibold text-destructive"
+          >
+            Away
+          </Badge>
+          <span className="shrink-0 text-right text-xs text-muted-foreground">Between segments</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PunchInspectorRow(props: { checkin: Checkin; index: number; direction: "IN" | "OUT" }) {
+  const { checkin, index, direction } = props;
+  const isIn = direction === "IN";
+  const branch = formatBranchLabel(checkin.custom_device_branch);
+  const Icon = isIn ? LogInIcon : LogOutIcon;
+
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 shadow-xs">
       <div
-        className="absolute inset-y-2 w-px bg-border/60"
-        style={{ left: "calc(50% - 0.5px)" }}
-      />
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-lg border",
+          isIn
+            ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+            : "border-amber-500/20 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+        )}
+        aria-label={direction}
+      >
+        <Icon className="size-4" aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold tracking-tight">{formatCheckinTime(checkin.time)}</div>
+        <div className="mt-1 flex items-end justify-between gap-3">
+          <span className="text-[11px] text-muted-foreground">#{index}</span>
+          {branch ? (
+            <span className="shrink-0 text-right text-xs text-muted-foreground">{branch}</span>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
 
 function FlagBadge({ flag }: { flag: Flag }) {
   const sev = flag.severity ?? "WARNING";
+  const provisional = flag.is_provisional === true || flag.day_closed === 0;
+
+  if (provisional) {
+    return (
+      <Badge
+        variant="outline"
+        className="rounded-full border border-dashed border-amber-500/70 bg-amber-500/10 text-[11px] text-amber-950 dark:text-amber-100"
+        title="Provisional (intraday)"
+      >
+        {flag.flag_code}
+      </Badge>
+    );
+  }
+
   return (
     <Badge
       variant="outline"
       className={cn(
-        "rounded-full border-transparent",
-        sev === "CRITICAL" && "bg-destructive text-destructive-foreground",
-        sev === "WARNING" && "bg-amber-500/15 text-amber-900 dark:text-amber-200",
-        sev === "INFO" && "bg-foreground/5 text-foreground"
+        "rounded-full border text-[11px]",
+        sev === "CRITICAL" &&
+          "border-destructive bg-destructive text-destructive-foreground",
+        sev === "WARNING" &&
+          "border-amber-600 bg-amber-500/20 text-amber-950 dark:text-amber-100",
+        sev === "INFO" && "border-border bg-foreground/5 text-foreground"
       )}
-      title={flag.status ?? ""}
+      title={`Final · ${flag.status ?? "OPEN"}`}
     >
       {flag.flag_code}
     </Badge>
@@ -1200,54 +1315,23 @@ function LegendPill({ severity }: { severity: Severity }) {
   );
 }
 
-function worstSeverity(flags: Flag[]): Severity | null {
-  const present = new Set((flags ?? []).map((f) => (f.severity ?? "WARNING") as Severity));
-  for (const s of SEVERITY_ORDER) {
-    if (present.has(s)) return s;
-  }
-  return null;
+function sortCheckinsByTime(checkins: Checkin[]): Checkin[] {
+  return [...checkins].sort(
+    (a, b) => parseDateTimeLocal(a.time).getTime() - parseDateTimeLocal(b.time).getTime()
+  );
 }
 
-function DayIndicators(props: {
-  flags: Flag[];
-  dense: boolean;
-  onClickFlag: (f: Flag) => void;
-}) {
-  return null;
-}
-
-function severityOutlineClass(sev: Severity | null) {
-  if (sev === "CRITICAL") return "border-destructive/60";
-  if (sev === "WARNING") return "border-amber-500/50";
-  if (sev === "INFO") return "border-foreground/20";
-  return "border-border/70";
-}
-
-function getRoguePunchKind(flags: Flag[], shift: ShiftContext) {
-  if (!shift.shift_assigned) {
-    if ((flags ?? []).some((f) => f.flag_code === "OFF_SHIFT_PUNCH")) return "OFF_SHIFT" as const;
-  }
-  if ((flags ?? []).some((f) => f.flag_code === "UNKNOWN_DEVICE_BRANCH")) return "UNKNOWN_BRANCH" as const;
-  if ((flags ?? []).some((f) => f.flag_code === "NON_PRIMARY_SITE_PUNCH")) return "NON_PRIMARY" as const;
-  return null;
-}
-
-function countFlagsBySeverity(flags: Flag[]) {
-  const out = { CRITICAL: 0, WARNING: 0, INFO: 0 };
-  for (const f of flags ?? []) {
-    const s = (f.severity ?? "WARNING") as Severity;
-    if (s === "CRITICAL") out.CRITICAL++;
-    else if (s === "WARNING") out.WARNING++;
-    else out.INFO++;
-  }
-  return out;
+/** MVP punch direction from chronological order; ignores Employee Checkin.log_type. */
+function inferCheckinDirection(sortedIndex: number, totalCheckins: number): "IN" | "OUT" {
+  if (totalCheckins <= 0) return "IN";
+  if (sortedIndex === 0) return "IN";
+  if (sortedIndex === totalCheckins - 1) return "OUT";
+  return sortedIndex % 2 === 0 ? "IN" : "OUT";
 }
 
 function deriveSegments(checkins: Checkin[]): Segment[] {
-  if (!checkins || checkins.length < 2) return [];
-  const sorted = [...checkins].sort(
-    (a, b) => parseDateTimeLocal(a.time).getTime() - parseDateTimeLocal(b.time).getTime()
-  );
+  const sorted = sortCheckinsByTime(checkins);
+  if (sorted.length < 2) return [];
 
   const out: Segment[] = [];
   for (let i = 0; i < sorted.length - 1; i += 2) {
@@ -1268,58 +1352,155 @@ function deriveSegments(checkins: Checkin[]): Segment[] {
   return out;
 }
 
-function deriveGaps(segments: Segment[]) {
-  const gaps: Array<{
-    startMin: number | null;
-    endMin: number | null;
-    topPct: number;
-    heightPct: number;
-    minutes: number | null;
-  }> = [];
-  if (!segments || segments.length < 2) return gaps;
+function buildSegmentInspectorItems(segments: Segment[]): SegmentInspectorItem[] {
+  if (!segments.length) return [];
 
-  const sorted = [...segments].sort((a, b) => (a.startMin ?? a.startPct ?? 0) - (b.startMin ?? b.startPct ?? 0));
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const a = sorted[i];
-    const b = sorted[i + 1];
-    const aEndPct = a.endPct ?? null;
-    const bStartPct = b.startPct ?? null;
-    if (aEndPct == null || bStartPct == null) continue;
-    if (bStartPct <= aEndPct) continue;
-    const heightPct = bStartPct - aEndPct;
-    if (heightPct < 0.5) continue;
+  const sorted = [...segments].sort(
+    (a, b) => (a.startMin ?? a.startPct ?? 0) - (b.startMin ?? b.startPct ?? 0)
+  );
+  const items: SegmentInspectorItem[] = [];
 
-    let minutes: number | null = null;
-    if (a.end?.time && b.start?.time) {
-      const delta = parseDateTimeLocal(b.start.time).getTime() - parseDateTimeLocal(a.end.time).getTime();
-      if (Number.isFinite(delta) && delta >= 0) minutes = Math.round(delta / 60000);
+  for (let i = 0; i < sorted.length; i++) {
+    items.push({ kind: "segment", segment: sorted[i] });
+    if (i < sorted.length - 1) {
+      const gap = computeGapBetween(sorted[i], sorted[i + 1]);
+      if (gap) items.push({ kind: "away", gap });
     }
-
-    gaps.push({
-      startMin: a.endMin ?? null,
-      endMin: b.startMin ?? null,
-      topPct: aEndPct,
-      heightPct,
-      minutes,
-    });
   }
+
+  return items;
+}
+
+function computeGapBetween(a: Segment, b: Segment): AwayGap | null {
+  if (!a.end?.time || !b.start?.time) return null;
+
+  const delta = parseDateTimeLocal(b.start.time).getTime() - parseDateTimeLocal(a.end.time).getTime();
+  if (!Number.isFinite(delta) || delta <= 0) return null;
+
+  const minutes = Math.round(delta / 60000);
+  if (minutes <= 0) return null;
+
+  const startMin = a.endMin ?? minutesFromDateTime(a.end.time);
+  const endMin = b.startMin ?? minutesFromDateTime(b.start.time);
+  const startPct = a.endPct ?? (startMin != null ? clamp((startMin / (24 * 60)) * 100, 0, 100) : null);
+  const endPct = b.startPct ?? (endMin != null ? clamp((endMin / (24 * 60)) * 100, 0, 100) : null);
+  const topPct = startPct ?? undefined;
+  const heightPct =
+    topPct != null && endPct != null && endPct > topPct ? endPct - topPct : undefined;
+
+  return {
+    start: a.end,
+    end: b.start,
+    minutes,
+    startMin,
+    endMin,
+    topPct,
+    heightPct,
+  };
+}
+
+function deriveGaps(segments: Segment[]): AwayGap[] {
+  if (!segments || segments.length < 2) return [];
+
+  const sorted = [...segments].sort(
+    (a, b) => (a.startMin ?? a.startPct ?? 0) - (b.startMin ?? b.startPct ?? 0)
+  );
+  const gaps: AwayGap[] = [];
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const gap = computeGapBetween(sorted[i], sorted[i + 1]);
+    if (gap && (gap.heightPct == null || gap.heightPct >= 0.5)) gaps.push(gap);
+  }
+
   return gaps;
+}
+
+function employeeDisplayName(employee: CalendarEmployee | null | undefined, fallbackId?: string | null) {
+  if (!employee) return fallbackId ?? "Select employee";
+  const parts = employee.label.split("·");
+  return (parts[1] ?? parts[0] ?? employee.id).trim();
+}
+
+function employeeInitials(employee: CalendarEmployee | null | undefined, fallbackId?: string | null) {
+  const name = employeeDisplayName(employee, fallbackId);
+  return (
+    name
+      .split(" ")
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || "?"
+  );
 }
 
 function EmployeePicker(props: {
   employees: CalendarEmployee[];
   value: string | null;
   onChange: (v: string) => void;
+  isLoading?: boolean;
 }) {
-  const selected = props.employees.find((e) => e.id === props.value) ?? props.employees[0];
+  const selected = props.employees.find((e) => e.id === props.value) ?? props.employees[0] ?? null;
   const [open, setOpen] = useState(false);
+  const displayName = employeeDisplayName(selected, props.value);
+  const subtitle = [selected?.title, selected?.department].filter(Boolean).join(" · ");
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="max-w-[260px] justify-start" disabled={!props.employees.length}>
-          <UserRoundIcon className="mr-1 size-4" />
-          <span className="truncate">{selected?.label ?? "Select employee"}</span>
-        </Button>
+        <button
+          type="button"
+          disabled={!props.employees.length || props.isLoading}
+          className={cn(
+            "group flex min-w-0 max-w-full items-center gap-3 rounded-xl border border-transparent px-1 py-1 text-left transition-colors",
+            "hover:border-border/60 hover:bg-muted/30 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/40",
+            (!props.employees.length || props.isLoading) && "pointer-events-none opacity-80"
+          )}
+        >
+          <div
+            className={cn(
+              "relative size-11 shrink-0 overflow-hidden rounded-full border border-border/60 bg-muted/20",
+              props.isLoading && "ring-2 ring-primary/20 ring-offset-2 ring-offset-background"
+            )}
+          >
+            {selected?.image ? (
+              <img
+                src={selected.image}
+                alt={displayName}
+                className={cn("h-full w-full object-cover transition-opacity", props.isLoading && "opacity-70")}
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-muted-foreground">
+                {employeeInitials(selected, props.value)}
+              </div>
+            )}
+            {props.isLoading ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-background/35">
+                <Loader2Icon className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+              </div>
+            ) : null}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold tracking-tight">{displayName}</span>
+              {selected ? (
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{selected.id}</span>
+              ) : null}
+              {props.isLoading ? (
+                <Loader2Icon className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+              ) : (
+                <ChevronsUpDownIcon
+                  className="size-3.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-muted-foreground"
+                  aria-hidden="true"
+                />
+              )}
+            </div>
+            {subtitle ? (
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>
+            ) : null}
+          </div>
+        </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[320px] p-2">
         <Command>
@@ -1336,7 +1517,10 @@ function EmployeePicker(props: {
                     setOpen(false);
                   }}
                 >
-                  <span className="truncate">{e.label}</span>
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="truncate font-medium">{employeeDisplayName(e)}</span>
+                    <span className="truncate font-mono text-[11px] text-muted-foreground">{e.id}</span>
+                  </div>
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -1373,8 +1557,28 @@ function DateJump(props: { anchor: Date; onSelectDate: (d: Date) => void }) {
   );
 }
 
-function cn(...parts: Array<string | undefined | null | false>) {
-  return parts.filter(Boolean).join(" ");
+function formatDurationMinutes(
+  totalMinutes: number | null | undefined,
+  options?: { signed?: boolean }
+): string {
+  if (totalMinutes == null || !Number.isFinite(totalMinutes)) return "—";
+
+  const rounded = Math.round(Math.abs(totalMinutes));
+  const days = Math.floor(rounded / (24 * 60));
+  let remainder = rounded % (24 * 60);
+  const hours = Math.floor(remainder / 60);
+  const minutes = remainder % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+
+  const body = parts.join(" ");
+  if (!options?.signed) return body;
+  if (totalMinutes > 0) return `+${body}`;
+  if (totalMinutes < 0) return `-${body}`;
+  return body;
 }
 
 function clamp(n: number, min: number, max: number) {

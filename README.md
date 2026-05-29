@@ -18,12 +18,24 @@ bench --site <site> migrate
 
 ## MVP jobs / APIs
 
-- Daily closeout (scheduler): `zkteco_hr.attendance_engine.closeout.run_yesterday_closeout`
-- Manual closeout (console):
+- Bridge closeout webhook (POST, API key + optional `X-Bridge-Secret`):
+  - `zkteco_hr.attendance_engine.closeout.notify_device_closeout_status`
+  - Args: `device_sn`, `local_date`, `status` (`closed|deferred_offline|closure_failed`), `device_branch`, `last_error`, `undelivered` (JSON list when `closed`)
+  - Site config (optional): `bridge_closeout_secret` in `site_config.json`
+- Company fallback closeout (scheduler, ~03:00 company TZ): `zkteco_hr.attendance_engine.closeout.run_company_fallback_closeout`
+  - Creates `UNNOTIFIED_ABSENCE` only; skips employees whose branch has an open `Device Closeout Alert`
+- Manual full-day closeout (console, legacy):
 
 ```python
 from zkteco_hr.attendance_engine.closeout import generate_auto_flags_for_date
 generate_auto_flags_for_date("2026-05-28")
+```
+
+- Device-scoped closeout (enqueued when bridge reports `closed`):
+
+```python
+from zkteco_hr.attendance_engine.closeout import generate_auto_flags_for_device_date
+generate_auto_flags_for_device_date("DEVICE-SN", "2026-05-28", undelivered=[])
 ```
 
 - “My Week” API (whitelisted):

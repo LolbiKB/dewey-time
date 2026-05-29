@@ -118,6 +118,26 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         or []
     )
 
+    employee_branch = frappe.db.get_value("Employee", employee, "branch")
+    device_alerts = []
+    if employee_branch:
+        device_alerts = (
+            frappe.get_all(
+                "Device Closeout Alert",
+                filters={
+                    "branch": employee_branch,
+                    "local_date": ["between", [start, end]],
+                    "resolved_at": ["is", "not set"],
+                },
+                fields=["device_sn", "branch", "local_date", "status", "last_error"],
+                order_by="local_date asc, device_sn asc",
+            )
+            or []
+        )
+        for row in device_alerts:
+            if row.get("local_date"):
+                row["local_date"] = str(row["local_date"])
+
     flags = (
         frappe.get_all(
             "Attendance Flag",
@@ -160,7 +180,13 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
                 f["evidence"] = json.loads(ev)
             except Exception:
                 f["evidence"] = None
-        flags_by_day[key].append(f)
+        day_closed = f.get("day_closed")
+        flags_by_day[key].append(
+            {
+                **f,
+                "is_provisional": day_closed == 0,
+            }
+        )
 
     days = []
     cur = start
@@ -195,4 +221,5 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         "start_date": str(start),
         "end_date": str(end),
         "days": days,
+        "device_alerts": device_alerts,
     }

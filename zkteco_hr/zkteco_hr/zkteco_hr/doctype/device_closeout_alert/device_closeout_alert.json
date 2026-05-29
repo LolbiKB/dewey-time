@@ -1,0 +1,105 @@
+{
+  "actions": [],
+  "allow_copy": 0,
+  "allow_guest_to_view": 0,
+  "allow_import": 0,
+  "creation": "2026-05-28 00:00:00.000000",
+  "custom": 1,
+  "docstatus": 0,
+  "doctype": "DocType",
+  "document_type": "Document",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "device_sn",
+    "branch",
+    "local_date",
+    "column_break_1",
+    "status",
+    "resolved_at",
+    "last_error"
+  ],
+  "fields": [
+    {
+      "fieldname": "device_sn",
+      "fieldtype": "Data",
+      "in_list_view": 1,
+      "label": "Device SN",
+      "reqd": 1
+    },
+    {
+      "fieldname": "branch",
+      "fieldtype": "Link",
+      "in_list_view": 1,
+      "label": "Branch",
+      "options": "Branch"
+    },
+    {
+      "fieldname": "local_date",
+      "fieldtype": "Date",
+      "in_list_view": 1,
+      "label": "Local Date",
+      "reqd": 1
+    },
+    {
+      "fieldname": "column_break_1",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "label": "Status",
+      "options": "closed\ndeferred_offline\nclosure_failed",
+      "reqd": 1
+    },
+    {
+      "fieldname": "resolved_at",
+      "fieldtype": "Datetime",
+      "label": "Resolved At"
+    },
+    {
+      "fieldname": "last_error",
+      "fieldtype": "Small Text",
+      "label": "Last Error"
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "links": [],
+  "modified": "2026-05-28 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "ZKTeco HR",
+  "name": "Device Closeout Alert",
+  "naming_rule": "By script",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    },
+    {
+      "create": 0,
+      "delete": 0,
+      "email": 1,
+      "export": 0,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "HR User",
+      "share": 0,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}

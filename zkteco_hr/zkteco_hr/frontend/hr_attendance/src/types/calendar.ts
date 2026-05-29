@@ -14,9 +14,18 @@ export type ShiftContext = {
 export type Checkin = {
   name?: string;
   time: string;
+  /** Present on ERPNext rows but ignored by UI/engine MVP; direction is inferred from punch order. */
   log_type?: "IN" | "OUT" | null;
   device_id?: string | null;
   custom_device_branch?: string | null;
+};
+
+export type DeviceAlert = {
+  device_sn: string;
+  branch?: string | null;
+  local_date: string;
+  status: "closed" | "deferred_offline" | "closure_failed" | string;
+  last_error?: string | null;
 };
 
 export type Flag = {
@@ -26,6 +35,7 @@ export type Flag = {
   status?: FlagStatus;
   source?: "AUTO" | "EMPLOYEE" | "HR";
   day_closed?: 0 | 1;
+  is_provisional?: boolean;
   rule_version?: string;
   evidence?: unknown;
 };
@@ -45,7 +55,10 @@ export type CalendarPayload = {
   start_date: string;
   end_date: string;
   days: Day[];
+  device_alerts?: DeviceAlert[];
 };
+
+export type FilterPreset = "default" | "needs_attention";
 
 export type CalendarEmployee = {
   id: string;
