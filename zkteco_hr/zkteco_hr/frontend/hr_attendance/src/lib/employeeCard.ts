@@ -49,6 +49,33 @@ export function roleLine(employee: CalendarEmployee | null | undefined): string 
   return [employee?.title, employee?.department].filter(Boolean).join(" · ");
 }
 
+/** Subtitle under the selected employee in the picker (no ERP doc ids or shift metadata). */
+export function employeePickerSubtitle(employee: CalendarEmployee | null | undefined): string {
+  if (!employee) return "Choose an employee";
+  const parts = [
+    roleLine(employee) || null,
+    formatEmploymentType(employee.employment_type) || null,
+  ].filter((part) => part != null && String(part).trim());
+  if (parts.length) return parts.join(" · ");
+  return employee.id;
+}
+
+/** Searchable text for the employee command list (excludes shift schedule doc names). */
+export function employeeSearchHaystack(employee: CalendarEmployee): string {
+  return [
+    employee.id,
+    employee.employee_name,
+    employeeShortName(employee),
+    employee.label,
+    employee.employment_type,
+    employee.title,
+    employee.department,
+    employee.company,
+  ]
+    .filter((part) => part != null && String(part).trim())
+    .join(" ");
+}
+
 export function formatScheduleCoverage(employee: CalendarEmployee): string | null {
   if (!employee.has_shift_assignment || !employee.schedule_min_date) return null;
   const min = format(new Date(employee.schedule_min_date), "MMM yyyy");

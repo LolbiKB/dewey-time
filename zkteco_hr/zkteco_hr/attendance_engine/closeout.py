@@ -8,6 +8,7 @@ import frappe
 from frappe.utils import add_days, get_datetime, getdate, now_datetime, nowdate
 
 from zkteco_hr.attendance_engine.bridge_auth import validate_bridge_request
+from zkteco_hr.attendance_engine.lunch_flags import evaluate_lunch_flags
 # Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
 from zkteco_hr.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
 
@@ -18,6 +19,8 @@ AUTO_FLAG_CODES = [
     "UNNOTIFIED_ABSENCE",
     "NON_PRIMARY_SITE_PUNCH",
     "LATE_START",
+    "LATE_FROM_LUNCH",
+    "MISSING_LUNCH",
     "OFF_SHIFT_PUNCH",
     "MISSING_IN_OR_OUT",
     "UNKNOWN_DEVICE_BRANCH",
@@ -27,6 +30,8 @@ AUTO_FLAG_CODES = [
 DEVICE_CLOSEOUT_FLAG_CODES = [
     "NON_PRIMARY_SITE_PUNCH",
     "LATE_START",
+    "LATE_FROM_LUNCH",
+    "MISSING_LUNCH",
     "OFF_SHIFT_PUNCH",
     "MISSING_IN_OR_OUT",
     "UNKNOWN_DEVICE_BRANCH",
@@ -389,6 +394,16 @@ def _generate_for_employee_date(
                             "first_in": first_in_dt.isoformat(),
                             "late_threshold": late_threshold.isoformat(),
                         },
+                    )
+                )
+
+            if on_shift and checkins_count >= 2:
+                flags_to_create.extend(
+                    evaluate_lunch_flags(
+                        checkins=checkins,
+                        shift_meta=shift_meta,
+                        attendance_date=attendance_date,
+                        grace_minutes=grace,
                     )
                 )
 

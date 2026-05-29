@@ -18,22 +18,37 @@ function WeekDayDateBadge(props: {
     <div
       className={cn(
         "inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-sm tracking-tight",
-        props.isToday && "bg-primary font-semibold text-primary-foreground shadow-sm",
+        props.isToday &&
+          props.isOffDay &&
+          "bg-destructive/10 font-semibold text-destructive ring-2 ring-primary ring-offset-1 ring-offset-background",
+        props.isToday &&
+          !props.isOffDay &&
+          "bg-primary font-semibold text-primary-foreground shadow-sm",
         !props.isToday &&
           props.isOffDay &&
           "bg-destructive/10 font-normal text-destructive ring-1 ring-inset ring-destructive/35",
         !props.isToday && !props.isOffDay && "font-semibold text-foreground"
       )}
-      title={props.isToday ? "Today" : undefined}
+      title={
+        props.isToday
+          ? props.isOffDay
+            ? "Today — day off"
+            : "Today"
+          : undefined
+      }
     >
       {props.dayNum}
     </div>
   );
 
-  if (props.isOffDay && !props.isToday) {
-    const tip = props.hasOffShiftPunch
-      ? "Off shift — punches recorded (OFF_SHIFT_PUNCH)"
-      : "No shift scheduled";
+  if (props.isOffDay) {
+    const tip = props.isToday
+      ? props.hasOffShiftPunch
+        ? "Today — day off, punches recorded"
+        : "Today — no shift scheduled"
+      : props.hasOffShiftPunch
+        ? "Off shift — punches recorded (OFF_SHIFT_PUNCH)"
+        : "No shift scheduled";
     return (
       <Tooltip>
         <TooltipTrigger asChild>{badge}</TooltipTrigger>
@@ -99,24 +114,20 @@ export function WeekView(props: WeekViewProps) {
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
           const isOffDay = info?.shift?.shift_assigned !== true;
+          const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
           const offShiftFlag = dayOffShiftPunchFlag(info);
           const timeRange = formatDayCheckinTimeRange(info);
           return (
             <div
               key={key}
-              className={cn(
-                "px-3 py-2",
-                isOffDay && !isToday && "bg-destructive/[0.06]"
-              )}
+              className={cn("px-3 py-2", isOffDay && "bg-destructive/[0.06]")}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-baseline gap-2">
                   <div
                     className={cn(
                       "text-xs font-medium",
-                      isOffDay && !isToday
-                        ? "text-destructive/60"
-                        : "text-muted-foreground"
+                      isOffDay ? "text-destructive/60" : "text-muted-foreground"
                     )}
                   >
                     {format(d, "EEE")}
@@ -128,7 +139,16 @@ export function WeekView(props: WeekViewProps) {
                     hasOffShiftPunch={offShiftFlag != null}
                   />
                 </div>
-                {isToday ? <span className="text-[11px] font-medium text-primary/80">Today</span> : null}
+                {isToday ? (
+                  <span
+                    className={cn(
+                      "text-[11px] font-medium",
+                      isTodayOff ? "text-destructive/75" : "text-primary/80"
+                    )}
+                  >
+                    Today
+                  </span>
+                ) : null}
               </div>
 
               <div className="mt-0.5 truncate text-[10px] text-muted-foreground">

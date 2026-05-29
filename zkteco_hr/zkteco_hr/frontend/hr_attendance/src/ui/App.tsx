@@ -136,6 +136,7 @@ export function App() {
     () => countWeekAssignedShiftDays(weekDates, daysByDate),
     [daysByDate, weekDates]
   );
+
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
   const loadError = employeesError ?? calendarError;

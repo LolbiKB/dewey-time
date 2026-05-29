@@ -151,6 +151,61 @@ export function minuteToSchedulePct(min: number): number {
   return ((min - SCHEDULE_DAY_START_MIN) / SCHEDULE_DAY_SPAN) * 100;
 }
 
+export type WeekGanttWindow = {
+  startMin: number;
+  endMin: number;
+  span: number;
+};
+
+/** Time scale for the week schedule Gantt (padded around assigned shifts). */
+export function computeWeekGanttWindow(week: WeekDaySchedule[]): WeekGanttWindow {
+  let startMin = SCHEDULE_DAY_START_MIN;
+  let endMin = SCHEDULE_DAY_END_MIN;
+
+  for (const day of week) {
+    if (day.startMin != null) startMin = Math.min(startMin, day.startMin);
+    if (day.endMin != null) endMin = Math.max(endMin, day.endMin);
+    if (day.lunchStartMin != null) startMin = Math.min(startMin, day.lunchStartMin);
+    if (day.lunchEndMin != null) endMin = Math.max(endMin, day.lunchEndMin);
+  }
+
+  startMin = Math.max(0, startMin - 30);
+  endMin = Math.min(24 * 60, endMin + 30);
+  const span = Math.max(60, endMin - startMin);
+  return { startMin, endMin, span };
+}
+
+export function minuteToWeekGanttPct(min: number, window: WeekGanttWindow): number {
+  return ((min - window.startMin) / window.span) * 100;
+}
+
+export function formatGanttAxisHour(min: number): string {
+  const hh = Math.floor(min / 60) % 24;
+  if (hh === 0) return "12a";
+  if (hh === 12) return "12p";
+  return hh > 12 ? `${hh - 12}p` : `${hh}a`;
+}
+
+/** When every working day shares the same shift window, return one subtitle line. */
+export function describeWeekSchedulePattern(week: WeekDaySchedule[]): string | null {
+  const workDays = week.filter((d) => d.assigned && !d.onLeave);
+  if (workDays.length < 2) return null;
+
+  const ref = workDays[0]!;
+  const uniform = workDays.every(
+    (d) => d.shiftType === ref.shiftType && d.timeLabel === ref.timeLabel
+  );
+  if (!uniform || !ref.timeLabel) return null;
+
+  const weekdays = workDays.map((d) => d.weekday);
+  const range =
+    weekdays.length === workDays.length && workDays.length >= 5
+      ? "Mon–Fri"
+      : `${weekdays[0]}–${weekdays[weekdays.length - 1]}`;
+
+  return `${range} · ${shortShiftTypeCode(ref.shiftType)} · ${ref.timeLabel}`;
+}
+
 export function formatWeekRangeLabel(weekDates: Date[]) {
   const start = weekDates[0]!;
   const end = weekDates[6]!;
