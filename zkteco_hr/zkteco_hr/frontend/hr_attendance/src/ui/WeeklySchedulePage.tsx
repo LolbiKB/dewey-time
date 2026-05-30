@@ -1,18 +1,18 @@
 import { addDays, format, parseISO } from "date-fns";
-import {
-  ArrowLeftIcon,
-  CalendarDaysIcon,
-  CheckIcon,
-  Loader2Icon,
-  RefreshCwIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, Loader2Icon } from "lucide-react";
 import { useFrappeAuth } from "frappe-react-sdk";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -23,14 +23,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import {
   useCalendarEmployees,
   useDefaultEmployee,
@@ -42,17 +36,19 @@ import {
   useWeeklyScheduleResolve,
 } from "@/hooks/useWeeklySchedule";
 import { employeeShortName } from "@/lib/employeeCard";
-import { cn } from "@/lib/utils";
-import type { WeekPattern, WeekPatternDay, Weekday } from "@/types/schedule";
+import type { ScheduleContext } from "@/types/schedule";
+import type { ResolvePlan, ShiftBlock, WeekPattern } from "@/types/schedule";
 import {
   apply55DayTemplate,
   cloneWeekPattern,
   emptyWeekPattern,
   formatDayList,
-  formatTimeInput,
   validateWeekPattern,
+  weekPatternFromBlocks,
+  weekPatternToBlocks,
 } from "@/types/schedule";
 import { ScheduleEmployeePicker } from "@/ui/ScheduleEmployeePicker";
+import { WeekPatternGroupEditor } from "@/ui/WeekPatternGroupEditor";
 
 export function WeeklySchedulePage() {
   const { currentUser, isLoading: authLoading } = useFrappeAuth();
@@ -60,12 +56,19 @@ export function WeeklySchedulePage() {
   const initialEmployee = searchParams.get("employee");
 
   const [employee, setEmployee] = useState<string | null>(initialEmployee);
-  const [weekPattern, setWeekPattern] = useState<WeekPattern>(() => emptyWeekPattern());
+  const [shiftBlocks, setShiftBlocks] = useState<ShiftBlock[]>(() =>
+    weekPatternToBlocks(emptyWeekPattern())
+  );
   const [effectiveFrom, setEffectiveFrom] = useState("");
   const [generateThrough, setGenerateThrough] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingConfirmPlan, setPendingConfirmPlan] = useState<string[]>([]);
   const [saveSuccessUrl, setSaveSuccessUrl] = useState<string | null>(null);
+
+  const weekPattern = useMemo<WeekPattern>(
+    () => weekPatternFromBlocks(shiftBlocks),
+    [shiftBlocks]
+  );
 
   const { employees, isLoading: employeesLoading } = useCalendarEmployees();
   useDefaultEmployee(employees, employee, setEmployee);
@@ -74,18 +77,18 @@ export function WeeklySchedulePage() {
 
   useEffect(() => {
     if (!context) return;
-    setWeekPattern(cloneWeekPattern(context.week_pattern));
+    setShiftBlocks(weekPatternToBlocks(cloneWeekPattern(context.week_pattern)));
     setEffectiveFrom(context.default_effective_from);
     setGenerateThrough(context.default_generate_through);
+    setSaveSuccessUrl(null);
   }, [context?.employee]);
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
-  const {
-    plan,
-    resolving,
-    resolveError,
-    refreshPlan,
-  } = useWeeklyScheduleResolve(employee, weekPattern, effectiveFrom || null);
+  const { plan, resolving, resolveError } = useWeeklyScheduleResolve(
+    employee,
+    weekPattern,
+    effectiveFrom || null
+  );
 
   const { holidays, isLoading: holidaysLoading } = useHolidayPreview(
     employee,
@@ -95,20 +98,8 @@ export function WeeklySchedulePage() {
 
   const { apply, applying, status, clearStatus } = useApplyWeeklySchedule();
 
-  const selectedEmployee = useMemo(
-    () => employees.find((e) => e.id === employee) ?? null,
-    [employees, employee]
-  );
-
   const canApply = context?.can_apply ?? false;
   const previewOnly = Boolean(context && !canApply);
-
-  function updateDay(weekday: Weekday, patch: Partial<WeekPatternDay>) {
-    setWeekPattern((prev) => ({
-      ...prev,
-      days: prev.days.map((row) => (row.weekday === weekday ? { ...row, ...patch } : row)),
-    }));
-  }
 
   async function handleSave(confirmCreate = false) {
     if (!employee || !effectiveFrom || !generateThrough) return;
@@ -158,12 +149,12 @@ export function WeeklySchedulePage() {
   if (!currentUser || currentUser === "Guest") {
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-background px-4">
-        <Card className="max-w-md border-border/60">
-          <CardContent className="space-y-3 py-6 text-sm">
-            <div className="font-semibold">Sign in required</div>
-            <p className="text-muted-foreground">
-              Weekly Schedule uses your Frappe session and HR permissions.
-            </p>
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle>Sign in required</CardTitle>
+            <CardDescription>Weekly Schedule uses your Frappe session and HR permissions.</CardDescription>
+          </CardHeader>
+          <CardContent>
             <Button asChild size="sm">
               <a href={`/login?redirect-to=${encodeURIComponent("/hr-schedule")}`}>Log in</a>
             </Button>
@@ -173,411 +164,166 @@ export function WeeklySchedulePage() {
     );
   }
 
+  const saveDisabled =
+    !employee ||
+    !canApply ||
+    applying ||
+    validationIssues.length > 0 ||
+    !effectiveFrom ||
+    !generateThrough;
+
   return (
-    <div className="min-h-[100dvh] bg-background text-foreground">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
-        <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <Button asChild variant="ghost" size="sm" className="-ml-2 h-8 px-2 text-xs">
-              <Link to={employee ? `/hr-attendance?employee=${employee}` : "/hr-attendance"}>
-                <ArrowLeftIcon className="mr-1.5 size-3.5" />
-                Back to attendance
-              </Link>
-            </Button>
-            <h1 className="text-lg font-semibold tracking-tight">Weekly schedule</h1>
-            <p className="text-sm text-muted-foreground">
-              {previewOnly
-                ? "Preview PAT matches for existing setups. Save is for employees with no active SSA."
-                : "Configure shift patterns, match shared PATs, and generate assignments."}
-            </p>
-          </div>
-          <ScheduleEmployeePicker
-            employees={employees}
-            value={employee}
-            onChange={setEmployee}
-            isLoading={employeesLoading || contextLoading}
-            className="w-full sm:max-w-md"
-          />
-        </header>
-
-        {employee ? (
-          <>
-            <Card className="border-border/60">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Current setup</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <div className="flex flex-wrap gap-2 text-muted-foreground">
-                  <span className="font-medium text-foreground">
-                    {context?.employee_name ?? employeeShortName(selectedEmployee, employee)}
-                  </span>
-                  {context?.company ? <span>· {context.company}</span> : null}
-                  {context?.branch ? <span>· {context.branch}</span> : null}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(context?.ssas ?? []).length ? (
-                    context!.ssas.map((ssa) => (
-                      <Badge key={ssa.name} variant="secondary" className="font-normal">
-                        {ssa.shift_schedule ?? ssa.name}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="text-muted-foreground">No shift schedule assignments yet.</span>
-                  )}
-                </div>
-                {context?.assignment_summary?.latest_end_date ? (
-                  <p className="text-xs text-muted-foreground">
-                    Assignments through{" "}
-                    <span className="font-medium text-foreground">
-                      {context.assignment_summary.latest_end_date}
-                    </span>
-                  </p>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            {previewOnly ? (
-              <Card className="border-amber-500/40 bg-amber-500/5">
-                <CardContent className="space-y-3 py-4 text-sm">
-                  <p className="font-medium text-amber-900 dark:text-amber-100">
-                    Preview only — this employee already has{" "}
-                    {context!.enabled_ssa_count === 1
-                      ? "an active SSA"
-                      : `${context!.enabled_ssa_count} active SSAs`}
-                    .
-                  </p>
-                  <p className="text-muted-foreground">
-                    Change schedules in Frappe Desk, then return here only for fresh setup after
-                    old SSAs are disabled.
-                  </p>
-                  <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
-                    <li>Disable existing Shift Schedule Assignment(s) for this employee.</li>
-                    <li>Cancel or end future Shift Assignments tied to the old pattern.</li>
-                    <li>Re-open this page when the employee has no active SSA to save a new plan.</li>
-                  </ol>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            <Card className="border-border/60">
-              <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-                <CardTitle className="text-sm font-medium">Weekly pattern</CardTitle>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setWeekPattern((prev) => apply55DayTemplate(prev))}
+    <div className="flex h-[100dvh] flex-col bg-background text-foreground">
+      <div className="mx-auto flex h-full w-full max-w-7xl flex-col px-4 py-4 sm:px-6">
+        <header className="mb-4 shrink-0 space-y-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-3">
+              <Button asChild variant="ghost" size="icon-sm">
+                <Link
+                  to={employee ? `/hr-attendance?employee=${employee}` : "/hr-attendance"}
+                  aria-label="Back to attendance"
                 >
-                  Apply 5.5-day template
-                </Button>
-              </CardHeader>
-              <CardContent className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Day</TableHead>
-                      <TableHead className="w-16">Work?</TableHead>
-                      <TableHead>Start</TableHead>
-                      <TableHead>End</TableHead>
-                      <TableHead>Lunch start</TableHead>
-                      <TableHead>Lunch end</TableHead>
-                      <TableHead className="w-20">Grace</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {weekPattern.days.map((row) => {
-                      const issue = validationIssues.find((v) => v.weekday === row.weekday);
-                      return (
-                        <TableRow key={row.weekday} className={issue ? "bg-destructive/5" : undefined}>
-                          <TableCell className="font-medium">{row.weekday.slice(0, 3)}</TableCell>
-                          <TableCell>
-                            <input
-                              type="checkbox"
-                              checked={row.works}
-                              onChange={(e) =>
-                                updateDay(row.weekday, {
-                                  works: e.target.checked,
-                                  ...(e.target.checked
-                                    ? {
-                                        grace_minutes: row.grace_minutes ?? 10,
-                                      }
-                                    : {}),
-                                })
-                              }
-                              aria-label={`${row.weekday} working`}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TimeCell
-                              disabled={!row.works}
-                              value={formatTimeInput(row.start_time)}
-                              onChange={(v) => updateDay(row.weekday, { start_time: v })}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TimeCell
-                              disabled={!row.works}
-                              value={formatTimeInput(row.end_time)}
-                              onChange={(v) => updateDay(row.weekday, { end_time: v })}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TimeCell
-                              disabled={!row.works}
-                              value={formatTimeInput(row.lunch_start)}
-                              onChange={(v) => updateDay(row.weekday, { lunch_start: v || null })}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TimeCell
-                              disabled={!row.works}
-                              value={formatTimeInput(row.lunch_end)}
-                              onChange={(v) => updateDay(row.weekday, { lunch_end: v || null })}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number"
-                              min={0}
-                              disabled={!row.works}
-                              className="h-8 w-16 px-2"
-                              value={row.works ? (row.grace_minutes ?? 10) : ""}
-                              onChange={(e) =>
-                                updateDay(row.weekday, {
-                                  grace_minutes: Number(e.target.value || 0),
-                                })
-                              }
-                            />
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-                {validationIssues.length ? (
-                  <ul className="mt-2 space-y-1 text-xs text-destructive">
-                    {validationIssues.map((issue) => (
-                      <li key={issue.weekday}>
-                        {issue.weekday}: {issue.message}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Short shift (Saturday morning): use a shorter end time (e.g. 08:00–12:00, no lunch).
+                  <ArrowLeftIcon />
+                </Link>
+              </Button>
+              <div>
+                <h1 className="text-lg font-semibold tracking-tight">Weekly Schedule</h1>
+                <p className="text-sm text-muted-foreground">
+                  Match shared patterns and generate assignments.
                 </p>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
 
-            <Card className="border-border/60">
-              <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-                <CardTitle className="text-sm font-medium">Resolved plan</CardTitle>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  onClick={() => refreshPlan()}
-                  disabled={!employee || validationIssues.length > 0}
-                >
-                  <RefreshCwIcon className={cn("size-3.5", resolving && "animate-spin")} />
-                  Refresh plan
-                </Button>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                {resolveError ? (
-                  <p className="text-destructive">{String(resolveError)}</p>
-                ) : resolving ? (
-                  <p className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2Icon className="size-4 animate-spin" />
-                    Resolving…
-                  </p>
-                ) : plan?.groups?.length ? (
-                  <ul className="space-y-2">
-                    {plan.groups.map((group, index) => {
-                      const pat =
-                        group.shift_schedule.action === "use"
-                          ? group.shift_schedule.name
-                          : group.shift_schedule.proposed_name;
-                      const ft =
-                        group.shift_type.action === "use"
-                          ? group.shift_type.name
-                          : group.shift_type.proposed_name;
-                      const isCreate =
-                        group.shift_schedule.action === "create" ||
-                        group.shift_type.action === "create";
-                      return (
-                        <li
-                          key={`${index}-${pat}`}
-                          className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-3 py-2"
-                        >
-                          <span className="font-medium">{formatDayList(group.days)}</span>
-                          <span className="text-muted-foreground">→</span>
-                          <Badge variant={isCreate ? "outline" : "secondary"} className="font-normal">
-                            {isCreate ? "create" : "use"}
-                          </Badge>
-                          <span className="truncate text-xs">{pat ?? ft}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : validationIssues.length ? (
-                  <p className="text-muted-foreground">Fix validation errors to preview the plan.</p>
-                ) : (
-                  <p className="text-muted-foreground">Fill the grid to preview matched PATs.</p>
-                )}
-
-                {plan?.warnings?.length ? (
-                  <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-400">
-                    {plan.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/60">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Dates</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="effective-from">Effective from</Label>
-                  <Input
-                    id="effective-from"
-                    type="date"
-                    value={effectiveFrom}
-                    onChange={(e) => setEffectiveFrom(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="generate-through">Generate through</Label>
-                  <Input
-                    id="generate-through"
-                    type="date"
-                    value={generateThrough}
-                    min={effectiveFrom}
-                    max={
-                      effectiveFrom
-                        ? format(addDays(parseISO(effectiveFrom), 365), "yyyy-MM-dd")
-                        : undefined
-                    }
-                    onChange={(e) => setGenerateThrough(e.target.value)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/60">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <CalendarDaysIcon className="size-4 opacity-60" />
-                  Holiday preview
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {holidaysLoading ? (
-                  <p className="text-sm text-muted-foreground">Loading holidays…</p>
-                ) : holidays.length ? (
-                  <ul className="flex flex-wrap gap-2">
-                    {holidays.map((holiday) => (
-                      <Badge
-                        key={holiday.date}
-                        variant="secondary"
-                        className="font-normal text-muted-foreground"
-                      >
-                        {holiday.date}
-                        {holiday.weekly_off ? " · weekly off" : ""} — {holiday.description}
-                      </Badge>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No holidays in this range.</p>
-                )}
-              </CardContent>
-            </Card>
-
-            {status ? (
-              <Card
-                className={cn(
-                  "border-border/60",
-                  status.type === "error" ? "border-destructive/40 bg-destructive/5" : "border-emerald-500/30"
-                )}
-              >
-                <CardContent className="py-3 text-sm">{status.message}</CardContent>
-              </Card>
-            ) : null}
-
-            {saveSuccessUrl ? (
-              <Card className="border-emerald-500/30 bg-emerald-500/5">
-                <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
-                  <span>Schedule saved successfully.</span>
-                  <Button asChild size="sm" variant="outline">
-                    <Link to={saveSuccessUrl}>Open attendance calendar</Link>
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            <div className="flex flex-wrap justify-end gap-2 pb-6">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <ScheduleEmployeePicker
+                employees={employees}
+                value={employee}
+                onChange={setEmployee}
+                isLoading={employeesLoading || contextLoading}
+                className="h-9 w-full sm:w-64"
+                compact
+              />
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => refreshPlan()}
-                disabled={!employee || validationIssues.length > 0 || resolving}
+                size="sm"
+                onClick={() =>
+                  setShiftBlocks(weekPatternToBlocks(apply55DayTemplate(weekPattern)))
+                }
+                disabled={!employee}
               >
-                Refresh plan
+                5.5-day template
               </Button>
               <Button
                 type="button"
+                size="sm"
                 onClick={() => void handleSave(false)}
-                disabled={
-                  !employee ||
-                  !canApply ||
-                  applying ||
-                  validationIssues.length > 0 ||
-                  !effectiveFrom ||
-                  !generateThrough
-                }
+                disabled={saveDisabled}
               >
                 {applying ? (
                   <>
-                    <Loader2Icon className="mr-2 size-4 animate-spin" />
-                    Saving…
+                    <Loader2Icon className="animate-spin" />
+                    Saving
                   </>
                 ) : previewOnly ? (
-                  "Save disabled — use Desk"
+                  "Preview only"
                 ) : (
-                  "Save & generate"
+                  "Save schedule"
                 )}
               </Button>
             </div>
-          </>
-        ) : (
-          <Card className="border-border/60">
-            <CardContent className="py-8 text-center text-sm text-muted-foreground">
-              Select an employee to edit their weekly schedule.
-            </CardContent>
-          </Card>
-        )}
+          </div>
+
+          {previewOnly ? (
+            <Card className="border-amber-500/30 bg-amber-500/5">
+              <CardContent className="py-3 text-sm text-amber-950 dark:text-amber-100">
+                Active SSAs exist — preview matches here, then update live schedules in Desk before
+                saving a fresh plan.
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {saveSuccessUrl ? (
+            <Card className="border-emerald-500/30 bg-emerald-500/5">
+              <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
+                <span>Schedule saved successfully.</span>
+                <Button asChild size="sm" variant="outline">
+                  <Link to={saveSuccessUrl}>Open attendance</Link>
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
+        </header>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          {!employee ? (
+            <Card className="flex items-center justify-center border-dashed">
+              <CardContent className="py-12 text-center">
+                <p className="font-medium">Select an employee</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Their current pattern loads when available.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <Card className="flex min-h-0 min-w-0 flex-col">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                  <div>
+                    <CardTitle className="text-base">Shift blocks</CardTitle>
+                    {validationIssues[0] ? (
+                      <CardDescription className="text-destructive">
+                        {validationIssues[0].message}
+                      </CardDescription>
+                    ) : (
+                      <CardDescription>
+                        One block per shared pattern — like Frappe Shift Schedule repeat days.
+                      </CardDescription>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="min-h-0 flex-1 pt-0">
+                  <WeekPatternGroupEditor
+                    blocks={shiftBlocks}
+                    onChange={setShiftBlocks}
+                    validationIssues={validationIssues}
+                  />
+                </CardContent>
+              </Card>
+
+              <ScheduleInspector
+                context={context}
+                employee={employee}
+                plan={plan}
+                resolving={resolving}
+                resolveError={resolveError}
+                effectiveFrom={effectiveFrom}
+                generateThrough={generateThrough}
+                onEffectiveFromChange={setEffectiveFrom}
+                onGenerateThroughChange={setGenerateThrough}
+                holidays={holidays}
+                holidaysLoading={holidaysLoading}
+                statusMessage={status?.type === "error" ? status.message : null}
+                previewOnly={previewOnly}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create new shift records?</DialogTitle>
+            <DialogTitle>Create shared shift records?</DialogTitle>
             <DialogDescription>
-              No matching Shift Type or Shift Schedule exists for this plan. Confirm to create shared
-              records on save.
+              Confirm to create shared Shift Type and Shift Schedule records on save.
             </DialogDescription>
           </DialogHeader>
-          <ul className="space-y-1 text-sm">
+          <ul className="space-y-2 text-sm">
             {pendingConfirmPlan.map((name) => (
               <li key={name} className="flex items-center gap-2">
-                <CheckIcon className="size-3.5 text-muted-foreground" />
-                {name}
+                <CheckIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="truncate">{name}</span>
               </li>
             ))}
           </ul>
@@ -593,7 +339,7 @@ export function WeeklySchedulePage() {
               }}
               disabled={applying}
             >
-              Confirm & save
+              Create and save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -602,18 +348,169 @@ export function WeeklySchedulePage() {
   );
 }
 
-function TimeCell(props: {
-  value: string;
-  disabled?: boolean;
-  onChange: (value: string) => void;
+function ScheduleInspector(props: {
+  context: ScheduleContext | null;
+  employee: string;
+  plan: ResolvePlan | null;
+  resolving: boolean;
+  resolveError: unknown;
+  effectiveFrom: string;
+  generateThrough: string;
+  onEffectiveFromChange: (value: string) => void;
+  onGenerateThroughChange: (value: string) => void;
+  holidays: Array<{ date: string; description: string; weekly_off: boolean }>;
+  holidaysLoading: boolean;
+  statusMessage: string | null;
+  previewOnly: boolean;
 }) {
+  const activeSsas =
+    props.context?.ssas?.filter(
+      (ssa) => ssa.enabled !== 0 && (ssa.shift_status ?? "").toLowerCase() !== "inactive"
+    ) ?? [];
+
   return (
-    <Input
-      type="time"
-      disabled={props.disabled}
-      className="h-8 w-[7rem] px-2"
-      value={props.value}
-      onChange={(e) => props.onChange(e.target.value)}
-    />
+    <Card className="flex min-h-0 flex-col lg:max-h-full">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Summary</CardTitle>
+        <CardDescription>
+          {props.context?.employee_name ?? employeeShortName(null, props.employee)}
+          {props.context?.company ? ` · ${props.context.company}` : ""}
+        </CardDescription>
+      </CardHeader>
+
+      <ScrollArea className="min-h-0 flex-1 px-4">
+        <div className="space-y-4 pb-4">
+          <section className="space-y-2">
+            <Label className="text-xs text-muted-foreground">Current assignments</Label>
+            {activeSsas.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {activeSsas.slice(0, 4).map((ssa) => (
+                  <Badge key={ssa.name} variant="secondary" className="max-w-full truncate font-normal">
+                    {ssa.shift_schedule ?? ssa.name}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No active SSA — ready to save.</p>
+            )}
+            {props.context?.assignment_summary?.latest_end_date ? (
+              <p className="text-xs text-muted-foreground">
+                Through {props.context.assignment_summary.latest_end_date}
+              </p>
+            ) : null}
+          </section>
+
+          <Separator />
+
+          <section className="space-y-2">
+            <Label className="text-xs text-muted-foreground">Matched plan</Label>
+            {props.resolveError ? (
+              <p className="text-sm text-destructive">{String(props.resolveError)}</p>
+            ) : props.resolving ? (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2Icon className="size-4 animate-spin" />
+                Matching…
+              </p>
+            ) : props.plan?.groups?.length ? (
+              <ul className="space-y-2">
+                {props.plan.groups.map((group, index) => {
+                  const pat =
+                    group.shift_schedule.action === "use"
+                      ? group.shift_schedule.name
+                      : group.shift_schedule.proposed_name;
+                  const isCreate =
+                    group.shift_schedule.action === "create" ||
+                    group.shift_type.action === "create";
+                  return (
+                    <li key={`${index}-${pat}`} className="rounded-lg border border-border/60 p-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{formatDayList(group.days)}</span>
+                        <Badge variant={isCreate ? "outline" : "secondary"} className="font-normal">
+                          {isCreate ? "Create" : "Use"}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">{pat}</p>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">Edit the work week to preview PATs.</p>
+            )}
+            {props.plan?.warnings?.[0] ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400">{props.plan.warnings[0]}</p>
+            ) : null}
+          </section>
+
+          <Separator />
+
+          <section className="space-y-3">
+            <Label className="text-xs text-muted-foreground">Generation range</Label>
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <Label htmlFor="effective-from" className="text-xs font-normal">
+                  Effective from
+                </Label>
+                <Input
+                  id="effective-from"
+                  type="date"
+                  className="h-8"
+                  value={props.effectiveFrom}
+                  onChange={(e) => props.onEffectiveFromChange(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="generate-through" className="text-xs font-normal">
+                  Generate through
+                </Label>
+                <Input
+                  id="generate-through"
+                  type="date"
+                  className="h-8"
+                  value={props.generateThrough}
+                  min={props.effectiveFrom}
+                  max={
+                    props.effectiveFrom
+                      ? format(addDays(parseISO(props.effectiveFrom), 365), "yyyy-MM-dd")
+                      : undefined
+                  }
+                  onChange={(e) => props.onGenerateThroughChange(e.target.value)}
+                />
+              </div>
+            </div>
+          </section>
+
+          <Separator />
+
+          <section className="space-y-2">
+            <Label className="text-xs text-muted-foreground">Holidays</Label>
+            {props.holidaysLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : props.holidays.length ? (
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {props.holidays.slice(0, 4).map((holiday) => (
+                  <li key={holiday.date} className="truncate">
+                    {holiday.date} · {holiday.description}
+                  </li>
+                ))}
+                {props.holidays.length > 4 ? (
+                  <li className="text-xs">+{props.holidays.length - 4} more</li>
+                ) : null}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">None in range.</p>
+            )}
+          </section>
+
+          {props.statusMessage ? (
+            <p className="text-sm text-destructive">{props.statusMessage}</p>
+          ) : props.previewOnly ? (
+            <p className="text-xs text-muted-foreground">
+              Save disabled until SSAs are cleared in Desk.
+            </p>
+          ) : null}
+        </div>
+      </ScrollArea>
+    </Card>
   );
 }

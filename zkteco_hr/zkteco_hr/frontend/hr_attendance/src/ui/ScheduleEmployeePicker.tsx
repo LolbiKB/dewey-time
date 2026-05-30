@@ -25,6 +25,7 @@ export type ScheduleEmployeePickerProps = {
   onChange: (id: string) => void;
   isLoading?: boolean;
   className?: string;
+  compact?: boolean;
 };
 
 export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
@@ -44,19 +45,30 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
-          className={cn("h-11 w-full justify-between font-normal", props.className)}
+          className={cn(
+            props.compact ? "h-8 gap-1.5 px-2" : "h-11",
+            "w-full justify-between font-normal",
+            props.className
+          )}
         >
           <span className="flex min-w-0 items-center gap-2 truncate text-left">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold">
+            <span
+              className={cn(
+                "flex shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold",
+                props.compact ? "size-6" : "size-8"
+              )}
+            >
               {employeeInitials(selected, props.value)}
             </span>
             <span className="min-w-0 truncate">
-              <span className="block truncate font-medium">
+              <span className={cn("block truncate font-medium", props.compact && "text-sm")}>
                 {employeeShortName(selected, props.value)}
               </span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {employeePickerSubtitle(selected)}
-              </span>
+              {!props.compact ? (
+                <span className="block truncate text-xs text-muted-foreground">
+                  {employeePickerSubtitle(selected)}
+                </span>
+              ) : null}
             </span>
           </span>
           {props.isLoading ? (

@@ -278,3 +278,163 @@ export function formatDayList(days: string[]): string {
   if (days.length === 1) return days[0]!.slice(0, 3);
   return days.map((d) => d.slice(0, 3)).join(", ");
 }
+
+export type DayTimeConfig = Omit<WeekPatternDay, "weekday">;
+
+export type ShiftBlock = {
+  id: string;
+  days: Weekday[];
+  profile: {
+    start_time: string;
+    end_time: string;
+    lunch_start: string | null;
+    lunch_end: string | null;
+    grace_minutes: number;
+  };
+};
+
+function defaultShiftProfile(): ShiftBlock["profile"] {
+  return {
+    start_time: "08:00",
+    end_time: "17:00",
+    lunch_start: "12:00",
+    lunch_end: "13:00",
+    grace_minutes: 10,
+  };
+}
+
+function profileKey(profile: ShiftBlock["profile"]): string {
+  return [
+    toApiTime(profile.start_time),
+    toApiTime(profile.end_time),
+    toApiTime(profile.lunch_start),
+    toApiTime(profile.lunch_end),
+    profile.grace_minutes,
+  ].join("|");
+}
+
+function timeToMinutes(value: string | null | undefined): number | null {
+  const normalized = toApiTime(value);
+  if (!normalized) return null;
+  const [hours, minutes] = normalized.split(":").map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
+/** Same grouping as server `group_week_pattern` — days with identical hours become one block. */
+export function weekPatternToBlocks(pattern: WeekPattern): ShiftBlock[] {
+  const buckets = new Map<string, { days: Weekday[]; profile: ShiftBlock["profile"] }>();
+
+  for (const row of pattern.days) {
+    if (!row.works) continue;
+
+    const profile = {
+      start_time: formatTimeInput(row.start_time) || "",
+      end_time: formatTimeInput(row.end_time) || "",
+      lunch_start: row.lunch_start ? formatTimeInput(row.lunch_start) : null,
+      lunch_end: row.lunch_end ? formatTimeInput(row.lunch_end) : null,
+      grace_minutes: Number(row.grace_minutes ?? 10),
+    };
+
+    if (!profile.start_time || !profile.end_time) continue;
+
+    const startMinutes = timeToMinutes(profile.start_time);
+    const endMinutes = timeToMinutes(profile.end_time);
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) continue;
+
+    const key = profileKey(profile);
+    const bucket = buckets.get(key) ?? { days: [], profile };
+    bucket.days.push(row.weekday);
+    buckets.set(key, bucket);
+  }
+
+  const blocks = [...buckets.values()]
+    .map((bucket) => ({
+      ...bucket,
+      days: [...bucket.days].sort((a, b) => WEEKDAYS.indexOf(a) - WEEKDAYS.indexOf(b)),
+    }))
+    .sort((a, b) => WEEKDAYS.indexOf(a.days[0]!) - WEEKDAYS.indexOf(b.days[0]!))
+    .map((bucket, index) => ({
+      id: `block-${index}`,
+      days: bucket.days,
+      profile: bucket.profile,
+    }));
+
+  if (!blocks.length) {
+    return [{ id: "block-0", days: [], profile: defaultShiftProfile() }];
+  }
+
+  return blocks;
+}
+
+export function weekPatternFromBlocks(
+  blocks: ShiftBlock[],
+  frequency = "Every Week"
+): WeekPattern {
+  const rows = new Map<Weekday, WeekPatternDay>(
+    WEEKDAYS.map((weekday) => [weekday, { weekday, works: false }])
+  );
+
+  for (const block of blocks) {
+    for (const weekday of block.days) {
+      rows.set(weekday, {
+        weekday,
+        works: true,
+        start_time: block.profile.start_time,
+        end_time: block.profile.end_time,
+        lunch_start: block.profile.lunch_start,
+        lunch_end: block.profile.lunch_end,
+        grace_minutes: block.profile.grace_minutes,
+      });
+    }
+  }
+
+  return {
+    frequency,
+    days: WEEKDAYS.map((weekday) => rows.get(weekday)!),
+  };
+}
+
+export function createShiftBlock(partial?: Partial<ShiftBlock>): ShiftBlock {
+  return {
+    id: partial?.id ?? `block-${Date.now()}`,
+    days: partial?.days ?? [],
+    profile: partial?.profile ?? defaultShiftProfile(),
+  };
+}
+
+export function dayConfigFromRow(row: WeekPatternDay): DayTimeConfig {
+  return {
+    works: row.works,
+    start_time: row.start_time,
+    end_time: row.end_time,
+    lunch_start: row.lunch_start,
+    lunch_end: row.lunch_end,
+    grace_minutes: row.grace_minutes,
+  };
+}
+
+export function applyConfigToDays(
+  pattern: WeekPattern,
+  config: DayTimeConfig,
+  targets: Iterable<Weekday>
+): WeekPattern {
+  const targetSet = new Set(targets);
+  return {
+    ...pattern,
+    days: pattern.days.map((row) =>
+      targetSet.has(row.weekday) ? { weekday: row.weekday, ...config } : row
+    ),
+  };
+}
+
+export function formatDayConfigSummary(row: WeekPatternDay): string {
+  if (!row.works) return "Off";
+  const start = formatTimeInput(row.start_time) || "—";
+  const end = formatTimeInput(row.end_time) || "—";
+  const lunchStart = formatTimeInput(row.lunch_start);
+  const lunchEnd = formatTimeInput(row.lunch_end);
+  const lunch =
+    lunchStart && lunchEnd ? ` · lunch ${lunchStart}–${lunchEnd}` : "";
+  return `${start}–${end}${lunch}`;
+}
