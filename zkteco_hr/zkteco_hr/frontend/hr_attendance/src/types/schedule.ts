@@ -73,7 +73,6 @@ export type ResolvePlan = {
   groups: ResolvePlanGroup[];
   warnings: string[];
   needs_create: boolean;
-  reconcile_preview?: ReconcilePreview;
 };
 
 export type ScheduleContextSsa = {
@@ -92,6 +91,8 @@ export type ScheduleContext = {
   company?: string | null;
   branch?: string | null;
   ssas: ScheduleContextSsa[];
+  enabled_ssa_count: number;
+  can_apply: boolean;
   assignment_summary: {
     earliest_start_date?: string | null;
     latest_end_date?: string | null;
@@ -116,11 +117,6 @@ export type ApplyScheduleResult = {
   created?: {
     shift_types: string[];
     shift_schedules: string[];
-  };
-  reconcile_summary?: {
-    disabled_ssas: string[];
-    trimmed_assignments: string[];
-    cancelled_assignments: string[];
   };
   assignments_generated_through?: string;
   attendance_url?: string;

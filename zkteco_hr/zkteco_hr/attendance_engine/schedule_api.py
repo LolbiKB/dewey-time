@@ -6,19 +6,17 @@ import frappe
 from frappe.utils import add_days, getdate, nowdate
 
 from zkteco_hr.attendance_engine.hr_calendar import (
-    _format_time,
     _require_hr_role,
     shift_assignment_bounds_by_employee,
 )
 from zkteco_hr.attendance_engine.schedule_resolver import (
-    WEEKDAYS,
-    build_reconcile_preview,
     build_resolve_plan,
     create_shift_schedule,
     create_shift_type,
+    employee_has_enabled_ssas,
     generate_shifts_for_ssa,
+    is_ssa_enabled,
     list_employee_ssas,
-    reconcile_orphan_ssas,
     upsert_ssa,
     week_pattern_from_ssas,
 )
@@ -81,6 +79,7 @@ def get_employee_schedule_context(employee: str):
 
     header = _employee_header(employee)
     ssas = list_employee_ssas(employee)
+    enabled_ssas = [ssa for ssa in ssas if is_ssa_enabled(ssa)]
     bounds = shift_assignment_bounds_by_employee([employee]).get(employee, {})
 
     assignment_summary = {
@@ -91,6 +90,8 @@ def get_employee_schedule_context(employee: str):
     return {
         **header,
         "ssas": ssas,
+        "enabled_ssa_count": len(enabled_ssas),
+        "can_apply": len(enabled_ssas) == 0,
         "assignment_summary": assignment_summary,
         "week_pattern": {
             "frequency": "Every Week",
@@ -111,13 +112,7 @@ def resolve_weekly_schedule_plan(employee: str, week_pattern=None, effective_fro
 
     pattern = _parse_week_pattern(week_pattern or frappe.form_dict.get("week_pattern"))
     _employee_header(employee)
-    plan = build_resolve_plan(employee=employee, week_pattern=pattern)
-
-    effective = getdate(effective_from or frappe.form_dict.get("effective_from") or add_days(nowdate(), 1))
-    plan["reconcile_preview"] = build_reconcile_preview(
-        employee=employee, plan=plan, effective_from=effective
-    )
-    return plan
+    return build_resolve_plan(employee=employee, week_pattern=pattern)
 
 
 @frappe.whitelist()
@@ -169,6 +164,14 @@ def apply_weekly_schedule(
     pattern = _parse_week_pattern(week_pattern or frappe.form_dict.get("week_pattern"))
     _employee_header(employee)
 
+    if employee_has_enabled_ssas(employee):
+        frappe.throw(
+            "This employee already has an active Shift Schedule Assignment. "
+            "Disable existing SSAs and adjust Shift Assignments in Desk, then return here "
+            "only when setting up a fresh schedule.",
+            exc=frappe.ValidationError,
+        )
+
     effective = getdate(
         create_shifts_after or frappe.form_dict.get("create_shifts_after") or add_days(nowdate(), 1)
     )
@@ -194,10 +197,6 @@ def apply_weekly_schedule(
     ssas_out: list[dict] = []
 
     try:
-        reconcile_summary = reconcile_orphan_ssas(
-            employee=employee, plan=plan, effective_from=effective
-        )
-
         for group in plan.get("groups") or []:
             profile = group.get("profile") or {}
             shift_type_info = group.get("shift_type") or {}
@@ -256,7 +255,6 @@ def apply_weekly_schedule(
             "shift_types": created_shift_types,
             "shift_schedules": created_shift_schedules,
         },
-        "reconcile_summary": reconcile_summary,
         "assignments_generated_through": str(through),
         "attendance_url": f"/hr-attendance?employee={employee}",
     }

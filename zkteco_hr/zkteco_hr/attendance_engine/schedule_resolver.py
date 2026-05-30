@@ -290,6 +290,19 @@ def target_pat_names(plan: dict) -> set[str]:
     return names
 
 
+def is_ssa_enabled(ssa: dict) -> bool:
+    if (ssa.get("shift_status") or "").lower() == "inactive":
+        return False
+    enabled = ssa.get("enabled")
+    if enabled in (0, False, "0"):
+        return False
+    return True
+
+
+def employee_has_enabled_ssas(employee: str) -> bool:
+    return any(is_ssa_enabled(ssa) for ssa in list_employee_ssas(employee))
+
+
 def list_employee_ssas(employee: str) -> list[dict]:
     if not frappe.db.table_exists("Shift Schedule Assignment"):
         return []
@@ -456,7 +469,7 @@ def week_pattern_from_ssas(employee: str) -> list[dict]:
     by_day = {row["weekday"]: row for row in rows}
 
     for ssa in list_employee_ssas(employee):
-        if not ssa.get("enabled") and (ssa.get("shift_status") or "").lower() == "inactive":
+        if not is_ssa_enabled(ssa):
             continue
         pat = ssa.get("shift_schedule")
         if not pat:

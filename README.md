@@ -81,15 +81,16 @@ Calendar filter semantics (Shift Assignment docstatus, leave, flags): see `zktec
   - `zkteco_hr.attendance_engine.schedule_api.get_holiday_preview(employee, start_date, end_date)`
   - `zkteco_hr.attendance_engine.schedule_api.apply_weekly_schedule(employee, week_pattern, create_shifts_after, generate_through, confirm_create)`
 
-Effective-from defaults to **tomorrow** (site date). Orphan SSAs not in the new plan are disabled from that date forward; past assignments are preserved.
+Effective-from defaults to **tomorrow** (site date).
+
+**Policy:** Save is allowed only when the employee has **no active SSA** (greenfield setup). If SSAs already exist, the wizard is **preview-only** — disable old SSAs and adjust Shift Assignments in Desk, then return after cleanup.
 
 **Manual acceptance (Frappe Cloud after deploy + migrate):**
 
-1. Open `/hr-schedule`, pick an employee with existing SSAs — grid prefills from PATs.
-2. Change Sat to short shift — resolved plan shows separate group / PAT.
-3. Preview shows reconcile section when an old SSA would be disabled.
-4. Save with `confirm_create` when new FT/PAT needed — success link opens `/hr-attendance`.
-5. `/hr-attendance`: shift band on Tue–Sat inside Mon–Sat assignment block.
+1. Employee **with no active SSA** — fill grid, preview PAT match, Save & generate, verify bands on `/hr-attendance`.
+2. Employee **with active SSA(s)** — amber banner, Save disabled, preview still shows resolved PAT groups.
+3. After Desk cleanup (SSAs disabled) — same employee can save a fresh plan.
+4. New FT/PAT — confirm modal, then success link to `/hr-attendance`.
 
 ## React + Vite HR Attendance (local dev)
 

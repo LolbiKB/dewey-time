@@ -23,7 +23,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -101,6 +100,9 @@ export function WeeklySchedulePage() {
     [employees, employee]
   );
 
+  const canApply = context?.can_apply ?? false;
+  const previewOnly = Boolean(context && !canApply);
+
   function updateDay(weekday: Weekday, patch: Partial<WeekPatternDay>) {
     setWeekPattern((prev) => ({
       ...prev,
@@ -110,7 +112,7 @@ export function WeeklySchedulePage() {
 
   async function handleSave(confirmCreate = false) {
     if (!employee || !effectiveFrom || !generateThrough) return;
-    if (validationIssues.length) return;
+    if (validationIssues.length || !canApply) return;
 
     clearStatus();
     const result = await apply({
@@ -184,7 +186,9 @@ export function WeeklySchedulePage() {
             </Button>
             <h1 className="text-lg font-semibold tracking-tight">Weekly schedule</h1>
             <p className="text-sm text-muted-foreground">
-              Configure shift patterns, match shared PATs, and generate assignments.
+              {previewOnly
+                ? "Preview PAT matches for existing setups. Save is for employees with no active SSA."
+                : "Configure shift patterns, match shared PATs, and generate assignments."}
             </p>
           </div>
           <ScheduleEmployeePicker
@@ -231,6 +235,29 @@ export function WeeklySchedulePage() {
                 ) : null}
               </CardContent>
             </Card>
+
+            {previewOnly ? (
+              <Card className="border-amber-500/40 bg-amber-500/5">
+                <CardContent className="space-y-3 py-4 text-sm">
+                  <p className="font-medium text-amber-900 dark:text-amber-100">
+                    Preview only — this employee already has{" "}
+                    {context!.enabled_ssa_count === 1
+                      ? "an active SSA"
+                      : `${context!.enabled_ssa_count} active SSAs`}
+                    .
+                  </p>
+                  <p className="text-muted-foreground">
+                    Change schedules in Frappe Desk, then return here only for fresh setup after
+                    old SSAs are disabled.
+                  </p>
+                  <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
+                    <li>Disable existing Shift Schedule Assignment(s) for this employee.</li>
+                    <li>Cancel or end future Shift Assignments tied to the old pattern.</li>
+                    <li>Re-open this page when the employee has no active SSA to save a new plan.</li>
+                  </ol>
+                </CardContent>
+              </Card>
+            ) : null}
 
             <Card className="border-border/60">
               <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
@@ -408,30 +435,6 @@ export function WeeklySchedulePage() {
                     ))}
                   </ul>
                 ) : null}
-
-                {plan?.reconcile_preview &&
-                (plan.reconcile_preview.disable_ssas.length > 0 ||
-                  plan.reconcile_preview.affected_assignments.length > 0) ? (
-                  <>
-                    <Separator />
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium">Reconcile from {plan.reconcile_preview.effective_from}</p>
-                      {plan.reconcile_preview.disable_ssas.length ? (
-                        <p className="text-xs text-muted-foreground">
-                          Disable SSAs:{" "}
-                          {plan.reconcile_preview.disable_ssas
-                            .map((s) => s.shift_schedule)
-                            .join(", ")}
-                        </p>
-                      ) : null}
-                      {plan.reconcile_preview.affected_assignments.length ? (
-                        <p className="text-xs text-muted-foreground">
-                          Future assignments affected: {plan.reconcile_preview.affected_assignments.length}
-                        </p>
-                      ) : null}
-                    </div>
-                  </>
-                ) : null}
               </CardContent>
             </Card>
 
@@ -532,6 +535,7 @@ export function WeeklySchedulePage() {
                 onClick={() => void handleSave(false)}
                 disabled={
                   !employee ||
+                  !canApply ||
                   applying ||
                   validationIssues.length > 0 ||
                   !effectiveFrom ||
@@ -543,6 +547,8 @@ export function WeeklySchedulePage() {
                     <Loader2Icon className="mr-2 size-4 animate-spin" />
                     Saving…
                   </>
+                ) : previewOnly ? (
+                  "Save disabled — use Desk"
                 ) : (
                   "Save & generate"
                 )}

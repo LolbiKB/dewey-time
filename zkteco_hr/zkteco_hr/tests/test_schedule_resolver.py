@@ -170,68 +170,37 @@ class TestMatchShiftType(unittest.TestCase):
         self.assertEqual(result["proposed_name"], "FT_0800_1200")
 
 
-class TestReconcilePreview(unittest.TestCase):
-    @patch("zkteco_hr.attendance_engine.schedule_resolver._future_assignments_for_shift_type")
+class TestEnabledSsaGate(unittest.TestCase):
+    def test_inactive_or_disabled_ssa_not_enabled(self):
+        from zkteco_hr.attendance_engine.schedule_resolver import is_ssa_enabled
+
+        self.assertFalse(is_ssa_enabled({"enabled": 0, "shift_status": "Inactive"}))
+        self.assertFalse(is_ssa_enabled({"enabled": 0, "shift_status": "Active"}))
+        self.assertTrue(is_ssa_enabled({"enabled": 1, "shift_status": "Active"}))
+
     @patch("zkteco_hr.attendance_engine.schedule_resolver.list_employee_ssas")
-    def test_orphan_ssa_marked_for_disable(self, list_ssas, future_assignments):
-        from zkteco_hr.attendance_engine.schedule_resolver import build_reconcile_preview
+    def test_employee_has_enabled_ssas(self, list_ssas):
+        from zkteco_hr.attendance_engine.schedule_resolver import employee_has_enabled_ssas
 
-        list_ssas.return_value = [
-            {
-                "name": "SSA-OLD",
-                "shift_schedule": "PAT_OLD",
-                "enabled": 1,
-                "shift_status": "Active",
-                "shift_type": "FT_OLD",
-            },
-            {
-                "name": "SSA-KEEP",
-                "shift_schedule": "PAT_NEW",
-                "enabled": 1,
-                "shift_status": "Active",
-                "shift_type": "FT_NEW",
-            },
-        ]
-        future_assignments.return_value = [
-            {
-                "name": "SA-1",
-                "shift_type": "FT_OLD",
-                "start_date": "2026-06-01",
-                "end_date": "2026-06-30",
-                "action": "end_before",
-                "proposed_end_date": "2026-05-31",
-            }
-        ]
+        list_ssas.return_value = [{"enabled": 1, "shift_status": "Active"}]
+        self.assertTrue(employee_has_enabled_ssas("EMP-1"))
 
-        plan = {
-            "groups": [
-                {
-                    "shift_schedule": {"action": "use", "name": "PAT_NEW"},
-                }
-            ]
-        }
-
-        preview = build_reconcile_preview(
-            employee="EMP-1",
-            plan=plan,
-            effective_from=date(2026, 6, 1),
-        )
-
-        self.assertEqual(len(preview["disable_ssas"]), 1)
-        self.assertEqual(preview["disable_ssas"][0]["name"], "SSA-OLD")
-        self.assertEqual(len(preview["affected_assignments"]), 1)
+        list_ssas.return_value = [{"enabled": 0, "shift_status": "Inactive"}]
+        self.assertFalse(employee_has_enabled_ssas("EMP-1"))
 
 
 class TestScheduleApi(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.schedule_api.employee_has_enabled_ssas")
     @patch("zkteco_hr.attendance_engine.schedule_api.getdate")
     @patch("zkteco_hr.attendance_engine.schedule_api.build_resolve_plan")
     @patch("zkteco_hr.attendance_engine.schedule_api._employee_header")
     @patch("zkteco_hr.attendance_engine.schedule_api._require_hr_role")
     def test_apply_returns_needs_confirm_without_flag(
-        self, _role, _header, build_plan, getdate
+        self, _role, _header, build_plan, getdate, has_enabled
     ):
         from zkteco_hr.attendance_engine import schedule_api
 
+        has_enabled.return_value = False
         build_plan.return_value = {"needs_create": True, "groups": []}
         getdate.side_effect = lambda value: date.fromisoformat(str(value))
 
@@ -245,6 +214,23 @@ class TestScheduleApi(unittest.TestCase):
 
         self.assertTrue(result["needs_confirm"])
         self.assertIn("plan", result)
+
+    @patch("zkteco_hr.attendance_engine.schedule_api.employee_has_enabled_ssas")
+    @patch("zkteco_hr.attendance_engine.schedule_api._employee_header")
+    @patch("zkteco_hr.attendance_engine.schedule_api._require_hr_role")
+    def test_apply_blocked_when_employee_has_enabled_ssa(self, _role, _header, has_enabled):
+        from zkteco_hr.attendance_engine import schedule_api
+
+        has_enabled.return_value = True
+
+        with self.assertRaises(Exception):
+            schedule_api.apply_weekly_schedule(
+                employee="EMP-1",
+                week_pattern=json.dumps({"frequency": "Every Week", "days": []}),
+                create_shifts_after="2026-06-02",
+                generate_through="2026-09-01",
+                confirm_create=True,
+            )
 
 
 if __name__ == "__main__":
