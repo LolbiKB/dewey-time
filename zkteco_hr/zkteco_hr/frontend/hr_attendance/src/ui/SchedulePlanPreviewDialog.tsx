@@ -66,7 +66,7 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
 
             {props.resolveError ? (
               <p className="text-sm text-destructive">{String(props.resolveError)}</p>
-            ) : props.resolving ? (
+            ) : props.resolving && !props.plan?.groups?.length ? (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2Icon className="size-4 animate-spin" />
                 Matching patterns…
@@ -221,6 +221,7 @@ export type SchedulePreviewTriggerProps = {
   disabled?: boolean;
   resolving?: boolean;
   groupCount?: number;
+  className?: string;
 };
 
 export function SchedulePreviewTrigger(props: SchedulePreviewTriggerProps) {
@@ -228,13 +229,14 @@ export function SchedulePreviewTrigger(props: SchedulePreviewTriggerProps) {
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size="default"
+      className={cn("h-9 min-w-[7.5rem]", props.className)}
       onClick={props.onClick}
       disabled={props.disabled}
     >
       {props.resolving ? (
         <>
-          <Loader2Icon className="animate-spin" />
+          <Loader2Icon className="size-3.5 animate-spin" />
           Preview
         </>
       ) : (

@@ -57,6 +57,8 @@ Seeded or historical **Employee Checkin** rows do not always produce **Attendanc
 2. **Both** after seeding checkins (or **Closeout** alone to re-debug a range)
 3. Verify flag chips in the week view and rows in Desk **Attendance Flag**
 
+**UI:** `/hr-schedule` — **Clear schedule data (dev)** (System Manager to execute): deletes all Shift Schedule Assignments, Shift Assignments, and Attendance Flags for the selected employee so you can re-test greenfield save. Does not delete Shift Type / Pattern masters.
+
 Closeout is **idempotent for AUTO flags**: each run deletes and recreates AUTO rows for that employee/date; HR and employee-sourced flags are untouched.
 
 ## HR Attendance Calendar (Desk)

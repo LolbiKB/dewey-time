@@ -29,10 +29,11 @@ export type WeekPatternGroupEditorProps = {
   blocks: ShiftBlock[];
   onChange: (blocks: ShiftBlock[]) => void;
   validationIssues: DayValidationIssue[];
+  disabled?: boolean;
 };
 
 export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
-  const { blocks, onChange, validationIssues } = props;
+  const { blocks, onChange, validationIssues, disabled = false } = props;
 
   function updateBlockProfile(blockId: string, patch: Partial<ShiftBlock["profile"]>) {
     onChange(
@@ -65,12 +66,34 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
   }
 
   function removeBlock(blockId: string) {
-    const next = blocks.filter((block) => block.id !== blockId);
-    onChange(next.length ? next : [createShiftBlock()]);
+    onChange(blocks.filter((block) => block.id !== blockId));
   }
 
   function addBlock() {
-    onChange([...blocks, createShiftBlock({ profile: { ...blocks[blocks.length - 1]!.profile } })]);
+    const lastProfile = blocks[blocks.length - 1]?.profile;
+    onChange([...blocks, createShiftBlock(lastProfile ? { profile: { ...lastProfile } } : undefined)]);
+  }
+
+  if (!blocks.length) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/80 px-6 py-14 text-center">
+        <p className="text-sm font-medium">No shift blocks</p>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+          Choose a template above or add a block to define working days and hours.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-4"
+          disabled={disabled}
+          onClick={addBlock}
+        >
+          <PlusIcon />
+          Add shift block
+        </Button>
+      </div>
+    );
   }
 
   return (
@@ -96,17 +119,16 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
                   Same hours on every selected day — maps to one shared PAT.
                 </p>
               </div>
-              {blocks.length > 1 ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => removeBlock(block.id)}
-                  aria-label={`Remove ${title}`}
-                >
-                  <Trash2Icon />
-                </Button>
-              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={disabled}
+                onClick={() => removeBlock(block.id)}
+                aria-label={`Remove ${title}`}
+              >
+                <Trash2Icon />
+              </Button>
             </div>
 
             <div className="mb-6 flex flex-wrap gap-2">
@@ -122,7 +144,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
                     size="sm"
                     variant={selected ? "default" : "outline"}
                     className="h-9 min-w-9 px-2.5"
-                    disabled={!selected && takenElsewhere}
+                    disabled={disabled || (!selected && takenElsewhere)}
                     onClick={() => toggleDay(block.id, weekday)}
                     aria-pressed={selected}
                     aria-label={weekday}
@@ -138,18 +160,21 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
               <TimeInput
                 className="w-full"
                 label="Start"
+                disabled={disabled}
                 value={formatTimeInput(block.profile.start_time)}
                 onChange={(e) => updateBlockProfile(block.id, { start_time: e.target.value })}
               />
               <TimeInput
                 className="w-full"
                 label="End"
+                disabled={disabled}
                 value={formatTimeInput(block.profile.end_time)}
                 onChange={(e) => updateBlockProfile(block.id, { end_time: e.target.value })}
               />
               <TimeInput
                 className="w-full"
                 label="Lunch start"
+                disabled={disabled}
                 value={formatTimeInput(block.profile.lunch_start)}
                 onChange={(e) =>
                   updateBlockProfile(block.id, { lunch_start: e.target.value || null })
@@ -158,6 +183,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
               <TimeInput
                 className="w-full"
                 label="Lunch end"
+                disabled={disabled}
                 value={formatTimeInput(block.profile.lunch_end)}
                 onChange={(e) =>
                   updateBlockProfile(block.id, { lunch_end: e.target.value || null })
@@ -168,6 +194,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
                 <Input
                   type="number"
                   min={0}
+                  disabled={disabled}
                   className="h-10 w-full min-w-[5rem] px-3"
                   value={block.profile.grace_minutes}
                   onChange={(e) =>
@@ -188,7 +215,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
         );
       })}
 
-      <Button type="button" variant="outline" size="sm" onClick={addBlock}>
+      <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={addBlock}>
         <PlusIcon />
         Add shift block
       </Button>

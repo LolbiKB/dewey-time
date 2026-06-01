@@ -1,7 +1,7 @@
 import { addDays, parseISO } from "date-fns";
 import { ArrowLeftIcon, CheckIcon, Loader2Icon } from "lucide-react";
 import { useFrappeAuth } from "frappe-react-sdk";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -25,13 +25,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   useCalendarEmployees,
   useDefaultEmployee,
 } from "@/hooks/useHrAttendanceData";
@@ -44,8 +37,10 @@ import { useWeeklyScheduleTemplates } from "@/hooks/useWeeklySchedule";
 import type { ShiftBlock, WeekPattern } from "@/types/schedule";
 import {
   apply55DayTemplate,
+  blocksFingerprint,
   cloneWeekPattern,
   emptyWeekPattern,
+  findMatchingTemplateKey,
   validateWeekPattern,
   weekPatternFromBlocks,
   weekPatternToBlocks,
@@ -54,8 +49,14 @@ import {
   SchedulePlanPreviewDialog,
   SchedulePreviewTrigger,
 } from "@/ui/SchedulePlanPreviewDialog";
+import { cn } from "@/lib/utils";
+import { ClearEmployeeScheduleDialog } from "@/ui/ClearEmployeeScheduleDialog";
 import { ScheduleEmployeePicker } from "@/ui/ScheduleEmployeePicker";
 import { WeekPatternGroupEditor } from "@/ui/WeekPatternGroupEditor";
+import {
+  WeeklyScheduleTemplatePickerDialog,
+  type ScheduleTemplateOption,
+} from "@/ui/WeeklyScheduleTemplatePickerDialog";
 
 export function WeeklySchedulePage() {
   const { currentUser, isLoading: authLoading } = useFrappeAuth();
@@ -63,17 +64,16 @@ export function WeeklySchedulePage() {
   const initialEmployee = searchParams.get("employee");
 
   const [employee, setEmployee] = useState<string | null>(initialEmployee);
-  const [shiftBlocks, setShiftBlocks] = useState<ShiftBlock[]>(() =>
-    weekPatternToBlocks(emptyWeekPattern())
-  );
+  const [shiftBlocks, setShiftBlocks] = useState<ShiftBlock[]>([]);
   const [effectiveFrom, setEffectiveFrom] = useState("");
   const [generateThrough, setGenerateThrough] = useState("");
-  const [limitGenerateThrough, setLimitGenerateThrough] = useState(true);
+  const [limitGenerateThrough, setLimitGenerateThrough] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [pendingConfirmPlan, setPendingConfirmPlan] = useState<string[]>([]);
   const [saveSuccessUrl, setSaveSuccessUrl] = useState<string | null>(null);
   const [templateKey, setTemplateKey] = useState<string>("manual");
+  const appliedTemplateFingerprint = useRef<string | null>(null);
 
   const weekPattern = useMemo<WeekPattern>(
     () => weekPatternFromBlocks(shiftBlocks),
@@ -90,7 +90,7 @@ export function WeeklySchedulePage() {
     setShiftBlocks(weekPatternToBlocks(cloneWeekPattern(context.week_pattern)));
     setEffectiveFrom(context.default_effective_from);
     setGenerateThrough(context.default_generate_through ?? "");
-    setLimitGenerateThrough(Boolean(context.default_generate_through));
+    setLimitGenerateThrough(false);
     setSaveSuccessUrl(null);
   }, [context?.employee]);
 
@@ -102,10 +102,53 @@ export function WeeklySchedulePage() {
   );
 
   const { apply, applying, status, clearStatus } = useApplyWeeklySchedule();
-  const { templates: dynamicTemplates, isLoading: templatesLoading } = useWeeklyScheduleTemplates(12);
+  const { templates: dynamicTemplates, isLoading: templatesLoading } = useWeeklyScheduleTemplates(24);
 
   const canApply = context?.can_apply ?? false;
   const previewOnly = Boolean(context && !canApply);
+  const scheduleReadOnly = previewOnly;
+
+  const selectedEmployee = useMemo(
+    () => employees.find((e) => e.name === employee) ?? null,
+    [employees, employee]
+  );
+
+  const employeeLabel = useMemo(() => {
+    if (!employee) return null;
+    return selectedEmployee?.employee_name ?? context?.employee_name ?? employee;
+  }, [employee, selectedEmployee, context?.employee_name]);
+
+  const static55Blocks = useMemo<ShiftBlock[]>(
+    () => weekPatternToBlocks(apply55DayTemplate(emptyWeekPattern())),
+    []
+  );
+
+  const templateOptions = useMemo((): ScheduleTemplateOption[] => {
+    const options: ScheduleTemplateOption[] = dynamicTemplates.map((t) => ({
+      key: t.key,
+      label: t.label,
+      count: t.count,
+      blocks: t.blocks,
+    }));
+    if (!options.length) {
+      options.push({
+        key: "static:55",
+        label: "Mon–Fri + Sat AM (5.5-day)",
+        count: 0,
+        blocks: static55Blocks,
+        builtin: true,
+      });
+    }
+    return options;
+  }, [dynamicTemplates, static55Blocks]);
+
+  useEffect(() => {
+    if (!employee) return;
+    const match = findMatchingTemplateKey(shiftBlocks, templateOptions);
+    setTemplateKey(match);
+    appliedTemplateFingerprint.current =
+      match === "manual" ? null : blocksFingerprint(shiftBlocks);
+  }, [employee, shiftBlocks, templateOptions]);
 
   async function handleSave(confirmCreate = false) {
     if (!employee || !effectiveFrom) return;
@@ -171,57 +214,44 @@ export function WeeklySchedulePage() {
     );
   }
 
+  const hasWorkingDays = weekPattern.days.some((day) => day.works);
+
   const saveDisabled =
     !employee ||
     !canApply ||
     applying ||
     validationIssues.length > 0 ||
     !effectiveFrom ||
+    !hasWorkingDays ||
     (limitGenerateThrough && !generateThrough);
 
   const generateThroughMax = effectiveFrom
     ? addDays(parseISO(effectiveFrom), 365)
     : undefined;
 
-  function clearShiftBlocks() {
-    setShiftBlocks(weekPatternToBlocks(emptyWeekPattern()));
-    setTemplateKey("manual");
-  }
-
-  const static55Blocks = useMemo<ShiftBlock[]>(
-    () => weekPatternToBlocks(apply55DayTemplate(emptyWeekPattern())),
-    []
-  );
-
-  const templateOptions = useMemo(() => {
-    const options = dynamicTemplates.map((t) => ({
-      key: t.key,
-      label: t.label,
-      count: t.count,
-      blocks: t.blocks,
-    }));
-    if (!options.length) {
-      options.push({
-        key: "static:55",
-        label: "Mon–Fri + Sat AM (5.5-day)",
-        count: 0,
-        blocks: static55Blocks,
-      });
-    }
-    return options;
-  }, [dynamicTemplates, static55Blocks]);
-
   function applyTemplate(key: string) {
     setTemplateKey(key);
-    if (key === "manual") return;
-    if (key === "static:55") {
-      setShiftBlocks(static55Blocks);
+    if (key === "manual") {
+      appliedTemplateFingerprint.current = null;
       return;
     }
-    const template = templateOptions.find((t) => t.key === key);
-    if (template) {
-      setShiftBlocks(template.blocks);
+
+    const source =
+      key === "static:55"
+        ? static55Blocks
+        : templateOptions.find((t) => t.key === key)?.blocks;
+    if (!source?.length) {
+      setShiftBlocks([]);
+      appliedTemplateFingerprint.current = blocksFingerprint([]);
+      return;
     }
+    const blocks = weekPatternToBlocks(weekPatternFromBlocks(source));
+    setShiftBlocks(blocks);
+    appliedTemplateFingerprint.current = blocksFingerprint(blocks);
+  }
+
+  function handleShiftBlocksChange(blocks: ShiftBlock[]) {
+    setShiftBlocks(blocks);
   }
 
   return (
@@ -256,36 +286,23 @@ export function WeeklySchedulePage() {
                   className="h-9 w-full sm:w-64"
                   compact
                 />
-                <Select value={templateKey} onValueChange={applyTemplate} disabled={!employee}>
-                  <SelectTrigger className="h-9 w-full sm:w-64">
-                    <SelectValue placeholder={templatesLoading ? "Loading templates…" : "Template"} />
-                  </SelectTrigger>
-                  <SelectContent align="end">
-                    <SelectItem value="manual">Manual</SelectItem>
-                    {templateOptions.map((tpl) => (
-                      <SelectItem key={tpl.key} value={tpl.key}>
-                        {tpl.label}
-                        {tpl.count ? ` · ${tpl.count}` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={clearShiftBlocks}
-                disabled={!employee}
-              >
-                Clear blocks
-              </Button>
+              <ClearEmployeeScheduleDialog
+                employee={employee}
+                employeeRow={selectedEmployee}
+                employeeLabel={employeeLabel}
+                triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                onSuccess={() => {
+                  setSaveSuccessUrl(null);
+                  void refreshContext();
+                }}
+              />
               </div>
             </div>
 
             {previewOnly ? (
               <Card className="border-amber-500/30 bg-amber-500/5">
                 <CardContent className="py-2.5 text-sm text-amber-950 dark:text-amber-100">
-                  Active SSAs exist — preview only until cleared in Desk.
+                  Active SSAs exist — preview only until cleared. Use Clear schedule data (dev) or Desk.
                 </CardContent>
               </Card>
             ) : null}
@@ -313,25 +330,45 @@ export function WeeklySchedulePage() {
                 </CardContent>
               </Card>
             ) : (
-              <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <CardHeader className="shrink-0 space-y-0 px-5 pb-3 pt-5">
-                  <CardTitle className="text-base">Shift blocks</CardTitle>
-                  {validationIssues[0] ? (
-                    <CardDescription className="text-destructive">
-                      {validationIssues[0].message}
-                    </CardDescription>
-                  ) : (
-                    <CardDescription>
-                      One block per shared pattern — like Frappe Shift Schedule repeat days.
-                    </CardDescription>
-                  )}
+              <Card
+                className={cn(
+                  "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+                  scheduleReadOnly && "opacity-95"
+                )}
+              >
+                <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <CardTitle className="text-base">Shift blocks</CardTitle>
+                    {validationIssues[0] && !scheduleReadOnly ? (
+                      <CardDescription className="text-destructive">
+                        {validationIssues[0].message}
+                      </CardDescription>
+                    ) : (
+                      <CardDescription>
+                        {scheduleReadOnly
+                          ? "Preview only — clear existing SSAs to edit."
+                          : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                      </CardDescription>
+                    )}
+                  </div>
+                  <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
+                    <WeeklyScheduleTemplatePickerDialog
+                      value={templateKey}
+                      options={templateOptions}
+                      onSelect={applyTemplate}
+                      loading={templatesLoading}
+                      disabled={scheduleReadOnly}
+                      triggerClassName="sm:min-w-[20rem] sm:max-w-md"
+                    />
+                  </div>
                 </CardHeader>
                 <ScrollArea className="min-h-0 flex-1">
                   <CardContent className="px-5 pb-5 pt-0">
                     <WeekPatternGroupEditor
                       blocks={shiftBlocks}
-                      onChange={setShiftBlocks}
+                      onChange={handleShiftBlocksChange}
                       validationIssues={validationIssues}
+                      disabled={scheduleReadOnly}
                     />
                   </CardContent>
                 </ScrollArea>
@@ -348,6 +385,7 @@ export function WeeklySchedulePage() {
                     label="Effective from"
                     value={effectiveFrom}
                     onChange={setEffectiveFrom}
+                    disabled={scheduleReadOnly}
                   />
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
@@ -364,6 +402,7 @@ export function WeeklySchedulePage() {
                         <Switch
                           id="generate-through-limit"
                           checked={limitGenerateThrough}
+                          disabled={scheduleReadOnly}
                           onCheckedChange={(checked) => {
                             setLimitGenerateThrough(checked);
                             if (!checked) setGenerateThrough("");
@@ -379,6 +418,7 @@ export function WeeklySchedulePage() {
                         placeholder="Pick end date"
                         min={effectiveFrom ? parseISO(effectiveFrom) : undefined}
                         max={generateThroughMax}
+                        disabled={scheduleReadOnly}
                       />
                     ) : (
                       <p className="flex h-10 items-center text-xs text-muted-foreground">
@@ -394,19 +434,20 @@ export function WeeklySchedulePage() {
                   ) : null}
                   <SchedulePreviewTrigger
                     onClick={() => setPreviewOpen(true)}
-                    disabled={!employee}
+                    disabled={!employee || shiftBlocks.length === 0}
                     resolving={resolving}
                     groupCount={plan?.groups?.length}
                   />
                   <Button
                     type="button"
-                    size="sm"
+                    size="default"
+                    className="h-9 min-w-[7.5rem]"
                     onClick={() => void handleSave(false)}
                     disabled={saveDisabled}
                   >
                     {applying ? (
                       <>
-                        <Loader2Icon className="animate-spin" />
+                        <Loader2Icon className="size-3.5 animate-spin" />
                         Saving
                       </>
                     ) : previewOnly ? (

@@ -109,15 +109,17 @@ export function useWeeklyScheduleResolve(
       ? `${RESOLVE_METHOD}:${employee}:${effectiveFrom}:${debouncedPatternJson}`
       : null;
 
-  const { data, error, isLoading, isValidating, mutate } = useFrappeGetCall<ResolvePlan>(
+  const { data, error, isLoading, mutate } = useFrappeGetCall<ResolvePlan>(
     RESOLVE_METHOD,
     params,
     swrKey
   );
 
-  const resolving =
-    Boolean(patternValid && employee && effectiveFrom && debouncedPatternJson !== patternJson) ||
-    Boolean(swrKey && (isLoading || isValidating));
+  const isDebouncing = Boolean(
+    patternValid && employee && effectiveFrom && debouncedPatternJson !== patternJson
+  );
+  const hasPlan = Boolean(data?.message);
+  const resolving = isDebouncing || Boolean(swrKey && isLoading && !hasPlan);
 
   const refreshPlan = useCallback(() => {
     if (!patternValid || !employee || !effectiveFrom) return;

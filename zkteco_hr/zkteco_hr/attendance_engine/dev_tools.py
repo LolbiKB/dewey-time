@@ -8,6 +8,10 @@ from frappe.utils import add_days, getdate
 from zkteco_hr.attendance_engine.closeout import _generate_for_employee_date
 from zkteco_hr.attendance_engine.hr_calendar import _require_hr_role
 from zkteco_hr.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
+from zkteco_hr.attendance_engine.schedule_resolver import (
+    clear_employee_schedule,
+    preview_clear_employee_schedule,
+)
 
 VALID_MODES = frozenset({"intraday", "closeout", "both"})
 MAX_RANGE_DAYS = 31
@@ -99,3 +103,63 @@ def _build_response(*, employee, start_date, end_date, mode, days_processed):
         "flags_after": len(flags),
         "days": days,
     }
+
+
+def _validate_employee(employee: str) -> str:
+    employee = (employee or "").strip()
+    if not employee:
+        frappe.throw("employee is required")
+    if not frappe.db.exists("Employee", employee):
+        frappe.throw(f"Employee {employee} not found")
+    return employee
+
+
+def _parse_confirm(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return bool(value)
+
+
+def _require_system_manager_for_clear():
+    user = frappe.session.user
+    if user == "Administrator":
+        return
+    roles = set(frappe.get_roles(user) or [])
+    if "System Manager" in roles:
+        return
+    frappe.throw("Clear schedule data requires System Manager role")
+
+
+@frappe.whitelist()
+def preview_clear_employee_schedule_api(employee: str | None = None):
+    """Dev-only: preview SSA / SA / Attendance Flag counts before nuclear clear."""
+    _require_hr_role()
+    employee = _validate_employee(employee or frappe.form_dict.get("employee"))
+    return preview_clear_employee_schedule(employee)
+
+
+@frappe.whitelist()
+def clear_employee_schedule_api(employee: str | None = None, confirm=None):
+    """Dev-only: delete all SSA, SA, and Attendance Flags for one employee."""
+    _require_hr_role()
+    employee = _validate_employee(employee or frappe.form_dict.get("employee"))
+
+    confirm_value = confirm
+    if confirm_value is None:
+        confirm_value = frappe.form_dict.get("confirm")
+
+    if not _parse_confirm(confirm_value):
+        preview = preview_clear_employee_schedule(employee)
+        return {"needs_confirm": True, "preview": preview}
+
+    _require_system_manager_for_clear()
+
+    try:
+        result = clear_employee_schedule(employee)
+        frappe.db.commit()
+        return result
+    except Exception:
+        frappe.db.rollback()
+        raise

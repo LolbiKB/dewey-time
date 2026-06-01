@@ -598,3 +598,120 @@ def generate_shifts_for_ssa(ssa_name: str, start_date, end_date=None) -> None:
         start = getdate(start_date)
         if end_date:
             doc.create_shifts(start, getdate(end_date))
+
+
+_CLEAR_SAMPLE_CAP = 10
+
+
+def _list_employee_shift_assignment_names(employee: str) -> list[str]:
+    if not frappe.db.table_exists("Shift Assignment"):
+        return []
+    return frappe.get_all("Shift Assignment", filters={"employee": employee}, pluck="name") or []
+
+
+def _list_employee_ssa_names(employee: str) -> list[str]:
+    if not frappe.db.table_exists("Shift Schedule Assignment"):
+        return []
+    return frappe.get_all("Shift Schedule Assignment", filters={"employee": employee}, pluck="name") or []
+
+
+def _count_attendance_flags(employee: str) -> int:
+    if not frappe.db.table_exists("Attendance Flag"):
+        return 0
+    return frappe.db.count("Attendance Flag", {"employee": employee})
+
+
+def _sample_names(names: list[str], cap: int = _CLEAR_SAMPLE_CAP) -> list[str]:
+    return list(names[:cap])
+
+
+def preview_clear_employee_schedule(employee: str) -> dict:
+    """Dev: counts of SSA, SA, and Attendance Flag rows for an employee."""
+    assignment_names = _list_employee_shift_assignment_names(employee)
+    ssa_names = _list_employee_ssa_names(employee)
+    flag_count = _count_attendance_flags(employee)
+
+    return {
+        "employee": employee,
+        "shift_assignment_count": len(assignment_names),
+        "ssa_count": len(ssa_names),
+        "attendance_flag_count": flag_count,
+        "sample_shift_assignments": _sample_names(assignment_names),
+        "sample_ssas": _sample_names(ssa_names),
+    }
+
+
+def _disable_ssa(ssa_name: str) -> None:
+    doc = frappe.get_doc("Shift Schedule Assignment", ssa_name)
+    if frappe.db.has_column("Shift Schedule Assignment", "enabled"):
+        doc.enabled = 0
+    if frappe.db.has_column("Shift Schedule Assignment", "shift_status"):
+        doc.shift_status = "Inactive"
+    doc.save(ignore_permissions=True)
+
+
+def _delete_shift_assignment(name: str) -> tuple[str | None, str]:
+    """Returns (cancelled_name or None, deleted_name)."""
+    doc = frappe.get_doc("Shift Assignment", name)
+    cancelled = None
+    if doc.docstatus == 1:
+        doc.cancel()
+        cancelled = name
+    frappe.delete_doc("Shift Assignment", name, force=1)
+    return cancelled, name
+
+
+def _delete_ssa(ssa_name: str) -> tuple[str | None, str | None]:
+    """Returns (deleted_name, disabled_name) — at most one set."""
+    try:
+        frappe.delete_doc("Shift Schedule Assignment", ssa_name, force=1)
+        return ssa_name, None
+    except frappe.LinkExistsError:
+        _disable_ssa(ssa_name)
+        return None, ssa_name
+    except Exception as exc:
+        message = str(exc).lower()
+        if "link" in message or "linked" in message:
+            _disable_ssa(ssa_name)
+            return None, ssa_name
+        raise
+
+
+def clear_employee_schedule(employee: str) -> dict:
+    """
+    Dev: remove all Shift Assignments, Shift Schedule Assignments, and Attendance Flags
+    for one employee. Does not delete Shift Type / Shift Schedule masters.
+    """
+    cancelled_assignments: list[str] = []
+    deleted_assignments: list[str] = []
+    deleted_ssas: list[str] = []
+    disabled_ssas: list[str] = []
+
+    for name in _list_employee_shift_assignment_names(employee):
+        cancelled, deleted = _delete_shift_assignment(name)
+        if cancelled:
+            cancelled_assignments.append(cancelled)
+        deleted_assignments.append(deleted)
+
+    for ssa_name in _list_employee_ssa_names(employee):
+        deleted, disabled = _delete_ssa(ssa_name)
+        if deleted:
+            deleted_ssas.append(deleted)
+        if disabled:
+            disabled_ssas.append(disabled)
+
+    deleted_flags = 0
+    if frappe.db.table_exists("Attendance Flag"):
+        deleted_flags = _count_attendance_flags(employee)
+        if deleted_flags:
+            frappe.db.delete("Attendance Flag", {"employee": employee})
+
+    return {
+        "ok": True,
+        "employee": employee,
+        "cancelled_assignments": cancelled_assignments,
+        "deleted_assignments": deleted_assignments,
+        "deleted_ssas": deleted_ssas,
+        "disabled_ssas": disabled_ssas,
+        "deleted_flags": deleted_flags,
+    }

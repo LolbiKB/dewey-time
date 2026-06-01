@@ -129,6 +129,32 @@ export type WeeklyScheduleTemplate = {
   blocks: ShiftBlock[];
 };
 
+export type ClearSchedulePreview = {
+  employee: string;
+  shift_assignment_count: number;
+  ssa_count: number;
+  attendance_flag_count: number;
+  sample_shift_assignments: string[];
+  sample_ssas: string[];
+};
+
+export type ClearScheduleNeedsConfirm = {
+  needs_confirm: true;
+  preview: ClearSchedulePreview;
+};
+
+export type ClearScheduleResult = {
+  ok: true;
+  employee: string;
+  cancelled_assignments: string[];
+  deleted_assignments: string[];
+  deleted_ssas: string[];
+  disabled_ssas: string[];
+  deleted_flags: number;
+};
+
+export type ClearScheduleResponse = ClearScheduleNeedsConfirm | ClearScheduleResult;
+
 export function emptyWeekPattern(): WeekPattern {
   return {
     frequency: "Every Week",
@@ -367,10 +393,6 @@ export function weekPatternToBlocks(pattern: WeekPattern): ShiftBlock[] {
       profile: bucket.profile,
     }));
 
-  if (!blocks.length) {
-    return [{ id: "block-0", days: [], profile: defaultShiftProfile() }];
-  }
-
   return blocks;
 }
 
@@ -408,6 +430,36 @@ export function createShiftBlock(partial?: Partial<ShiftBlock>): ShiftBlock {
     days: partial?.days ?? [],
     profile: partial?.profile ?? defaultShiftProfile(),
   };
+}
+
+/** Stable compare key for shift blocks (ignores block ids). */
+export function blocksFingerprint(blocks: ShiftBlock[]): string {
+  return JSON.stringify(
+    blocks.map((block) => ({
+      days: block.days,
+      profile: block.profile,
+    }))
+  );
+}
+
+export function normalizeTemplateBlocks(blocks: ShiftBlock[]): ShiftBlock[] {
+  if (!blocks.length) return [];
+  return weekPatternToBlocks(weekPatternFromBlocks(blocks));
+}
+
+export function findMatchingTemplateKey(
+  blocks: ShiftBlock[],
+  templates: Array<{ key: string; blocks: ShiftBlock[] }>
+): string {
+  if (!blocks.length) return "manual";
+  const fp = blocksFingerprint(blocks);
+  for (const template of templates) {
+    if (template.key === "manual") continue;
+    if (blocksFingerprint(normalizeTemplateBlocks(template.blocks)) === fp) {
+      return template.key;
+    }
+  }
+  return "manual";
 }
 
 export function dayConfigFromRow(row: WeekPatternDay): DayTimeConfig {
