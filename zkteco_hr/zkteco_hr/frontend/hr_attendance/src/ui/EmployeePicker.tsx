@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  employeeInitials,
   employeePickerSubtitle,
   employeeSearchHaystack,
   employeeShortName,
@@ -21,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
+import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
 import { WeeklyScheduleSheet } from "@/ui/WeeklyScheduleSheet";
 
 export type EmployeePickerProps = {
@@ -65,7 +65,7 @@ export function EmployeePicker(props: EmployeePickerProps) {
             disabled={disabled}
             className="h-auto min-h-14 min-w-0 flex-1 justify-start gap-3 rounded-none border-0 px-3 py-2 font-normal shadow-none hover:bg-muted/50"
           >
-            <EmployeeAvatar employee={selected} fallbackId={props.value} />
+            <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />
             <span className="min-w-0 flex-1 text-left leading-snug">
               <span className="block truncate text-base font-semibold">{name}</span>
               <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>
@@ -151,28 +151,6 @@ function ScheduleAccessButton(props: {
   );
 }
 
-function EmployeeAvatar(props: {
-  employee: CalendarEmployee | null;
-  fallbackId: string | null;
-}) {
-  return (
-    <span className="relative size-10 shrink-0">
-      <span className="flex size-full items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold text-muted-foreground">
-        {props.employee?.image ? (
-          <img
-            src={props.employee.image}
-            alt=""
-            className="size-full object-cover"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          employeeInitials(props.employee, props.fallbackId)
-        )}
-      </span>
-    </span>
-  );
-}
-
 function EmployeeOption(props: {
   employee: CalendarEmployee;
   selected: boolean;
@@ -187,7 +165,7 @@ function EmployeeOption(props: {
       onSelect={props.onSelect}
       className="gap-2 py-2"
     >
-      <EmployeeAvatar employee={employee} fallbackId={employee.id} />
+      <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">
           {employeeShortName(employee)}

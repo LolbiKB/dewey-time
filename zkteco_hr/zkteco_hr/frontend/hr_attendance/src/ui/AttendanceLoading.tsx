@@ -72,7 +72,7 @@ export function WeekViewSkeleton() {
 export function AttendancePageSkeleton(props: { label?: string }) {
   return (
     <div className="flex h-[100dvh] flex-col bg-background">
-      <div className="mx-auto flex h-full w-full max-w-7xl flex-col gap-3 px-4 py-4 sm:px-6">
+      <div className="mx-auto flex h-full w-full max-w-7xl flex-col gap-3 px-5 py-5 sm:px-8 sm:py-6">
         <AttendanceHeaderSkeleton />
         <div className="flex min-h-0 flex-1 flex-col">
           <WeekViewSkeleton />

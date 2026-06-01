@@ -3,6 +3,7 @@ import { PlusIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TimeInput } from "@/components/ui/time-input";
 import { cn } from "@/lib/utils";
 import {
   WEEKDAYS,
@@ -73,7 +74,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {blocks.map((block, index) => {
         const title = block.days.length ? formatDayList(block.days) : `Shift block ${index + 1}`;
         const blockInvalid = block.days.some((day) =>
@@ -84,14 +85,14 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
           <div
             key={block.id}
             className={cn(
-              "rounded-xl border border-border/80 bg-card p-4",
+              "rounded-xl border border-border/80 bg-card p-5 sm:p-6",
               blockInvalid && "border-destructive/40"
             )}
           >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div className="space-y-1">
                 <p className="text-sm font-medium">{title}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs leading-relaxed text-muted-foreground">
                   Same hours on every selected day — maps to one shared PAT.
                 </p>
               </div>
@@ -108,7 +109,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
               ) : null}
             </div>
 
-            <div className="mb-4 flex flex-wrap gap-1">
+            <div className="mb-6 flex flex-wrap gap-2">
               {WEEKDAYS.map((weekday) => {
                 const selected = block.days.includes(weekday);
                 const takenElsewhere = blocks.some(
@@ -120,7 +121,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
                     type="button"
                     size="sm"
                     variant={selected ? "default" : "outline"}
-                    className="h-8 w-8 px-0"
+                    className="h-9 min-w-9 px-2.5"
                     disabled={!selected && takenElsewhere}
                     onClick={() => toggleDay(block.id, weekday)}
                     aria-pressed={selected}
@@ -133,35 +134,41 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
               })}
             </div>
 
-            <div className="flex flex-wrap items-end gap-3">
-              <TimeField
+            <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              <TimeInput
+                className="w-full"
                 label="Start"
                 value={formatTimeInput(block.profile.start_time)}
-                onChange={(value) => updateBlockProfile(block.id, { start_time: value })}
+                onChange={(e) => updateBlockProfile(block.id, { start_time: e.target.value })}
               />
-              <TimeField
+              <TimeInput
+                className="w-full"
                 label="End"
                 value={formatTimeInput(block.profile.end_time)}
-                onChange={(value) => updateBlockProfile(block.id, { end_time: value })}
+                onChange={(e) => updateBlockProfile(block.id, { end_time: e.target.value })}
               />
-              <TimeField
+              <TimeInput
+                className="w-full"
                 label="Lunch start"
                 value={formatTimeInput(block.profile.lunch_start)}
-                onChange={(value) =>
-                  updateBlockProfile(block.id, { lunch_start: value || null })
+                onChange={(e) =>
+                  updateBlockProfile(block.id, { lunch_start: e.target.value || null })
                 }
               />
-              <TimeField
+              <TimeInput
+                className="w-full"
                 label="Lunch end"
                 value={formatTimeInput(block.profile.lunch_end)}
-                onChange={(value) => updateBlockProfile(block.id, { lunch_end: value || null })}
+                onChange={(e) =>
+                  updateBlockProfile(block.id, { lunch_end: e.target.value || null })
+                }
               />
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Grace</Label>
+              <div className="min-w-0 space-y-2">
+                <Label className="text-xs font-medium text-muted-foreground">Grace (min)</Label>
                 <Input
                   type="number"
                   min={0}
-                  className="h-8 w-14 px-2"
+                  className="h-10 w-full min-w-[5rem] px-3"
                   value={block.profile.grace_minutes}
                   onChange={(e) =>
                     updateBlockProfile(block.id, {
@@ -173,7 +180,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
             </div>
 
             {blockInvalid ? (
-              <p className="mt-2 text-xs text-destructive">
+              <p className="mt-4 text-xs text-destructive">
                 {validationIssues.find((issue) => block.days.includes(issue.weekday))?.message}
               </p>
             ) : null}
@@ -185,20 +192,6 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
         <PlusIcon />
         Add shift block
       </Button>
-    </div>
-  );
-}
-
-function TimeField(props: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{props.label}</Label>
-      <Input
-        type="time"
-        className="h-8 w-[6.75rem]"
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-      />
     </div>
   );
 }

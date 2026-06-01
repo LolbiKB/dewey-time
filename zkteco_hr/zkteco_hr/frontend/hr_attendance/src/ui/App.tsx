@@ -217,7 +217,7 @@ export function App() {
   return (
     <>
       <div className="h-[100dvh] overflow-hidden bg-background text-foreground">
-        <div className="mx-auto flex h-full max-w-7xl flex-col px-4 py-4 sm:px-6">
+        <div className="mx-auto flex h-full max-w-7xl flex-col px-5 py-5 sm:px-8 sm:py-6">
           {loadError ? (
             <Card className="mb-3 border-destructive/40 bg-destructive/5 animate-in fade-in duration-300">
               <CardContent className="py-3 text-sm text-destructive">

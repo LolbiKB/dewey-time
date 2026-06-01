@@ -1,4 +1,4 @@
-import { ChevronsUpDownIcon, Loader2Icon } from "lucide-react";
+import { CheckIcon, ChevronsUpDownIcon, Loader2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -12,12 +12,14 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  employeeInitials,
   employeePickerSubtitle,
+  employeeSearchHaystack,
   employeeShortName,
+  roleLine,
 } from "@/lib/employeeCard";
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee } from "@/types/calendar";
+import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
 
 export type ScheduleEmployeePickerProps = {
   employees: CalendarEmployee[];
@@ -52,14 +54,11 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
           )}
         >
           <span className="flex min-w-0 items-center gap-2 truncate text-left">
-            <span
-              className={cn(
-                "flex shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold",
-                props.compact ? "size-6" : "size-8"
-              )}
-            >
-              {employeeInitials(selected, props.value)}
-            </span>
+            <EmployeeAvatar
+              employee={selected}
+              fallbackId={props.value}
+              className={props.compact ? "size-6" : "size-8"}
+            />
             <span className="min-w-0 truncate">
               <span className={cn("block truncate font-medium", props.compact && "text-sm")}>
                 {employeeShortName(selected, props.value)}
@@ -79,10 +78,7 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(24rem,calc(100vw-2rem))] p-0">
-        <Command filter={(value, search, keywords) => {
-          const haystack = [value, ...(keywords ?? [])].join(" ").toLowerCase();
-          return haystack.includes(search.toLowerCase()) ? 1 : 0;
-        }}>
+        <Command>
           <CommandInput placeholder="Search employees…" />
           <CommandList>
             <CommandEmpty>No employees found.</CommandEmpty>
@@ -90,17 +86,25 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
               {props.employees.map((employee) => (
                 <CommandItem
                   key={employee.id}
-                  value={employee.id}
-                  keywords={[employee.name, employee.id, employee.branch ?? ""]}
+                  value={employeeSearchHaystack(employee)}
                   onSelect={() => {
                     props.onChange(employee.id);
                     setOpen(false);
                   }}
+                  className="gap-2 py-2"
                 >
-                  <span className="font-medium">{employeeShortName(employee, employee.id)}</span>
-                  <span className="ml-2 truncate text-xs text-muted-foreground">
-                    {employeePickerSubtitle(employee)}
+                  <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {employeeShortName(employee, employee.id)}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[employee.id, roleLine(employee)].filter(Boolean).join(" · ")}
+                    </span>
                   </span>
+                  {employee.id === props.value ? (
+                    <CheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  ) : null}
                 </CommandItem>
               ))}
             </CommandGroup>

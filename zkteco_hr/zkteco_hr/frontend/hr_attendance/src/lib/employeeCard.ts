@@ -62,7 +62,7 @@ export function employeePickerSubtitle(employee: CalendarEmployee | null | undef
 
 /** Searchable text for the employee command list (excludes shift schedule doc names). */
 export function employeeSearchHaystack(employee: CalendarEmployee): string {
-  return [
+  const haystack = [
     employee.id,
     employee.employee_name,
     employeeShortName(employee),
@@ -74,6 +74,7 @@ export function employeeSearchHaystack(employee: CalendarEmployee): string {
   ]
     .filter((part) => part != null && String(part).trim())
     .join(" ");
+  return haystack || employee.id || "employee";
 }
 
 export function formatScheduleCoverage(employee: CalendarEmployee): string | null {

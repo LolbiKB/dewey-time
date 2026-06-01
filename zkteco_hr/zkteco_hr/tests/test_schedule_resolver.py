@@ -233,5 +233,75 @@ class TestScheduleApi(unittest.TestCase):
             )
 
 
+class TestScheduleTemplates(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.schedule_api._require_hr_role")
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.cache")
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.get_all")
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.db.table_exists")
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.db.has_column")
+    @patch("zkteco_hr.attendance_engine.schedule_api._blocks_from_week_pattern")
+    def test_templates_deduped_and_sorted_by_count(
+        self,
+        blocks_from_pattern,
+        has_column,
+        table_exists,
+        get_all,
+        cache,
+        _role,
+    ):
+        from zkteco_hr.attendance_engine import schedule_api
+
+        table_exists.return_value = True
+        has_column.side_effect = lambda _dt, col: col in ("enabled", "end_date")
+        cache.return_value.get_value.return_value = None
+
+        get_all.return_value = [
+            {"employee": "EMP-1", "end_date": None},
+            {"employee": "EMP-2", "end_date": None},
+            {"employee": "EMP-3", "end_date": None},
+        ]
+
+        tpl_a = [
+            {
+                "id": "tpl-0",
+                "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+                "profile": {
+                    "start_time": "08:00",
+                    "end_time": "17:00",
+                    "lunch_start": "12:00",
+                    "lunch_end": "13:00",
+                    "grace_minutes": 10,
+                },
+            }
+        ]
+        tpl_b = [
+            {
+                "id": "tpl-0",
+                "days": ["Saturday"],
+                "profile": {
+                    "start_time": "08:00",
+                    "end_time": "12:00",
+                    "lunch_start": None,
+                    "lunch_end": None,
+                    "grace_minutes": 10,
+                },
+            }
+        ]
+
+        def blocks_side_effect(emp):
+            if emp in ("EMP-1", "EMP-2"):
+                return tpl_a
+            return tpl_b
+
+        blocks_from_pattern.side_effect = blocks_side_effect
+
+        payload = schedule_api.list_weekly_schedule_templates(limit=10)
+        templates = payload["templates"]
+
+        self.assertEqual(len(templates), 2)
+        self.assertEqual(templates[0]["count"], 2)
+        self.assertEqual(templates[1]["count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

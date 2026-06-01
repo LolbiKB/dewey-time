@@ -122,6 +122,13 @@ export type ApplyScheduleResult = {
   attendance_url?: string;
 };
 
+export type WeeklyScheduleTemplate = {
+  key: string;
+  label: string;
+  count: number;
+  blocks: ShiftBlock[];
+};
+
 export function emptyWeekPattern(): WeekPattern {
   return {
     frequency: "Every Week",

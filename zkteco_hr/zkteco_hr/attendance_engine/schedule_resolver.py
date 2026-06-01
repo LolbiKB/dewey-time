@@ -592,7 +592,9 @@ def upsert_ssa(*, employee: str, shift_schedule: str, create_shifts_after) -> st
     return doc.name
 
 
-def generate_shifts_for_ssa(ssa_name: str, start_date, end_date) -> None:
+def generate_shifts_for_ssa(ssa_name: str, start_date, end_date=None) -> None:
     doc = frappe.get_doc("Shift Schedule Assignment", ssa_name)
     if hasattr(doc, "create_shifts"):
-        doc.create_shifts(getdate(start_date), getdate(end_date))
+        start = getdate(start_date)
+        if end_date:
+            doc.create_shifts(start, getdate(end_date))

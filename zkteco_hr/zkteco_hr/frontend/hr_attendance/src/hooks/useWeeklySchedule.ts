@@ -7,6 +7,7 @@ import type {
   HolidayPreviewItem,
   ResolvePlan,
   ScheduleContext,
+  WeeklyScheduleTemplate,
   WeekPattern,
 } from "@/types/schedule";
 import { validateWeekPattern, weekPatternForApi } from "@/types/schedule";
@@ -15,6 +16,7 @@ const CONTEXT_METHOD = "zkteco_hr.attendance_engine.schedule_api.get_employee_sc
 const RESOLVE_METHOD = "zkteco_hr.attendance_engine.schedule_api.resolve_weekly_schedule_plan";
 const HOLIDAY_METHOD = "zkteco_hr.attendance_engine.schedule_api.get_holiday_preview";
 const APPLY_METHOD = "zkteco_hr.attendance_engine.schedule_api.apply_weekly_schedule";
+const TEMPLATES_METHOD = "zkteco_hr.attendance_engine.schedule_api.list_weekly_schedule_templates";
 
 export function useScheduleContext(employee: string | null) {
   const params = useMemo(() => (employee ? { employee } : undefined), [employee]);
@@ -142,7 +144,7 @@ export function useApplyWeeklySchedule() {
       employee: string;
       week_pattern: WeekPattern;
       create_shifts_after: string;
-      generate_through: string;
+      generate_through?: string | null;
       confirm_create?: boolean;
     }): Promise<ApplyScheduleResult | null> => {
       setStatus(null);
@@ -153,7 +155,7 @@ export function useApplyWeeklySchedule() {
           employee: args.employee,
           week_pattern: JSON.stringify(weekPatternForApi(args.week_pattern)),
           create_shifts_after: args.create_shifts_after,
-          generate_through: args.generate_through,
+          generate_through: args.generate_through ?? "",
           confirm_create: args.confirm_create ? 1 : 0,
         });
         const payload = result?.message ?? (result as unknown as ApplyScheduleResult);
@@ -181,4 +183,22 @@ export function useApplyWeeklySchedule() {
   );
 
   return { apply, applying: loading, status, clearStatus: () => setStatus(null) };
+}
+
+export function useWeeklyScheduleTemplates(limit = 12) {
+  const params = useMemo(() => ({ limit }), [limit]);
+  const swrKey = `${TEMPLATES_METHOD}:${limit}`;
+
+  const { data, error, isLoading, mutate } = useFrappeGetCall<{ templates: WeeklyScheduleTemplate[] }>(
+    TEMPLATES_METHOD,
+    params,
+    swrKey
+  );
+
+  return {
+    templates: data?.message?.templates ?? [],
+    error,
+    isLoading,
+    refresh: mutate,
+  };
 }

@@ -15,6 +15,7 @@ from zkteco_hr.attendance_engine.schedule_resolver import (
     create_shift_type,
     employee_has_enabled_ssas,
     generate_shifts_for_ssa,
+    group_week_pattern,
     is_ssa_enabled,
     list_employee_ssas,
     upsert_ssa,
@@ -68,6 +69,152 @@ def _employee_header(employee: str) -> dict:
         "branch": row.get("branch"),
     }
 
+
+def _normalize_time_hhmm(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) >= 2:
+        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+    return text
+
+
+def _template_key_from_blocks(blocks: list[dict]) -> str:
+    # Stable key: ordered blocks, ordered days.
+    compact: list[dict] = []
+    for block in blocks:
+        profile = block.get("profile") or {}
+        compact.append(
+            {
+                "days": block.get("days") or [],
+                "start": _normalize_time_hhmm(profile.get("start_time")),
+                "end": _normalize_time_hhmm(profile.get("end_time")),
+                "lunch_start": _normalize_time_hhmm(profile.get("lunch_start")),
+                "lunch_end": _normalize_time_hhmm(profile.get("lunch_end")),
+                "grace": int(profile.get("grace_minutes") or 0),
+            }
+        )
+    return json.dumps(compact, sort_keys=True, separators=(",", ":"))
+
+
+def _template_label_from_blocks(blocks: list[dict]) -> str:
+    # Human label, not guaranteed unique.
+    parts: list[str] = []
+    for block in blocks:
+        days = block.get("days") or []
+        profile = block.get("profile") or {}
+        start = _normalize_time_hhmm(profile.get("start_time")) or "—"
+        end = _normalize_time_hhmm(profile.get("end_time")) or "—"
+        lunch_start = _normalize_time_hhmm(profile.get("lunch_start"))
+        lunch_end = _normalize_time_hhmm(profile.get("lunch_end"))
+        lunch = f" (lunch {lunch_start}–{lunch_end})" if lunch_start and lunch_end else ""
+        parts.append(f"{', '.join([d[:3] for d in days])}: {start}–{end}{lunch}")
+    if not parts:
+        return "Empty schedule"
+    if len(parts) == 1:
+        return parts[0]
+    return " · ".join(parts)
+
+
+def _blocks_from_week_pattern(employee: str) -> list[dict]:
+    week_pattern = {"frequency": "Every Week", "days": week_pattern_from_ssas(employee)}
+    blocks: list[dict] = []
+    for index, group in enumerate(group_week_pattern(week_pattern.get("days") or [])):
+        profile = group.get("profile") or {}
+        blocks.append(
+            {
+                "id": f"tpl-{index}",
+                "days": group.get("days") or [],
+                "profile": {
+                    "start_time": _normalize_time_hhmm(profile.get("start_time")) or "",
+                    "end_time": _normalize_time_hhmm(profile.get("end_time")) or "",
+                    "lunch_start": _normalize_time_hhmm(profile.get("lunch_start")),
+                    "lunch_end": _normalize_time_hhmm(profile.get("lunch_end")),
+                    "grace_minutes": int(profile.get("grace_minutes") or 0),
+                },
+            }
+        )
+    return blocks
+
+
+@frappe.whitelist()
+def list_weekly_schedule_templates(limit=10):
+    """
+    Dynamic templates derived from employees' enabled SSAs, ranked by frequency.
+
+    Returns: [{ key, label, blocks, count }]
+    """
+    _require_hr_role()
+    try:
+        limit_n = int(limit or 10)
+    except Exception:
+        limit_n = 10
+    limit_n = max(1, min(limit_n, 50))
+
+    cache_key = f"weekly_schedule_templates:v1:limit={limit_n}"
+    cached = frappe.cache().get_value(cache_key)
+    if cached:
+        return cached
+
+    if not frappe.db.table_exists("Shift Schedule Assignment"):
+        return {"templates": []}
+
+    # Derive employee set from enabled SSAs (and not ended if end_date exists).
+    filters: dict = {}
+    if frappe.db.has_column("Shift Schedule Assignment", "enabled"):
+        filters["enabled"] = 1
+    fields = ["employee"]
+    has_end_date = frappe.db.has_column("Shift Schedule Assignment", "end_date")
+    if has_end_date:
+        fields.append("end_date")
+
+    rows = frappe.get_all(
+        "Shift Schedule Assignment",
+        filters=filters,
+        fields=fields,
+        limit_page_length=2000,
+    ) or []
+
+    today = getdate(nowdate())
+    employees: set[str] = set()
+    for row in rows:
+        emp = row.get("employee")
+        if not emp:
+            continue
+        if has_end_date:
+            end_date = row.get("end_date")
+            if end_date and getdate(end_date) < today:
+                continue
+        employees.add(emp)
+    employees = sorted(employees)
+
+    counts: dict[str, dict] = {}
+    for emp in employees:
+        try:
+            blocks = _blocks_from_week_pattern(emp)
+        except Exception:
+            continue
+        if not blocks:
+            continue
+        key = _template_key_from_blocks(blocks)
+        item = counts.get(key)
+        if not item:
+            counts[key] = {
+                "key": key,
+                "label": _template_label_from_blocks(blocks),
+                "blocks": blocks,
+                "count": 1,
+            }
+        else:
+            item["count"] += 1
+
+    templates = sorted(counts.values(), key=lambda t: (-int(t.get("count") or 0), t.get("label") or ""))
+    payload = {"templates": templates[:limit_n]}
+    frappe.cache().set_value(cache_key, payload, expires_in_sec=300)
+    return payload
 
 @frappe.whitelist()
 def get_employee_schedule_context(employee: str):
@@ -175,13 +322,18 @@ def apply_weekly_schedule(
     effective = getdate(
         create_shifts_after or frappe.form_dict.get("create_shifts_after") or add_days(nowdate(), 1)
     )
-    through = getdate(
-        generate_through or frappe.form_dict.get("generate_through") or add_days(effective, 90)
+    through_raw = (
+        generate_through
+        if generate_through is not None
+        else frappe.form_dict.get("generate_through")
     )
-    if through < effective:
-        frappe.throw("generate_through must be on or after create_shifts_after")
-    if (through - effective).days > 365:
-        frappe.throw("generate_through cannot be more than 365 days after create_shifts_after")
+    through = None
+    if through_raw is not None and str(through_raw).strip():
+        through = getdate(through_raw)
+        if through < effective:
+            frappe.throw("generate_through must be on or after create_shifts_after")
+        if (through - effective).days > 365:
+            frappe.throw("generate_through cannot be more than 365 days after create_shifts_after")
 
     confirm = confirm_create
     if isinstance(confirm, str):
@@ -226,7 +378,8 @@ def apply_weekly_schedule(
                 shift_schedule=pat_name,
                 create_shifts_after=effective,
             )
-            generate_shifts_for_ssa(ssa_name, effective, through)
+            if through is not None:
+                generate_shifts_for_ssa(ssa_name, effective, through)
             ssas_out.append({"name": ssa_name, "shift_schedule": pat_name})
 
         frappe.db.commit()
@@ -255,6 +408,6 @@ def apply_weekly_schedule(
             "shift_types": created_shift_types,
             "shift_schedules": created_shift_schedules,
         },
-        "assignments_generated_through": str(through),
+        "assignments_generated_through": str(through) if through else None,
         "attendance_url": f"/hr-attendance?employee={employee}",
     }
