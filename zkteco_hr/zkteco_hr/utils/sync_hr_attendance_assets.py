@@ -7,13 +7,34 @@ import frappe
 # (sync onto a symlink deletes the bundle → 404 / text/html MIME on CSS).
 
 
+def _hr_attendance_bundle_ok(base_dir: str) -> bool:
+    if not base_dir or not os.path.isdir(base_dir):
+        return False
+    assets_dir = os.path.join(base_dir, "assets")
+    return os.path.isfile(os.path.join(assets_dir, "index.css")) and os.path.isfile(
+        os.path.join(assets_dir, "index.js")
+    )
+
+
+def _remove_dest(dest_dir: str) -> None:
+    if os.path.islink(dest_dir):
+        os.unlink(dest_dir)
+    elif os.path.isdir(dest_dir):
+        shutil.rmtree(dest_dir)
+    elif os.path.isfile(dest_dir):
+        os.remove(dest_dir)
+
+
 def sync_hr_attendance_assets():
     """
-    Copy Vite-built SPA into sites/assets when bench build symlinks are missing.
+    Copy Vite-built SPA into sites/assets when the bundle is missing or unreachable.
 
-    When sites/assets/.../hr_attendance is already a symlink to app public/,
-    files are served directly from public/ — skip copy. Copying assets/ onto the
-    same path (via symlink) deletes the bundle and causes 404 / text/html MIME errors.
+    When sites/assets/.../hr_attendance already exposes index.js + index.css (symlink
+    or copy), skip — never partial-sync into a healthy tree.
+
+    When the bundle is missing (empty dir, broken symlink, or symlink target wiped),
+    remove dest and full copytree from app public/. Never rmtree/copy only assets/
+    through a symlink (that deletes the app bundle).
     """
     app = "zkteco_hr"
     app_path = frappe.get_app_path(app)
@@ -24,19 +45,19 @@ def sync_hr_attendance_assets():
     if not os.path.isdir(src_assets):
         return
 
-    if os.path.islink(dest_dir):
-        return
-
-    dest_assets = os.path.join(dest_dir, "assets")
-    if os.path.exists(dest_assets):
+    if os.path.lexists(dest_dir):
         try:
-            if os.path.samefile(src_assets, dest_assets):
-                return
+            resolved = os.path.realpath(dest_dir)
         except OSError:
-            pass
+            resolved = ""
 
-    if os.path.exists(dest_dir):
-        shutil.rmtree(dest_dir)
+        if _hr_attendance_bundle_ok(resolved):
+            return
+
+        _remove_dest(dest_dir)
+
+    if os.path.lexists(dest_dir):
+        return
 
     # index.html contains Jinja; served only via www/hr-attendance.
     shutil.copytree(
