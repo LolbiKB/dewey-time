@@ -7,8 +7,13 @@ from zoneinfo import ZoneInfo
 import frappe
 from frappe.utils import add_days, get_datetime, getdate, now_datetime, nowdate
 
+from zkteco_hr.attendance_engine.absence_flags import (
+    evaluate_missing_time_flags,
+    missing_time_max_end_min_for_date,
+)
 from zkteco_hr.attendance_engine.bridge_auth import validate_bridge_request
 from zkteco_hr.attendance_engine.lunch_flags import evaluate_lunch_flags
+from zkteco_hr.attendance_engine.record_issue_flags import evaluate_record_issue_flags
 # Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
 from zkteco_hr.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
 
@@ -17,31 +22,35 @@ CLOSEOUT_STATUSES = frozenset({"closed", "deferred_offline", "closure_failed"})
 
 AUTO_FLAG_CODES = [
     "UNNOTIFIED_ABSENCE",
+    "MISSING_TIME",
+    "ATTENDANCE_ISSUE",
     "NON_PRIMARY_SITE_PUNCH",
     "LATE_START",
     "LATE_FROM_LUNCH",
     "LEFT_EARLY",
-    "MISSING_LUNCH",
     "OFF_SHIFT_PUNCH",
     "MISSING_IN_OR_OUT",
+    "MISSING_LUNCH",
     "UNKNOWN_DEVICE_BRANCH",
     "DELIVERY_FAILED",
+    "NO_CHECKIN_YET",
 ]
 
 DEVICE_CLOSEOUT_FLAG_CODES = [
+    "MISSING_TIME",
+    "ATTENDANCE_ISSUE",
     "NON_PRIMARY_SITE_PUNCH",
     "LATE_START",
     "LATE_FROM_LUNCH",
     "LEFT_EARLY",
-    "MISSING_LUNCH",
     "OFF_SHIFT_PUNCH",
-    "MISSING_IN_OR_OUT",
-    "UNKNOWN_DEVICE_BRANCH",
-    "DELIVERY_FAILED",
+    "UNNOTIFIED_ABSENCE",
 ]
 
 FLAG_SEVERITY = {
     "UNNOTIFIED_ABSENCE": "CRITICAL",
+    "MISSING_TIME": "CRITICAL",
+    "ATTENDANCE_ISSUE": "CRITICAL",
     "MISSING_IN_OR_OUT": "CRITICAL",
     "UNKNOWN_DEVICE_BRANCH": "CRITICAL",
     "DELIVERY_FAILED": "WARNING",
@@ -190,8 +199,11 @@ def generate_auto_flags_for_device_date(device_sn, local_date, undelivered=None)
     if isinstance(undelivered_items, str):
         undelivered_items = _parse_undelivered(undelivered_items, status="closed")
 
-    employees = _employees_for_device_closeout(device_sn, local_date, undelivered_items)
-    for employee in employees:
+    branch = _device_closeout_branch(device_sn, local_date)
+    employees = set(_employees_for_device_closeout(device_sn, local_date, undelivered_items))
+    employees.update(_on_shift_zero_checkin_employees_at_branch(branch, local_date))
+
+    for employee in sorted(employees):
         employee_undelivered = [
             item
             for item in undelivered_items
@@ -200,7 +212,7 @@ def generate_auto_flags_for_device_date(device_sn, local_date, undelivered=None)
         _generate_for_employee_date(
             employee=employee,
             attendance_date=local_date,
-            include_unnotified_absence=False,
+            include_unnotified_absence=True,
             device_sn=device_sn,
             undelivered_items=employee_undelivered,
         )
@@ -237,6 +249,8 @@ def _generate_company_fallback_for_date(*, company: str, attendance_date):
 
         checkins = _get_checkins_for_day(employee=employee, attendance_date=attendance_date)
         if checkins:
+            continue
+        if should_skip_absence_flags(employee=employee, employee_branch=employee_branch, attendance_date=attendance_date):
             continue
 
         _delete_auto_flags_for_employee_date(
@@ -299,6 +313,64 @@ def _employees_for_device_closeout(device_sn: str, local_date, undelivered_items
     return sorted(employees)
 
 
+def _device_closeout_branch(device_sn: str, local_date) -> str | None:
+    local_date = getdate(local_date)
+    alert_name = f"DCA-{frappe.scrub(device_sn)}-{local_date}"[:140]
+    return frappe.db.get_value("Device Closeout Alert", alert_name, "branch")
+
+
+def _on_shift_zero_checkin_employees_at_branch(branch: str | None, local_date) -> list[str]:
+    if not branch:
+        return []
+    local_date = getdate(local_date)
+    employees = (
+        frappe.get_all("Employee", filters={"status": "Active", "branch": branch}, pluck="name") or []
+    )
+    out: list[str] = []
+    for employee in employees:
+        if not _get_shift_assignment(employee=employee, attendance_date=local_date):
+            continue
+        if _get_checkins_for_day(employee=employee, attendance_date=local_date):
+            continue
+        out.append(employee)
+    return out
+
+
+def should_skip_absence_flags(*, employee: str, employee_branch: str | None, attendance_date) -> bool:
+    attendance_date = getdate(attendance_date)
+    if employee_branch and has_open_device_closeout_alert(branch=employee_branch, local_date=attendance_date):
+        return True
+    return has_delivery_or_record_failure_today(employee, attendance_date)
+
+
+def has_delivery_or_record_failure_today(employee: str, attendance_date) -> bool:
+    attendance_date = getdate(attendance_date)
+    if frappe.db.exists(
+        "Attendance Flag",
+        {
+            "employee": employee,
+            "attendance_date": attendance_date,
+            "flag_code": "DELIVERY_FAILED",
+            "source": "AUTO",
+        },
+    ):
+        return True
+    rows = frappe.get_all(
+        "Attendance Flag",
+        filters={
+            "employee": employee,
+            "attendance_date": attendance_date,
+            "flag_code": "ATTENDANCE_ISSUE",
+            "source": "AUTO",
+        },
+        fields=["evidence"],
+    )
+    for row in rows or []:
+        if "delivery_failed" in (row.get("evidence") or ""):
+            return True
+    return False
+
+
 def _generate_for_employee_date(
     *,
     employee: str,
@@ -340,35 +412,85 @@ def _generate_for_employee_date(
         "device_sn": device_sn,
     }
 
-    flags_to_create = []
+    flags_to_create: list[tuple[str, dict]] = []
 
-    if include_unnotified_absence:
-        if on_shift and checkins_count == 0:
-            flags_to_create.append(("UNNOTIFIED_ABSENCE", {"reason": "on_shift_no_checkins"}))
-    elif on_shift and checkins_count == 0:
-        # Device closeout path: employees only in undelivered list get flags below.
-        pass
-
-    if (not on_shift) and checkins_count > 0:
+    if not on_shift:
+        if checkins_count == 0:
+            return
         flags_to_create.append(("OFF_SHIFT_PUNCH", {"reason": "off_shift_has_checkins"}))
-    elif on_shift and checkins_count == 1:
-        flags_to_create.append(("MISSING_IN_OR_OUT", {"reason": "single_checkin"}))
+        for flag_code, extra_evidence in flags_to_create:
+            _insert_flag(
+                employee=employee,
+                company=employee_company,
+                attendance_date=attendance_date,
+                flag_code=flag_code,
+                evidence={**evidence, **extra_evidence},
+            )
+        return
 
-    unknown_branch_hits = 0
-    non_primary_hits = 0
-    for c in checkins:
-        device_branch = c.get("custom_device_branch")
-        if not device_branch:
-            unknown_branch_hits += 1
-            continue
-        if employee_branch and device_branch != employee_branch:
-            non_primary_hits += 1
-
-    if checkins_count > 0 and unknown_branch_hits > 0:
-        flags_to_create.append(
-            ("UNKNOWN_DEVICE_BRANCH", {"unknown_branch_checkins": unknown_branch_hits})
+    if checkins_count == 0:
+        flags_to_create.extend(
+            evaluate_record_issue_flags(
+                checkins=checkins,
+                shift_meta=None,
+                attendance_date=attendance_date,
+                undelivered_items=undelivered_items,
+            )
         )
-    if checkins_count > 0 and employee_branch and non_primary_hits > 0:
+        if (
+            include_unnotified_absence
+            and not undelivered_items
+            and not should_skip_absence_flags(
+                employee=employee,
+                employee_branch=employee_branch,
+                attendance_date=attendance_date,
+            )
+        ):
+            flags_to_create.insert(
+                0, ("UNNOTIFIED_ABSENCE", {"reason": "on_shift_no_checkins"})
+            )
+        for flag_code, extra_evidence in flags_to_create:
+            _insert_flag(
+                employee=employee,
+                company=employee_company,
+                attendance_date=attendance_date,
+                flag_code=flag_code,
+                evidence={**evidence, **extra_evidence},
+            )
+        return
+
+    shift_meta = (
+        _get_shift_meta(shift_assignment["shift_type"])
+        if shift_assignment and shift_assignment.get("shift_type")
+        else None
+    )
+    grace = int(shift_meta.get("custom_grace_minutes") or 0) if shift_meta else 0
+
+    if shift_meta and shift_meta.get("start_time") is not None:
+        start_dt = _combine_date_time(attendance_date, shift_meta["start_time"])
+        late_threshold = start_dt + timedelta(minutes=grace)
+        evidence["shift_start"] = start_dt.isoformat()
+        evidence["grace_minutes"] = grace
+        evidence["late_threshold"] = late_threshold.isoformat()
+        if first_in_dt and first_in_dt > late_threshold:
+            flags_to_create.append(
+                (
+                    "LATE_START",
+                    {
+                        "first_in": first_in_dt.isoformat(),
+                        "late_threshold": late_threshold.isoformat(),
+                    },
+                )
+            )
+
+    non_primary_hits = 0
+    if employee_branch:
+        non_primary_hits = sum(
+            1
+            for c in checkins
+            if c.get("custom_device_branch") and c.get("custom_device_branch") != employee_branch
+        )
+    if non_primary_hits > 0:
         flags_to_create.append(
             (
                 "NON_PRIMARY_SITE_PUNCH",
@@ -379,55 +501,50 @@ def _generate_for_employee_date(
             )
         )
 
-    if on_shift and first_in_dt and shift_assignment and shift_assignment.get("shift_type"):
-        shift_meta = _get_shift_meta(shift_assignment["shift_type"])
-        if shift_meta and shift_meta.get("start_time") is not None:
-            grace = int(shift_meta.get("custom_grace_minutes") or 0)
-            start_dt = _combine_date_time(attendance_date, shift_meta["start_time"])
-            late_threshold = start_dt + timedelta(minutes=grace)
-            evidence["shift_start"] = start_dt.isoformat()
-            evidence["grace_minutes"] = grace
-            evidence["late_threshold"] = late_threshold.isoformat()
-            if first_in_dt > late_threshold:
+    if shift_meta and checkins_count > 0:
+        flags_to_create.extend(
+            evaluate_missing_time_flags(
+                checkins=checkins,
+                shift_meta=shift_meta,
+                attendance_date=attendance_date,
+                max_end_min=None,
+            )
+        )
+
+    if shift_meta and checkins_count >= 2:
+        flags_to_create.extend(
+            evaluate_lunch_flags(
+                checkins=checkins,
+                shift_meta=shift_meta,
+                attendance_date=attendance_date,
+                grace_minutes=grace,
+            )
+        )
+        if last_out_dt and shift_meta.get("end_time") is not None:
+            end_dt = _combine_date_time(attendance_date, shift_meta["end_time"])
+            early_threshold = end_dt - timedelta(minutes=grace)
+            evidence["shift_end"] = end_dt.isoformat()
+            evidence["early_threshold"] = early_threshold.isoformat()
+            if last_out_dt < early_threshold:
                 flags_to_create.append(
                     (
-                        "LATE_START",
+                        "LEFT_EARLY",
                         {
-                            "first_in": first_in_dt.isoformat(),
-                            "late_threshold": late_threshold.isoformat(),
+                            "last_out": last_out_dt.isoformat(),
+                            "early_threshold": early_threshold.isoformat(),
                         },
                     )
                 )
 
-            if on_shift and checkins_count >= 2:
-                flags_to_create.extend(
-                    evaluate_lunch_flags(
-                        checkins=checkins,
-                        shift_meta=shift_meta,
-                        attendance_date=attendance_date,
-                        grace_minutes=grace,
-                    )
-                )
-
-            if (
-                checkins_count >= 2
-                and last_out_dt
-                and shift_meta.get("end_time") is not None
-            ):
-                end_dt = _combine_date_time(attendance_date, shift_meta["end_time"])
-                early_threshold = end_dt - timedelta(minutes=grace)
-                evidence["shift_end"] = end_dt.isoformat()
-                evidence["early_threshold"] = early_threshold.isoformat()
-                if last_out_dt < early_threshold:
-                    flags_to_create.append(
-                        (
-                            "LEFT_EARLY",
-                            {
-                                "last_out": last_out_dt.isoformat(),
-                                "early_threshold": early_threshold.isoformat(),
-                            },
-                        )
-                    )
+    flags_to_create.extend(
+        evaluate_record_issue_flags(
+            checkins=checkins,
+            shift_meta=shift_meta,
+            attendance_date=attendance_date,
+            grace_minutes=grace,
+            undelivered_items=undelivered_items,
+        )
+    )
 
     for flag_code, extra_evidence in flags_to_create:
         _insert_flag(
@@ -436,20 +553,6 @@ def _generate_for_employee_date(
             attendance_date=attendance_date,
             flag_code=flag_code,
             evidence={**evidence, **extra_evidence},
-        )
-
-    for item in undelivered_items or []:
-        _insert_flag(
-            employee=employee,
-            company=employee_company,
-            attendance_date=attendance_date,
-            flag_code="DELIVERY_FAILED",
-            evidence={
-                **evidence,
-                "reason": "undelivered_checkin",
-                "device_sn": device_sn,
-                "undelivered": item,
-            },
         )
 
 

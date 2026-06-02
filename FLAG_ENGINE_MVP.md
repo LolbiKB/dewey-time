@@ -59,13 +59,15 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 |------|------|----------------|----------|
 | `LATE_START` | Intraday + closeout | 0 / 1 | On-shift; `Shift Type.start_time`, `custom_grace_minutes` |
 | `LEFT_EARLY` | Closeout | 1 | On-shift; ≥2 checkins; last punch before `end_time − grace` |
-| `NO_CHECKIN_YET` | Intraday only | 0 | On-shift; no checkins; after start + grace (default 2h); no open device alert; no `DELIVERY_FAILED` today |
+| `MISSING_TIME` | Intraday + closeout | 0 / 1 | On-shift obligation gap **≥30 min** (`absence_threshold_minutes`); leading / away / trailing |
+| `ATTENDANCE_ISSUE` | Closeout (+ intraday wrong-site separate) | 1 | Incomplete punch data (`single_checkin`, `unpaired_punch`, `delivery_failed`, etc.) — **CRITICAL** |
 | `OFF_SHIFT_PUNCH` | Closeout | 1 | **Off-shift** (no assignment) but has checkins |
 | `MISSING_IN_OR_OUT` | Closeout | 1 | On-shift; exactly one checkin |
 | `NON_PRIMARY_SITE_PUNCH` | Intraday + closeout | 0 / 1 | `Employee.branch` ≠ `custom_device_branch` |
 | `UNKNOWN_DEVICE_BRANCH` | Closeout | 1 | Checkin missing `custom_device_branch` |
 | `DELIVERY_FAILED` | Closeout | 1 | Bridge `undelivered[]` on `status=closed` |
-| `UNNOTIFIED_ABSENCE` | **03:00 company fallback only** | 1 | On-shift; zero checkins; no open device closeout alert for branch |
+| `UNNOTIFIED_ABSENCE` | Closeout + **03:00 fallback** | 1 | On-shift; zero checkins at close; branch sweep on device closeout |
+| `OFF_SHIFT_PUNCH` | Closeout | 1 | Not on-shift but has punches — **only** flag that day (suppresses all others) |
 | `MISSING_LUNCH` | Closeout | 1 | Full-day shift with lunch window; no plausible out/in pair |
 | `LATE_FROM_LUNCH` | Closeout | 1 | Full-day shift; return after `lunch_end + grace` |
 
@@ -74,7 +76,7 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 | Rules doc | Code / behavior |
 |-----------|-----------------|
 | `MISSING_ALL_PUNCHES` | **`UNNOTIFIED_ABSENCE`** (same intent: on-shift, no checkins at closeout/fallback) |
-| Per-device closeout absence for all on-shift staff | **Not MVP** — by design only **03:00 fallback** creates `UNNOTIFIED_ABSENCE` |
+| Per-device closeout absence for all on-shift staff | **Done** — branch sweep + `include_unnotified_absence` on device close |
 | Device closeout | Flags employees who **punched on that device** (+ `undelivered`); not company-wide absence sweep |
 
 ### Why P0 #1 mattered (historical)

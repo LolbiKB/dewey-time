@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import frappe
 from frappe.utils import getdate, now_datetime, nowdate
 
+from zkteco_hr.attendance_engine.absence_flags import (
+    evaluate_missing_time_flags,
+    missing_time_max_end_min_for_date,
+)
 from zkteco_hr.attendance_engine.closeout import (
     _combine_date_time,
     _delete_auto_flags_for_employee_date,
@@ -13,12 +17,13 @@ from zkteco_hr.attendance_engine.closeout import (
     _get_shift_assignment,
     _get_shift_meta,
     _insert_flag,
+    has_delivery_or_record_failure_today,
     has_open_device_closeout_alert,
 )
 
 INTRADAY_FLAG_CODES = [
     "LATE_START",
-    "NO_CHECKIN_YET",
+    "MISSING_TIME",
     "NON_PRIMARY_SITE_PUNCH",
 ]
 
@@ -74,6 +79,13 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
     }
 
     shift_meta = _get_shift_meta(shift_assignment["shift_type"]) if shift_assignment else None
+    if not shift_meta:
+        return
+
+    skip_absence = (
+        employee_branch
+        and has_open_device_closeout_alert(branch=employee_branch, local_date=attendance_date)
+    ) or has_delivery_or_record_failure_today(employee, attendance_date)
 
     if checkins_count > 0 and employee_branch:
         non_primary_hits = sum(
@@ -95,7 +107,7 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
                 day_closed=0,
             )
 
-    if shift_meta and shift_meta.get("start_time") is not None:
+    if shift_meta.get("start_time") is not None:
         grace = int(shift_meta.get("custom_grace_minutes") or 0)
         start_dt = _combine_date_time(attendance_date, shift_meta["start_time"])
         late_threshold = start_dt + timedelta(minutes=grace)
@@ -119,25 +131,20 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
                     day_closed=0,
                 )
 
-        if checkins_count == 0:
-            no_checkin_after_hours = int(frappe.conf.get("intraday_no_checkin_grace_hours") or 2)
-            no_checkin_threshold = start_dt + timedelta(hours=no_checkin_after_hours)
-            if (
-                now_dt > no_checkin_threshold
-                and not has_open_device_closeout_alert(branch=employee_branch, local_date=attendance_date)
-                and not _has_delivery_failed_today(employee, attendance_date)
+        if not skip_absence:
+            max_end_min = missing_time_max_end_min_for_date(attendance_date)
+            for flag_code, extra in evaluate_missing_time_flags(
+                checkins=checkins,
+                shift_meta=shift_meta,
+                attendance_date=attendance_date,
+                max_end_min=max_end_min,
             ):
                 _insert_flag(
                     employee=employee,
                     company=employee_company,
                     attendance_date=attendance_date,
-                    flag_code="NO_CHECKIN_YET",
-                    evidence={
-                        **evidence,
-                        "reason": "on_shift_no_checkin_yet",
-                        "no_checkin_threshold": no_checkin_threshold.isoformat(),
-                        "now": now_dt.isoformat(),
-                    },
+                    flag_code=flag_code,
+                    evidence={**evidence, **extra},
                     day_closed=0,
                 )
 
@@ -163,20 +170,6 @@ def on_employee_checkin_after_insert(doc, method=None):
     if not doc or not doc.get("employee") or not doc.get("time"):
         return
     enqueue_intraday_refresh(doc.employee, getdate(doc.time))
-
-
-def _has_delivery_failed_today(employee: str, attendance_date) -> bool:
-    return bool(
-        frappe.db.exists(
-            "Attendance Flag",
-            {
-                "employee": employee,
-                "attendance_date": getdate(attendance_date),
-                "flag_code": "DELIVERY_FAILED",
-                "source": "AUTO",
-            },
-        )
-    )
 
 
 def _is_within_intraday_window() -> bool:

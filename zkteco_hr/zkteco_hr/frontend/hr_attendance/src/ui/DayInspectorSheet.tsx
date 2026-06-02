@@ -29,7 +29,7 @@ import {
   sortCheckinsByTime,
   type SegmentInspectorItem,
 } from "@/lib/segmentInspector";
-import { formatFlagLabel } from "@/lib/flagLabels";
+import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
 import { cn } from "@/lib/utils";
 import { DeviceAlertRow } from "@/ui/DeviceAlerts";
 
@@ -237,7 +237,9 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
                             </TooltipTrigger>
                             <TooltipContent>
                               <div className="text-xs">
-                                <div className="font-medium">{formatFlagLabel(f.flag_code)}</div>
+                                <div className="font-medium">
+                                  {formatFlagLabel(f.flag_code, parseFlagEvidence(f.evidence))}
+                                </div>
                                 <div className="text-muted-foreground">{f.flag_code}</div>
                                 <div className="text-muted-foreground">
                                   {f.status ?? "OPEN"} · {f.severity ?? "WARNING"}
@@ -484,7 +486,7 @@ function PunchInspectorRow(props: { checkin: Checkin; index: number; direction: 
 function FlagBadge({ flag }: { flag: Flag }) {
   const sev = flag.severity ?? "WARNING";
   const provisional = flag.is_provisional === true || flag.day_closed === 0;
-  const label = formatFlagLabel(flag.flag_code);
+  const label = formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence));
 
   if (provisional) {
     return (

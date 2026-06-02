@@ -191,6 +191,8 @@ class TestDeviceCloseoutWebhook(unittest.TestCase):
 
 
 class TestLateAndEarlyFlags(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_missing_time_flags", return_value=[])
     @patch("zkteco_hr.attendance_engine.closeout.evaluate_lunch_flags", return_value=[])
     @patch("zkteco_hr.attendance_engine.closeout._insert_flag")
     @patch("zkteco_hr.attendance_engine.closeout._delete_auto_flags_for_employee_date")
@@ -207,6 +209,8 @@ class TestLateAndEarlyFlags(unittest.TestCase):
         _delete_flags,
         insert_flag,
         _lunch,
+        _missing,
+        _record,
     ):
         from datetime import datetime
 
@@ -241,10 +245,12 @@ class TestLateAndEarlyFlags(unittest.TestCase):
 
 
 class TestDeviceCloseoutFlags(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.closeout._on_shift_zero_checkin_employees_at_branch", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout._device_closeout_branch", return_value="BRANCH-A")
     @patch("zkteco_hr.attendance_engine.closeout._insert_flag")
     @patch("zkteco_hr.attendance_engine.closeout._generate_for_employee_date")
     @patch("zkteco_hr.attendance_engine.closeout._employees_for_device_closeout", return_value=["EMP-1"])
-    def test_closed_routes_to_device_scoped_generation(self, employees, generate, insert_flag):
+    def test_closed_routes_to_device_scoped_generation(self, employees, generate, insert_flag, _branch, _sweep):
         from zkteco_hr.attendance_engine.closeout import generate_auto_flags_for_device_date
 
         generate_auto_flags_for_device_date(
@@ -255,7 +261,7 @@ class TestDeviceCloseoutFlags(unittest.TestCase):
 
         employees.assert_called_once()
         generate.assert_called_once()
-        self.assertFalse(generate.call_args.kwargs["include_unnotified_absence"])
+        self.assertTrue(generate.call_args.kwargs["include_unnotified_absence"])
         insert_flag.assert_not_called()
 
     @patch("zkteco_hr.attendance_engine.closeout._insert_flag")
@@ -286,7 +292,7 @@ class TestDeviceCloseoutFlags(unittest.TestCase):
         self.assertEqual(delete_flags.call_args_list[0].kwargs.get("day_closed"), 0)
         self.assertEqual(delete_flags.call_args_list[1].kwargs.get("day_closed"), 1)
         flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
-        self.assertIn("DELIVERY_FAILED", flag_codes)
+        self.assertIn("ATTENDANCE_ISSUE", flag_codes)
         self.assertNotIn("UNNOTIFIED_ABSENCE", flag_codes)
 
     @patch("zkteco_hr.attendance_engine.closeout.has_open_device_closeout_alert", return_value=True)

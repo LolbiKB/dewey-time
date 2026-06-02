@@ -4,6 +4,8 @@ from frappe.model.document import Document
 
 FLAG_SEVERITY = {
     "UNNOTIFIED_ABSENCE": "CRITICAL",
+    "MISSING_TIME": "CRITICAL",
+    "ATTENDANCE_ISSUE": "CRITICAL",
     "MISSING_IN_OR_OUT": "CRITICAL",
     "UNKNOWN_DEVICE_BRANCH": "CRITICAL",
     "OFF_SHIFT_PUNCH": "WARNING",
@@ -33,6 +35,14 @@ class AttendanceFlag(Document):
                 delivery_key = self._delivery_failed_key()
                 if delivery_key:
                     suffix = f"delivery-failed-{delivery_key}"
+            elif self.flag_code == "MISSING_TIME":
+                interval_key = self._missing_time_key()
+                if interval_key:
+                    suffix = f"missing-time-{interval_key}"
+            elif self.flag_code == "ATTENDANCE_ISSUE":
+                issue_key = self._attendance_issue_key()
+                if issue_key:
+                    suffix = f"attendance-issue-{issue_key}"
 
             key = "AUTO-{0}-{1}-{2}".format(
                 frappe.scrub(self.employee),
@@ -46,19 +56,47 @@ class AttendanceFlag(Document):
             if not self.company:
                 self.company = frappe.db.get_value("Employee", self.employee, "company")
 
-    def _delivery_failed_key(self):
+    def _parsed_evidence(self):
         evidence = self.evidence
         if isinstance(evidence, str) and evidence:
             try:
                 import json
 
-                evidence = json.loads(evidence)
+                return json.loads(evidence)
             except Exception:
-                evidence = None
+                return None
         if isinstance(evidence, dict):
+            return evidence
+        return None
+
+    def _delivery_failed_key(self):
+        evidence = self._parsed_evidence()
+        if isinstance(evidence, dict):
+            undelivered = evidence.get("undelivered")
+            if isinstance(undelivered, dict):
+                for key in ("pin", "user_id", "supabase_log_id", "custom_supabase_log_id"):
+                    value = undelivered.get(key)
+                    if value:
+                        return frappe.scrub(str(value))
             for key in ("pin", "user_id", "supabase_log_id", "custom_supabase_log_id"):
                 value = evidence.get(key)
                 if value:
                     return frappe.scrub(str(value))
+        return None
+
+    def _missing_time_key(self):
+        evidence = self._parsed_evidence()
+        if isinstance(evidence, dict):
+            start = evidence.get("interval_start")
+            if start:
+                return frappe.scrub(str(start))[:80]
+        return None
+
+    def _attendance_issue_key(self):
+        evidence = self._parsed_evidence()
+        if isinstance(evidence, dict):
+            reason = evidence.get("reason") or "issue"
+            punch = evidence.get("punch_time") or ""
+            return frappe.scrub(f"{reason}-{punch}")[:80]
         return None
 

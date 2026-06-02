@@ -9,65 +9,83 @@ _install_frappe_mock()
 
 
 class TestIntradayRefresh(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.intraday.evaluate_missing_time_flags")
     @patch("zkteco_hr.attendance_engine.intraday._insert_flag")
-    @patch("zkteco_hr.attendance_engine.intraday._has_delivery_failed_today", return_value=False)
+    @patch("zkteco_hr.attendance_engine.intraday.has_delivery_or_record_failure_today", return_value=False)
     @patch("zkteco_hr.attendance_engine.intraday.has_open_device_closeout_alert", return_value=False)
-    @patch("zkteco_hr.attendance_engine.intraday.now_datetime")
+    @patch("zkteco_hr.attendance_engine.intraday.missing_time_max_end_min_for_date", return_value=660)
     @patch("zkteco_hr.attendance_engine.intraday._get_checkins_for_day", return_value=[])
     @patch("zkteco_hr.attendance_engine.intraday._get_shift_meta")
     @patch("zkteco_hr.attendance_engine.intraday._get_shift_assignment")
     @patch("zkteco_hr.attendance_engine.intraday._delete_auto_flags_for_employee_date")
     @patch("zkteco_hr.attendance_engine.intraday.frappe.get_cached_doc")
-    def test_no_checkin_yet_when_past_threshold(
+    def test_missing_time_when_zero_checkins(
         self,
         get_cached_doc,
         delete_flags,
         get_shift,
         get_shift_meta,
         _checkins,
-        now_datetime,
+        _max_end,
         _open_alert,
         _delivery_failed,
         insert_flag,
+        evaluate_missing,
     ):
         from zkteco_hr.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
+
+        evaluate_missing.return_value = [
+            (
+                "MISSING_TIME",
+                {
+                    "interval_start": "2026-05-28T09:00:00",
+                    "interval_end": "2026-05-28T10:00:00",
+                    "minutes": 60,
+                    "kind": "leading",
+                    "threshold_minutes": 30,
+                },
+            )
+        ]
 
         employee = MagicMock()
         employee.branch = "BRANCH-A"
         employee.company = "Test Co"
         get_cached_doc.return_value = employee
         get_shift.return_value = {"shift_type": "FT_0800_1700"}
-        get_shift_meta.return_value = {"start_time": datetime(2026, 5, 28, 8, 0, 0), "custom_grace_minutes": 5}
-        now_datetime.return_value = datetime(2026, 5, 28, 11, 0, 0)
+        get_shift_meta.return_value = {
+            "start_time": datetime(2026, 5, 28, 8, 0, 0),
+            "custom_grace_minutes": 5,
+            "end_time": datetime(2026, 5, 28, 17, 0, 0),
+        }
 
         refresh_intraday_flags_for_employee_date("EMP-1", date(2026, 5, 28))
 
         delete_flags.assert_called_once()
         self.assertEqual(delete_flags.call_args.kwargs.get("day_closed"), 0)
         flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
-        self.assertIn("NO_CHECKIN_YET", flag_codes)
+        self.assertIn("MISSING_TIME", flag_codes)
         self.assertNotIn("UNNOTIFIED_ABSENCE", flag_codes)
-        no_checkin_call = next(c for c in insert_flag.call_args_list if c.kwargs["flag_code"] == "NO_CHECKIN_YET")
-        self.assertEqual(no_checkin_call.kwargs["day_closed"], 0)
+        missing_call = next(c for c in insert_flag.call_args_list if c.kwargs["flag_code"] == "MISSING_TIME")
+        self.assertEqual(missing_call.kwargs["day_closed"], 0)
 
+    @patch("zkteco_hr.attendance_engine.intraday.evaluate_missing_time_flags", return_value=[])
     @patch("zkteco_hr.attendance_engine.intraday._insert_flag")
-    @patch("zkteco_hr.attendance_engine.intraday._has_delivery_failed_today", return_value=True)
-    @patch("zkteco_hr.attendance_engine.intraday.now_datetime")
+    @patch("zkteco_hr.attendance_engine.intraday.has_delivery_or_record_failure_today", return_value=True)
     @patch("zkteco_hr.attendance_engine.intraday._get_checkins_for_day", return_value=[])
     @patch("zkteco_hr.attendance_engine.intraday._get_shift_meta")
     @patch("zkteco_hr.attendance_engine.intraday._get_shift_assignment")
     @patch("zkteco_hr.attendance_engine.intraday._delete_auto_flags_for_employee_date")
     @patch("zkteco_hr.attendance_engine.intraday.frappe.get_cached_doc")
-    def test_no_checkin_yet_skipped_when_delivery_failed(
+    def test_missing_time_skipped_when_delivery_failed(
         self,
         get_cached_doc,
         delete_flags,
         get_shift,
         get_shift_meta,
         _checkins,
-        now_datetime,
         insert_flag,
         _delivery_failed,
+        evaluate_missing,
     ):
         from zkteco_hr.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
 
@@ -76,16 +94,17 @@ class TestIntradayRefresh(unittest.TestCase):
         employee.company = "Test Co"
         get_cached_doc.return_value = employee
         get_shift.return_value = {"shift_type": "FT_0800_1700"}
-        get_shift_meta.return_value = {"start_time": datetime(2026, 5, 28, 8, 0, 0), "custom_grace_minutes": 5}
-        now_datetime.return_value = datetime(2026, 5, 28, 11, 0, 0)
+        get_shift_meta.return_value = {
+            "start_time": datetime(2026, 5, 28, 8, 0, 0),
+            "custom_grace_minutes": 5,
+            "end_time": datetime(2026, 5, 28, 17, 0, 0),
+        }
 
         refresh_intraday_flags_for_employee_date("EMP-1", date(2026, 5, 28))
 
-        flag_codes = [
-            (call.kwargs.get("flag_code") or (call.args[3] if len(call.args) > 3 else None))
-            for call in insert_flag.call_args_list
-        ]
-        self.assertNotIn("NO_CHECKIN_YET", flag_codes)
+        evaluate_missing.assert_not_called()
+        flag_codes = [call.kwargs.get("flag_code") for call in insert_flag.call_args_list]
+        self.assertNotIn("MISSING_TIME", flag_codes)
 
 
 class TestIntradayEnqueue(unittest.TestCase):
