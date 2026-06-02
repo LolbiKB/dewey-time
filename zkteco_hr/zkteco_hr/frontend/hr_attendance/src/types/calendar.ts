@@ -55,9 +55,15 @@ export type LeaveContext = {
   leave_type?: string | null;
 };
 
+export type HolidayContext = {
+  description: string;
+  weekly_off: boolean;
+};
+
 export type Day = {
   date: string;
   shift?: ShiftContext;
+  holiday?: HolidayContext | null;
   leave?: LeaveContext;
   checkins?: Checkin[];
   first_in?: string | null;

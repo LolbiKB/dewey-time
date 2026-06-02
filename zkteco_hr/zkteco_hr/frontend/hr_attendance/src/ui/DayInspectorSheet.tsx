@@ -490,30 +490,42 @@ function FlagBadge({ flag }: { flag: Flag }) {
 
   if (provisional) {
     return (
-      <Badge
-        variant="outline"
-        className="rounded-full border border-dashed border-amber-500/70 bg-amber-500/10 text-[11px] text-amber-950 dark:text-amber-100"
-        title={`${label} (${flag.flag_code}) · provisional`}
-      >
-        {label}
-      </Badge>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="rounded-full border border-dashed border-amber-500/70 bg-amber-500/10 text-[11px] text-amber-950 dark:text-amber-100"
+          >
+            {label}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="text-xs">
+          {label} ({flag.flag_code}) · provisional
+        </TooltipContent>
+      </Tooltip>
     );
   }
 
   return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "rounded-full border text-[11px]",
-        sev === "CRITICAL" &&
-          "border-destructive bg-destructive text-destructive-foreground",
-        sev === "WARNING" &&
-          "border-amber-600 bg-amber-500/20 text-amber-950 dark:text-amber-100",
-        sev === "INFO" && "border-border bg-foreground/5 text-foreground"
-      )}
-      title={`${label} (${flag.flag_code}) · ${flag.status ?? "OPEN"}`}
-    >
-      {label}
-    </Badge>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className={cn(
+            "rounded-full border text-[11px]",
+            sev === "CRITICAL" &&
+              "border-destructive bg-destructive text-destructive-foreground",
+            sev === "WARNING" &&
+              "border-amber-600 bg-amber-500/20 text-amber-950 dark:text-amber-100",
+            sev === "INFO" && "border-border bg-foreground/5 text-foreground"
+          )}
+        >
+          {label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="text-xs">
+        {label} ({flag.flag_code}) · {flag.status ?? "OPEN"}
+      </TooltipContent>
+    </Tooltip>
   );
 }

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { type RunEngineMode, useRunEngine } from "@/hooks/useRunEngine";
 import { cn } from "@/lib/utils";
 
@@ -127,29 +128,23 @@ export function RunEngineDialog(props: RunEngineDialogProps) {
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="run-engine-start" className="text-xs text-muted-foreground">
-                  From
-                </Label>
-                <Input
+                <DatePickerInput
                   id="run-engine-start"
-                  type="date"
+                  label="From"
                   value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
+                  onChange={setStartDate}
                   disabled={loading}
-                  className="h-9"
+                  className="[&>button]:h-9"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="run-engine-end" className="text-xs text-muted-foreground">
-                  To
-                </Label>
-                <Input
+                <DatePickerInput
                   id="run-engine-end"
-                  type="date"
+                  label="To"
                   value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
+                  onChange={setEndDate}
                   disabled={loading}
-                  className="h-9"
+                  className="[&>button]:h-9"
                 />
               </div>
             </div>

@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { useMemo } from "react";
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   clamp,
   formatBranchLabel,
@@ -52,16 +53,19 @@ export function DayCell(props: {
 }) {
   const checkins = props.info?.checkins ?? [];
   const hasUnpairedPunch = deriveUnpairedPunches(checkins, parseDateTimeLocal).length > 0;
+  const holiday = props.info?.holiday ?? null;
+  const shift = holiday ? { shift_assigned: false } : (props.info?.shift ?? { shift_assigned: false });
 
   return (
     <button
       type="button"
       onClick={props.onInspectDay}
       className={cn(
-        "group relative min-h-0 border-b border-r border-border/60 p-3 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 focus:ring-2 focus:ring-ring/40",
+        "group relative min-h-0 border-b border-r border-border/60 p-3 pl-5 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 focus:ring-2 focus:ring-ring/40",
         props.dense ? "h-full" : "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
-        props.today && "bg-primary/3 ring-1 ring-primary/20"
+        props.today && "bg-primary/3 ring-1 ring-primary/20",
+        holiday && "bg-amber-500/[0.04]"
       )}
     >
       <div className={cn("grid h-full gap-2", props.dense ? "grid-rows-[20px_1fr]" : "grid-rows-[1fr]")}>
@@ -84,20 +88,38 @@ export function DayCell(props: {
         ) : null}
 
         <div className="min-h-0 h-full">
-          <DayDayTrack
-            firstIn={props.info?.first_in ?? null}
-            lastOut={props.info?.last_out ?? null}
-            checkins={checkins}
-            shift={props.info?.shift ?? { shift_assigned: false }}
-            dateKey={format(props.date, "yyyy-MM-dd")}
-            observedLunch={props.info?.observed_lunch ?? null}
-            dense={props.dense}
-            windowStartMin={props.timelineStartMin}
-            windowEndMin={props.timelineEndMin}
-          />
+          {holiday ? (
+            <HolidayBoard description={holiday.description} weeklyOff={holiday.weekly_off} />
+          ) : (
+            <DayDayTrack
+              firstIn={props.info?.first_in ?? null}
+              lastOut={props.info?.last_out ?? null}
+              checkins={checkins}
+              shift={shift}
+              dateKey={format(props.date, "yyyy-MM-dd")}
+              observedLunch={props.info?.observed_lunch ?? null}
+              dense={props.dense}
+              windowStartMin={props.timelineStartMin}
+              windowEndMin={props.timelineEndMin}
+            />
+          )}
         </div>
       </div>
     </button>
+  );
+}
+
+function HolidayBoard(props: { description: string; weeklyOff: boolean }) {
+  const label = props.weeklyOff ? "Weekly off" : "Holiday";
+  const text = (props.description || "").trim() || label
+
+  // Show as multiple vertical “lines” using columns; keep it stable and non-wrapping in height.
+  return (
+    <div className="relative h-full rounded-xl border border-amber-500/20 bg-amber-500/5 p-2">
+      <div className="text-[15px] leading-snug text-amber-950/80 dark:text-amber-100/80 whitespace-normal break-words line-clamp-6">
+        {text}
+      </div>
+    </div>
   );
 }
 
@@ -244,12 +266,17 @@ function DayDayTrack(props: {
           if (m == null) return null;
           const topPct = pctFromMinute(m);
           return (
-            <div
-              key={`${c.time}-${idx}`}
-              className="absolute inset-x-2 h-1 rounded-full bg-destructive shadow-sm"
-              style={{ top: `calc(${topPct}% - 2px)` }}
-              title={`Unpaired punch · ${format(parseDateTimeLocal(c.time), "h:mm a")}`}
-            />
+            <Tooltip key={`${c.time}-${idx}`}>
+              <TooltipTrigger asChild>
+                <div
+                  className="absolute inset-x-2 h-1 rounded-full bg-destructive shadow-sm"
+                  style={{ top: `calc(${topPct}% - 2px)` }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="text-xs">
+                Unpaired punch · {format(parseDateTimeLocal(c.time), "h:mm a")}
+              </TooltipContent>
+            </Tooltip>
           );
         })}
 

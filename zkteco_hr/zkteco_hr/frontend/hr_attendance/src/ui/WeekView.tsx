@@ -33,37 +33,33 @@ function WeekDayDateBadge(props: {
           "bg-destructive/10 font-normal text-destructive ring-1 ring-inset ring-destructive/35",
         !props.isToday && !props.isOffDay && "font-semibold text-foreground"
       )}
-      title={
-        props.isToday
-          ? props.isOffDay
-            ? "Today — day off"
-            : "Today"
-          : undefined
-      }
     >
       {props.dayNum}
     </div>
   );
 
-  if (props.isOffDay) {
-    const tip = props.isToday
+  const tip = props.isToday
+    ? props.isOffDay
       ? props.hasOffShiftPunch
         ? "Today — day off, punches recorded"
-        : "Today — no shift scheduled"
-      : props.hasOffShiftPunch
+        : "Today — day off"
+      : "Today"
+    : props.isOffDay
+      ? props.hasOffShiftPunch
         ? "Off shift — punches recorded (OFF_SHIFT_PUNCH)"
-        : "No shift scheduled";
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>{badge}</TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          {tip}
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
+        : "No shift scheduled"
+      : null;
 
-  return badge;
+  if (!tip) return badge;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent side="bottom" className="text-xs">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function dayOffShiftPunchFlag(day?: Day): Flag | undefined {
@@ -128,21 +124,30 @@ export function WeekView(props: WeekViewProps) {
           const key = format(d, "yyyy-MM-dd");
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
-          const isOffDay = info?.shift?.shift_assigned !== true;
+          const holiday = info?.holiday ?? null;
+          // Holiday wins: treat as off-day in UI even if a Shift Assignment exists.
+          const isOffDay = holiday != null || info?.shift?.shift_assigned !== true;
           const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
           const offShiftFlag = dayOffShiftPunchFlag(info);
           const timeRange = formatDayCheckinTimeRange(info);
           return (
             <div
               key={key}
-              className={cn("px-3 py-2", isOffDay && "bg-destructive/[0.06]")}
+              className={cn(
+                "px-3 py-2",
+                holiday ? "bg-amber-500/[0.06]" : isOffDay && "bg-destructive/[0.06]"
+              )}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-baseline gap-2">
                   <div
                     className={cn(
                       "text-xs font-medium",
-                      isOffDay ? "text-destructive/60" : "text-muted-foreground"
+                      holiday
+                        ? "text-amber-700/80 dark:text-amber-200/80"
+                        : isOffDay
+                          ? "text-destructive/60"
+                          : "text-muted-foreground"
                     )}
                   >
                     {format(d, "EEE")}
@@ -166,36 +171,65 @@ export function WeekView(props: WeekViewProps) {
                 ) : null}
               </div>
 
+              {holiday ? (
+                <div className="mt-0.5 truncate text-[10px] font-semibold text-amber-900/80 dark:text-amber-100/80">
+                  Holiday
+                </div>
+              ) : null}
+
               <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                {timeRange ? <span title="Actual punches">{timeRange}</span> : null}
+                {timeRange ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate">{timeRange}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs">
+                      Actual punches
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
               </div>
 
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {info?.leave?.on_leave ? (
-                  <span
-                    className="inline-flex max-w-full items-center truncate rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-900 dark:text-sky-100"
-                    title={info.leave.leave_type ? `On leave · ${info.leave.leave_type}` : "On leave"}
-                  >
-                    Leave
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex max-w-full items-center truncate rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-900 dark:text-sky-100">
+                        Leave
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs">
+                      {info.leave.leave_type ? `On leave · ${info.leave.leave_type}` : "On leave"}
+                    </TooltipContent>
+                  </Tooltip>
                 ) : null}
                 {offShiftFlag ? (
-                  <button
-                    type="button"
-                    onClick={() => props.onInspectFlag(key, offShiftFlag)}
-                    className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
-                    title="Off-shift punches recorded"
-                  >
-                    OFF_SHIFT
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => props.onInspectFlag(key, offShiftFlag)}
+                        className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
+                      >
+                        OFF_SHIFT
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs">
+                      Off-shift punches recorded
+                    </TooltipContent>
+                  </Tooltip>
                 ) : null}
                 {(props.alertsByDate.get(key) ?? []).length > 0 ? (
-                  <span
-                    className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[10px] font-semibold text-amber-800 dark:text-amber-200"
-                    title="Device closeout pending"
-                  >
-                    !
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[10px] font-semibold text-amber-800 dark:text-amber-200">
+                        !
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs">
+                      Device closeout pending
+                    </TooltipContent>
+                  </Tooltip>
                 ) : null}
               </div>
             </div>
