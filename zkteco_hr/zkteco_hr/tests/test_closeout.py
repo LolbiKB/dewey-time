@@ -42,6 +42,7 @@ def _install_frappe_mock():
     frappe.db = MagicMock()
     frappe.db.exists = MagicMock(return_value=False)
     frappe.db.get_value = MagicMock(return_value=None)
+    frappe.db.table_exists = MagicMock(return_value=True)
     frappe.db.set_value = MagicMock()
     frappe.db.delete = MagicMock()
     frappe.db.sql = MagicMock(return_value=[])
@@ -417,6 +418,85 @@ class TestLateAndEarlyFlags(unittest.TestCase):
 
         flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
         self.assertNotIn("LATE_START", flag_codes)
+
+    @patch("zkteco_hr.attendance_engine.closeout.holiday_by_date_for_company")
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_missing_time_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_lunch_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout._insert_flag")
+    @patch("zkteco_hr.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("zkteco_hr.attendance_engine.closeout._get_shift_meta")
+    @patch("zkteco_hr.attendance_engine.closeout._get_checkins_for_day")
+    @patch("zkteco_hr.attendance_engine.closeout._get_shift_assignment")
+    @patch("zkteco_hr.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_holiday_wins_emits_only_off_shift_punch_when_checkins_exist(
+        self,
+        get_cached_doc,
+        get_shift,
+        get_checkins,
+        get_shift_meta,
+        _delete_flags,
+        insert_flag,
+        _lunch,
+        _missing,
+        _record,
+        holiday_by_date,
+    ):
+        from datetime import datetime
+
+        from zkteco_hr.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._shift_meta_with_grace(custom_grace_minutes=0)
+        holiday_by_date.return_value = {"2026-05-27": {"description": "Holiday", "weekly_off": False}}
+        get_checkins.return_value = [
+            {"name": "IN-1", "time": datetime(2026, 5, 27, 8, 0), "custom_device_branch": "BRANCH-A"},
+            {"name": "OUT-1", "time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=False,
+        )
+
+        flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertEqual(flag_codes, ["OFF_SHIFT_PUNCH"])
+
+    @patch("zkteco_hr.attendance_engine.closeout.holiday_by_date_for_company")
+    @patch("zkteco_hr.attendance_engine.closeout._insert_flag")
+    @patch("zkteco_hr.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("zkteco_hr.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout._get_shift_assignment")
+    @patch("zkteco_hr.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_holiday_wins_creates_no_flags_when_no_checkins(
+        self,
+        get_cached_doc,
+        get_shift,
+        _checkins,
+        _delete_flags,
+        insert_flag,
+        holiday_by_date,
+    ):
+        from zkteco_hr.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        holiday_by_date.return_value = {"2026-05-27": {"description": "Holiday", "weekly_off": False}}
+
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=True,
+        )
+        insert_flag.assert_not_called()
 
 
 class TestDeviceCloseoutFlags(unittest.TestCase):

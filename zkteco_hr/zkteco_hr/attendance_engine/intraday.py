@@ -10,6 +10,7 @@ from zkteco_hr.attendance_engine.absence_flags import (
     evaluate_missing_time_flags,
     missing_time_max_end_min_for_date,
 )
+from zkteco_hr.attendance_engine.holidays import holiday_by_date_for_company
 from zkteco_hr.attendance_engine.closeout import (
     _delete_auto_flags_for_employee_date,
     _get_checkins_for_day,
@@ -56,6 +57,13 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
     employee_doc = frappe.get_cached_doc("Employee", employee)
     employee_branch = getattr(employee_doc, "branch", None)
     employee_company = getattr(employee_doc, "company", None)
+
+    if employee_company:
+        holiday = holiday_by_date_for_company(
+            company=employee_company, start=attendance_date, end=attendance_date
+        ).get(str(attendance_date))
+        if holiday:
+            return
 
     shift_assignment = _get_shift_assignment(employee=employee, attendance_date=attendance_date)
     on_shift = bool(shift_assignment)

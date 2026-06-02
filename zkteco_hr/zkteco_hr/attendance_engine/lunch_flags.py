@@ -51,6 +51,8 @@ def evaluate_lunch_flags(
 
     grace = timedelta(minutes=max(0, int(grace_minutes or 0)))
     return_threshold = lunch_end_dt + grace
+    scheduled_minutes = int(max(0, (lunch_end_dt - lunch_start_dt).total_seconds() / 60))
+    min_observed_minutes = max(1, scheduled_minutes // 2)
 
     flags: list[tuple[str, dict]] = []
     expected_lunch = {
@@ -61,7 +63,11 @@ def evaluate_lunch_flags(
     }
 
     lunch_pair = find_plausible_lunch_pair(
-        punch_times, lunch_start_dt=lunch_start_dt, lunch_end_dt=lunch_end_dt, grace=grace
+        punch_times,
+        lunch_start_dt=lunch_start_dt,
+        lunch_end_dt=lunch_end_dt,
+        grace=grace,
+        min_duration_minutes=min_observed_minutes,
     )
     if lunch_pair is None:
         return []

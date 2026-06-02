@@ -23,6 +23,7 @@ from zkteco_hr.attendance_engine.shift_grace import (
     grace_fields_from_shift_doc,
 )
 from zkteco_hr.attendance_engine.shift_times import combine_date_time as _combine_date_time
+from zkteco_hr.attendance_engine.holidays import holiday_by_date_for_company
 # Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
 from zkteco_hr.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
 
@@ -400,6 +401,12 @@ def _generate_for_employee_date(
     employee_branch = getattr(employee_doc, "branch", None)
     employee_company = getattr(employee_doc, "company", None)
 
+    holiday = None
+    if employee_company:
+        holiday = holiday_by_date_for_company(
+            company=employee_company, start=attendance_date, end=attendance_date
+        ).get(str(attendance_date))
+
     shift_assignment = _get_shift_assignment(employee=employee, attendance_date=attendance_date)
     on_shift = bool(shift_assignment)
 
@@ -419,9 +426,25 @@ def _generate_for_employee_date(
         "first_in": first_in_dt.isoformat() if first_in_dt else None,
         "last_out": last_out_dt.isoformat() if last_out_dt else None,
         "device_sn": device_sn,
+        "holiday": holiday,
     }
 
     flags_to_create: list[tuple[str, dict]] = []
+
+    if holiday:
+        # Holiday wins: suppress normal on-shift flags even if SSA created a Shift Assignment.
+        if checkins_count == 0:
+            return
+        flags_to_create.append(("OFF_SHIFT_PUNCH", {"reason": "holiday_has_checkins"}))
+        for flag_code, extra_evidence in flags_to_create:
+            _insert_flag(
+                employee=employee,
+                company=employee_company,
+                attendance_date=attendance_date,
+                flag_code=flag_code,
+                evidence={**evidence, **extra_evidence},
+            )
+        return
 
     if not on_shift:
         if checkins_count == 0:

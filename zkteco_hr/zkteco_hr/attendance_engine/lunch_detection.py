@@ -37,11 +37,14 @@ def detect_observed_lunch(
         return None
 
     grace = timedelta(minutes=max(0, int(grace_minutes or 0)))
+    scheduled_minutes = int(max(0, (lunch_end_dt - lunch_start_dt).total_seconds() / 60))
+    min_observed_minutes = max(1, scheduled_minutes // 2)
     pair = find_plausible_lunch_pair(
         punch_times,
         lunch_start_dt=lunch_start_dt,
         lunch_end_dt=lunch_end_dt,
         grace=grace,
+        min_duration_minutes=min_observed_minutes,
     )
     if pair is None:
         return None
@@ -92,9 +95,11 @@ def find_plausible_lunch_pair(
     lunch_start_dt: datetime,
     lunch_end_dt: datetime,
     grace: timedelta,
+    min_duration_minutes: int = 0,
 ) -> tuple[datetime, datetime] | None:
-    """First punch at/after lunch start followed by a later punch before lunch end + grace (+1h slack)."""
+    """First plausible OUT→IN pair in lunch window meeting minimum duration."""
     window_end = lunch_end_dt + grace + timedelta(hours=1)
+    min_duration_minutes = max(0, int(min_duration_minutes or 0))
 
     for i in range(len(punch_times) - 1):
         lunch_out = punch_times[i]
@@ -104,6 +109,9 @@ def find_plausible_lunch_pair(
         if lunch_in <= lunch_out:
             continue
         if lunch_in <= window_end:
+            minutes = int(max(0, (lunch_in - lunch_out).total_seconds() / 60))
+            if minutes < min_duration_minutes:
+                continue
             return lunch_out, lunch_in
 
     return None

@@ -118,6 +118,33 @@ class TestIntradayRefresh(unittest.TestCase):
         flag_codes = [call.kwargs.get("flag_code") for call in insert_flag.call_args_list]
         self.assertNotIn("MISSING_TIME", flag_codes)
 
+    @patch("zkteco_hr.attendance_engine.intraday.holiday_by_date_for_company")
+    @patch("zkteco_hr.attendance_engine.intraday._insert_flag")
+    @patch("zkteco_hr.attendance_engine.intraday._delete_auto_flags_for_employee_date")
+    @patch("zkteco_hr.attendance_engine.intraday._get_shift_assignment")
+    @patch("zkteco_hr.attendance_engine.intraday.frappe.get_cached_doc")
+    def test_intraday_skips_holidays(
+        self,
+        get_cached_doc,
+        get_shift,
+        delete_flags,
+        insert_flag,
+        holiday_by_date,
+    ):
+        from zkteco_hr.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        holiday_by_date.return_value = {"2026-05-28": {"description": "Holiday", "weekly_off": False}}
+
+        refresh_intraday_flags_for_employee_date("EMP-1", date(2026, 5, 28))
+
+        delete_flags.assert_called_once()
+        insert_flag.assert_not_called()
+
 
 class TestIntradayEnqueue(unittest.TestCase):
     @patch("zkteco_hr.attendance_engine.intraday.frappe.enqueue")

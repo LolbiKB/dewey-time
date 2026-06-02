@@ -65,6 +65,26 @@ class TestLunchFlags(unittest.TestCase):
         self.assertIn("LATE_FROM_LUNCH", codes)
         self.assertNotIn("MISSING_LUNCH", codes)
 
+    def test_ignores_short_pair_and_does_not_flag_late_from_lunch(self):
+        from zkteco_hr.attendance_engine.lunch_flags import evaluate_lunch_flags
+
+        d = date(2026, 6, 3)
+        # Scheduled lunch: 12:00–13:00 (60m). Min observed lunch = 30m (half scheduled).
+        # A 15m OUT→IN pair inside the lunch window should be ignored as "not lunch".
+        checkins = [
+            {"time": datetime(2026, 6, 3, 8, 0)},
+            {"time": datetime(2026, 6, 3, 12, 0)},
+            {"time": datetime(2026, 6, 3, 12, 15)},
+            {"time": datetime(2026, 6, 3, 13, 0)},
+            {"time": datetime(2026, 6, 3, 17, 0)},
+        ]
+        meta = {
+            "custom_lunch_start": datetime(2026, 1, 1, 12, 0).time(),
+            "custom_lunch_end": datetime(2026, 1, 1, 13, 0).time(),
+        }
+        flags = evaluate_lunch_flags(checkins=checkins, shift_meta=meta, attendance_date=d, grace_minutes=0)
+        self.assertEqual(flags, [])
+
     def test_skips_short_shift_without_lunch_fields(self):
         from zkteco_hr.attendance_engine.lunch_flags import evaluate_lunch_flags
 

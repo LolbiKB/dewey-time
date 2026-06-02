@@ -72,6 +72,8 @@ For employee \(E\) on date \(D\):
   - If none → **Off** (or **Unassigned** if you want to track setup gaps).
   - Else shift type = `FT_*`.
 
+Holiday source (MVP): resolve holiday dates from the employee’s **Company Default Holiday List** (`Company.default_holiday_list`). Holidays are displayed on the HR calendar/timeline, and the flag engine treats those days as **off-shift** (holiday wins) even if SSA-generated Shift Assignments exist.
+
 ### 2) Select relevant checkins for \(E,D\)
 
 - Include all Employee Checkin rows for \(E\) whose `time` falls within:
@@ -114,15 +116,15 @@ MVP detection (shared by closeout flags and HR calendar UI):
 - **Observed lunch** = first plausible punch OUT→IN pair where:
   - OUT punch time is at or after `custom_lunch_start`
   - IN punch time is after OUT and on or before `custom_lunch_end + grace + 1 hour` slack
-- Do **not** fabricate lunch when no pair is found; emit **MISSING_LUNCH** instead.
-- **Late return** = observed IN after `custom_lunch_end + grace` → **LATE_FROM_LUNCH**.
+- **Validity guard:** ignore an observed pair if its duration is less than **half of the scheduled lunch length** (e.g. scheduled 60m → minimum observed 30m). When ignored, treat lunch as **not observed**.
+- If no valid observed lunch exists, **assume scheduled lunch** for the lunch window (do not label it as Away, and do not emit lunch flags).
+- **Late return** = valid observed IN after `custom_lunch_end + grace` → **LATE_FROM_LUNCH**.
 
 The calendar API exposes `observed_lunch` on each day (same heuristic as closeout). UI uses this to distinguish **lunch** bands from **away** bands on the timeline.
 
 Flags:
 
-- **MISSING_LUNCH**: no plausible lunch out/in pair detected.
-- **LATE_FROM_LUNCH**: first checkin after expected lunch end (plus grace) is late.
+- **LATE_FROM_LUNCH**: valid observed lunch return after expected lunch end (plus grace) is late.
 
 ### 5b) Early departure (flag)
 

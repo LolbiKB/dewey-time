@@ -10,6 +10,7 @@ from frappe.utils import get_datetime, getdate
 from zkteco_hr.attendance_engine.closeout import _get_shift_meta
 from zkteco_hr.attendance_engine.lunch_detection import detect_observed_lunch
 from zkteco_hr.attendance_engine.shift_grace import effective_lunch_return_grace, effective_start_grace
+from zkteco_hr.attendance_engine.holidays import holiday_by_date_for_company
 from zkteco_hr.attendance_engine.shift_assignment import (
     get_shift_assignment as _get_shift_assignment,
     shift_assignment_bounds_by_employee,
@@ -347,6 +348,9 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         or []
     )
 
+    employee_company = frappe.db.get_value("Employee", employee, "company")
+    holiday_by_date = holiday_by_date_for_company(company=employee_company, start=start, end=end)
+
     employee_branch = frappe.db.get_value("Employee", employee, "branch")
     device_alerts = []
     if employee_branch and frappe.db.table_exists("Device Closeout Alert"):
@@ -454,6 +458,7 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             {
                 "date": key,
                 "shift": shift,
+                "holiday": holiday_by_date.get(key),
                 "leave": leave_by_date.get(key, {"on_leave": False}),
                 "checkins": day_checkins,
                 "first_in": first_in,
