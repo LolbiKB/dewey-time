@@ -57,8 +57,8 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 
 | Flag | When | `day_closed` | Requires |
 |------|------|----------------|----------|
-| `LATE_START` | Intraday + closeout | 0 / 1 | On-shift; `Shift Type.start_time`, `custom_grace_minutes` |
-| `LEFT_EARLY` | Closeout | 1 | On-shift; ≥2 checkins; last punch before `end_time − grace` |
+| `LATE_START` | Intraday + closeout | 0 / 1 | On-shift; `start_time` + effective start grace (`max(custom_grace_minutes, late_entry_grace_period)`) |
+| `LEFT_EARLY` | Closeout | 1 | On-shift; ≥2 checkins; last punch before `end_time − effective end grace` (`max(custom_grace_minutes, early_exit_grace_period)`) |
 | `MISSING_TIME` | Intraday + closeout | 0 / 1 | On-shift obligation gap **≥30 min** (`absence_threshold_minutes`); leading / away / trailing |
 | `ATTENDANCE_ISSUE` | Closeout (+ intraday wrong-site separate) | 1 | Incomplete punch data (`single_checkin`, `unpaired_punch`, `delivery_failed`, etc.) — **CRITICAL** |
 | `OFF_SHIFT_PUNCH` | Closeout | 1 | **Off-shift** (no assignment) but has checkins |
@@ -69,7 +69,7 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 | `UNNOTIFIED_ABSENCE` | Closeout + **03:00 fallback** | 1 | On-shift; zero checkins at close; branch sweep on device closeout |
 | `OFF_SHIFT_PUNCH` | Closeout | 1 | Not on-shift but has punches — **only** flag that day (suppresses all others) |
 | `MISSING_LUNCH` | Closeout | 1 | Full-day shift with lunch window; no plausible out/in pair |
-| `LATE_FROM_LUNCH` | Closeout | 1 | Full-day shift; return after `lunch_end + grace` |
+| `LATE_FROM_LUNCH` | Closeout | 1 | Full-day shift; return after `lunch_end + effective lunch return grace` (same as start grace) |
 
 ### Rules doc aliases and intentional gaps
 

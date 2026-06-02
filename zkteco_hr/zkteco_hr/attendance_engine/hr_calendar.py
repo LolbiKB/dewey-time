@@ -9,6 +9,7 @@ from frappe.utils import get_datetime, getdate
 
 from zkteco_hr.attendance_engine.closeout import _get_shift_meta
 from zkteco_hr.attendance_engine.lunch_detection import detect_observed_lunch
+from zkteco_hr.attendance_engine.shift_grace import effective_lunch_return_grace, effective_start_grace
 from zkteco_hr.attendance_engine.shift_assignment import (
     get_shift_assignment as _get_shift_assignment,
     shift_assignment_bounds_by_employee,
@@ -178,7 +179,7 @@ def _shift_context_for_day(*, employee: str, attendance_date):
         "shift_type": assignment["shift_type"],
         "start_time": _format_time(meta.get("start_time")),
         "end_time": _format_time(meta.get("end_time")),
-        "grace_minutes": meta.get("custom_grace_minutes") or 0,
+        "grace_minutes": effective_start_grace(meta),
         "lunch_start": _format_time(meta.get("custom_lunch_start")),
         "lunch_end": _format_time(meta.get("custom_lunch_end")),
     }
@@ -446,7 +447,7 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
                         checkins=day_checkins,
                         shift_meta=meta,
                         attendance_date=cur,
-                        grace_minutes=int(meta.get("custom_grace_minutes") or 0),
+                        grace_minutes=effective_lunch_return_grace(meta),
                     )
 
         days.append(

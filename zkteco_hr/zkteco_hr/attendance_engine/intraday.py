@@ -20,6 +20,7 @@ from zkteco_hr.attendance_engine.closeout import (
     has_delivery_or_record_failure_today,
     has_open_device_closeout_alert,
 )
+from zkteco_hr.attendance_engine.shift_grace import effective_start_grace, grace_evidence
 
 INTRADAY_FLAG_CODES = [
     "LATE_START",
@@ -108,11 +109,11 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
             )
 
     if shift_meta.get("start_time") is not None:
-        grace = int(shift_meta.get("custom_grace_minutes") or 0)
+        start_grace = effective_start_grace(shift_meta)
         start_dt = _combine_date_time(attendance_date, shift_meta["start_time"])
-        late_threshold = start_dt + timedelta(minutes=grace)
+        late_threshold = start_dt + timedelta(minutes=start_grace)
         evidence["shift_start"] = start_dt.isoformat()
-        evidence["grace_minutes"] = grace
+        evidence.update(grace_evidence(shift_meta))
         evidence["late_threshold"] = late_threshold.isoformat()
 
         if checkins_count > 0:
@@ -125,6 +126,7 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
                     flag_code="LATE_START",
                     evidence={
                         **evidence,
+                        **grace_evidence(shift_meta),
                         "first_in": first_in_dt.isoformat(),
                         "late_threshold": late_threshold.isoformat(),
                     },

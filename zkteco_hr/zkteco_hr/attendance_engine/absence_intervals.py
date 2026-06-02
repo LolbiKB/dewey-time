@@ -8,6 +8,10 @@ from frappe.utils import getdate, now_datetime
 
 from zkteco_hr.attendance_engine.attendance_segments import derive_segments
 from zkteco_hr.attendance_engine.lunch_detection import detect_observed_lunch
+from zkteco_hr.attendance_engine.shift_grace import (
+    effective_lunch_return_grace,
+    effective_start_grace,
+)
 
 
 def absence_threshold_minutes() -> int:
@@ -123,7 +127,7 @@ def derive_away_gap_intervals(
     shift_meta: dict,
     observed_lunch_range: dict | None,
 ) -> list[dict]:
-    grace = int(shift_meta.get("custom_grace_minutes") or 0)
+    grace = effective_start_grace(shift_meta)
     lunch_start = _parse_shift_time_to_minutes(shift_meta.get("custom_lunch_start"))
     lunch_end = _parse_shift_time_to_minutes(shift_meta.get("custom_lunch_end"))
     shift_start = _parse_shift_time_to_minutes(shift_meta.get("start_time"))
@@ -243,7 +247,7 @@ def compute_missing_time_intervals(
         checkins=checkins,
         shift_meta=shift_meta,
         attendance_date=attendance_date,
-        grace_minutes=int(shift_meta.get("custom_grace_minutes") or 0),
+        grace_minutes=effective_lunch_return_grace(shift_meta),
     )
     observed_lunch_range = None
     if observed:

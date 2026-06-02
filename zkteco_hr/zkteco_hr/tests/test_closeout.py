@@ -191,6 +191,19 @@ class TestDeviceCloseoutWebhook(unittest.TestCase):
 
 
 class TestLateAndEarlyFlags(unittest.TestCase):
+    def _shift_meta_with_grace(self, **grace_fields):
+        from zkteco_hr.attendance_engine.shift_grace import enrich_shift_meta
+
+        return enrich_shift_meta(
+            {
+                "start_time": dt_time(8, 0),
+                "end_time": dt_time(17, 0),
+                "custom_lunch_start": None,
+                "custom_lunch_end": None,
+                **grace_fields,
+            }
+        )
+
     @patch("zkteco_hr.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
     @patch("zkteco_hr.attendance_engine.closeout.evaluate_missing_time_flags", return_value=[])
     @patch("zkteco_hr.attendance_engine.closeout.evaluate_lunch_flags", return_value=[])
@@ -221,13 +234,11 @@ class TestLateAndEarlyFlags(unittest.TestCase):
         employee.company = "Test Co"
         get_cached_doc.return_value = employee
         get_shift.return_value = {"shift_type": "FT_0800_1700"}
-        get_shift_meta.return_value = {
-            "start_time": dt_time(8, 0),
-            "end_time": dt_time(17, 0),
-            "custom_grace_minutes": 10,
-            "custom_lunch_start": None,
-            "custom_lunch_end": None,
-        }
+        get_shift_meta.return_value = self._shift_meta_with_grace(
+            custom_grace_minutes=10,
+            late_entry_grace_period=0,
+            early_exit_grace_period=10,
+        )
         get_checkins.return_value = [
             {"name": "IN-1", "time": datetime(2026, 5, 27, 8, 30), "custom_device_branch": "BRANCH-A"},
             {"name": "OUT-1", "time": datetime(2026, 5, 27, 16, 0), "custom_device_branch": "BRANCH-A"},
@@ -242,6 +253,70 @@ class TestLateAndEarlyFlags(unittest.TestCase):
         flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
         self.assertIn("LATE_START", flag_codes)
         self.assertIn("LEFT_EARLY", flag_codes)
+
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_missing_time_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout.evaluate_lunch_flags", return_value=[])
+    @patch("zkteco_hr.attendance_engine.closeout._insert_flag")
+    @patch("zkteco_hr.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("zkteco_hr.attendance_engine.closeout._get_shift_meta")
+    @patch("zkteco_hr.attendance_engine.closeout._get_checkins_for_day")
+    @patch("zkteco_hr.attendance_engine.closeout._get_shift_assignment")
+    @patch("zkteco_hr.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_late_start_respects_hrms_grace_when_custom_zero(
+        self,
+        get_cached_doc,
+        get_shift,
+        get_checkins,
+        get_shift_meta,
+        _delete_flags,
+        insert_flag,
+        _lunch,
+        _missing,
+        _record,
+    ):
+        from datetime import datetime
+
+        from zkteco_hr.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._shift_meta_with_grace(
+            custom_grace_minutes=0,
+            late_entry_grace_period=15,
+            early_exit_grace_period=0,
+        )
+
+        get_checkins.return_value = [
+            {"name": "IN-1", "time": datetime(2026, 5, 27, 8, 10), "custom_device_branch": "BRANCH-A"},
+            {"name": "OUT-1", "time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=False,
+        )
+        flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertNotIn("LATE_START", flag_codes)
+
+        insert_flag.reset_mock()
+        get_checkins.return_value = [
+            {"name": "IN-1", "time": datetime(2026, 5, 27, 8, 16), "custom_device_branch": "BRANCH-A"},
+            {"name": "OUT-1", "time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=False,
+        )
+        flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertIn("LATE_START", flag_codes)
+        late_call = next(c for c in insert_flag.call_args_list if c.kwargs["flag_code"] == "LATE_START")
+        self.assertEqual(late_call.kwargs["evidence"]["grace_minutes"], 15)
+        self.assertEqual(late_call.kwargs["evidence"]["late_entry_grace_period"], 15)
 
 
 class TestDeviceCloseoutFlags(unittest.TestCase):

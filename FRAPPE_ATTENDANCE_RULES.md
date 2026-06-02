@@ -95,11 +95,11 @@ If `log_type` is reliably populated:
 Applies on **on-shift** days.
 
 - Expected start = Shift Type `start_time`
-- Grace = `custom_grace_minutes` (default 0 if unset)
+- **Start grace** = `max(custom_grace_minutes, late_entry_grace_period)` (each treated as 0 if unset). Weekly schedule creation also writes both custom and HRMS grace fields from the profile.
 
 Flag: **LATE_START** if:
 
-- `first_in` exists and `first_in` > \(start + grace\)
+- `first_in` exists and `first_in` > \(start + start\_grace\)
 - If `first_in` missing → handle by missing-punch rules below.
 
 ### 5) Lunch window (full-day shifts only)
@@ -107,7 +107,7 @@ Flag: **LATE_START** if:
 If shift type has `custom_lunch_start` and `custom_lunch_end`:
 
 - Expected lunch start/end define a *window*.
-- Grace around lunch can reuse `custom_grace_minutes` or have its own (deferred).
+- **Lunch return grace** = same as start grace (`max(custom_grace_minutes, late_entry_grace_period)`). A separate lunch-only grace field is deferred.
 
 MVP detection (shared by closeout flags and HR calendar UI):
 
@@ -129,11 +129,11 @@ Flags:
 Applies on **on-shift** days with at least two punches.
 
 - Expected end = Shift Type `end_time`
-- Grace = `custom_grace_minutes` (same as late start)
+- **End grace** = `max(custom_grace_minutes, early_exit_grace_period)`
 
 Flag: **LEFT_EARLY** if:
 
-- `last_out` exists and `last_out` < \(end − grace\)
+- `last_out` exists and `last_out` < \(end − end\_grace\)
 
 ### 6) Missing punches / insufficient data (flag)
 

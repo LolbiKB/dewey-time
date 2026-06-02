@@ -14,6 +14,14 @@ from zkteco_hr.attendance_engine.absence_flags import (
 from zkteco_hr.attendance_engine.bridge_auth import validate_bridge_request
 from zkteco_hr.attendance_engine.lunch_flags import evaluate_lunch_flags
 from zkteco_hr.attendance_engine.record_issue_flags import evaluate_record_issue_flags
+from zkteco_hr.attendance_engine.shift_grace import (
+    effective_end_grace,
+    effective_lunch_return_grace,
+    effective_start_grace,
+    enrich_shift_meta,
+    grace_evidence,
+    grace_fields_from_shift_doc,
+)
 # Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
 from zkteco_hr.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
 
@@ -464,19 +472,22 @@ def _generate_for_employee_date(
         if shift_assignment and shift_assignment.get("shift_type")
         else None
     )
-    grace = int(shift_meta.get("custom_grace_minutes") or 0) if shift_meta else 0
+    start_grace = effective_start_grace(shift_meta) if shift_meta else 0
+    end_grace = effective_end_grace(shift_meta) if shift_meta else 0
+    lunch_grace = effective_lunch_return_grace(shift_meta) if shift_meta else 0
 
     if shift_meta and shift_meta.get("start_time") is not None:
         start_dt = _combine_date_time(attendance_date, shift_meta["start_time"])
-        late_threshold = start_dt + timedelta(minutes=grace)
+        late_threshold = start_dt + timedelta(minutes=start_grace)
         evidence["shift_start"] = start_dt.isoformat()
-        evidence["grace_minutes"] = grace
+        evidence.update(grace_evidence(shift_meta))
         evidence["late_threshold"] = late_threshold.isoformat()
         if first_in_dt and first_in_dt > late_threshold:
             flags_to_create.append(
                 (
                     "LATE_START",
                     {
+                        **grace_evidence(shift_meta),
                         "first_in": first_in_dt.isoformat(),
                         "late_threshold": late_threshold.isoformat(),
                     },
@@ -517,12 +528,12 @@ def _generate_for_employee_date(
                 checkins=checkins,
                 shift_meta=shift_meta,
                 attendance_date=attendance_date,
-                grace_minutes=grace,
+                grace_minutes=lunch_grace,
             )
         )
         if last_out_dt and shift_meta.get("end_time") is not None:
             end_dt = _combine_date_time(attendance_date, shift_meta["end_time"])
-            early_threshold = end_dt - timedelta(minutes=grace)
+            early_threshold = end_dt - timedelta(minutes=end_grace)
             evidence["shift_end"] = end_dt.isoformat()
             evidence["early_threshold"] = early_threshold.isoformat()
             if last_out_dt < early_threshold:
@@ -530,6 +541,7 @@ def _generate_for_employee_date(
                     (
                         "LEFT_EARLY",
                         {
+                            **grace_evidence(shift_meta, for_end=True),
                             "last_out": last_out_dt.isoformat(),
                             "early_threshold": early_threshold.isoformat(),
                         },
@@ -541,7 +553,7 @@ def _generate_for_employee_date(
             checkins=checkins,
             shift_meta=shift_meta,
             attendance_date=attendance_date,
-            grace_minutes=grace,
+            grace_minutes=lunch_grace,
             undelivered_items=undelivered_items,
         )
     )
@@ -626,13 +638,14 @@ def _get_shift_meta(shift_type: str):
     except Exception:
         return None
 
-    return {
+    meta = {
         "start_time": doc.start_time,
         "end_time": doc.end_time,
-        "custom_grace_minutes": getattr(doc, "custom_grace_minutes", 0),
+        **grace_fields_from_shift_doc(doc),
         "custom_lunch_start": getattr(doc, "custom_lunch_start", None),
         "custom_lunch_end": getattr(doc, "custom_lunch_end", None),
     }
+    return enrich_shift_meta(meta)
 
 
 def _get_checkins_for_day(*, employee: str, attendance_date):

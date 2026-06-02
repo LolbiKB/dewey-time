@@ -524,8 +524,17 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
         doc.custom_lunch_start = profile.get("lunch_start")
     if frappe.db.has_column("Shift Type", "custom_lunch_end"):
         doc.custom_lunch_end = profile.get("lunch_end")
+    grace = int(profile.get("grace_minutes") or 0)
     if frappe.db.has_column("Shift Type", "custom_grace_minutes"):
-        doc.custom_grace_minutes = profile.get("grace_minutes") or 0
+        doc.custom_grace_minutes = grace
+    if frappe.db.has_column("Shift Type", "late_entry_grace_period"):
+        doc.late_entry_grace_period = grace
+    if frappe.db.has_column("Shift Type", "early_exit_grace_period"):
+        doc.early_exit_grace_period = grace
+    if frappe.db.has_column("Shift Type", "enable_late_entry_marking"):
+        doc.enable_late_entry_marking = 1
+    if frappe.db.has_column("Shift Type", "enable_early_exit_marking"):
+        doc.enable_early_exit_marking = 1
     if frappe.db.has_column("Shift Type", "enable_auto_attendance"):
         doc.enable_auto_attendance = 0
     doc.insert(ignore_permissions=True)
