@@ -74,6 +74,8 @@ For employee \(E\) on date \(D\):
 1. Resolve holiday from **Company Default Holiday List** (`holiday_by_date_for_company`).
 2. If \(D\) is a holiday / weekly off → **Off** for flag engine (**holiday wins**), even if SSA created a Shift Assignment row.
 3. Else load Shift Assignment for \(E,D\) (range-aware; see `shift_assignment.py`).
+   - **Today and future:** submitted **Active** row in range only.
+   - **Past dates:** submitted **Active** in range; if none, **Inactive** in range (retired ERP slice — still on-shift for flags/UI; `schedule_superseded` on calendar).
    - If none → **Off**.
    - Else shift type = `FT_*`.
 

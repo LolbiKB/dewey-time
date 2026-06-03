@@ -9,6 +9,9 @@ export type ShiftContext = {
   grace_minutes?: number;
   lunch_start?: string | null;
   lunch_end?: string | null;
+  /** True when the covering Shift Assignment is Inactive (retired in ERP) on a past day. */
+  schedule_superseded?: boolean;
+  assignment_status?: string;
 };
 
 export type Checkin = {

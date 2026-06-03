@@ -8,7 +8,8 @@ Policy: [`docs/FRAPPE_ATTENDANCE_RULES.md`](../../../docs/FRAPPE_ATTENDANCE_RULE
 
 | Source | Used for | Filter rule |
 |--------|----------|-------------|
-| **Shift Assignment** | Expected shift per date (`day.shift`), on-shift rules, ghost band | `docstatus == 1` (Submitted), `status == "Active"`, `start_date <= D`, `end_date` null or `>= D`. Draft assignments are ignored. Prefer HRMS `get_shifts_for_date(employee, noon on D)`. |
+| **Shift Assignment** | Expected shift per date (`day.shift`), on-shift rules, ghost band | `docstatus == 1` (Submitted), in range (`start_date <= D`, `end_date` null or `>= D`). **Live** (`D >= site today`): `status == "Active"`. **Historical** (`D < site today`): Active first, then Inactive if no Active row (`schedule_superseded` on API). Draft assignments ignored. Prefer HRMS `get_shifts_for_date(employee, noon on D)`. |
+| **Shift Assignment (bounds)** | Picker `schedule_min/max`, `has_shift_assignment` | Submitted **Active only** (live schedule window â€” not retired slices). |
 | **Shift Schedule** (`PAT_*`) | Pattern metadata when resolving SSA | Optional strict: linked schedule `docstatus == 1`; log if draft. |
 | **Shift Schedule Assignment** | Picker `has_shift_assignment`, SSA id, date bounds fallback | No docstatus. `enabled == 1`, not expired. Dated calendar still from **Shift Assignment**. |
 | **Leave Application** | `day.leave` badge | `docstatus == 1`, `status == "Approved"`, `from_date <= D <= to_date`. Leave does not remove shift ghost if a Shift Assignment exists. |
@@ -135,5 +136,7 @@ Week header **`OFF_SHIFT`** chip opens the day inspector directly on that flagâ€
 ## Off-shift / holiday punches
 
 When the day is off (no assignment, or **holiday wins**) and checkins exist, closeout creates **`OFF_SHIFT_PUNCH`** only (day-level Attendance Flag).
+
+**After enabling historical Inactive lookup:** existing `OFF_SHIFT_PUNCH` rows on days that were wrongly treated as off-shift are **not** auto-removed. Re-run closeout for affected dates (or clear flags in Desk) if HR needs flags aligned with restored on-shift rules.
 
 Implementation: `attendance_engine/shift_assignment.py`, `attendance_engine/holidays.py`, `attendance_engine/hr_calendar.py`, `attendance_engine/closeout.py`.

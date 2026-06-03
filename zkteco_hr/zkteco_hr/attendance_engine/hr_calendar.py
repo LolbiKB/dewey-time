@@ -175,7 +175,7 @@ def _shift_context_for_day(*, employee: str, attendance_date):
     if not meta:
         return {"shift_assigned": False}
 
-    return {
+    ctx = {
         "shift_assigned": True,
         "shift_type": assignment["shift_type"],
         "start_time": _format_time(meta.get("start_time")),
@@ -184,6 +184,11 @@ def _shift_context_for_day(*, employee: str, attendance_date):
         "lunch_start": _format_time(meta.get("custom_lunch_start")),
         "lunch_end": _format_time(meta.get("custom_lunch_end")),
     }
+    if assignment.get("schedule_superseded"):
+        ctx["schedule_superseded"] = True
+    if assignment.get("assignment_status"):
+        ctx["assignment_status"] = assignment["assignment_status"]
+    return ctx
 
 
 def first_checkin_date_by_employee(employee_ids: list[str]) -> dict[str, dict]:

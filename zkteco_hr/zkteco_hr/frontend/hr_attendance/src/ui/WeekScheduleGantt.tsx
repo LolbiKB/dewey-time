@@ -109,6 +109,11 @@ function ShiftBody(props: { day: WeekDaySchedule }) {
               {formatScheduleDuration(props.day.durationMin)} net
             </span>
           ) : null}
+          {props.day.shift.schedule_superseded ? (
+            <span title="Shift Assignment is Inactive in ERP; still shown for this past day">
+              Superseded in ERP
+            </span>
+          ) : null}
         </div>
       </div>
     </div>

@@ -8,14 +8,18 @@ from zkteco_hr.tests.test_closeout import _install_frappe_mock
 
 _install_frappe_mock()
 
+SITE_TODAY = date(2026, 6, 3)
+
 
 class TestShiftAssignmentQuery(unittest.TestCase):
     def setUp(self):
         import frappe
 
         frappe.get_all = MagicMock(return_value=[])
+        frappe.db.has_column = MagicMock(return_value=True)
 
-    def test_tuesday_in_mon_sat_block_is_assigned(self):
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_tuesday_in_mon_sat_block_is_assigned(self, _now):
         from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
 
         import frappe
@@ -26,6 +30,7 @@ class TestShiftAssignmentQuery(unittest.TestCase):
                 "shift_type": "FT_Standard",
                 "start_date": date(2026, 6, 1),
                 "end_date": date(2026, 6, 6),
+                "status": "Active",
             }
         ]
 
@@ -33,7 +38,8 @@ class TestShiftAssignmentQuery(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["name"], "HR-SHA-26-05-00013")
 
-    def test_wednesday_in_mon_sat_june_block_is_assigned(self):
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_wednesday_in_mon_sat_june_block_is_assigned(self, _now):
         """HR-SHA style range row: start Mon, end Sat — mid-week dates must match."""
         from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
 
@@ -45,6 +51,7 @@ class TestShiftAssignmentQuery(unittest.TestCase):
                 "shift_type": "FT_Standard",
                 "start_date": date(2026, 6, 1),
                 "end_date": date(2026, 6, 6),
+                "status": "Active",
             }
         ]
 
@@ -54,7 +61,8 @@ class TestShiftAssignmentQuery(unittest.TestCase):
         self.assertEqual(row["start_date"], "2026-06-01")
         self.assertEqual(row["end_date"], "2026-06-06")
 
-    def test_sunday_after_june_block_end_is_not_assigned(self):
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_sunday_after_june_block_end_is_not_assigned(self, _now):
         from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
 
         import frappe
@@ -64,7 +72,8 @@ class TestShiftAssignmentQuery(unittest.TestCase):
         row = _get_shift_assignment_query("DI-1138", date(2026, 6, 7))
         self.assertIsNone(row)
 
-    def test_friday_in_mon_sat_block_is_assigned(self):
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_friday_in_mon_sat_block_queries_active_first(self, _now):
         from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
 
         import frappe
@@ -75,6 +84,7 @@ class TestShiftAssignmentQuery(unittest.TestCase):
                 "shift_type": "FT_Standard",
                 "start_date": date(2026, 5, 25),
                 "end_date": date(2026, 5, 30),
+                "status": "Active",
             }
         ]
 
@@ -89,7 +99,8 @@ class TestShiftAssignmentQuery(unittest.TestCase):
         self.assertEqual(call_kwargs["filters"]["status"], "Active")
         self.assertEqual(call_kwargs["filters"]["start_date"], ["<=", date(2026, 5, 29)])
 
-    def test_sunday_after_block_end_is_not_assigned(self):
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_sunday_after_block_end_is_not_assigned(self, _now):
         from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
 
         import frappe
@@ -99,7 +110,8 @@ class TestShiftAssignmentQuery(unittest.TestCase):
         row = _get_shift_assignment_query("EMP-1", date(2026, 5, 31))
         self.assertIsNone(row)
 
-    def test_draft_assignment_not_returned(self):
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_draft_assignment_not_returned(self, _now):
         from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
 
         import frappe
@@ -108,6 +120,70 @@ class TestShiftAssignmentQuery(unittest.TestCase):
 
         _get_shift_assignment_query("EMP-1", date(2026, 5, 27))
         self.assertEqual(frappe.get_all.call_args.kwargs["filters"]["docstatus"], 1)
+
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_historical_inactive_row_is_assigned_with_superseded(self, _now):
+        from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
+
+        import frappe
+
+        inactive_row = {
+            "name": "HR-SHA-26-06-00002",
+            "shift_type": "FT_0800_1700",
+            "start_date": date(2026, 5, 18),
+            "end_date": date(2026, 5, 23),
+            "status": "Inactive",
+        }
+
+        def _get_all_side_effect(*_args, **kwargs):
+            if kwargs.get("filters", {}).get("status") == "Active":
+                return []
+            if kwargs.get("filters", {}).get("status") == "Inactive":
+                return [inactive_row]
+            return []
+
+        frappe.get_all.side_effect = _get_all_side_effect
+
+        row = _get_shift_assignment_query("DI-1138", date(2026, 5, 20))
+        self.assertIsNotNone(row)
+        self.assertEqual(row["shift_type"], "FT_0800_1700")
+        self.assertTrue(row["schedule_superseded"])
+        self.assertEqual(row["assignment_status"], "Inactive")
+        self.assertEqual(frappe.get_all.call_count, 2)
+
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_today_inactive_only_is_not_assigned(self, _now):
+        from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
+
+        import frappe
+
+        frappe.get_all.return_value = []
+
+        row = _get_shift_assignment_query("DI-1138", SITE_TODAY)
+        self.assertIsNone(row)
+        frappe.get_all.assert_called_once()
+        self.assertEqual(frappe.get_all.call_args.kwargs["filters"]["status"], "Active")
+
+    @patch("zkteco_hr.attendance_engine.shift_assignment.nowdate", return_value=SITE_TODAY)
+    def test_historical_prefers_active_over_inactive(self, _now):
+        from zkteco_hr.attendance_engine.shift_assignment import _get_shift_assignment_query
+
+        import frappe
+
+        active_row = {
+            "name": "SA-ACTIVE",
+            "shift_type": "FT_A",
+            "start_date": date(2026, 5, 18),
+            "end_date": date(2026, 5, 23),
+            "status": "Active",
+        }
+        frappe.get_all.return_value = [active_row]
+
+        row = _get_shift_assignment_query("EMP-1", date(2026, 5, 20))
+        self.assertIsNotNone(row)
+        self.assertEqual(row["name"], "SA-ACTIVE")
+        self.assertNotIn("schedule_superseded", row)
+        frappe.get_all.assert_called_once()
 
     @patch("zkteco_hr.attendance_engine.shift_assignment._get_shift_assignment_hrms")
     def test_hrms_path_used_when_available(self, hrms_mock):
@@ -143,6 +219,27 @@ class TestShiftContextForDay(unittest.TestCase):
         ctx = _shift_context_for_day(employee="EMP-1", attendance_date=date(2026, 5, 29))
         self.assertTrue(ctx["shift_assigned"])
         self.assertEqual(ctx["shift_type"], "FT_Standard")
+
+    @patch("zkteco_hr.attendance_engine.hr_calendar._get_shift_meta")
+    @patch("zkteco_hr.attendance_engine.hr_calendar._get_shift_assignment")
+    def test_shift_context_passes_superseded_metadata(self, get_assignment, get_meta):
+        from zkteco_hr.attendance_engine.hr_calendar import _shift_context_for_day
+
+        get_assignment.return_value = {
+            "shift_type": "FT_Standard",
+            "assignment_status": "Inactive",
+            "schedule_superseded": True,
+        }
+        get_meta.return_value = {
+            "start_time": "08:00:00",
+            "end_time": "17:00:00",
+            "custom_grace_minutes": 15,
+        }
+
+        ctx = _shift_context_for_day(employee="EMP-1", attendance_date=date(2026, 5, 20))
+        self.assertTrue(ctx["shift_assigned"])
+        self.assertTrue(ctx["schedule_superseded"])
+        self.assertEqual(ctx["assignment_status"], "Inactive")
 
     @patch("zkteco_hr.attendance_engine.hr_calendar._get_shift_assignment")
     def test_shift_assigned_false_when_no_assignment(self, get_assignment):

@@ -65,7 +65,7 @@ HR never maintains a Frappe-side device registry.
 - `Shift Type` (`FT_0800_1700`): start/end + custom lunch/grace fields.
 - `Shift Schedule` (`PAT_*`): pattern (days/frequency) referencing a Shift Type (submitted).
 - `Shift Schedule Assignment`: employee → schedule; generates dated `Shift Assignment` rows.
-- `Shift Assignment`: employee + date → expected shift context.
+- `Shift Assignment`: employee + date → expected shift context. **Live days** use **Active** rows only; **past days** also honor **Inactive** submitted rows in range (HRMS may retire slices after SSA regen). **`schedule_min/max`** in the HR UI uses **Active** bounds only.
 
 ### Employee primary Branch
 

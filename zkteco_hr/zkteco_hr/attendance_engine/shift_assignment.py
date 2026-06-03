@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 import frappe
-from frappe.utils import get_datetime, getdate
+from frappe.utils import get_datetime, getdate, nowdate
+
+
+def _is_historical_attendance_date(attendance_date) -> bool:
+    """Past calendar days (site TZ): allow Inactive submitted assignments in range."""
+    return getdate(attendance_date) < getdate(nowdate())
+
+
+def _shift_assignment_has_status_column() -> bool:
+    return frappe.db.has_column("Shift Assignment", "status")
+
+
+def _shift_assignment_fields() -> list[str]:
+    fields = ["name", "shift_type", "start_date", "end_date"]
+    if _shift_assignment_has_status_column():
+        fields.append("status")
+    return fields
 
 
 def get_shift_assignment(*, employee: str, attendance_date):
     """
-    Active submitted Shift Assignment covering attendance_date.
+    Submitted Shift Assignment covering attendance_date.
+
+    Live (today/future): status must be Active when the column exists.
+    Historical (past): Active first, then Inactive if no Active row (HRMS retired slices).
     Prefers HRMS get_shifts_for_date; falls back to equivalent get_all filters.
     """
     attendance_date = getdate(attendance_date)
@@ -37,33 +56,52 @@ def _get_shift_assignment_hrms(employee: str, attendance_date):
     return _normalize_shift_assignment_row(shifts[0], attendance_date)
 
 
-def _get_shift_assignment_query(employee: str, attendance_date):
+def _fetch_shift_assignment_row(
+    employee: str,
+    attendance_date,
+    *,
+    status: str | None = None,
+):
     attendance_date = getdate(attendance_date)
-    if not frappe.db.table_exists("Shift Assignment"):
-        return None
+    filters: dict = {
+        "employee": employee,
+        "docstatus": 1,
+        "start_date": ["<=", attendance_date],
+    }
+    if status and _shift_assignment_has_status_column():
+        filters["status"] = status
 
     rows = (
         frappe.get_all(
             "Shift Assignment",
-            filters={
-                "employee": employee,
-                "docstatus": 1,
-                "status": "Active",
-                "start_date": ["<=", attendance_date],
-            },
+            filters=filters,
             or_filters=[
                 ["end_date", "is", "not set"],
                 ["end_date", ">=", attendance_date],
             ],
-            fields=["name", "shift_type", "start_date", "end_date"],
+            fields=_shift_assignment_fields(),
             order_by="start_date desc",
             limit_page_length=1,
         )
         or []
     )
-    if not rows:
+    return rows[0] if rows else None
+
+
+def _get_shift_assignment_query(employee: str, attendance_date):
+    attendance_date = getdate(attendance_date)
+    if not frappe.db.table_exists("Shift Assignment"):
         return None
-    return _normalize_shift_assignment_row(rows[0], attendance_date)
+
+    if not _shift_assignment_has_status_column():
+        row = _fetch_shift_assignment_row(employee, attendance_date)
+        return _normalize_shift_assignment_row(row, attendance_date) if row else None
+
+    row = _fetch_shift_assignment_row(employee, attendance_date, status="Active")
+    if not row and _is_historical_attendance_date(attendance_date):
+        row = _fetch_shift_assignment_row(employee, attendance_date, status="Inactive")
+
+    return _normalize_shift_assignment_row(row, attendance_date) if row else None
 
 
 def _normalize_shift_assignment_row(row, attendance_date):
@@ -75,21 +113,29 @@ def _normalize_shift_assignment_row(row, attendance_date):
         name = row.get("name")
         start_date = row.get("start_date")
         end_date = row.get("end_date")
+        status = row.get("status")
     else:
         shift_type = getattr(row, "shift_type", None)
         name = getattr(row, "name", None)
         start_date = getattr(row, "start_date", None)
         end_date = getattr(row, "end_date", None)
+        status = getattr(row, "status", None)
 
     if not shift_type:
         return None
 
-    return {
+    status_text = (status or "").strip()
+    out = {
         "name": name,
         "shift_type": shift_type,
         "start_date": str(getdate(start_date)) if start_date else str(getdate(attendance_date)),
         "end_date": str(getdate(end_date)) if end_date else None,
     }
+    if status_text:
+        out["assignment_status"] = status_text
+        if status_text.lower() == "inactive":
+            out["schedule_superseded"] = True
+    return out
 
 
 def shift_assignment_bounds_by_employee(employee_ids: list[str]) -> dict[str, dict]:
@@ -101,7 +147,7 @@ def shift_assignment_bounds_by_employee(employee_ids: list[str]) -> dict[str, di
         return {}
 
     status_clause = ""
-    if frappe.db.has_column("Shift Assignment", "status"):
+    if _shift_assignment_has_status_column():
         status_clause = "AND status = 'Active'"
 
     placeholders = ", ".join(["%s"] * len(employee_ids))
