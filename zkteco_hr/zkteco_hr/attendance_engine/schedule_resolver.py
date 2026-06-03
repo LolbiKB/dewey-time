@@ -116,10 +116,37 @@ def group_week_pattern(days: list[dict]) -> list[dict]:
     return groups
 
 
+def _compress_contiguous_day_ranges(ordered_days: list[str]) -> str:
+    """Compress sorted weekday names into MON-FRI style ranges."""
+    if not ordered_days:
+        return ""
+    segments: list[str] = []
+    run_start = ordered_days[0]
+    run_end = ordered_days[0]
+    for day in ordered_days[1:]:
+        if WEEKDAY_TO_INDEX[day] == WEEKDAY_TO_INDEX[run_end] + 1:
+            run_end = day
+            continue
+        if run_start == run_end:
+            segments.append(WEEKDAY_SHORT[run_start])
+        else:
+            segments.append(f"{WEEKDAY_SHORT[run_start]}-{WEEKDAY_SHORT[run_end]}")
+        run_start = day
+        run_end = day
+    if run_start == run_end:
+        segments.append(WEEKDAY_SHORT[run_start])
+    else:
+        segments.append(f"{WEEKDAY_SHORT[run_start]}-{WEEKDAY_SHORT[run_end]}")
+    return "-".join(segments)
+
+
 def compact_days_label(days: list[str], profile: dict) -> str:
     day_set = set(days)
-    weekdays = set(WEEKDAYS[:5])
-    if day_set == weekdays:
+    if day_set == set(WEEKDAYS):
+        return "MON-SUN"
+    if day_set == set(WEEKDAYS[:6]):
+        return "MON-SAT"
+    if day_set == set(WEEKDAYS[:5]):
         return "MON-FRI"
     if day_set == {"Saturday"}:
         start_m = time_to_minutes(profile.get("start_time"))
@@ -130,7 +157,7 @@ def compact_days_label(days: list[str], profile: dict) -> str:
     if len(days) == 1:
         return WEEKDAY_SHORT[days[0]]
     ordered = sorted(days, key=lambda d: WEEKDAY_TO_INDEX[d])
-    return "-".join(WEEKDAY_SHORT[d] for d in ordered)
+    return _compress_contiguous_day_ranges(ordered)
 
 
 def proposed_shift_type_name(profile: dict) -> str:
@@ -187,6 +214,32 @@ def _repeat_days_set(doc) -> set[str]:
     return {row.day for row in rows if getattr(row, "day", None)}
 
 
+def _shift_schedule_doc_matches(
+    doc,
+    *,
+    day_set: set[str],
+    shift_type: str,
+    frequency: str,
+    require_submitted: bool = True,
+) -> bool:
+    if require_submitted and getattr(doc, "docstatus", 0) != 1:
+        return False
+    if getattr(doc, "shift_type", None) != shift_type:
+        return False
+    if getattr(doc, "frequency", None) != frequency:
+        return False
+    return _repeat_days_set(doc) == day_set
+
+
+def _choose_shift_schedule_match(matches: list[str], proposed: str) -> str:
+    if proposed in matches:
+        return proposed
+    pat_matches = [name for name in matches if name.startswith("PAT_")]
+    if pat_matches:
+        return sorted(pat_matches, key=lambda n: (len(n), n))[0]
+    return sorted(matches, key=lambda n: (len(n), n))[0]
+
+
 def match_shift_schedule(
     *,
     days: list[str],
@@ -195,12 +248,17 @@ def match_shift_schedule(
     frequency: str = "Every Week",
 ) -> dict:
     day_set = set(days)
+    proposed = proposed_pat_name(days, shift_type, profile)
 
     if not frappe.db.table_exists("Shift Schedule"):
-        return {
-            "action": "create",
-            "proposed_name": proposed_pat_name(days, shift_type, profile),
-        }
+        return {"action": "create", "proposed_name": proposed}
+
+    if frappe.db.exists("Shift Schedule", proposed):
+        doc = frappe.get_doc("Shift Schedule", proposed)
+        if _shift_schedule_doc_matches(
+            doc, day_set=day_set, shift_type=shift_type, frequency=frequency
+        ):
+            return {"action": "use", "name": proposed}
 
     names = frappe.get_all(
         "Shift Schedule",
@@ -215,12 +273,9 @@ def match_shift_schedule(
             matches.append(name)
 
     if not matches:
-        return {
-            "action": "create",
-            "proposed_name": proposed_pat_name(days, shift_type, profile),
-        }
+        return {"action": "create", "proposed_name": proposed}
 
-    chosen = sorted(matches, key=lambda n: (len(n), n))[0]
+    chosen = _choose_shift_schedule_match(matches, proposed)
     return {"action": "use", "name": chosen, "alternatives": [n for n in matches if n != chosen]}
 
 
@@ -549,7 +604,10 @@ def create_shift_schedule(
     frequency: str = "Every Week",
     name: str | None = None,
 ) -> str:
-    existing = match_shift_schedule(days=days, shift_type=shift_type, profile=profile, frequency=frequency)
+    proposed = name or proposed_pat_name(days, shift_type, profile)
+    existing = match_shift_schedule(
+        days=days, shift_type=shift_type, profile=profile, frequency=frequency
+    )
     if existing.get("action") == "use":
         return existing["name"]
 
@@ -558,9 +616,19 @@ def create_shift_schedule(
     doc.frequency = frequency
     for day in days:
         doc.append("repeat_on_days", {"day": day})
-    doc.insert(ignore_permissions=True)
-    doc.submit()
-    return doc.name
+    if hasattr(doc, "name"):
+        doc.name = proposed
+    try:
+        doc.insert(ignore_permissions=True)
+        doc.submit()
+        return doc.name
+    except Exception:
+        rematch = match_shift_schedule(
+            days=days, shift_type=shift_type, profile=profile, frequency=frequency
+        )
+        if rematch.get("action") == "use":
+            return rematch["name"]
+        raise
 
 
 def upsert_ssa(

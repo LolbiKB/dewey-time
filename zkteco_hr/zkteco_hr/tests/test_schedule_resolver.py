@@ -114,6 +114,162 @@ class TestNaming(unittest.TestCase):
         )
         self.assertEqual(name, "PAT_MON-FRI_FT_0800_1700_L1200_1300")
 
+    def test_compact_days_label_ranges(self):
+        from zkteco_hr.attendance_engine.schedule_resolver import (
+            WEEKDAYS,
+            compact_days_label,
+            proposed_pat_name,
+        )
+
+        profile = {
+            "start_time": "08:00:00",
+            "end_time": "17:00:00",
+            "lunch_start": "12:00:00",
+            "lunch_end": "13:00:00",
+        }
+        self.assertEqual(compact_days_label(list(WEEKDAYS), profile), "MON-SUN")
+        self.assertEqual(compact_days_label(list(WEEKDAYS[:6]), profile), "MON-SAT")
+        self.assertEqual(
+            compact_days_label(["Monday", "Wednesday", "Friday"], profile),
+            "MON-WED-FRI",
+        )
+        self.assertEqual(
+            compact_days_label(["Wednesday", "Thursday", "Friday"], profile),
+            "WED-FRI",
+        )
+
+    def test_proposed_pat_name_mon_sun(self):
+        from zkteco_hr.attendance_engine.schedule_resolver import WEEKDAYS, proposed_pat_name
+
+        profile = {
+            "start_time": "08:00:00",
+            "end_time": "17:00:00",
+            "lunch_start": "12:00:00",
+            "lunch_end": "13:00:00",
+        }
+        name = proposed_pat_name(list(WEEKDAYS), "FT_0800_1700", profile)
+        self.assertEqual(name, "PAT_MON-SUN_FT_0800_1700_L1200_1300")
+
+
+class TestMatchShiftSchedule(unittest.TestCase):
+    def _make_pat_doc(self, name, days, shift_type="FT_0800_1700", frequency="Every Week"):
+        doc = MagicMock()
+        doc.name = name
+        doc.docstatus = 1
+        doc.shift_type = shift_type
+        doc.frequency = frequency
+        rows = [MagicMock(day=day) for day in days]
+        doc.repeat_on_days = rows
+        return doc
+
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.get_doc")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.get_all")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.db.exists")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.db.table_exists")
+    def test_prefers_canonical_pat_over_autoname(self, table_exists, exists, get_all, get_doc):
+        from zkteco_hr.attendance_engine.schedule_resolver import match_shift_schedule
+
+        table_exists.return_value = True
+        exists.return_value = False
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        profile = {
+            "start_time": "08:00:00",
+            "end_time": "17:00:00",
+            "lunch_start": "12:00:00",
+            "lunch_end": "13:00:00",
+        }
+        canonical = "PAT_MON-FRI_FT_0800_1700_L1200_1300"
+        autoname = "HR-SCH-26-06-00001"
+        get_all.return_value = [autoname, canonical]
+
+        def doc_loader(_doctype, name):
+            if name == canonical:
+                return self._make_pat_doc(canonical, days)
+            return self._make_pat_doc(autoname, days)
+
+        get_doc.side_effect = doc_loader
+
+        result = match_shift_schedule(
+            days=days,
+            shift_type="FT_0800_1700",
+            profile=profile,
+        )
+        self.assertEqual(result["action"], "use")
+        self.assertEqual(result["name"], canonical)
+
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.get_doc")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.get_all")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.db.exists")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.db.table_exists")
+    def test_fast_path_reuses_proposed_name(self, table_exists, exists, get_all, get_doc):
+        from zkteco_hr.attendance_engine.schedule_resolver import match_shift_schedule
+
+        table_exists.return_value = True
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        profile = {
+            "start_time": "08:00:00",
+            "end_time": "17:00:00",
+            "lunch_start": "12:00:00",
+            "lunch_end": "13:00:00",
+        }
+        canonical = "PAT_MON-FRI_FT_0800_1700_L1200_1300"
+        exists.side_effect = lambda _dt, name: name == canonical
+        get_doc.return_value = self._make_pat_doc(canonical, days)
+        get_all.return_value = []
+
+        result = match_shift_schedule(
+            days=days,
+            shift_type="FT_0800_1700",
+            profile=profile,
+        )
+        self.assertEqual(result["action"], "use")
+        self.assertEqual(result["name"], canonical)
+        get_all.assert_not_called()
+
+
+class TestCreateShiftSchedule(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.match_shift_schedule")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.new_doc")
+    def test_sets_doc_name_on_create(self, new_doc, match_schedule):
+        from zkteco_hr.attendance_engine.schedule_resolver import create_shift_schedule
+
+        match_schedule.return_value = {"action": "create", "proposed_name": "PAT_MON-FRI_FT_0800_1700"}
+        doc = MagicMock()
+        doc.name = None
+        new_doc.return_value = doc
+
+        name = create_shift_schedule(
+            days=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+            shift_type="FT_0800_1700",
+            profile={"start_time": "08:00:00", "end_time": "17:00:00"},
+            name="PAT_MON-FRI_FT_0800_1700",
+        )
+        self.assertEqual(doc.name, "PAT_MON-FRI_FT_0800_1700")
+        doc.insert.assert_called_once()
+        doc.submit.assert_called_once()
+        self.assertEqual(name, doc.name)
+
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.match_shift_schedule")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.new_doc")
+    def test_insert_failure_falls_back_to_rematch(self, new_doc, match_schedule):
+        from zkteco_hr.attendance_engine.schedule_resolver import create_shift_schedule
+
+        match_schedule.side_effect = [
+            {"action": "create", "proposed_name": "PAT_MON-FRI_FT_0800_1700"},
+            {"action": "use", "name": "PAT_MON-FRI_FT_0800_1700"},
+        ]
+        doc = MagicMock()
+        doc.insert.side_effect = Exception("duplicate")
+        new_doc.return_value = doc
+
+        name = create_shift_schedule(
+            days=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+            shift_type="FT_0800_1700",
+            profile={"start_time": "08:00:00", "end_time": "17:00:00"},
+        )
+        self.assertEqual(name, "PAT_MON-FRI_FT_0800_1700")
+        self.assertEqual(match_schedule.call_count, 2)
+
 
 class TestMatchShiftType(unittest.TestCase):
     @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.get_all")
