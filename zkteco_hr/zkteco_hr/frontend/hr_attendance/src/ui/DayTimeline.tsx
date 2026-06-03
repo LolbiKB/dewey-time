@@ -6,16 +6,21 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   clamp,
   formatBranchLabel,
+  formatCheckinTime,
   formatDurationMinutes,
   minutesFromDateTime,
   parseDateTimeLocal,
   parseTimeToMinutes,
 } from "@/lib/attendanceTime";
 import {
+  classifyUnpairedPresentations,
   computeDayTimeWindow,
   deriveTimelineGaps,
   deriveUnpairedPunches,
+  hasTimelineErrorPunches,
   shiftTimelinePolicyFromShift,
+  type DeviceSyncStatus,
+  type PunchPresentation,
 } from "@/lib/attendancePunches";
 import {
   detectObservedLunch,
@@ -40,6 +45,12 @@ type Checkin = NonNullable<Day["checkins"]>[number];
 const scheduledBandClass =
   "border-2 border-dashed border-muted-foreground/80 bg-muted/50 dark:border-muted-foreground/65 dark:bg-muted/40";
 
+const punchHelpers = {
+  parseTime: parseDateTimeLocal,
+  minutesFromDateTime,
+  clamp,
+};
+
 export function DayCell(props: {
   date: Date;
   outside: boolean;
@@ -48,10 +59,20 @@ export function DayCell(props: {
   dense: boolean;
   timelineStartMin?: number;
   timelineEndMin?: number;
+  deviceSync?: DeviceSyncStatus[];
   onInspectDay: () => void;
 }) {
   const checkins = props.info?.checkins ?? [];
-  const hasUnpairedPunch = deriveUnpairedPunches(checkins, parseDateTimeLocal).length > 0;
+  const dateKey = format(props.date, "yyyy-MM-dd");
+  const shiftEndMin =
+    props.info?.shift?.shift_assigned && props.info.shift.end_time
+      ? parseTimeToMinutes(props.info.shift.end_time)
+      : null;
+  const hasErrorPunch = hasTimelineErrorPunches(
+    checkins,
+    { dateKey, shiftEndMin, deviceSync: props.deviceSync },
+    punchHelpers
+  );
   const holiday = props.info?.holiday ?? null;
   const shift = holiday ? { shift_assigned: false } : (props.info?.shift ?? { shift_assigned: false });
 
@@ -73,7 +94,7 @@ export function DayCell(props: {
               <span
                 className={cn(
                   "h-4 w-1 rounded-full",
-                  hasUnpairedPunch ? "bg-destructive" : "bg-muted/40"
+                  hasErrorPunch ? "bg-destructive" : "bg-muted/40"
                 )}
                 aria-hidden="true"
               />
@@ -103,8 +124,9 @@ export function DayCell(props: {
               lastOut={props.info?.last_out ?? null}
               checkins={checkins}
               shift={shift}
-              dateKey={format(props.date, "yyyy-MM-dd")}
+              dateKey={dateKey}
               observedLunch={props.info?.observed_lunch ?? null}
+              deviceSync={props.deviceSync}
               dense={props.dense}
               windowStartMin={props.timelineStartMin}
               windowEndMin={props.timelineEndMin}
@@ -137,15 +159,43 @@ function DayDayTrack(props: {
   shift: ShiftContext;
   dateKey: string;
   observedLunch: ObservedLunch | null;
+  deviceSync?: DeviceSyncStatus[];
   dense: boolean;
   windowStartMin?: number;
   windowEndMin?: number;
 }) {
   const color = "bg-emerald-600";
+  const openSessionUncertainClass =
+    "border border-dashed border-amber-500/50 bg-amber-500/20 dark:bg-amber-500/15";
 
   const span = computeDaySpan(props.firstIn, props.lastOut);
   const segments = deriveSegments(props.checkins);
-  const roguePunches = useMemo(
+  const shiftEndMin =
+    props.shift?.shift_assigned && props.shift.end_time
+      ? parseTimeToMinutes(props.shift.end_time)
+      : null;
+  const punchPresentations = useMemo(
+    () =>
+      classifyUnpairedPresentations(
+        props.checkins ?? [],
+        {
+          dateKey: props.dateKey,
+          shiftEndMin,
+          deviceSync: props.deviceSync,
+        },
+        punchHelpers
+      ),
+    [props.checkins, props.dateKey, props.deviceSync, shiftEndMin]
+  );
+  const errorPresentations = useMemo(
+    () => punchPresentations.filter((row) => row.kind !== "openSession"),
+    [punchPresentations]
+  );
+  const openSessions = useMemo(
+    () => punchPresentations.filter((row) => row.kind === "openSession"),
+    [punchPresentations]
+  );
+  const unpairedForGaps = useMemo(
     () => deriveUnpairedPunches(props.checkins ?? [], parseDateTimeLocal),
     [props.checkins]
   );
@@ -165,12 +215,12 @@ function DayDayTrack(props: {
   );
   const gaps = useMemo(
     () =>
-      deriveTimelineGaps(segments, roguePunches, minutesFromDateTime, {
+      deriveTimelineGaps(segments, unpairedForGaps, minutesFromDateTime, {
         shiftPolicy,
         observedLunchRange,
         scheduledLunchRange,
       }),
-    [observedLunchRange, roguePunches, scheduledLunchRange, segments, shiftPolicy]
+    [observedLunchRange, scheduledLunchRange, segments, shiftPolicy, unpairedForGaps]
   );
   const awayIntervals = useMemo(
     () =>
@@ -185,8 +235,16 @@ function DayDayTrack(props: {
   );
   const missingExpected = useMemo(() => {
     const maxEndMin = missingExpectedMaxEndMin(props.dateKey);
+    const openSessionIntervals = openSessions.flatMap((row) => {
+      const intervals = [{ startMin: row.startMin, endMin: row.confirmedEndMin }];
+      if (row.uncertainEndMin != null && row.uncertainEndMin > row.confirmedEndMin) {
+        intervals.push({ startMin: row.confirmedEndMin, endMin: row.uncertainEndMin });
+      }
+      return intervals;
+    });
     const excludeIntervals = [
       ...awayIntervals,
+      ...openSessionIntervals,
       ...scheduledFuture.map((interval) => ({
         startMin: interval.startMin,
         endMin: interval.endMin,
@@ -196,7 +254,7 @@ function DayDayTrack(props: {
       maxEndMin,
       excludeIntervals,
     });
-  }, [awayIntervals, props.dateKey, props.shift, scheduledFuture, segments]);
+  }, [awayIntervals, openSessions, props.dateKey, props.shift, scheduledFuture, segments]);
   const lateness = computeLateness(props.shift, props.firstIn);
 
   const window = useMemo(() => {
@@ -257,6 +315,14 @@ function DayDayTrack(props: {
     );
   }
 
+  function openSessionLabel(row: PunchPresentation) {
+    const branchLabel = formatBranchLabel(row.branch);
+    const since = formatCheckinTime(row.checkin.time);
+    const parts = [`On site · since ${since}`, branchLabel].filter(Boolean);
+    if (row.syncLagging) parts.push("sync pending");
+    return parts.join(" · ");
+  }
+
   return (
     <div className="flex h-full flex-col gap-2">
       <div
@@ -268,12 +334,15 @@ function DayDayTrack(props: {
           style={{ left: "calc(50% - 0.5px)" }}
         />
 
-        {roguePunches.map((c, idx) => {
-          const m = minutesFromDateTime(c.time);
-          if (m == null) return null;
+        {errorPresentations.map((row, idx) => {
+          const m = row.startMin;
           const topPct = pctFromMinute(m);
+          const label =
+            row.kind === "rogue"
+              ? "Rogue punch"
+              : "Unpaired punch";
           return (
-            <Tooltip key={`${c.time}-${idx}`}>
+            <Tooltip key={`${row.checkin.time}-${idx}`}>
               <TooltipTrigger asChild>
                 <div
                   className="absolute inset-x-2 h-1 rounded-full bg-destructive shadow-sm"
@@ -281,9 +350,43 @@ function DayDayTrack(props: {
                 />
               </TooltipTrigger>
               <TooltipContent side="right" className="text-xs">
-                Unpaired punch · {format(parseDateTimeLocal(c.time), "h:mm a")}
+                {label} · {format(parseDateTimeLocal(row.checkin.time), "h:mm a")}
               </TooltipContent>
             </Tooltip>
+          );
+        })}
+
+        {openSessions.map((row, idx) => {
+          const confirmed = renderTimelineBand(
+            `open-${idx}`,
+            {
+              startMin: row.startMin,
+              endMin: row.confirmedEndMin,
+              minutes: Math.max(0, row.confirmedEndMin - row.startMin),
+            },
+            cn(color, "shadow-sm ring-1 ring-foreground/10"),
+            openSessionLabel(row),
+            window != null
+          );
+          const uncertain =
+            row.uncertainEndMin != null && row.uncertainEndMin > row.confirmedEndMin
+              ? renderTimelineBand(
+                  `open-uncertain-${idx}`,
+                  {
+                    startMin: row.confirmedEndMin,
+                    endMin: row.uncertainEndMin,
+                    minutes: row.uncertainEndMin - row.confirmedEndMin,
+                  },
+                  openSessionUncertainClass,
+                  "Punches may still be in transit",
+                  window != null
+                )
+              : null;
+          return (
+            <span key={`open-wrap-${idx}`} className="contents">
+              {confirmed}
+              {uncertain}
+            </span>
           );
         })}
 

@@ -1,4 +1,4 @@
-import type { Day, DeviceAlert, Flag } from "@/types/calendar";
+import type { Day, DeviceAlert, DeviceSyncStatus, Flag } from "@/types/calendar";
 import { format } from "date-fns";
 import { ArrowLeftIcon, ArrowRightIcon, ChevronRightIcon, LogInIcon, LogOutIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -46,6 +46,7 @@ export type DayInspectorSheetProps = {
   employeeLabel: string | null;
   inspectingDay?: Day;
   alertsByDate: Map<string, DeviceAlert[]>;
+  syncByDate: Map<string, DeviceSyncStatus[]>;
   reviewingFlag: Flag | null;
   onReviewingFlagChange: (flag: Flag | null) => void;
   onClose: () => void;
@@ -66,6 +67,9 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
           dateKey: props.inspectingDate ?? undefined,
           shift: props.inspectingDay?.shift,
           observedLunch: props.inspectingDay?.observed_lunch ?? null,
+          deviceSync: props.inspectingDate
+            ? (props.syncByDate.get(props.inspectingDate) ?? [])
+            : [],
         }
       ),
     [
@@ -73,6 +77,7 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
       props.inspectingDay?.checkins,
       props.inspectingDay?.observed_lunch,
       props.inspectingDay?.shift,
+      props.syncByDate,
       segments,
     ]
   );
@@ -203,6 +208,14 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
                                 key={`away-${idx}`}
                                 item={item}
                                 dateKey={props.inspectingDate ?? ""}
+                              />
+                            );
+                          }
+                          if (item.kind === "openSession") {
+                            return (
+                              <OpenSessionInspectorRow
+                                key={`open-${item.checkin.time}-${idx}`}
+                                item={item}
                               />
                             );
                           }
@@ -421,6 +434,62 @@ function AwayInspectorRow(props: {
         >
           Away
         </Badge>
+      </div>
+    </div>
+  );
+}
+
+function OpenSessionInspectorRow(props: {
+  item: Extract<SegmentInspectorItem, { kind: "openSession" }>;
+}) {
+  const { item } = props;
+  const branch = formatBranchLabel(item.branch);
+  const duration = Math.max(0, item.confirmedEndMin - item.startMin);
+  const uncertainMinutes =
+    item.uncertainEndMin != null && item.uncertainEndMin > item.confirmedEndMin
+      ? item.uncertainEndMin - item.confirmedEndMin
+      : null;
+
+  return (
+    <div className="flex gap-3 rounded-xl border border-emerald-600/30 bg-emerald-600/5 px-3 py-3 shadow-xs">
+      <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
+        <div className="h-full min-h-10 w-1 rounded-full bg-emerald-600" aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold tracking-tight text-emerald-950 dark:text-emerald-50">
+              On site
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Since {formatCheckinTime(item.checkin.time)}
+              {branch ? ` · ${branch}` : null}
+            </div>
+          </div>
+          <Badge
+            variant="secondary"
+            className="shrink-0 rounded-md bg-emerald-600/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-900 dark:text-emerald-100"
+          >
+            {formatDurationMinutes(duration)}
+          </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            variant="outline"
+            className="h-5 rounded-md border-emerald-600/30 bg-emerald-600/10 px-1.5 text-[10px] font-semibold text-emerald-900 dark:text-emerald-100"
+          >
+            Open session
+          </Badge>
+          {item.syncLagging ? (
+            <Badge
+              variant="outline"
+              className="h-5 rounded-md border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] font-semibold text-amber-900 dark:text-amber-100"
+            >
+              Sync pending
+              {uncertainMinutes != null ? ` · ${formatDurationMinutes(uncertainMinutes)}` : null}
+            </Badge>
+          ) : null}
+        </div>
       </div>
     </div>
   );

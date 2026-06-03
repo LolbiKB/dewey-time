@@ -1,6 +1,7 @@
 import {
   deviceAlertsByDate,
   deviceAlertsForWeek,
+  deviceSyncByDate,
   formatAttendanceLoadError,
   useCalendarEmployees,
   useDefaultEmployee,
@@ -73,6 +74,7 @@ export function App() {
       end_date: "",
       days: [],
       device_alerts: [],
+      device_sync: [],
     } as CalendarPayload);
 
   const earliestInPayload = useMemo(
@@ -100,6 +102,10 @@ export function App() {
   const alertsByDate = useMemo(
     () => deviceAlertsByDate(payload.device_alerts ?? []),
     [payload.device_alerts]
+  );
+  const syncByDate = useMemo(
+    () => deviceSyncByDate(payload.device_sync ?? []),
+    [payload.device_sync]
   );
 
   const selectedEmployee = useMemo(
@@ -280,6 +286,7 @@ export function App() {
                     weekDates={weekDates}
                     daysByDate={daysByDate}
                     alertsByDate={alertsByDate}
+                    syncByDate={syncByDate}
                     onInspectDay={(date) => {
                       setInspectingDate(date);
                       setReviewingFlag(null);
@@ -302,6 +309,7 @@ export function App() {
         employeeLabel={employeeShortName(selectedEmployee, employee)}
         inspectingDay={inspectingDay}
         alertsByDate={alertsByDate}
+        syncByDate={syncByDate}
         reviewingFlag={reviewingFlag}
         onReviewingFlagChange={setReviewingFlag}
         onClose={() => {

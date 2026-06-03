@@ -3,7 +3,7 @@ import { useFrappeGetCall } from "frappe-react-sdk";
 import { useEffect, useMemo } from "react";
 
 import { calendarFetchRange } from "@/lib/weekCalendar";
-import type { CalendarEmployee, CalendarPayload, DeviceAlert } from "@/types/calendar";
+import type { CalendarEmployee, CalendarPayload, DeviceAlert, DeviceSyncStatus } from "@/types/calendar";
 
 const EMPLOYEES_METHOD = "zkteco_hr.attendance_engine.hr_calendar.list_calendar_employees";
 const CALENDAR_METHOD = "zkteco_hr.attendance_engine.hr_calendar.get_employee_calendar";
@@ -89,6 +89,15 @@ export function deviceAlertsByDate(alerts: DeviceAlert[]): Map<string, DeviceAle
   for (const alert of alerts) {
     const key = String(alert.local_date);
     map.set(key, [...(map.get(key) ?? []), alert]);
+  }
+  return map;
+}
+
+export function deviceSyncByDate(rows: DeviceSyncStatus[]): Map<string, DeviceSyncStatus[]> {
+  const map = new Map<string, DeviceSyncStatus[]>();
+  for (const row of rows) {
+    const key = String(row.local_date);
+    map.set(key, [...(map.get(key) ?? []), row]);
   }
   return map;
 }

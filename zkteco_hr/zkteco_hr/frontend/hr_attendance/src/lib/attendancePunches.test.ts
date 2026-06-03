@@ -5,12 +5,14 @@ import type { Checkin } from "@/types/calendar";
 
 import {
   buildShiftExemptIntervals,
+  classifyUnpairedPresentations,
   computeWeekTimelineWindow,
   deriveSegments,
   deriveTimelineGaps,
   deriveUnpairedPunches,
   directionForCheckin,
   groupCheckinsByBranchRuns,
+  hasTimelineErrorPunches,
   shiftTimelinePolicyFromShift,
   subtractExemptFromGap,
   TIMELINE_VIEWPORT_MINUTES,
@@ -239,4 +241,67 @@ test("missing branch punches never pair with each other", () => {
   const unpaired = deriveUnpairedPunches(checkins, parseTime);
   assert.equal(unpaired.length, 2);
   assert.ok(unpaired.every((c) => !c.custom_device_branch));
+});
+
+test("classify trailing punch on today as open session", () => {
+  const checkins = [
+    punch("2026-06-03 08:00:00", "BRANCH-A"),
+    punch("2026-06-03 12:00:00", "BRANCH-A"),
+    punch("2026-06-03 13:00:00", "BRANCH-A"),
+  ];
+  const now = new Date("2026-06-03T15:30:00");
+  const helpers = { parseTime, minutesFromDateTime, clamp };
+  const rows = classifyUnpairedPresentations(
+    checkins,
+    { dateKey: "2026-06-03", now, shiftEndMin: 17 * 60 },
+    helpers
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.kind, "openSession");
+  assert.equal(hasTimelineErrorPunches(checkins, { dateKey: "2026-06-03", now }, helpers), false);
+});
+
+test("classify same punches on past day as unpaired error", () => {
+  const checkins = [
+    punch("2026-06-02 08:00:00", "BRANCH-A"),
+    punch("2026-06-02 12:00:00", "BRANCH-A"),
+    punch("2026-06-02 13:00:00", "BRANCH-A"),
+  ];
+  const now = new Date("2026-06-03T15:30:00");
+  const rows = classifyUnpairedPresentations(
+    checkins,
+    { dateKey: "2026-06-02", now },
+    { parseTime, minutesFromDateTime, clamp }
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.kind, "unpairedError");
+});
+
+test("sync horizon caps open session confirmed end", () => {
+  const checkins = [punch("2026-06-03 08:00:00", "BRANCH-A")];
+  const now = new Date("2026-06-03T15:30:00");
+  const rows = classifyUnpairedPresentations(
+    checkins,
+    {
+      dateKey: "2026-06-03",
+      now,
+      deviceSync: [
+        {
+          device_sn: "DEV1",
+          local_date: "2026-06-03",
+          last_device_log_at: "2026-06-03 15:00:00",
+          last_delivered_at: "2026-06-03 14:00:00",
+          pending_count: 1,
+        },
+      ],
+    },
+    { parseTime, minutesFromDateTime, clamp }
+  );
+
+  assert.equal(rows[0]!.kind, "openSession");
+  assert.equal(rows[0]!.confirmedEndMin, 14 * 60);
+  assert.equal(rows[0]!.uncertainEndMin, 15 * 60 + 30);
+  assert.equal(rows[0]!.syncLagging, true);
 });

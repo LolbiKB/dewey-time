@@ -155,7 +155,11 @@ If day is **off** (including **holiday wins**) but checkins exist:
 
 ### 9) Work segments (UI / derived intervals)
 
-HR calendar **segments** are derived from punches (not stored). See root policy §9 in prior versions for pairing, lunch vs away bands, missing expected, scheduled reference, and week timeline scale.
+HR calendar **segments** are derived from punches (not stored). Pairing, lunch vs away bands, missing expected, scheduled reference, and week timeline scale apply as before.
+
+**Open session (intraday):** On **today**, a trailing odd branch punch (employee still on site) renders as a green **open session** band, not a red unpaired error. **Past days** and **rogue** (no branch) punches stay alarming. When bridge posts **`Device Sync Status`**, the solid green band ends at `last_delivered_at`; a dashed amber extension shows possible in-transit punches when sync lags.
+
+Bridge contract: [`docs/BRIDGE_AGENT_HANDOFF.md`](BRIDGE_AGENT_HANDOFF.md).
 
 **Flags vs segments:** `MISSING_IN_OR_OUT` is day-level (one punch total). `NON_PRIMARY_SITE_PUNCH` is per punch vs `Employee.branch`.
 

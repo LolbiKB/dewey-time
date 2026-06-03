@@ -1,4 +1,4 @@
-import type { Day, DeviceAlert, Flag } from "@/types/calendar";
+import type { Day, DeviceAlert, DeviceSyncStatus, Flag } from "@/types/calendar";
 import { format, isSameDay } from "date-fns";
 import { useEffect, useMemo, useRef } from "react";
 
@@ -70,6 +70,7 @@ export type WeekViewProps = {
   weekDates: Date[];
   daysByDate: Map<string, Day>;
   alertsByDate: Map<string, DeviceAlert[]>;
+  syncByDate: Map<string, DeviceSyncStatus[]>;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 };
@@ -251,6 +252,7 @@ export function WeekView(props: WeekViewProps) {
                 dense={false}
                 timelineStartMin={weekWindow.startMin}
                 timelineEndMin={weekWindow.endMin}
+                deviceSync={props.syncByDate.get(key) ?? []}
                 onInspectDay={() => props.onInspectDay(key)}
               />
             );

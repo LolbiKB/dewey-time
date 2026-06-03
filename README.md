@@ -20,9 +20,13 @@ bench --site <site> migrate
 
 ## MVP jobs / APIs
 
+- Bridge contract (checkins, closeout, intraday sync): [`docs/BRIDGE_AGENT_HANDOFF.md`](docs/BRIDGE_AGENT_HANDOFF.md)
 - Bridge closeout webhook (POST, API key + optional `X-Bridge-Secret`):
   - `zkteco_hr.attendance_engine.closeout.notify_device_closeout_status`
   - Args: `device_sn`, `local_date`, `status` (`closed|deferred_offline|closure_failed`), `device_branch`, `last_error`, `undelivered` (JSON list when `closed`)
+- Bridge intraday sync webhook (POST, same auth):
+  - `zkteco_hr.attendance_engine.device_sync.notify_device_sync_status`
+  - Args: `device_sn`, `local_date`, `device_branch`, `last_device_log_at`, `last_delivered_at`, optional `pending_count`, `last_error`, `bridge_env`
   - Site config (optional): `bridge_closeout_secret` in `site_config.json`
 - Company fallback closeout (scheduler, ~03:00 company TZ): `zkteco_hr.attendance_engine.closeout.run_company_fallback_closeout`
   - Creates `UNNOTIFIED_ABSENCE` only; skips employees whose branch has an open `Device Closeout Alert`

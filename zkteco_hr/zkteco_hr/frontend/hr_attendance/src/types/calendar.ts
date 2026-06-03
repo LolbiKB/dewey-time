@@ -28,6 +28,16 @@ export type DeviceAlert = {
   last_error?: string | null;
 };
 
+export type DeviceSyncStatus = {
+  device_sn: string;
+  branch?: string | null;
+  local_date: string;
+  last_device_log_at?: string | null;
+  last_delivered_at?: string | null;
+  pending_count?: number | null;
+  last_error?: string | null;
+};
+
 export type Flag = {
   name: string;
   flag_code: string;
@@ -80,6 +90,7 @@ export type CalendarPayload = {
   end_date: string;
   days: Day[];
   device_alerts?: DeviceAlert[];
+  device_sync?: DeviceSyncStatus[];
   /** From Employee Checkin ledger — week nav backward bound. */
   first_checkin_date?: string | null;
   schedule_max_date?: string | null;

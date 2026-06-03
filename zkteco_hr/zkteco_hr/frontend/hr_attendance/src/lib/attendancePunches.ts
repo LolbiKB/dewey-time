@@ -1,5 +1,7 @@
 import type { Checkin } from "@/types/calendar";
 
+import { minutesFromDateTime } from "@/lib/attendanceTime";
+
 export type Segment = {
   start: Checkin;
   end: Checkin;
@@ -169,6 +171,203 @@ export function deriveUnpairedPunches(
   return unpaired;
 }
 
+export type PunchPresentationKind = "rogue" | "openSession" | "unpairedError";
+
+export type DeviceSyncStatus = {
+  device_sn: string;
+  branch?: string | null;
+  local_date: string;
+  last_device_log_at?: string | null;
+  last_delivered_at?: string | null;
+  pending_count?: number | null;
+  last_error?: string | null;
+};
+
+export type PunchPresentation = {
+  kind: PunchPresentationKind;
+  checkin: Checkin;
+  branch: string | null;
+  startMin: number;
+  confirmedEndMin: number;
+  uncertainEndMin?: number | null;
+  syncLagging?: boolean;
+};
+
+export function dateKeyFromDate(now: Date): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function isInsidePairedSegment(min: number, segments: Segment[]): boolean {
+  for (const segment of segments) {
+    if (segment.startMin == null || segment.endMin == null) continue;
+    if (min >= segment.startMin && min < segment.endMin) return true;
+  }
+  return false;
+}
+
+export function syncHorizonForTimeline(
+  deviceSync: DeviceSyncStatus[] | undefined,
+  options: { dateKey: string; deviceIds?: Iterable<string | null | undefined> }
+): { horizonMin: number | null; isLagging: boolean } {
+  if (!deviceSync?.length) return { horizonMin: null, isLagging: false };
+
+  const deviceFilter =
+    options.deviceIds != null
+      ? new Set(
+          [...options.deviceIds]
+            .map((id) => (id != null ? String(id).trim() : ""))
+            .filter(Boolean)
+        )
+      : null;
+
+  let horizonMin: number | null = null;
+  let isLagging = false;
+
+  for (const row of deviceSync) {
+    if (row.local_date !== options.dateKey) continue;
+    if (deviceFilter?.size && !deviceFilter.has(row.device_sn)) continue;
+
+    const deliveredMin = minutesFromDateTime(row.last_delivered_at);
+    const deviceLogMin = minutesFromDateTime(row.last_device_log_at);
+
+    if (deliveredMin != null) {
+      horizonMin = horizonMin == null ? deliveredMin : Math.min(horizonMin, deliveredMin);
+    }
+    if (deliveredMin != null && deviceLogMin != null && deviceLogMin > deliveredMin) {
+      isLagging = true;
+    }
+    if ((row.pending_count ?? 0) > 0) {
+      isLagging = true;
+    }
+  }
+
+  return { horizonMin, isLagging };
+}
+
+function minutesNow(now: Date): number {
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+const punchPresentationHelpers = {
+  parseTime: (value: string) => new Date(value.replace(" ", "T")),
+  minutesFromDateTime,
+  clamp: (n: number, min: number, max: number) => Math.min(max, Math.max(min, n)),
+};
+
+export function classifyUnpairedPresentations(
+  checkins: Checkin[],
+  options: {
+    dateKey: string;
+    now?: Date;
+    shiftEndMin?: number | null;
+    deviceSync?: DeviceSyncStatus[];
+  },
+  helpers: {
+    parseTime: (value: string) => Date;
+    minutesFromDateTime: (value: string | null | undefined) => number | null;
+    clamp: (value: number, min: number, max: number) => number;
+  } = punchPresentationHelpers
+): PunchPresentation[] {
+  const now = options.now ?? new Date();
+  const todayKey = dateKeyFromDate(now);
+  const sorted = sortCheckinsByTime(checkins, helpers.parseTime);
+  const unpaired = deriveUnpairedPunches(checkins, helpers.parseTime);
+  if (!unpaired.length) return [];
+
+  const segments = deriveSegments(checkins, helpers);
+  const lastCheckin = sorted[sorted.length - 1]!;
+  const deviceIds = new Set(
+    checkins.map((c) => c.device_id).filter((id): id is string => !!id?.trim())
+  );
+  const { horizonMin, isLagging: syncLagging } = syncHorizonForTimeline(options.deviceSync, {
+    dateKey: options.dateKey,
+    deviceIds: deviceIds.size ? deviceIds : undefined,
+  });
+
+  const nowMin = minutesNow(now);
+  const capEnd = Math.min(nowMin, options.shiftEndMin ?? 24 * 60);
+
+  const presentations: PunchPresentation[] = [];
+
+  for (const checkin of unpaired) {
+    const startMin = helpers.minutesFromDateTime(checkin.time);
+    if (startMin == null) continue;
+
+    if (!hasPunchBranch(checkin)) {
+      presentations.push({
+        kind: "rogue",
+        checkin,
+        branch: null,
+        startMin,
+        confirmedEndMin: startMin,
+      });
+      continue;
+    }
+
+    const branch = punchBranch(checkin);
+    const isLastPunch =
+      checkin === lastCheckin ||
+      (!!checkin.name && !!lastCheckin.name && checkin.name === lastCheckin.name) ||
+      checkin.time === lastCheckin.time;
+
+    const isOpenSession =
+      options.dateKey >= todayKey &&
+      isLastPunch &&
+      !isInsidePairedSegment(startMin, segments);
+
+    if (isOpenSession) {
+      let confirmedEndMin = Math.max(startMin, capEnd);
+      if (horizonMin != null) {
+        confirmedEndMin = Math.max(startMin, Math.min(capEnd, horizonMin));
+      }
+      const uncertainEndMin = syncLagging && confirmedEndMin < capEnd ? capEnd : null;
+
+      presentations.push({
+        kind: "openSession",
+        checkin,
+        branch,
+        startMin,
+        confirmedEndMin,
+        uncertainEndMin,
+        syncLagging: syncLagging || uncertainEndMin != null,
+      });
+      continue;
+    }
+
+    presentations.push({
+      kind: "unpairedError",
+      checkin,
+      branch,
+      startMin,
+      confirmedEndMin: startMin,
+    });
+  }
+
+  return presentations;
+}
+
+export function hasTimelineErrorPunches(
+  checkins: Checkin[],
+  options: {
+    dateKey: string;
+    now?: Date;
+    shiftEndMin?: number | null;
+    deviceSync?: DeviceSyncStatus[];
+  },
+  helpers: {
+    parseTime: (value: string) => Date;
+    minutesFromDateTime: (value: string | null | undefined) => number | null;
+    clamp: (value: number, min: number, max: number) => number;
+  } = punchPresentationHelpers
+): boolean {
+  return classifyUnpairedPresentations(checkins, options, helpers).some(
+    (row) => row.kind === "rogue" || row.kind === "unpairedError"
+  );
+}
+
 export type ShiftTimelinePolicy = {
   startMin?: number | null;
   endMin?: number | null;
@@ -280,10 +479,17 @@ export function deriveTimelineGaps(
   _minutesFromDateTime: (value: string | null | undefined) => number | null,
   shiftPolicyOrOptions?: ShiftTimelinePolicy | null | TimelineGapOptions
 ): TimelineGap[] {
-  const options: TimelineGapOptions =
-    shiftPolicyOrOptions && "observedLunchRange" in shiftPolicyOrOptions
-      ? shiftPolicyOrOptions
-      : { shiftPolicy: shiftPolicyOrOptions ?? null };
+  let options: TimelineGapOptions;
+  if (
+    shiftPolicyOrOptions != null &&
+    typeof shiftPolicyOrOptions === "object" &&
+    ("observedLunchRange" in shiftPolicyOrOptions ||
+      "scheduledLunchRange" in shiftPolicyOrOptions)
+  ) {
+    options = shiftPolicyOrOptions;
+  } else {
+    options = { shiftPolicy: (shiftPolicyOrOptions as ShiftTimelinePolicy | null) ?? null };
+  }
 
   const shiftPolicy = options.shiftPolicy ?? null;
   const observedLunchRange = options.observedLunchRange ?? null;

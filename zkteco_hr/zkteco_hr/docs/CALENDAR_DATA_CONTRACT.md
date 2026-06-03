@@ -110,6 +110,22 @@ Flag object (in `day.flags[]`):
 
 `is_provisional` is `true` when `day_closed === 0`.
 
+**Device sync** (top-level `device_sync[]`, employee primary branch):
+
+```json
+{
+  "device_sn": "CK92218010001",
+  "branch": "DIS Iconic",
+  "local_date": "2026-06-03",
+  "last_device_log_at": "2026-06-03 14:02:00",
+  "last_delivered_at": "2026-06-03 14:00:00",
+  "pending_count": 0,
+  "last_error": null
+}
+```
+
+Written by bridge via `notify_device_sync_status`. See [`docs/BRIDGE_AGENT_HANDOFF.md`](../../../docs/BRIDGE_AGENT_HANDOFF.md).
+
 ## HR flag review (UI)
 
 Flags are listed in the **day inspector → Flags** tab. Clicking a flag opens an inline **HR review panel** (read-only): summary, supporting details, recommended HR action, **Review in Desk** link. Status `OPEN` is shown as **Awaiting HR review**. Approve/reject remains in Desk (P1 for SPA workflow).

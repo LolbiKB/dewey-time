@@ -371,6 +371,34 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             if row.get("local_date"):
                 row["local_date"] = str(row["local_date"])
 
+    device_sync = []
+    if employee_branch and frappe.db.table_exists("Device Sync Status"):
+        device_sync = (
+            frappe.get_all(
+                "Device Sync Status",
+                filters={
+                    "branch": employee_branch,
+                    "local_date": ["between", [start, end]],
+                },
+                fields=[
+                    "device_sn",
+                    "branch",
+                    "local_date",
+                    "last_device_log_at",
+                    "last_delivered_at",
+                    "pending_count",
+                    "last_error",
+                ],
+                order_by="local_date asc, device_sn asc",
+            )
+            or []
+        )
+        for row in device_sync:
+            if row.get("local_date"):
+                row["local_date"] = str(row["local_date"])
+            row["last_device_log_at"] = _format_datetime(row.get("last_device_log_at"))
+            row["last_delivered_at"] = _format_datetime(row.get("last_delivered_at"))
+
     flags = []
     if frappe.db.table_exists("Attendance Flag"):
         flags = (
@@ -476,5 +504,6 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         "end_date": str(end),
         "days": days,
         "device_alerts": device_alerts,
+        "device_sync": device_sync,
         **_employee_nav_meta(employee),
     }

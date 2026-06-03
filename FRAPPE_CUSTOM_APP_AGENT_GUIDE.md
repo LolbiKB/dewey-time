@@ -83,7 +83,11 @@ Use built-in `Employee.branch` as the employee’s primary branch.
 - `skip_auto_attendance = 1`
 - `custom_verify_type`, `custom_bridge_env` (ops/debug)
 
-## Bridge → Frappe contract (Employee Checkin)
+## Bridge → Frappe contract
+
+**Bridge / device engineers:** full handoff (checkin delivery, closeout, intraday sync watermark) — [`docs/BRIDGE_AGENT_HANDOFF.md`](docs/BRIDGE_AGENT_HANDOFF.md).
+
+### Employee Checkin
 
 POST to Frappe resource API for `Employee Checkin`.
 
