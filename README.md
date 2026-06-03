@@ -3,8 +3,10 @@
 Minimal Frappe custom app for the **attendance engine MVP**:
 
 - `Employee Checkin` is the immutable punch ledger (written by the bridge).
-- This app generates persisted workflow rows in `Attendance Flag` (AUTO closeout-only).
-- A simple read API returns “My Week” data (checkins + computed minutes + flags).
+- This app generates persisted **`Attendance Flag`** rows: **intraday provisional** (`day_closed=0`) and **closeout final** (`day_closed=1`).
+- HR calendar APIs + React SPA at **`/hr-attendance`** return checkins, shift context, holidays, flags, and timeline data.
+
+**Policy:** [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md) · **Pilot scope:** [`FLAG_ENGINE_MVP.md`](FLAG_ENGINE_MVP.md)
 
 ## Install (bench)
 
@@ -51,19 +53,21 @@ Seeded or historical **Employee Checkin** rows do not always produce **Attendanc
 - `mode`: `intraday` | `closeout` | `both` (max 31-day range)
 - `both` runs intraday then closeout per day; final AUTO flags are `day_closed=1` (closeout wins)
 
-**UI:** `/hr-attendance` — flag icon in the week header opens a dialog (remove before production MVP deploy):
+**UI (`/hr-attendance`):**
 
-1. Select employee and date range (defaults to visible week)
-2. **Both** after seeding checkins (or **Closeout** alone to re-debug a range)
-3. Verify flag chips in the week view and rows in Desk **Attendance Flag**
+1. **Run flag engine** dialog (dev) — select employee and date range; run **Both** after seeding checkins.
+2. Open a day → **Flags** tab → click a flag for the **HR review panel** (summary, evidence, link to Desk).
+3. Week header **`OFF_SHIFT`** chip opens the same flag review for that day.
+4. Verify rows in Desk **Attendance Flag**.
 
-**UI:** `/hr-schedule` — **Clear schedule data (dev)** (System Manager to execute): deletes all Shift Schedule Assignments, Shift Assignments, and Attendance Flags for the selected employee so you can re-test greenfield save. Also removes **Employee Checkin** and **Attendance** rows in each Shift Assignment window (HRMS blocks cancel otherwise). Does not delete Shift Type / Pattern masters.
+**UI (`/hr-schedule`):** **Clear schedule data (dev)** — removes SSAs, Shift Assignments, Attendance Flags, and linked checkins/attendance for re-testing.
 
 Closeout is **idempotent for AUTO flags**: each run deletes and recreates AUTO rows for that employee/date; HR and employee-sourced flags are untouched.
 
-## HR Attendance Calendar (Desk)
+## HR Attendance Calendar
 
-- Open from Awesomebar: **HR Attendance Calendar** or route `/app/hr-attendance-calendar`
+- **React SPA:** **`/hr-attendance`** (primary HR week view)
+- **Desk:** Awesomebar **HR Attendance Calendar** or `/app/hr-attendance-calendar`
 - Module sidebar: **ZKTeco HR** (Frappe v16 `Workspace Sidebar` fixture)
 
 HR calendar API:
@@ -71,7 +75,7 @@ HR calendar API:
 - `zkteco_hr.attendance_engine.hr_calendar.list_calendar_employees(include_without_shifts=True)`
 - `zkteco_hr.attendance_engine.hr_calendar.get_employee_calendar(employee, start_date, end_date)`
 
-Calendar filter semantics (Shift Assignment docstatus, leave, flags): see `zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md`.
+Calendar filter semantics (Shift Assignment docstatus, leave, holidays, flags): see [`zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md`](zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md).
 
 ## Weekly Schedule wizard
 
@@ -96,13 +100,11 @@ Effective-from defaults to **tomorrow** (site date). On save, HRMS **`create_shi
 
 ## React + Vite HR Attendance (local dev)
 
-This repo includes a Vite+React frontend scaffold under:
+Frontend scaffold:
 
 - `zkteco_hr/zkteco_hr/frontend/hr_attendance/`
 
 ### Run with mock data (fast UI iteration)
-
-From your bench's app folder (or from the repo), run:
 
 ```bash
 cd zkteco_hr/zkteco_hr/frontend/hr_attendance
@@ -110,9 +112,7 @@ npm install
 npm run dev
 ```
 
-### Build and load inside Frappe Desk
-
-Build assets into `zkteco_hr/zkteco_hr/public/hr_attendance/`:
+### Build and load inside Frappe
 
 ```bash
 cd zkteco_hr/zkteco_hr/frontend/hr_attendance
@@ -122,6 +122,4 @@ npm run build
 
 **Frappe Cloud deploy notes** (404 / MIME errors, sync pitfalls, cache bust): see [`docs/HR_ATTENDANCE_DEPLOY.md`](zkteco_hr/zkteco_hr/docs/HR_ATTENDANCE_DEPLOY.md).
 
-Then open the Desk page:
-
-- `/app/hr-attendance-calendar-react`
+Desk page (legacy entry): `/app/hr-attendance-calendar-react`

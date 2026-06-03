@@ -204,20 +204,14 @@ export function WeekView(props: WeekViewProps) {
                   </Tooltip>
                 ) : null}
                 {offShiftFlag ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => props.onInspectFlag(key, offShiftFlag)}
-                        className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
-                      >
-                        OFF_SHIFT
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="text-xs">
-                      Off-shift punches recorded
-                    </TooltipContent>
-                  </Tooltip>
+                  <button
+                    type="button"
+                    onClick={() => props.onInspectFlag(key, offShiftFlag)}
+                    className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
+                    title="Review off-shift punch flag"
+                  >
+                    OFF_SHIFT
+                  </button>
                 ) : null}
                 {(props.alertsByDate.get(key) ?? []).length > 0 ? (
                   <Tooltip>
@@ -258,7 +252,6 @@ export function WeekView(props: WeekViewProps) {
                 timelineStartMin={weekWindow.startMin}
                 timelineEndMin={weekWindow.endMin}
                 onInspectDay={() => props.onInspectDay(key)}
-                onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
               />
             );
           })}

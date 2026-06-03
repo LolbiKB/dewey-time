@@ -32,7 +32,7 @@ import {
   missingExpectedMaxEndMin,
 } from "@/lib/shiftTimeline";
 import { cn } from "@/lib/utils";
-import type { Day, Flag, ObservedLunch, ShiftContext } from "@/types/calendar";
+import type { Day, ObservedLunch, ShiftContext } from "@/types/calendar";
 
 type Checkin = NonNullable<Day["checkins"]>[number];
 
@@ -49,7 +49,6 @@ export function DayCell(props: {
   timelineStartMin?: number;
   timelineEndMin?: number;
   onInspectDay: () => void;
-  onInspectFlag: (flag: Flag) => void;
 }) {
   const checkins = props.info?.checkins ?? [];
   const hasUnpairedPunch = deriveUnpairedPunches(checkins, parseDateTimeLocal).length > 0;

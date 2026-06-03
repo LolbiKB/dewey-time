@@ -1,6 +1,6 @@
 # Flag engine MVP — scope and sign-off
 
-Single source of truth for **what the zkteco_hr flag engine must do for a pilot** vs what is deferred. Policy definitions remain in [`FRAPPE_ATTENDANCE_RULES.md`](./FRAPPE_ATTENDANCE_RULES.md). Implementation lives in **https://github.com/LolbiKB/zkteco_hr**.
+Single source of truth for **what the zkteco_hr flag engine must do for a pilot** vs what is deferred. Policy definitions: [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md). Implementation: **https://github.com/LolbiKB/zkteco_hr**.
 
 **MVP bar:** trustworthy for **5 employees × 20 days** with manual spot-checks — not every rule in the policy doc.
 
@@ -12,6 +12,8 @@ Single source of truth for **what the zkteco_hr flag engine must do for a pilot*
 Employee Checkin (bridge ledger)
        +
 Shift Assignment (submitted, active, date range)
+       +
+Company Holiday List (holiday wins at flag time)
        ↓
 zkteco_hr: intraday (day_closed=0) + closeout (day_closed=1) + 03:00 fallback
        ↓
@@ -22,71 +24,80 @@ No ERPNext **Attendance** (payroll) status. No **`Attendance Day`** projection t
 
 ---
 
+## Implemented in repo (Jun 2026)
+
+Engine and HR calendar UI code for MVP scope is **in the repository**. Remaining gate is **ops setup + pilot matrix sign-off** (see checklist below).
+
+| Module | Role |
+|--------|------|
+| `shift_assignment.py` | Range-aware on-shift lookup |
+| `shift_grace.py` | Effective grace resolution |
+| `shift_times.py` | Shift time parsing |
+| `holidays.py` | Holiday List metadata; holiday wins |
+| `intraday.py` | Provisional flags |
+| `closeout.py` | Final AUTO flags |
+| `lunch_flags.py` / `lunch_detection.py` | Observed lunch; `LATE_FROM_LUNCH` |
+| `hr_calendar.py` | Calendar API |
+| `frontend/hr_attendance/` | Week view, day inspector, HR flag review panel |
+
+---
+
 ## P0 — Ship blockers (before pilot)
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
-| 1 | **Range-aware Shift Assignment lookup** | zkteco_hr | **Done in repo** — see below |
+| 1 | **Range-aware Shift Assignment lookup** | zkteco_hr | **Done in repo** |
 | 2 | Bridge **device closeout** → `notify_device_closeout_status` | bridge + zkteco_hr | Code done; verify on Cloud + bridge env |
 | 3 | **Frappe scheduler** on Cloud | ops | In `hooks.py`; enable on site |
 | 4 | **Shift setup** per pilot employee | HR | Data — submitted **Active** assignments covering pilot dates |
 | 5 | **Pilot matrix** 5 × 20 | HR + eng | Process — expected vs actual `flag_code` spreadsheet |
 
-### P0 #1 — Shift assignment lookup (verified in repo)
+Items 2–5 are **ops/process** — not blocked on further engine code in repo.
+
+### P0 #1 — Shift assignment lookup
 
 **Module:** `zkteco_hr/zkteco_hr/attendance_engine/shift_assignment.py` — `get_shift_assignment(employee, attendance_date)`.
 
-Do **not** duplicate logic in `closeout.py`. All callers import this module:
+Callers: `hr_calendar.py`, `intraday.py`, `closeout.py`.
 
-- `hr_calendar.py` — expected shift band / off-day
-- `intraday.py` — on-shift intraday flags
-- `closeout.py` — closeout flag generation
-
-**Behavior:**
-
-1. Prefer HRMS `get_shifts_for_date(employee, noon on D)`.
-2. Fallback query: `docstatus == 1`, `status == "Active"`, `start_date <= D`, `end_date` null or `>= D`.
-
-**Tests:** `zkteco_hr/zkteco_hr/tests/test_shift_assignment.py` — Mon–Sat block → on-shift Tue–Sat (not only Monday); day after block end → off.
-
-**Deploy note:** Confirm the build on Frappe Cloud includes this module. Historical AUTO flags created before the fix are **not** auto-corrected — wipe AUTO flags and re-run intraday/closeout for affected dates if needed ([`TEST_ENV_RESET_AND_SEED.md`](./TEST_ENV_RESET_AND_SEED.md)).
+**Deploy note:** Historical AUTO flags before the range fix are **not** auto-corrected — wipe AUTO flags and re-run intraday/closeout for affected dates if needed.
 
 ---
 
 ## In scope — MVP flag set (v0)
 
-| Flag | When | `day_closed` | Requires |
-|------|------|----------------|----------|
-| `LATE_START` | Intraday + closeout | 0 / 1 | On-shift; `start_time` + effective start grace (`max(custom_grace_minutes, late_entry_grace_period)`) |
-| `LEFT_EARLY` | Closeout | 1 | On-shift; ≥2 checkins; last punch before `end_time − effective end grace` (`max(custom_grace_minutes, early_exit_grace_period)`) |
-| `MISSING_TIME` | Intraday + closeout | 0 / 1 | On-shift obligation gap **≥30 min** (`absence_threshold_minutes`); leading / away / trailing |
-| `ATTENDANCE_ISSUE` | Closeout (+ intraday wrong-site separate) | 1 | Incomplete punch data (`single_checkin`, `unpaired_punch`, `delivery_failed`, etc.) — **CRITICAL** |
-| `OFF_SHIFT_PUNCH` | Closeout | 1 | **Off-shift** (no assignment) but has checkins |
+| Flag | When | `day_closed` | Requires / notes |
+|------|------|----------------|------------------|
+| `LATE_START` | **Closeout only** | 1 | On-shift; **≥2 checkins**; `first_in` > start + effective start grace |
+| `LEFT_EARLY` | Closeout | 1 | On-shift; ≥2 checkins; last punch before end − effective end grace |
+| `MISSING_TIME` | Intraday + closeout | 0 / 1 | On-shift gap **≥30 min** |
+| `ATTENDANCE_ISSUE` | Closeout | 1 | Incomplete punch data — **CRITICAL** |
+| `OFF_SHIFT_PUNCH` | Closeout | 1 | Off-shift or **holiday wins**; has checkins — **only** flag that day |
 | `MISSING_IN_OR_OUT` | Closeout | 1 | On-shift; exactly one checkin |
 | `NON_PRIMARY_SITE_PUNCH` | Intraday + closeout | 0 / 1 | `Employee.branch` ≠ `custom_device_branch` |
-| `UNKNOWN_DEVICE_BRANCH` | Closeout | 1 | Checkin missing `custom_device_branch` |
+| `UNKNOWN_DEVICE_BRANCH` | Closeout | 1 | Missing `custom_device_branch` |
 | `DELIVERY_FAILED` | Closeout | 1 | Bridge `undelivered[]` on `status=closed` |
-| `UNNOTIFIED_ABSENCE` | Closeout + **03:00 fallback** | 1 | On-shift; zero checkins at close; branch sweep on device closeout |
-| `OFF_SHIFT_PUNCH` | Closeout | 1 | Not on-shift but has punches — **only** flag that day (suppresses all others) |
-| `MISSING_LUNCH` | Closeout | 1 | Full-day shift with lunch window; no plausible out/in pair |
-| `LATE_FROM_LUNCH` | Closeout | 1 | Full-day shift; return after `lunch_end + effective lunch return grace` (same as start grace) |
+| `UNNOTIFIED_ABSENCE` | Closeout + **03:00 fallback** | 1 | On-shift; zero checkins at close |
+| `LATE_FROM_LUNCH` | Closeout | 1 | Valid observed lunch; return after lunch end + grace |
 
-### Rules doc aliases and intentional gaps
+### Intraday provisional (`day_closed=0`)
 
-| Rules doc | Code / behavior |
-|-----------|-----------------|
-| `MISSING_ALL_PUNCHES` | **`UNNOTIFIED_ABSENCE`** (same intent: on-shift, no checkins at closeout/fallback) |
-| Per-device closeout absence for all on-shift staff | **Done** — branch sweep + `include_unnotified_absence` on device close |
-| Device closeout | Flags employees who **punched on that device** (+ `undelivered`); not company-wide absence sweep |
+**Only:** `MISSING_TIME`, `NON_PRIMARY_SITE_PUNCH`. Skips holidays. No `LATE_START`, no `UNNOTIFIED_ABSENCE`.
 
-### Why P0 #1 mattered (historical)
+### Intentionally not emitted (MVP)
 
-| Area | Before range fix | With `shift_assignment.py` |
-|------|------------------|----------------------------|
-| `/hr-attendance` shift band | Often only block **start** day | Mon–Sat inside block |
-| `OFF_SHIFT_PUNCH` | False positives Tue–Sat | Correct |
-| `LATE_START`, `NO_CHECKIN_YET` | Mostly **Monday** only | All on-shift days in block |
-| `UNNOTIFIED_ABSENCE` (fallback) | Mostly **Monday** only | All on-shift days with no checkins |
+| Flag | Status |
+|------|--------|
+| `MISSING_LUNCH` | **Suppressed** — assume scheduled lunch when no valid observed pair |
+| `NO_CHECKIN_YET` | Doctype constant only; engine does not generate |
+
+### Rules doc aliases
+
+| Rules doc | Code |
+|-----------|------|
+| `MISSING_ALL_PUNCHES` | **`UNNOTIFIED_ABSENCE`** |
+| Per-device closeout + branch sweep | **Done** |
+| Holiday off-day | **`holiday_by_date_for_company`** + holiday wins in closeout/intraday |
 
 ---
 
@@ -94,12 +105,13 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 
 | Item | Tier | Notes |
 |------|------|--------|
-| Lunch rule tuning (pair heuristic edge cases) | **P1** | Implemented in `lunch_flags.py`; refine with pilot matrix |
-| Holiday List as distinct “off” type | **P1** | MVP: no **Shift Assignment** = off; no separate holiday engine |
-| HR approve/reject / employee explain in React SPA | **P1** | MVP: ERPNext **Attendance Flag** list |
-| Payroll Present / Absent | **Deferred** | [`FRAPPE_ATTENDANCE_RULES.md`](./FRAPPE_ATTENDANCE_RULES.md) |
+| Lunch rule tuning (`LATE_FROM_LUNCH` edge cases) | **P1** | Implemented; refine with pilot matrix |
+| **`MISSING_LUNCH` flag** | **P1** | Suppressed in MVP |
+| Holiday-aware SSA (skip assignment on holidays) | **P1** | MVP uses holiday wins at flag time only |
+| HR approve/reject / employee explain in React SPA | **P1** | Desk **Attendance Flag** + read-only review panel in SPA |
+| Payroll Present / Absent | **Deferred** | [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md) |
 | Midnight shifts, multi-interval minutes | **Deferred** | |
-| `SUSPICIOUS_SEQUENCE` | **P2** | Optional in rules doc |
+| `SUSPICIOUS_SEQUENCE` | **P2** | |
 
 ---
 
@@ -107,41 +119,50 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 
 | In | Out |
 |----|-----|
-| Week view, punches, shift ghost band, per-day flag chips | Full HR workflow in SPA |
-| Device closeout banners, provisional vs final (`day_closed`) | Approve/reject in SPA |
-| Employee picker, weekly schedule sheet | Employee picker filters (P1) |
+| Week view, timeline, shift bands, holiday display | Full HR workflow in SPA |
+| Day inspector (segments, punches, flags list) | Approve/reject in SPA |
+| **HR flag review panel** in day inspector (summary, evidence, Review in Desk) | Employee self-service explain in SPA |
+| Week **`OFF_SHIFT`** chip → opens flag review | Flag filter by code (P1) |
+| Device closeout banners; provisional vs final (`day_closed`) | |
+| Employee picker; `/hr-schedule` wizard | Employee picker filters (P1) |
+| Run flag engine dialog (dev) | |
+
+Route: **`/hr-attendance`** (React SPA). Desk: **HR Attendance Calendar** / `/app/hr-attendance-calendar`.
 
 ---
 
 ## Operational go-live checklist
 
+**Engine/UI code is in repo.** Unchecked items below are **ops and pilot validation only.**
+
 - [ ] Bridge: `FRAPPE_URL`, `FRAPPE_API_KEY` / secret, optional `FRAPPE_BRIDGE_SECRET`
 - [ ] Supabase `devices.location` matches Frappe **`Branch.name`**
-- [ ] Pilot employees: submitted **Active** **Shift Assignment** covering pilot window (range rows Mon–Sat OK)
+- [ ] Pilot employees: submitted **Active** **Shift Assignment** covering pilot window
 - [ ] Frappe Cloud scheduler enabled
-- [x] P0 **range-aware `get_shift_assignment`** in repo (`shift_assignment.py` + tests) — [ ] deployed / verified on Cloud
-- [ ] Close device day (or wait for 03:00 fallback) to produce `day_closed = 1` flags
+- [x] P0 **range-aware `get_shift_assignment`** in repo — [ ] deployed / verified on Cloud
+- [ ] Close device day (or 03:00 fallback) → final `day_closed = 1` flags
 - [ ] Pilot matrix signed off (5 employees × 20 days)
 
 ---
 
-## Pilot acceptance (from rules doc, MVP subset)
+## Pilot acceptance (MVP subset)
 
-- [ ] Late start flags match manual expectations (sample of 20 days × 5 employees)
+- [ ] Late start flags match manual expectations (20 days × 5 employees); closeout + completed days only
+- [ ] Holiday dates: no on-shift flags; punches → `OFF_SHIFT_PUNCH` only
 - [ ] Off-shift punches visible; no payroll **Attendance** created
-- [ ] Saturday short shift (`FT_0800_1200`) does **not** require lunch flags (lunch flags P1 anyway)
+- [ ] Saturday short shift does not require lunch flags
 - [ ] Edge cases documented: missing checkins, device downtime, `DELIVERY_FAILED`
-- [ ] ~~Lunch late flags~~ — **P1**, not MVP gate
+- [ ] ~~`MISSING_LUNCH`~~ — not MVP gate; **`LATE_FROM_LUNCH`** — P1 tuning
 
 ---
 
-## Recommended next slices (P0 code complete; pilot + ops remain)
+## Recommended next slices
 
 | Option | Focus |
 |--------|--------|
-| **A (recommended)** | Pilot matrix, go-live checklist, re-flag dates if pre-fix data exists |
-| **B** | Implement `MISSING_LUNCH` / `LATE_FROM_LUNCH` in closeout (P1) |
-| **C** | Filter by `flag_code` in React (P1) |
+| **A (recommended)** | Pilot matrix, go-live checklist, re-flag pre-fix dates on Cloud |
+| **B** | Flag filter by `flag_code` in React (P1) |
+| **C** | HR approve/reject in SPA (P1) |
 
 ---
 
@@ -149,12 +170,9 @@ Do **not** duplicate logic in `closeout.py`. All callers import this module:
 
 | Doc | Role |
 |-----|------|
-| [`FRAPPE_ATTENDANCE_RULES.md`](./FRAPPE_ATTENDANCE_RULES.md) | Policy source of truth |
-| [`FRAPPE_ATTENDANCE_ENGINE_PLAN.md`](./FRAPPE_ATTENDANCE_ENGINE_PLAN.md) | Architecture |
-| [`FRAPPE_CUSTOM_APP_AGENT_GUIDE.md`](./FRAPPE_CUSTOM_APP_AGENT_GUIDE.md) | Agent constraints |
-| [`MVP_ATTENDANCE_ENGINE_TEST_GUIDE.md`](./MVP_ATTENDANCE_ENGINE_TEST_GUIDE.md) | E2E test steps |
-| [`BRIDGE_FRAPPE_CLOSEOUT_E2E.md`](./BRIDGE_FRAPPE_CLOSEOUT_E2E.md) | Closeout webhook |
-| [`FRAPPE_SHIFT_SETUP.md`](./FRAPPE_SHIFT_SETUP.md) | Shift Assignment prerequisites |
+| [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md) | Policy source of truth |
+| [`FRAPPE_ATTENDANCE_ENGINE_PLAN.md`](FRAPPE_ATTENDANCE_ENGINE_PLAN.md) | Architecture |
+| [`FRAPPE_CUSTOM_APP_AGENT_GUIDE.md`](FRAPPE_CUSTOM_APP_AGENT_GUIDE.md) | Agent constraints |
+| [`zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md`](zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md) | Calendar API contract |
 
-**Frappe app repo:** https://github.com/LolbiKB/zkteco_hr  
-**Bridge closeout client:** [`gcr-fastify/src/lib/frappe-closeout.ts`](../gcr-fastify/src/lib/frappe-closeout.ts)
+**Frappe app repo:** https://github.com/LolbiKB/zkteco_hr

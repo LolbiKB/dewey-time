@@ -81,7 +81,7 @@ export function App() {
   );
 
   const [inspectingDate, setInspectingDate] = useState<string | null>(null);
-  const [inspectingFlag, setInspectingFlag] = useState<Flag | null>(null);
+  const [reviewingFlag, setReviewingFlag] = useState<Flag | null>(null);
 
   const daysByDate = useMemo(() => {
     const m = new Map<string, Day>();
@@ -282,11 +282,11 @@ export function App() {
                     alertsByDate={alertsByDate}
                     onInspectDay={(date) => {
                       setInspectingDate(date);
-                      setInspectingFlag(null);
+                      setReviewingFlag(null);
                     }}
                     onInspectFlag={(date, flag) => {
                       setInspectingDate(date);
-                      setInspectingFlag(flag);
+                      setReviewingFlag(flag);
                     }}
                   />
                 </WeekViewAnimatedShell>
@@ -298,12 +298,16 @@ export function App() {
 
       <DayInspectorSheet
         inspectingDate={inspectingDate}
-        employee={employee}
+        employeeId={employee}
+        employeeLabel={employeeShortName(selectedEmployee, employee)}
         inspectingDay={inspectingDay}
         alertsByDate={alertsByDate}
-        inspectingFlag={inspectingFlag}
-        onInspectingFlagChange={setInspectingFlag}
-        onClose={() => setInspectingDate(null)}
+        reviewingFlag={reviewingFlag}
+        onReviewingFlagChange={setReviewingFlag}
+        onClose={() => {
+          setInspectingDate(null);
+          setReviewingFlag(null);
+        }}
       />
     </>
   );

@@ -1,9 +1,10 @@
 import type { Day, DeviceAlert, Flag } from "@/types/calendar";
 import { format } from "date-fns";
-import { ArrowRightIcon, LogInIcon, LogOutIcon } from "lucide-react";
-import { useMemo } from "react";
+import { ArrowLeftIcon, ArrowRightIcon, ChevronRightIcon, LogInIcon, LogOutIcon } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -15,7 +16,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   formatBranchLabel,
   formatCheckinTime,
@@ -30,8 +30,10 @@ import {
   type SegmentInspectorItem,
 } from "@/lib/segmentInspector";
 import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
+import { flagDialogTitle, formatFlagContextDate, formatFlagStatusLabel, flagIsProvisional } from "@/lib/flagDetails";
 import { cn } from "@/lib/utils";
 import { DeviceAlertRow } from "@/ui/DeviceAlerts";
+import { FlagDetailPanel } from "@/ui/FlagDetailPanel";
 
 type Checkin = NonNullable<Day["checkins"]>[number];
 type Severity = "INFO" | "WARNING" | "CRITICAL";
@@ -40,15 +42,17 @@ const SEVERITY_ORDER: Severity[] = ["CRITICAL", "WARNING", "INFO"];
 
 export type DayInspectorSheetProps = {
   inspectingDate: string | null;
-  employee: string | null;
+  employeeId: string | null;
+  employeeLabel: string | null;
   inspectingDay?: Day;
   alertsByDate: Map<string, DeviceAlert[]>;
-  inspectingFlag: Flag | null;
-  onInspectingFlagChange: (flag: Flag | null) => void;
+  reviewingFlag: Flag | null;
+  onReviewingFlagChange: (flag: Flag | null) => void;
   onClose: () => void;
 };
 
 export function DayInspectorSheet(props: DayInspectorSheetProps) {
+  const [activeTab, setActiveTab] = useState<"timeline" | "punches" | "flags">("timeline");
   const segments = useMemo(
     () => deriveSegments(props.inspectingDay?.checkins ?? []),
     [props.inspectingDay?.checkins]
@@ -88,21 +92,63 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
     <Sheet open={!!props.inspectingDate} onOpenChange={(open) => !open && props.onClose()}>
       <SheetContent side="right" className="flex w-[440px] flex-col overflow-hidden sm:max-w-md">
         <SheetHeader>
-          <SheetTitle>
-            {props.inspectingDate ? format(new Date(props.inspectingDate), "EEE, MMM d") : "Day"}
-          </SheetTitle>
-          <SheetDescription asChild>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="text-foreground">{props.employee}</span>
-              <Separator orientation="vertical" className="h-4" />
-              <span>Inspector</span>
-            </div>
-          </SheetDescription>
+          {props.reviewingFlag ? (
+            <>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    props.onReviewingFlagChange(null);
+                    setActiveTab("flags");
+                  }}
+                  aria-label="Back to flags"
+                >
+                  <ArrowLeftIcon className="size-4" />
+                </Button>
+                <SheetTitle className="truncate">{flagDialogTitle(props.reviewingFlag)}</SheetTitle>
+              </div>
+              <SheetDescription asChild>
+                <div className="text-sm text-muted-foreground">
+                  Attendance flag review · {formatFlagContextDate(props.inspectingDate ?? "")}
+                </div>
+              </SheetDescription>
+            </>
+          ) : (
+            <>
+              <SheetTitle>
+                {props.inspectingDate ? format(new Date(props.inspectingDate), "EEE, MMM d") : "Day"}
+              </SheetTitle>
+              <SheetDescription asChild>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span className="text-foreground">
+                    {props.employeeLabel ?? props.employeeId ?? "Employee"}
+                  </span>
+                  <Separator orientation="vertical" className="h-4" />
+                  <span>Day inspector</span>
+                </div>
+              </SheetDescription>
+            </>
+          )}
         </SheetHeader>
 
         <ScrollArea className="min-h-0 flex-1 px-4 pb-5">
+          {props.reviewingFlag && props.inspectingDate ? (
+            <FlagDetailPanel
+              flag={props.reviewingFlag}
+              date={props.inspectingDate}
+              employeeLabel={props.employeeLabel}
+              employeeId={props.employeeId}
+              onViewTimeline={() => {
+                props.onReviewingFlagChange(null);
+                setActiveTab("timeline");
+              }}
+            />
+          ) : (
           <div className="grid h-full grid-rows-[auto_1fr_auto] gap-3">
-            <Tabs defaultValue="timeline" className="min-h-0">
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="min-h-0">
               <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="timeline" className="gap-2">
                   Segments
@@ -223,43 +269,14 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
                         </div>
                       </div>
                     ) : flags.length > 0 ? (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {flags.slice(0, 14).map((f) => (
-                          <Tooltip key={f.name}>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                className="rounded-full focus:outline-hidden focus:ring-2 focus:ring-ring/40"
-                                onClick={() => props.onInspectingFlagChange(f)}
-                              >
-                                <FlagBadge flag={f} />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <div className="text-xs">
-                                <div className="font-medium">
-                                  {formatFlagLabel(f.flag_code, parseFlagEvidence(f.evidence))}
-                                </div>
-                                <div className="text-muted-foreground">{f.flag_code}</div>
-                                <div className="text-muted-foreground">
-                                  {f.status ?? "OPEN"} · {f.severity ?? "WARNING"}
-                                </div>
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
+                      <div className="mt-3 space-y-2">
+                        {flags.map((f) => (
+                          <FlagInspectorRow
+                            key={f.name}
+                            flag={f}
+                            onOpen={() => props.onReviewingFlagChange(f)}
+                          />
                         ))}
-                      </div>
-                    ) : null}
-
-                    {props.inspectingFlag ? (
-                      <div className="mt-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-2">
-                        <div className="text-xs font-medium">Selected</div>
-                        <div className="mt-1 flex items-center gap-2">
-                          <FlagBadge flag={props.inspectingFlag} />
-                          <div className="text-xs text-muted-foreground">
-                            {props.inspectingFlag.status ?? "OPEN"}
-                          </div>
-                        </div>
                       </div>
                     ) : null}
                   </CardContent>
@@ -267,6 +284,7 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
               </TabsContent>
             </Tabs>
           </div>
+          )}
         </ScrollArea>
       </SheetContent>
     </Sheet>
@@ -483,49 +501,60 @@ function PunchInspectorRow(props: { checkin: Checkin; index: number; direction: 
   );
 }
 
-function FlagBadge({ flag }: { flag: Flag }) {
+function FlagInspectorRow(props: { flag: Flag; onOpen: () => void }) {
+  const { flag } = props;
   const sev = flag.severity ?? "WARNING";
-  const provisional = flag.is_provisional === true || flag.day_closed === 0;
+  const provisional = flagIsProvisional(flag);
   const label = formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence));
-
-  if (provisional) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant="outline"
-            className="rounded-full border border-dashed border-amber-500/70 bg-amber-500/10 text-[11px] text-amber-950 dark:text-amber-100"
-          >
-            {label}
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent className="text-xs">
-          {label} ({flag.flag_code}) · provisional
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
+  const stripeClass =
+    sev === "CRITICAL"
+      ? "bg-destructive"
+      : sev === "WARNING"
+        ? "bg-amber-500"
+        : "bg-muted-foreground/50";
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge
-          variant="outline"
-          className={cn(
-            "rounded-full border text-[11px]",
-            sev === "CRITICAL" &&
-              "border-destructive bg-destructive text-destructive-foreground",
-            sev === "WARNING" &&
-              "border-amber-600 bg-amber-500/20 text-amber-950 dark:text-amber-100",
-            sev === "INFO" && "border-border bg-foreground/5 text-foreground"
-          )}
-        >
-          {label}
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent className="text-xs">
-        {label} ({flag.flag_code}) · {flag.status ?? "OPEN"}
-      </TooltipContent>
-    </Tooltip>
+    <button
+      type="button"
+      onClick={props.onOpen}
+      className="flex w-full gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 text-left shadow-xs transition-colors hover:bg-muted/20 focus:outline-hidden focus:ring-2 focus:ring-ring/40"
+    >
+      <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
+        <div className={cn("h-full min-h-10 w-1 rounded-full", stripeClass)} aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold tracking-tight">{label}</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {formatFlagStatusLabel(flag.status)}
+              {provisional ? " · Provisional" : null}
+            </div>
+          </div>
+          <ChevronRightIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge
+            variant="outline"
+            className={cn(
+              "h-5 rounded-md px-1.5 text-[10px] font-semibold",
+              sev === "CRITICAL" && "border-destructive/40 text-destructive",
+              sev === "WARNING" && "border-amber-500/40 text-amber-900 dark:text-amber-100",
+              sev === "INFO" && "border-border text-muted-foreground"
+            )}
+          >
+            {sev}
+          </Badge>
+          {provisional ? (
+            <Badge
+              variant="outline"
+              className="h-5 rounded-md border-dashed border-amber-500/60 px-1.5 text-[10px] font-semibold text-amber-950 dark:text-amber-100"
+            >
+              Provisional
+            </Badge>
+          ) : null}
+        </div>
+      </div>
+    </button>
   );
 }

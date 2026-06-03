@@ -2,6 +2,8 @@
 
 zkteco_hr does **not** submit HRMS shift documents. It **filters** ERPNext/HRMS data using the rules below when building the HR attendance calendar and closeout flags.
 
+Policy: [`docs/FRAPPE_ATTENDANCE_RULES.md`](../../../docs/FRAPPE_ATTENDANCE_RULES.md)
+
 ## Submission / filter semantics
 
 | Source | Used for | Filter rule |
@@ -10,6 +12,7 @@ zkteco_hr does **not** submit HRMS shift documents. It **filters** ERPNext/HRMS 
 | **Shift Schedule** (`PAT_*`) | Pattern metadata when resolving SSA | Optional strict: linked schedule `docstatus == 1`; log if draft. |
 | **Shift Schedule Assignment** | Picker `has_shift_assignment`, SSA id, date bounds fallback | No docstatus. `enabled == 1`, not expired. Dated calendar still from **Shift Assignment**. |
 | **Leave Application** | `day.leave` badge | `docstatus == 1`, `status == "Approved"`, `from_date <= D <= to_date`. Leave does not remove shift ghost if a Shift Assignment exists. |
+| **Holiday List** | `day.holiday`, off-day UI, flag engine holiday wins | Via `Company.default_holiday_list` → `holiday_by_date_for_company`. Flag engine treats holiday as off-shift even if SSA created a Shift Assignment. |
 | **Attendance Flag** | Day flags in UI / closeout | Filter by flag `status` / `day_closed`, not ERP docstatus. |
 | **Employee Checkin** | Punches, segments | No submit filter (immutable ledger). |
 
@@ -50,16 +53,38 @@ Per day:
     "lunch_start": "12:00:00",
     "lunch_end": "13:00:00"
   },
+  "holiday": null,
+  "leave": { "on_leave": false },
+  "checkins": [],
+  "flags": [],
+  "observed_lunch": null
+}
+```
+
+`grace_minutes` is **effective start grace** = `max(custom_grace_minutes, late_entry_grace_period)` from Shift Type (see `shift_grace.py`).
+
+Holiday day (flag engine treats as off; UI shows holiday board):
+
+```json
+{
+  "date": "2026-05-01",
+  "shift": { "shift_assigned": true },
+  "holiday": {
+    "description": "International Workers' Day",
+    "weekly_off": false
+  },
   "leave": { "on_leave": false },
   "checkins": [],
   "flags": []
 }
 ```
 
-Off day (no covering Shift Assignment):
+Note: `shift_assigned` may still be `true` from SSA rows; UI and flag engine apply **holiday wins** (timeline off-day, suppress on-shift flags; `OFF_SHIFT_PUNCH` if punches exist).
+
+Off day (no covering Shift Assignment, not a holiday):
 
 ```json
-{ "shift": { "shift_assigned": false }, "leave": { "on_leave": false } }
+{ "shift": { "shift_assigned": false }, "holiday": null, "leave": { "on_leave": false } }
 ```
 
 Approved leave:
@@ -68,8 +93,31 @@ Approved leave:
 { "leave": { "on_leave": true, "leave_type": "Annual Leave" } }
 ```
 
-## Off-shift punches
+Flag object (in `day.flags[]`):
 
-When `shift_assigned` is false and checkins exist, closeout creates **`OFF_SHIFT_PUNCH`** (day-level Attendance Flag, not per-segment).
+```json
+{
+  "name": "AUTO-emp-1-2026-05-29-late-start",
+  "flag_code": "LATE_START",
+  "severity": "WARNING",
+  "status": "OPEN",
+  "source": "AUTO",
+  "day_closed": 1,
+  "is_provisional": false,
+  "evidence": { "first_in": "...", "late_threshold": "..." }
+}
+```
 
-Implementation: `attendance_engine/shift_assignment.py`, `attendance_engine/hr_calendar.py`, `attendance_engine/closeout.py`.
+`is_provisional` is `true` when `day_closed === 0`.
+
+## HR flag review (UI)
+
+Flags are listed in the **day inspector → Flags** tab. Clicking a flag opens an inline **HR review panel** (read-only): summary, supporting details, recommended HR action, **Review in Desk** link. Status `OPEN` is shown as **Awaiting HR review**. Approve/reject remains in Desk (P1 for SPA workflow).
+
+Week header **`OFF_SHIFT`** chip opens the day inspector directly on that flag’s review panel.
+
+## Off-shift / holiday punches
+
+When the day is off (no assignment, or **holiday wins**) and checkins exist, closeout creates **`OFF_SHIFT_PUNCH`** only (day-level Attendance Flag).
+
+Implementation: `attendance_engine/shift_assignment.py`, `attendance_engine/holidays.py`, `attendance_engine/hr_calendar.py`, `attendance_engine/closeout.py`.

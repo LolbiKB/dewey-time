@@ -18,7 +18,7 @@ It captures: the **domain model**, the **MVP architecture**, the **Bridge → Fr
 Employees should see a **weekly calendar** (Desk) showing:
 
 - punches and computed minutes (computed on read)
-- flags (generated after day closeout)
+- flags (provisional intraday + final at closeout)
 - ability to attach explanation/proof to a flag
 
 HR should have an **inbox** (Desk list/filter) of open flags to approve/reject.
@@ -40,11 +40,14 @@ Bridge sets:
 
 No “Attendance Day” projection DocType in MVP. Minutes/timeline are computed on read.
 
-### 3) AUTO flags timing = closeout-only
+### 3) AUTO flags timing = intraday provisional + closeout final
 
-AUTO flags are generated **only after the day is closed** (nightly / closeout run), not on each checkin insert.
+AUTO flags use **`day_closed`**:
 
-Reason: avoids churn/false positives and handles delayed/out-of-order checkins.
+- **Provisional (`day_closed=0`):** intraday refresh for today — `MISSING_TIME`, `NON_PRIMARY_SITE_PUNCH` only.
+- **Final (`day_closed=1`):** device closeout / company fallback — all other AUTO flags. Closeout deletes provisional AUTO flags for that employee/date before writing finals.
+
+Reason: provisional flags give HR early signal without finalizing lateness/absence before the day is closed.
 
 ### 4) Device → Branch is IT-owned in Supabase, delivered by bridge
 
@@ -112,21 +115,34 @@ Agents must treat that file as the **source of truth** for:
 
 This agent guide only summarizes the key rule outputs and how they map to doctypes/workflow.
 
-### Closeout-only constraint (MVP)
+### Intraday + closeout (MVP)
 
-Even though `FRAPPE_ATTENDANCE_RULES.md` describes both “daily run” and review workflow, **MVP implementation generates AUTO flags only after closeout** (yesterday is closed) to avoid churn and handle lagged checkins.
+AUTO flags are split by **`day_closed`**:
 
-## Rules / flags (MVP starting set)
+- **Intraday provisional (`day_closed=0`):** `MISSING_TIME`, `NON_PRIMARY_SITE_PUNCH` only (skips holidays). Refreshed during business hours for today.
+- **Closeout final (`day_closed=1`):** all other AUTO flags (`LATE_START`, `UNNOTIFIED_ABSENCE`, lunch, record issues, etc.). Closeout deletes provisional AUTO flags for that employee/date before writing finals.
 
-Start with these AUTO flags on closeout for date **D**:
+Never mutate historical **Employee Checkin** rows.
 
-- `UNNOTIFIED_ABSENCE`: expected shift on D and zero checkins on D
-- `NON_PRIMARY_SITE_PUNCH`: any checkin where `custom_device_branch` != `Employee.branch`
-- `LATE_START`: first checkin time > shift start + grace
-- `OFF_SHIFT_PUNCH`: checkins exist but expected shift is off/holiday/unassigned (policy-specific)
-- `MISSING_IN_OR_OUT`: only one punch exists (cannot compute span)
-- `MISSING_LUNCH` / `LATE_FROM_LUNCH`: full-day shifts only (optional for MVP; can be closeout-only)
-- `UNKNOWN_DEVICE_BRANCH`: bridge didn’t populate `custom_device_branch` (IT must fix device mapping)
+## Rules / flags (MVP — implemented)
+
+**Grace:** `shift_grace.py` — effective start/end = `max(custom_grace_minutes, HRMS grace fields)`.
+
+**Holiday wins:** `holidays.py` — company Holiday List dates suppress on-shift flags; punches on holiday → `OFF_SHIFT_PUNCH` only.
+
+**Closeout flags (examples):**
+
+- `UNNOTIFIED_ABSENCE`: on-shift, zero checkins at closeout / fallback
+- `LATE_START`: closeout only; **≥2 checkins**; first in after start + effective start grace
+- `LEFT_EARLY`, `MISSING_IN_OR_OUT`, `ATTENDANCE_ISSUE`, `DELIVERY_FAILED`, `UNKNOWN_DEVICE_BRANCH`
+- `OFF_SHIFT_PUNCH`: off-shift or holiday with checkins
+- `LATE_FROM_LUNCH`: valid observed lunch return late (full-day shifts)
+
+**Intraday provisional:** `MISSING_TIME`, `NON_PRIMARY_SITE_PUNCH`.
+
+**Not emitted:** `MISSING_LUNCH` (suppressed); `NO_CHECKIN_YET` (doctype only).
+
+**HR UI (`/hr-attendance`):** read-only flag review panel in day inspector; approve/reject in Desk (P1 for SPA actions).
 
 ## Closeout generator (what to build first)
 
