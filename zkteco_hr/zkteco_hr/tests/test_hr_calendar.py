@@ -6,6 +6,7 @@ from zkteco_hr.tests.test_closeout import _install_frappe_mock
 _install_frappe_mock()
 
 from zkteco_hr.attendance_engine.hr_calendar import (
+    _filter_auto_flags_for_calendar_day,
     _shift_schedule_assignment_start_field,
     first_checkin_date_by_employee,
     is_full_time_employment,
@@ -47,6 +48,39 @@ class TestHrCalendarHelpers(unittest.TestCase):
                 self.assertIn("MIN(DATE(`time`))", query)
                 self.assertNotIn("offshift", query)
                 self.assertNotIn("skip_auto_attendance", query)
+
+
+class TestCalendarFlagDisplay(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.hr_calendar.has_open_device_closeout_alert", return_value=True)
+    def test_open_today_shows_provisional_auto_only(self, _open_alert):
+        today = "2026-06-03"
+        rows = [
+            {"name": "F1", "source": "AUTO", "day_closed": 1, "flag_code": "ATTENDANCE_ISSUE"},
+            {"name": "F2", "source": "AUTO", "day_closed": 0, "flag_code": "MISSING_TIME"},
+            {"name": "F3", "source": "HR", "day_closed": 1, "flag_code": "LATE_START"},
+        ]
+        out = _filter_auto_flags_for_calendar_day(
+            rows,
+            attendance_date=today,
+            employee_branch="DIS Iconic",
+            site_today=today,
+        )
+        self.assertEqual([row["name"] for row in out], ["F3", "F2"])
+
+    @patch("zkteco_hr.attendance_engine.hr_calendar.has_open_device_closeout_alert", return_value=False)
+    def test_closed_today_shows_final_auto(self, _open_alert):
+        today = "2026-06-03"
+        rows = [
+            {"name": "F1", "source": "AUTO", "day_closed": 1, "flag_code": "MISSING_TIME"},
+            {"name": "F2", "source": "AUTO", "day_closed": 0, "flag_code": "MISSING_TIME"},
+        ]
+        out = _filter_auto_flags_for_calendar_day(
+            rows,
+            attendance_date=today,
+            employee_branch="DIS Iconic",
+            site_today=today,
+        )
+        self.assertEqual([row["name"] for row in out], ["F1"])
 
 
 if __name__ == "__main__":

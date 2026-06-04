@@ -48,6 +48,8 @@ function blockExtras(profile: ShiftBlock["profile"]): string[] {
   const lines: string[] = [];
   if (profile.lunch_start && profile.lunch_end) {
     lines.push(`Lunch ${fmt12(profile.lunch_start)}–${fmt12(profile.lunch_end)}`);
+  } else {
+    lines.push("No lunch");
   }
   if (profile.grace_minutes) {
     lines.push(`${profile.grace_minutes} min grace`);

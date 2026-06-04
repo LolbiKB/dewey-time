@@ -5,9 +5,9 @@ from collections import defaultdict
 from datetime import timedelta
 
 import frappe
-from frappe.utils import get_datetime, getdate
+from frappe.utils import get_datetime, getdate, nowdate
 
-from zkteco_hr.attendance_engine.closeout import _get_shift_meta
+from zkteco_hr.attendance_engine.closeout import _get_shift_meta, has_open_device_closeout_alert
 from zkteco_hr.attendance_engine.lunch_detection import detect_observed_lunch
 from zkteco_hr.attendance_engine.shift_grace import effective_lunch_return_grace, effective_start_grace
 from zkteco_hr.attendance_engine.holidays import holiday_by_date_for_company
@@ -54,6 +54,41 @@ def _format_datetime(value):
     if hasattr(value, "strftime"):
         return value.strftime("%Y-%m-%d %H:%M:%S")
     return str(value)
+
+
+def _filter_auto_flags_for_calendar_day(
+    day_flags: list[dict],
+    *,
+    attendance_date,
+    employee_branch: str | None,
+    site_today,
+) -> list[dict]:
+    """Open days show provisional AUTO only; past days prefer final closeout flags."""
+    attendance_date = getdate(attendance_date)
+    site_today = getdate(site_today)
+    non_auto = [row for row in day_flags if (row.get("source") or "").upper() != "AUTO"]
+    auto = [row for row in day_flags if (row.get("source") or "").upper() == "AUTO"]
+
+    if attendance_date > site_today:
+        return non_auto
+
+    if attendance_date < site_today:
+        finals = [row for row in auto if row.get("day_closed") == 1]
+        return non_auto + (finals if finals else auto)
+
+    branch_still_open = bool(employee_branch) and has_open_device_closeout_alert(
+        branch=employee_branch, local_date=attendance_date
+    )
+    if branch_still_open:
+        return non_auto + [row for row in auto if row.get("day_closed") == 0]
+
+    if not employee_branch:
+        provisional = [row for row in auto if row.get("day_closed") == 0]
+        if provisional:
+            return non_auto + provisional
+
+    finals = [row for row in auto if row.get("day_closed") == 1]
+    return non_auto + (finals if finals else auto)
 
 
 def is_full_time_employment(employment_type: str | None) -> bool:
@@ -442,7 +477,7 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             }
         )
 
-    flags_by_day = defaultdict(list)
+    flags_by_day_raw: dict[str, list[dict]] = defaultdict(list)
     for f in flags:
         d = f.get("attendance_date")
         key = str(d) if d else None
@@ -455,11 +490,21 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             except Exception:
                 f["evidence"] = None
         day_closed = f.get("day_closed")
-        flags_by_day[key].append(
+        flags_by_day_raw[key].append(
             {
                 **f,
                 "is_provisional": day_closed == 0,
             }
+        )
+
+    site_today = getdate(nowdate())
+    flags_by_day = defaultdict(list)
+    for key, day_flags in flags_by_day_raw.items():
+        flags_by_day[key] = _filter_auto_flags_for_calendar_day(
+            day_flags,
+            attendance_date=key,
+            employee_branch=employee_branch,
+            site_today=site_today,
         )
 
     leave_by_date = _leave_by_date_for_range(employee=employee, start=start, end=end)

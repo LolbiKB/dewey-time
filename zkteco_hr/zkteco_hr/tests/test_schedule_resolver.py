@@ -137,6 +137,13 @@ class TestNaming(unittest.TestCase):
             compact_days_label(["Wednesday", "Thursday", "Friday"], profile),
             "WED-FRI",
         )
+        self.assertEqual(
+            compact_days_label(
+                ["Monday", "Tuesday", "Thursday", "Friday", "Saturday"],
+                profile,
+            ),
+            "MON-TUE-THU-FRI-SAT",
+        )
 
     def test_proposed_pat_name_mon_sun(self):
         from zkteco_hr.attendance_engine.schedule_resolver import WEEKDAYS, proposed_pat_name

@@ -16,7 +16,7 @@
 - **Shift setup** is complete: see [`FRAPPE_SHIFT_SETUP.md`](../FRAPPE_SHIFT_SETUP.md)
   - Shift Types named `FT_{HHMM}_{HHMM}`.
   - Shift Schedules named `PAT_{DAYS}_{SHIFT_TYPE}[_{LUNCH_HINT}]`.
-    - Day segment uses compressed ranges: `MON-FRI`, `MON-SAT`, `MON-SUN`, `WED-FRI`, `MON-WED-FRI`, single days (`MON`, `SAT`, `SAT-AM` for half-day Saturday).
+    - Day segment uses compressed ranges: `MON-FRI`, `MON-SAT`, `MON-SUN`, `WED-FRI`, single days (`MON`, `SAT`, `SAT-AM` for half-day Saturday). When the week has a gap (e.g. Wed off), every working day is spelled out: `MON-TUE-THU-FRI-SAT`.
     - Reuse is structural: same `repeat_on_days` set + Shift Type + frequency on a submitted PAT — not by display name alone. New PATs created by the weekly wizard use the canonical `PAT_*` name.
   - Employees assigned via **Shift Schedule Assignment** (creates dated Shift Assignments).
   - Lunch custom fields on Shift Type: `custom_lunch_start`, `custom_lunch_end`, `custom_grace_minutes`.

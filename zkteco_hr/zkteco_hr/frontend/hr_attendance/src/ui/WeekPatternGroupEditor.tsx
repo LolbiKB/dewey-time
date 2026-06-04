@@ -3,13 +3,17 @@ import { PlusIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { TimeInput } from "@/components/ui/time-input";
 import { cn } from "@/lib/utils";
 import {
   WEEKDAYS,
+  DEFAULT_LUNCH_END,
+  DEFAULT_LUNCH_START,
   createShiftBlock,
   formatDayList,
   formatTimeInput,
+  hasLunchBreak,
   type DayValidationIssue,
   type ShiftBlock,
   type Weekday,
@@ -41,6 +45,19 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
         block.id === blockId ? { ...block, profile: { ...block.profile, ...patch } } : block
       )
     );
+  }
+
+  function setLunchEnabled(blockId: string, enabled: boolean) {
+    const block = blocks.find((row) => row.id === blockId);
+    if (!block) return;
+    if (enabled) {
+      updateBlockProfile(blockId, {
+        lunch_start: block.profile.lunch_start || DEFAULT_LUNCH_START,
+        lunch_end: block.profile.lunch_end || DEFAULT_LUNCH_END,
+      });
+      return;
+    }
+    updateBlockProfile(blockId, { lunch_start: null, lunch_end: null });
   }
 
   function toggleDay(blockId: string, weekday: Weekday) {
@@ -103,6 +120,7 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
         const blockInvalid = block.days.some((day) =>
           validationIssues.some((issue) => issue.weekday === day)
         );
+        const lunchEnabled = hasLunchBreak(block.profile);
 
         return (
           <div
@@ -171,20 +189,37 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
                 value={formatTimeInput(block.profile.end_time)}
                 onChange={(e) => updateBlockProfile(block.id, { end_time: e.target.value })}
               />
-              <TimeInput
-                className="w-full"
-                label="Lunch start"
-                disabled={disabled}
-                value={formatTimeInput(block.profile.lunch_start)}
-                onChange={(e) =>
-                  updateBlockProfile(block.id, { lunch_start: e.target.value || null })
-                }
-              />
+              <div className="min-w-0 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label
+                    htmlFor={`${block.id}-lunch-start`}
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    Lunch start
+                  </Label>
+                  <Switch
+                    id={`${block.id}-lunch-break`}
+                    checked={lunchEnabled}
+                    disabled={disabled}
+                    className="scale-90"
+                    aria-label="Lunch break"
+                    onCheckedChange={(checked) => setLunchEnabled(block.id, checked)}
+                  />
+                </div>
+                <TimeInput
+                  id={`${block.id}-lunch-start`}
+                  disabled={disabled || !lunchEnabled}
+                  value={lunchEnabled ? formatTimeInput(block.profile.lunch_start) : ""}
+                  onChange={(e) =>
+                    updateBlockProfile(block.id, { lunch_start: e.target.value || null })
+                  }
+                />
+              </div>
               <TimeInput
                 className="w-full"
                 label="Lunch end"
-                disabled={disabled}
-                value={formatTimeInput(block.profile.lunch_end)}
+                disabled={disabled || !lunchEnabled}
+                value={lunchEnabled ? formatTimeInput(block.profile.lunch_end) : ""}
                 onChange={(e) =>
                   updateBlockProfile(block.id, { lunch_end: e.target.value || null })
                 }

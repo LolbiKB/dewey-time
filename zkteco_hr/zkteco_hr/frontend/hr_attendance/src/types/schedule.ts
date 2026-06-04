@@ -336,6 +336,17 @@ function defaultShiftProfile(): ShiftBlock["profile"] {
   };
 }
 
+export const DEFAULT_LUNCH_START = "12:00";
+export const DEFAULT_LUNCH_END = "13:00";
+
+/** True when both lunch times are set (full-day style). */
+export function hasLunchBreak(profile: {
+  lunch_start?: string | null;
+  lunch_end?: string | null;
+}): boolean {
+  return Boolean(toApiTime(profile.lunch_start) && toApiTime(profile.lunch_end));
+}
+
 function profileKey(profile: ShiftBlock["profile"]): string {
   return [
     toApiTime(profile.start_time),

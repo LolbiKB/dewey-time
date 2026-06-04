@@ -116,6 +116,16 @@ def group_week_pattern(days: list[dict]) -> list[dict]:
     return groups
 
 
+def _contiguous_run_count(ordered_days: list[str]) -> int:
+    if not ordered_days:
+        return 0
+    runs = 1
+    for idx in range(1, len(ordered_days)):
+        if WEEKDAY_TO_INDEX[ordered_days[idx]] != WEEKDAY_TO_INDEX[ordered_days[idx - 1]] + 1:
+            runs += 1
+    return runs
+
+
 def _compress_contiguous_day_ranges(ordered_days: list[str]) -> str:
     """Compress sorted weekday names into MON-FRI style ranges."""
     if not ordered_days:
@@ -157,6 +167,9 @@ def compact_days_label(days: list[str], profile: dict) -> str:
     if len(days) == 1:
         return WEEKDAY_SHORT[days[0]]
     ordered = sorted(days, key=lambda d: WEEKDAY_TO_INDEX[d])
+    if _contiguous_run_count(ordered) > 1:
+        # Gapped week (e.g. Wed off): spell each day so FRI is not hidden inside THU-SAT.
+        return "-".join(WEEKDAY_SHORT[d] for d in ordered)
     return _compress_contiguous_day_ranges(ordered)
 
 

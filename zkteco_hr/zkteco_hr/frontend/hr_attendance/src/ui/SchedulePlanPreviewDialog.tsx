@@ -98,7 +98,7 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
                         {formatTimeInput(group.profile.end_time)}
                         {group.profile.lunch_start && group.profile.lunch_end
                           ? ` · lunch ${formatTimeInput(group.profile.lunch_start)}–${formatTimeInput(group.profile.lunch_end)}`
-                          : ""}
+                          : " · no lunch"}
                       </p>
                     </li>
                   );
