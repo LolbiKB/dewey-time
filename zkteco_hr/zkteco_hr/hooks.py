@@ -11,7 +11,7 @@ add_to_apps_screen = [
     {
         "name": "zkteco_hr",
         "title": "ZKTeco HR",
-        "logo": "/assets/zkteco_hr/images/zkteco_hr_logo.svg",
+        "logo": "/assets/zkteco_hr/images/attendance-svgrepo-com.svg",
         "route": "/hr-attendance",
     }
 ]

@@ -6,7 +6,7 @@ import { useCalendarSession } from "@/hooks/useCalendarSession";
 import { defaultHrAccessContext, type HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
 
-const APP_LOGO = "/assets/zkteco_hr/images/zkteco_hr_logo.svg";
+const APP_LOGO = "/assets/zkteco_hr/images/attendance-svgrepo-com.svg";
 const DESK_URL = "/desk";
 const FLAGS_INBOX_URL = "/app/attendance-flag";
 

@@ -5,3 +5,4 @@ zkteco_hr.patches.resync_hr_attendance_assets_v2
 zkteco_hr.patches.resync_hr_attendance_assets_v3
 zkteco_hr.patches.remove_legacy_hr_attendance_pages
 zkteco_hr.patches.sync_zkteco_hr_desk_navigation
+zkteco_hr.patches.resync_hr_attendance_assets_v4

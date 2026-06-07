@@ -55,7 +55,7 @@ Runs on every `bench migrate` (`hooks.py` → `after_migrate`).
 
 4. **Cache bust with a build-time literal** in `copy-html-entry.mjs` (`?v=1730123456`), not server-side template vars.
 
-One-time repair for sites that still 404 after deploy: patch `resync_hr_attendance_assets_v3` (runs on next Migrate).
+One-time repair for sites that still 404 after deploy: patch `resync_hr_attendance_assets_v4` (runs on next Migrate — force full copy from app `public/`).
 
 Implementation: `zkteco_hr/utils/sync_hr_attendance_assets.py`
 
