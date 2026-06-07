@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Loader2Icon } from "lucide-react";
 
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -106,6 +106,88 @@ export function WeekViewAnimatedShell(props: {
         props.direction === "prev" && "slide-in-from-left-6",
         props.direction === "jump" && "slide-in-from-bottom-2 zoom-in-98"
       )}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+export function WeeklyScheduleHeaderSkeleton() {
+  return (
+    <div className="mb-3 shrink-0 space-y-2">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-40" />
+          <Skeleton className="h-4 w-72 max-w-full" />
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Skeleton className="h-9 w-full rounded-md sm:w-64" />
+          <Skeleton className="h-9 w-full rounded-md sm:w-36" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function WeeklyScheduleEditorSkeleton() {
+  return (
+    <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden animate-in fade-in duration-300">
+      <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-2">
+          <Skeleton className="h-5 w-28" />
+          <Skeleton className="h-4 w-72 max-w-full" />
+        </div>
+        <Skeleton className="h-10 w-full rounded-md sm:min-w-[20rem] sm:max-w-md" />
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-4 px-5 pb-5 pt-0">
+        {Array.from({ length: 2 }).map((_, index) => (
+          <div key={index} className="space-y-3 rounded-xl border border-border/60 p-4">
+            <Skeleton className="h-4 w-32" />
+            <div className="grid grid-cols-7 gap-2">
+              {Array.from({ length: 7 }).map((__, dayIndex) => (
+                <Skeleton key={dayIndex} className="h-8 rounded-md" />
+              ))}
+            </div>
+            <Skeleton className="h-9 w-full rounded-md" />
+            <Skeleton className="h-9 w-full rounded-md" />
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function WeeklySchedulePageSkeleton(props: { label?: string }) {
+  return (
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      <div className="mx-auto flex h-full w-full max-w-7xl flex-col px-5 py-4 sm:px-8 sm:py-5">
+        <WeeklyScheduleHeaderSkeleton />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <WeeklyScheduleEditorSkeleton />
+        </div>
+        <LoadingIndicator label={props.label} className="justify-center pb-2 pt-3" />
+      </div>
+    </div>
+  );
+}
+
+export function WeeklyScheduleAnimatedShell(props: {
+  loading: boolean;
+  employeeKey: string;
+  children: ReactNode;
+}) {
+  if (props.loading) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col animate-in fade-in duration-200">
+        <WeeklyScheduleEditorSkeleton />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      key={props.employeeKey}
+      className="flex min-h-0 flex-1 flex-col ease-out animate-in fade-in fill-mode-both duration-350 slide-in-from-bottom-2 zoom-in-98"
     >
       {props.children}
     </div>

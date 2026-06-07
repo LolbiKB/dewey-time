@@ -50,6 +50,13 @@ import {
   SchedulePreviewTrigger,
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
+import {
+  LoadingIndicator,
+  WeeklyScheduleAnimatedShell,
+  WeeklyScheduleEditorSkeleton,
+  WeeklyScheduleHeaderSkeleton,
+  WeeklySchedulePageSkeleton,
+} from "@/ui/AttendanceLoading";
 import { ClearEmployeeScheduleDialog } from "@/ui/ClearEmployeeScheduleDialog";
 import { ScheduleEmployeePicker } from "@/ui/ScheduleEmployeePicker";
 import { WeekPatternGroupEditor } from "@/ui/WeekPatternGroupEditor";
@@ -76,6 +83,7 @@ export function WeeklySchedulePage() {
   const [saveSuccessUrl, setSaveSuccessUrl] = useState<string | null>(null);
   const [templateKey, setTemplateKey] = useState<string>("manual");
   const appliedTemplateFingerprint = useRef<string | null>(null);
+  const [employeeLoading, setEmployeeLoading] = useState(false);
 
   const weekPattern = useMemo<WeekPattern>(
     () => weekPatternFromBlocks(shiftBlocks),
@@ -86,6 +94,15 @@ export function WeeklySchedulePage() {
   useDefaultEmployee(employees, employee, setEmployee);
 
   const { context, isLoading: contextLoading, refresh: refreshContext } = useScheduleContext(employee);
+
+  useEffect(() => {
+    if (!employee) return;
+    setEmployeeLoading(true);
+  }, [employee]);
+
+  useEffect(() => {
+    if (!contextLoading) setEmployeeLoading(false);
+  }, [contextLoading]);
 
   useEffect(() => {
     if (!context) return;
@@ -109,6 +126,8 @@ export function WeeklySchedulePage() {
   const canApply = context?.can_apply ?? false;
   const previewOnly = Boolean(context && !canApply);
   const scheduleReadOnly = previewOnly;
+  const isBootstrapping = employeesLoading && employees.length === 0;
+  const isScheduleLoading = contextLoading && !!employee;
 
   const selectedEmployee = useMemo(
     () => employees.find((e) => e.name === employee) ?? null,
@@ -191,11 +210,7 @@ export function WeeklySchedulePage() {
   }
 
   if (authLoading || sessionLoading) {
-    return (
-      <div className="flex h-full items-center justify-center overflow-hidden bg-background">
-        <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <WeeklySchedulePageSkeleton label="Starting session…" />;
   }
 
   if (!hrStaff) {
@@ -265,35 +280,41 @@ export function WeeklySchedulePage() {
       <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
         <div className="mx-auto flex h-full w-full max-w-7xl flex-col px-5 py-4 sm:px-8 sm:py-5">
           <header className="mb-3 shrink-0 space-y-2">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h1 className="text-lg font-semibold tracking-tight">Weekly Schedule</h1>
-                <p className="text-sm text-muted-foreground">
-                  Configure shared shift patterns for an employee.
-                </p>
-              </div>
+            {isBootstrapping ? (
+              <WeeklyScheduleHeaderSkeleton />
+            ) : (
+              <div className="animate-in fade-in slide-in-from-top-1 duration-300">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h1 className="text-lg font-semibold tracking-tight">Weekly Schedule</h1>
+                    <p className="text-sm text-muted-foreground">
+                      Configure shared shift patterns for an employee.
+                    </p>
+                  </div>
 
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <ScheduleEmployeePicker
-                  employees={employees}
-                  value={employee}
-                  onChange={setEmployee}
-                  isLoading={employeesLoading || contextLoading}
-                  className="h-9 w-full sm:w-64"
-                  compact
-                />
-              <ClearEmployeeScheduleDialog
-                employee={employee}
-                employeeRow={selectedEmployee}
-                employeeLabel={employeeLabel}
-                triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                onSuccess={() => {
-                  setSaveSuccessUrl(null);
-                  void refreshContext();
-                }}
-              />
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <ScheduleEmployeePicker
+                      employees={employees}
+                      value={employee}
+                      onChange={setEmployee}
+                      isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
+                      className="h-9 w-full sm:w-64"
+                      compact
+                    />
+                    <ClearEmployeeScheduleDialog
+                      employee={employee}
+                      employeeRow={selectedEmployee}
+                      employeeLabel={employeeLabel}
+                      triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                      onSuccess={() => {
+                        setSaveSuccessUrl(null);
+                        void refreshContext();
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
 
             {previewOnly ? (
               <Card className="border-amber-500/30 bg-amber-500/5">
@@ -316,7 +337,12 @@ export function WeeklySchedulePage() {
           </header>
 
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {!employee ? (
+            {isBootstrapping ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-3">
+                <WeeklyScheduleEditorSkeleton />
+                <LoadingIndicator label="Loading schedule…" className="justify-center pb-1" />
+              </div>
+            ) : !employee ? (
               <Card className="flex min-h-0 flex-1 items-center justify-center border-dashed">
                 <CardContent className="py-12 text-center">
                   <p className="font-medium">Select an employee</p>
@@ -326,49 +352,51 @@ export function WeeklySchedulePage() {
                 </CardContent>
               </Card>
             ) : (
-              <Card
-                className={cn(
-                  "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-                  scheduleReadOnly && "opacity-95"
-                )}
-              >
-                <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 space-y-1">
-                    <CardTitle className="text-base">Shift blocks</CardTitle>
-                    {validationIssues[0] && !scheduleReadOnly ? (
-                      <CardDescription className="text-destructive">
-                        {validationIssues[0].message}
-                      </CardDescription>
-                    ) : (
-                      <CardDescription>
-                        {scheduleReadOnly
-                          ? "Preview only — clear existing SSAs to edit."
-                          : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
-                      </CardDescription>
-                    )}
-                  </div>
-                  <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
-                    <WeeklyScheduleTemplatePickerDialog
-                      value={templateKey}
-                      options={templateOptions}
-                      onSelect={applyTemplate}
-                      loading={templatesLoading}
-                      disabled={scheduleReadOnly}
-                      triggerClassName="sm:min-w-[20rem] sm:max-w-md"
-                    />
-                  </div>
-                </CardHeader>
-                <ScrollArea className="min-h-0 flex-1">
-                  <CardContent className="px-5 pb-5 pt-0">
-                    <WeekPatternGroupEditor
-                      blocks={shiftBlocks}
-                      onChange={handleShiftBlocksChange}
-                      validationIssues={validationIssues}
-                      disabled={scheduleReadOnly}
-                    />
-                  </CardContent>
-                </ScrollArea>
-              </Card>
+              <WeeklyScheduleAnimatedShell loading={isScheduleLoading} employeeKey={employee}>
+                <Card
+                  className={cn(
+                    "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+                    scheduleReadOnly && "opacity-95"
+                  )}
+                >
+                  <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 space-y-1">
+                      <CardTitle className="text-base">Shift blocks</CardTitle>
+                      {validationIssues[0] && !scheduleReadOnly ? (
+                        <CardDescription className="text-destructive">
+                          {validationIssues[0].message}
+                        </CardDescription>
+                      ) : (
+                        <CardDescription>
+                          {scheduleReadOnly
+                            ? "Preview only — clear existing SSAs to edit."
+                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                        </CardDescription>
+                      )}
+                    </div>
+                    <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
+                      <WeeklyScheduleTemplatePickerDialog
+                        value={templateKey}
+                        options={templateOptions}
+                        onSelect={applyTemplate}
+                        loading={templatesLoading}
+                        disabled={scheduleReadOnly}
+                        triggerClassName="sm:min-w-[20rem] sm:max-w-md"
+                      />
+                    </div>
+                  </CardHeader>
+                  <ScrollArea className="min-h-0 flex-1">
+                    <CardContent className="px-5 pb-5 pt-0">
+                      <WeekPatternGroupEditor
+                        blocks={shiftBlocks}
+                        onChange={handleShiftBlocksChange}
+                        validationIssues={validationIssues}
+                        disabled={scheduleReadOnly}
+                      />
+                    </CardContent>
+                  </ScrollArea>
+                </Card>
+              </WeeklyScheduleAnimatedShell>
             )}
           </main>
 

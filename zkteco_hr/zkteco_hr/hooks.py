@@ -7,15 +7,10 @@ app_description = "Attendance flags + weekly view (MVP)"
 app_email = "noreply@example.com"
 app_license = "MIT"
 
-app_logo_url = ATTENDANCE_APP_LOGO
-
-website_context = {
-    "favicon": ATTENDANCE_APP_LOGO,
-    "splash_image": ATTENDANCE_APP_LOGO,
-}
-
 # Frappe v16 Desktop / Sidebar integration
 # Provides a stable entry point for the app on the Desk desktop.
+# Logo here + Desktop Icon logo_url only — do not set app_logo_url or
+# website_context.favicon (those override site-wide Desk / login branding).
 add_to_apps_screen = [
     {
         "name": "zkteco_hr",

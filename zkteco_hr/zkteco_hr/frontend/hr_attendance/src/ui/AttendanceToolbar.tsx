@@ -1,8 +1,6 @@
-import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import {
   CalendarDaysIcon,
-  CalendarRangeIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   RefreshCwIcon,
@@ -136,21 +134,6 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
             onSuccess={props.onRunEngineSuccess}
             disabled={navDisabled}
           />
-        ) : null}
-
-        {hrStaff && props.employee ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="hidden h-8 gap-1.5 px-2 text-xs sm:inline-flex"
-            asChild
-          >
-            <Link to={`/hr-schedule?employee=${props.employee}`}>
-              <CalendarRangeIcon className="size-3.5 shrink-0 opacity-70" />
-              Edit weekly schedule
-            </Link>
-          </Button>
         ) : null}
       </nav>
     </header>

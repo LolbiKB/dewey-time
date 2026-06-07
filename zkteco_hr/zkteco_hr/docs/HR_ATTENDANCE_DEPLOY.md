@@ -61,9 +61,11 @@ Implementation: `zkteco_hr/utils/sync_hr_attendance_assets.py`
 
 ### App icon / favicon (`public/images/`)
 
-Desk `logo_url`, `hooks.py` `app_logo_url`, and SPA favicon use:
+Desk `logo_url`, `add_to_apps_screen.logo`, and SPA `<link rel="icon">` use:
 
 `/assets/zkteco_hr/images/attendance-svgrepo-com.svg`
+
+Do **not** set `app_logo_url` or `website_context.favicon` in `hooks.py` — that replaces Frappe/ERPNext branding site-wide. Favicon for HR pages is set only in `www/hr-*.html`.
 
 On Frappe Cloud this path is **not** created by the SPA sync alone. Every migrate runs `sync_app_branding_assets()`; patch `v5` force-copies `public/images/` into `sites/assets/zkteco_hr/images/`.
 
