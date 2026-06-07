@@ -25,14 +25,17 @@ def _remove_dest(dest_dir: str) -> None:
         os.remove(dest_dir)
 
 
-ATTENDANCE_APP_LOGO = "/assets/zkteco_hr/images/attendance-svgrepo-com.svg"
-ATTENDANCE_APP_LOGO_FILE = "attendance-svgrepo-com.svg"
+APP_BRAND_LOGO = "/assets/zkteco_hr/images/DI-logo.svg"
+APP_BRAND_LOGO_FILE = "DI-logo.svg"
+
+# Backward-compatible alias for older patches/imports.
+ATTENDANCE_APP_LOGO = APP_BRAND_LOGO
 
 
 def _branding_assets_ok(base_dir: str) -> bool:
     if not base_dir or not os.path.isdir(base_dir):
         return False
-    return os.path.isfile(os.path.join(base_dir, ATTENDANCE_APP_LOGO_FILE))
+    return os.path.isfile(os.path.join(base_dir, APP_BRAND_LOGO_FILE))
 
 
 def _copy_branding_files(src_dir: str, dest_dir: str) -> None:
