@@ -14,7 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AppTooltip } from "@/ui/AppTooltip";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { type RunEngineMode, useRunEngine } from "@/hooks/useRunEngine";
 import { cn } from "@/lib/utils";
@@ -91,23 +91,20 @@ export function RunEngineDialog(props: RunEngineDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DialogTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0"
-              disabled={props.disabled || !props.employee}
-              aria-label="Run flag engine"
-            >
-              <FlagIcon className="size-4" />
-            </Button>
-          </DialogTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Run flag engine (dev)</TooltipContent>
-      </Tooltip>
+      <AppTooltip content="Run flag engine (dev)" side="bottom">
+        <DialogTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0"
+            disabled={props.disabled || !props.employee}
+            aria-label="Run flag engine"
+          >
+            <FlagIcon className="size-4" />
+          </Button>
+        </DialogTrigger>
+      </AppTooltip>
 
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" showCloseButton>
         <DialogHeader className="space-y-2 px-5 pt-5 pr-12">

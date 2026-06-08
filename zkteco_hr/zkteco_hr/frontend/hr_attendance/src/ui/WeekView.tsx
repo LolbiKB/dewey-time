@@ -2,7 +2,7 @@ import type { Day, DeviceAlert, DeviceSyncStatus, Flag } from "@/types/calendar"
 import { format, isSameDay } from "date-fns";
 import { useEffect, useMemo, useRef } from "react";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AppTooltip } from "@/ui/AppTooltip";
 import {
   formatDayCheckinTimeRange,
   minutesFromDateTime,
@@ -53,12 +53,9 @@ function WeekDayDateBadge(props: {
   if (!tip) return badge;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">
-        {tip}
-      </TooltipContent>
-    </Tooltip>
+    <AppTooltip content={tip} side="bottom">
+      {badge}
+    </AppTooltip>
   );
 }
 
@@ -180,51 +177,42 @@ export function WeekView(props: WeekViewProps) {
 
               <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
                 {timeRange ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="truncate">{timeRange}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="text-xs">
-                      Actual punches
-                    </TooltipContent>
-                  </Tooltip>
+                  <AppTooltip content="Actual punches" side="bottom">
+                    <span className="truncate">{timeRange}</span>
+                  </AppTooltip>
                 ) : null}
               </div>
 
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {info?.leave?.on_leave ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex max-w-full items-center truncate rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-900 dark:text-sky-100">
-                        Leave
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="text-xs">
-                      {info.leave.leave_type ? `On leave · ${info.leave.leave_type}` : "On leave"}
-                    </TooltipContent>
-                  </Tooltip>
+                  <AppTooltip
+                    content={
+                      info.leave.leave_type ? `On leave · ${info.leave.leave_type}` : "On leave"
+                    }
+                    side="bottom"
+                  >
+                    <span className="inline-flex max-w-full items-center truncate rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-900 dark:text-sky-100">
+                      Leave
+                    </span>
+                  </AppTooltip>
                 ) : null}
                 {offShiftFlag ? (
-                  <button
-                    type="button"
-                    onClick={() => props.onInspectFlag(key, offShiftFlag)}
-                    className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
-                    title="Review off-shift punch flag"
-                  >
-                    OFF_SHIFT
-                  </button>
+                  <AppTooltip content="Review off-shift punch flag" side="bottom">
+                    <button
+                      type="button"
+                      onClick={() => props.onInspectFlag(key, offShiftFlag)}
+                      className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
+                    >
+                      OFF_SHIFT
+                    </button>
+                  </AppTooltip>
                 ) : null}
                 {(props.alertsByDate.get(key) ?? []).length > 0 ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[10px] font-semibold text-amber-800 dark:text-amber-200">
-                        !
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="text-xs">
-                      Device closeout pending
-                    </TooltipContent>
-                  </Tooltip>
+                  <AppTooltip content="Device closeout pending" side="bottom">
+                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[10px] font-semibold text-amber-800 dark:text-amber-200">
+                      !
+                    </span>
+                  </AppTooltip>
                 ) : null}
               </div>
             </div>

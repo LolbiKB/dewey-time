@@ -18,6 +18,7 @@ import {
   type ShiftBlock,
   type Weekday,
 } from "@/types/schedule";
+import { AppTooltip } from "@/ui/AppTooltip";
 
 const WEEKDAY_SHORT: Record<Weekday, string> = {
   Monday: "Mo",
@@ -156,20 +157,20 @@ export function WeekPatternGroupEditor(props: WeekPatternGroupEditorProps) {
                   (other) => other.id !== block.id && other.days.includes(weekday)
                 );
                 return (
-                  <Button
-                    key={`${block.id}-${weekday}`}
-                    type="button"
-                    size="sm"
-                    variant={selected ? "default" : "outline"}
-                    className="h-9 min-w-9 px-2.5"
-                    disabled={disabled || (!selected && takenElsewhere)}
-                    onClick={() => toggleDay(block.id, weekday)}
-                    aria-pressed={selected}
-                    aria-label={weekday}
-                    title={weekday}
-                  >
-                    {WEEKDAY_SHORT[weekday]}
-                  </Button>
+                  <AppTooltip key={`${block.id}-${weekday}`} content={weekday} side="top">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={selected ? "default" : "outline"}
+                      className="h-9 min-w-9 px-2.5"
+                      disabled={disabled || (!selected && takenElsewhere)}
+                      onClick={() => toggleDay(block.id, weekday)}
+                      aria-pressed={selected}
+                      aria-label={weekday}
+                    >
+                      {WEEKDAY_SHORT[weekday]}
+                    </Button>
+                  </AppTooltip>
                 );
               })}
             </div>

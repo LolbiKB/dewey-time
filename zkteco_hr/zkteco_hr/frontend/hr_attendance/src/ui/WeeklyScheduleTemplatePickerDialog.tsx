@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatShiftTime12h } from "@/lib/weekSchedule";
 import { cn } from "@/lib/utils";
+import { AppTooltip } from "@/ui/AppTooltip";
 import { formatDayList, type ShiftBlock } from "@/types/schedule";
 
 function fmt12(time: string | null | undefined): string {
@@ -108,19 +109,19 @@ function TemplateCard(props: {
   const isManual = option.key === "manual";
 
   return (
-    <button
-      type="button"
-      onClick={props.onSelect}
-      title={isManual ? undefined : option.label}
-      className={cn(
-        "relative w-full rounded-xl border p-4 text-left transition-colors",
-        "hover:border-primary/35 hover:bg-muted/20",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        props.selected
-          ? "border-primary/50 bg-primary/[0.04] ring-1 ring-primary/15"
-          : "border-border/70 bg-card/50"
-      )}
-    >
+    <AppTooltip content={option.label} side="top" disabled={isManual}>
+      <button
+        type="button"
+        onClick={props.onSelect}
+        className={cn(
+          "relative w-full rounded-xl border p-4 text-left transition-colors",
+          "hover:border-primary/35 hover:bg-muted/20",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          props.selected
+            ? "border-primary/50 bg-primary/[0.04] ring-1 ring-primary/15"
+            : "border-border/70 bg-card/50"
+        )}
+      >
       {props.selected ? (
         <span className="absolute top-4 right-4 flex size-7 items-center justify-center rounded-full bg-primary/10">
           <CheckIcon className="size-4 text-primary" aria-label="Selected" />
@@ -144,7 +145,8 @@ function TemplateCard(props: {
           </ul>
         </div>
       )}
-    </button>
+      </button>
+    </AppTooltip>
   );
 }
 

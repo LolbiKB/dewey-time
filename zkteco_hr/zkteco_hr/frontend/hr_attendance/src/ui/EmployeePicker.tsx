@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
+import { AppTooltip } from "@/ui/AppTooltip";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
 import { WeeklyScheduleSheet } from "@/ui/WeeklyScheduleSheet";
 
@@ -158,18 +159,19 @@ function ScheduleAccessButton(props: {
       : "View expected shifts";
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      disabled={props.disabled}
-      onClick={props.onClick}
-      aria-label="View weekly schedule"
-      title={detail}
-      className="h-auto min-h-14 w-11 shrink-0 rounded-none border-0 px-0 shadow-none hover:bg-muted/50"
-    >
-      <CalendarDaysIcon className="size-4" strokeWidth={2} />
-      <span className="sr-only">Weekly schedule</span>
-    </Button>
+    <AppTooltip content={detail} side="bottom">
+      <Button
+        type="button"
+        variant="ghost"
+        disabled={props.disabled}
+        onClick={props.onClick}
+        aria-label="View weekly schedule"
+        className="h-auto min-h-14 w-11 shrink-0 rounded-none border-0 px-0 shadow-none hover:bg-muted/50"
+      >
+        <CalendarDaysIcon className="size-4" strokeWidth={2} />
+        <span className="sr-only">Weekly schedule</span>
+      </Button>
+    </AppTooltip>
   );
 }
 

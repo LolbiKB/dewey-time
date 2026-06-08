@@ -8,6 +8,7 @@ import {
   type WeekDaySchedule,
 } from "@/lib/weekSchedule";
 import { cn } from "@/lib/utils";
+import { AppTooltip } from "@/ui/AppTooltip";
 
 export type WeekScheduleGanttProps = {
   week: WeekDaySchedule[];
@@ -110,9 +111,12 @@ function ShiftBody(props: { day: WeekDaySchedule }) {
             </span>
           ) : null}
           {props.day.shift.schedule_superseded ? (
-            <span title="Shift Assignment is Inactive in ERP; still shown for this past day">
-              Superseded in ERP
-            </span>
+            <AppTooltip
+              content="Shift Assignment is Inactive in ERP; still shown for this past day"
+              side="top"
+            >
+              <span>Superseded in ERP</span>
+            </AppTooltip>
           ) : null}
         </div>
       </div>

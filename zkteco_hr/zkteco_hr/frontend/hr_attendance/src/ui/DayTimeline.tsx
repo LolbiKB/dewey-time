@@ -1,8 +1,7 @@
 import { format } from "date-fns";
 import { useMemo } from "react";
 
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AppTooltip } from "@/ui/AppTooltip";
 import {
   clamp,
   formatBranchLabel,
@@ -308,19 +307,16 @@ function DayDayTrack(props: {
     const topStyle = useWeekWindow ? `${topPct}%` : `calc(${topPct}% + 8px)`;
     const heightStyle = useWeekWindow ? `${heightPct}%` : `calc(${heightPct}% - 16px)`;
     return (
-      <HoverCard key={key} openDelay={220} closeDelay={120}>
-        <HoverCardTrigger asChild>
-          <div
-            className={cn("absolute inset-x-2 rounded-sm", className)}
-            style={{ top: topStyle, height: heightStyle }}
-          />
-        </HoverCardTrigger>
-        <HoverCardContent className="w-auto p-2">
-          <div className="text-xs">
-            {label} · {formatDurationMinutes(interval.minutes)}
-          </div>
-        </HoverCardContent>
-      </HoverCard>
+      <AppTooltip
+        key={key}
+        side="right"
+        content={`${label} · ${formatDurationMinutes(interval.minutes)}`}
+      >
+        <div
+          className={cn("absolute inset-x-2 rounded-sm", className)}
+          style={{ top: topStyle, height: heightStyle }}
+        />
+      </AppTooltip>
     );
   }
 
@@ -356,17 +352,16 @@ function DayDayTrack(props: {
               ? "Rogue punch"
               : "Unpaired punch";
           return (
-            <Tooltip key={`${row.checkin.time}-${idx}`}>
-              <TooltipTrigger asChild>
-                <div
-                  className="absolute inset-x-2 h-1 rounded-full bg-destructive shadow-sm"
-                  style={{ top: `calc(${topPct}% - 2px)` }}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="right" className="text-xs">
-                {label} · {format(parseDateTimeLocal(row.checkin.time), "h:mm a")}
-              </TooltipContent>
-            </Tooltip>
+            <AppTooltip
+              key={`${row.checkin.time}-${idx}`}
+              side="right"
+              content={`${label} · ${format(parseDateTimeLocal(row.checkin.time), "h:mm a")}`}
+            >
+              <div
+                className="absolute inset-x-2 h-1 rounded-full bg-destructive shadow-sm"
+                style={{ top: `calc(${topPct}% - 2px)` }}
+              />
+            </AppTooltip>
           );
         })}
 
@@ -374,17 +369,16 @@ function DayDayTrack(props: {
           const m = row.startMin;
           const topPct = pctFromMinute(m);
           return (
-            <Tooltip key={`off-${row.checkin.time}-${idx}`}>
-              <TooltipTrigger asChild>
-                <div
-                  className="absolute inset-x-2 h-1 rounded-full border border-amber-600/60 bg-amber-500/40 shadow-sm"
-                  style={{ top: `calc(${topPct}% - 2px)` }}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="right" className="text-xs">
-                Off-shift punch · {format(parseDateTimeLocal(row.checkin.time), "h:mm a")}
-              </TooltipContent>
-            </Tooltip>
+            <AppTooltip
+              key={`off-${row.checkin.time}-${idx}`}
+              side="right"
+              content={`Off-shift punch · ${format(parseDateTimeLocal(row.checkin.time), "h:mm a")}`}
+            >
+              <div
+                className="absolute inset-x-2 h-1 rounded-full border border-amber-600/60 bg-amber-500/40 shadow-sm"
+                style={{ top: `calc(${topPct}% - 2px)` }}
+              />
+            </AppTooltip>
           );
         })}
 
@@ -464,31 +458,32 @@ function DayDayTrack(props: {
           const isObservedLunch = isLunch && g.source === "observed";
           const isScheduledLunch = isLunch && g.source === "scheduled";
           return (
-            <HoverCard key={idx} openDelay={220} closeDelay={120}>
-              <HoverCardTrigger asChild>
-                <div
-                  className={cn(
-                    "absolute inset-x-2 rounded-sm border",
-                    isObservedLunch
-                      ? "border-sky-500/40 bg-sky-500/15"
-                      : isScheduledLunch
-                        ? "border-muted-foreground/45 bg-muted/35 dark:bg-muted/30"
-                        : "border-destructive/40 bg-destructive/15"
-                  )}
-                  style={{
-                    top: `${topPct}%`,
-                    height: `${heightPct}%`,
-                  }}
-                />
-              </HoverCardTrigger>
-              <HoverCardContent className="w-auto p-2">
-                <div className="text-xs">
+            <AppTooltip
+              key={idx}
+              side="right"
+              content={
+                <>
                   {isLunch ? "Lunch" : "Away"} · {formatDurationMinutes(g.minutes)}
                   {isObservedLunch ? " · observed" : null}
                   {isScheduledLunch ? " · scheduled" : null}
-                </div>
-              </HoverCardContent>
-            </HoverCard>
+                </>
+              }
+            >
+              <div
+                className={cn(
+                  "absolute inset-x-2 rounded-sm border",
+                  isObservedLunch
+                    ? "border-sky-500/40 bg-sky-500/15"
+                    : isScheduledLunch
+                      ? "border-muted-foreground/45 bg-muted/35 dark:bg-muted/30"
+                      : "border-destructive/40 bg-destructive/15"
+                )}
+                style={{
+                  top: `${topPct}%`,
+                  height: `${heightPct}%`,
+                }}
+              />
+            </AppTooltip>
           );
         })}
 
@@ -514,49 +509,44 @@ function DayDayTrack(props: {
               .join(" · ");
 
             return (
-              <HoverCard key={idx} openDelay={220} closeDelay={120}>
-                <HoverCardTrigger asChild>
-                  <div
-                    className={cn(
-                      "absolute inset-x-2 rounded-sm",
-                      onShift ? cn(color, "shadow-sm ring-1 ring-foreground/10") : offShiftSegmentClass
-                    )}
-                    style={{
-                      top: `${topPct}%`,
-                      height: `${heightPct}%`,
-                    }}
-                  >
-                    {!props.dense && heightPct >= 12 ? (
-                      <div className="pointer-events-none absolute inset-0 px-2 pt-1.5 text-white/95">
-                        <div className="absolute left-2 top-1.5 text-[11px] font-semibold leading-tight">
-                          {startLabel}
-                        </div>
-                        {heightPct >= 18 ? (
-                          <div className="absolute right-2 top-1.5 text-[10px] font-medium text-white/85">
-                            {formatDurationMinutes(s.minutes)}
-                          </div>
-                        ) : null}
-                        {heightPct >= 22 && lateness?.isLate && lateness.deltaMinutes != null ? (
-                          <div className="absolute right-2 bottom-1.5 text-[10px] font-medium text-white/85">
-                            {formatDurationMinutes(lateness.deltaMinutes, { signed: true })}
-                          </div>
-                        ) : null}
-                        {heightPct >= 24 ? (
-                          <div className="absolute left-2 right-2 top-[22px] truncate text-[10px] font-medium text-white/85">
-                            {branchLabel ?? "—"}
-                          </div>
-                        ) : null}
-                        <div className="absolute bottom-1.5 left-2 text-[11px] font-semibold leading-tight">
-                          {endLabel}
-                        </div>
+              <AppTooltip key={idx} side="right" content={compactTip || "Segment"}>
+                <div
+                  className={cn(
+                    "absolute inset-x-2 rounded-sm",
+                    onShift ? cn(color, "shadow-sm ring-1 ring-foreground/10") : offShiftSegmentClass
+                  )}
+                  style={{
+                    top: `${topPct}%`,
+                    height: `${heightPct}%`,
+                  }}
+                >
+                  {!props.dense && heightPct >= 12 ? (
+                    <div className="pointer-events-none absolute inset-0 px-2 pt-1.5 text-white/95">
+                      <div className="absolute left-2 top-1.5 text-[11px] font-semibold leading-tight">
+                        {startLabel}
                       </div>
-                    ) : null}
-                  </div>
-                </HoverCardTrigger>
-                <HoverCardContent className="w-auto max-w-[320px] p-2">
-                  <div className="text-xs">{compactTip || "Segment"}</div>
-                </HoverCardContent>
-              </HoverCard>
+                      {heightPct >= 18 ? (
+                        <div className="absolute right-2 top-1.5 text-[10px] font-medium text-white/85">
+                          {formatDurationMinutes(s.minutes)}
+                        </div>
+                      ) : null}
+                      {heightPct >= 22 && lateness?.isLate && lateness.deltaMinutes != null ? (
+                        <div className="absolute right-2 bottom-1.5 text-[10px] font-medium text-white/85">
+                          {formatDurationMinutes(lateness.deltaMinutes, { signed: true })}
+                        </div>
+                      ) : null}
+                      {heightPct >= 24 ? (
+                        <div className="absolute left-2 right-2 top-[22px] truncate text-[10px] font-medium text-white/85">
+                          {branchLabel ?? "—"}
+                        </div>
+                      ) : null}
+                      <div className="absolute bottom-1.5 left-2 text-[11px] font-semibold leading-tight">
+                        {endLabel}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </AppTooltip>
             );
           })
         )}

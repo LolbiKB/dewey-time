@@ -14,8 +14,10 @@ import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
 import { formatWeekRangeLabel } from "@/lib/weekSchedule";
+import type { Severity } from "@/types/calendar";
 import { EmployeePicker } from "@/ui/EmployeePicker";
 import { RunEngineDialog } from "@/ui/RunEngineDialog";
+import { WeekFlagSummary } from "@/ui/WeekFlagSummary";
 
 export type AttendanceToolbarProps = {
   employees: CalendarEmployee[];
@@ -42,6 +44,7 @@ export type AttendanceToolbarProps = {
   isRefreshing: boolean;
   isCalendarLoading: boolean;
   hrStaff?: boolean;
+  weekFlagCounts: Record<Severity, number>;
 };
 
 export function AttendanceToolbar(props: AttendanceToolbarProps) {
@@ -64,10 +67,17 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
         className="w-full sm:flex-1 sm:max-w-lg"
       />
 
-      <nav
-        className="flex items-center gap-0.5 self-stretch sm:self-auto"
-        aria-label="Week navigation"
-      >
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-2 self-stretch sm:flex-none">
+        <WeekFlagSummary
+          counts={props.weekFlagCounts}
+          loading={props.isCalendarLoading}
+          className="min-w-0 justify-end"
+        />
+
+        <nav
+          className="flex shrink-0 flex-wrap items-center gap-x-0.5 gap-y-1 sm:flex-nowrap"
+          aria-label="Week navigation"
+        >
         <Button
           type="button"
           variant="ghost"
@@ -135,7 +145,8 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
             disabled={navDisabled}
           />
         ) : null}
-      </nav>
+        </nav>
+      </div>
     </header>
   );
 }
