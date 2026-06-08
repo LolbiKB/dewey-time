@@ -154,6 +154,39 @@ def on_employee_checkin_after_insert(doc, method=None):
     enqueue_intraday_refresh(doc.employee, getdate(doc.time))
 
 
+def on_employee_checkin_on_update(doc, method=None):
+    """Re-trigger flag refresh when a checkin's time or employee is corrected in Desk."""
+    if not doc or not doc.get("employee") or not doc.get("time"):
+        return
+
+    try:
+        before = doc.get_doc_before_save()
+    except Exception:
+        before = None
+
+    # Only act when time or employee actually changed to avoid spurious re-runs.
+    if before:
+        if (
+            str(before.get("time") or "") == str(doc.get("time") or "")
+            and (before.get("employee") or "") == (doc.get("employee") or "")
+        ):
+            return
+
+    new_date = getdate(doc.time)
+    dates_to_refresh = {new_date}
+
+    if before and before.get("time"):
+        old_date = getdate(before.time)
+        if old_date != new_date:
+            dates_to_refresh.add(old_date)
+
+    for attendance_date in dates_to_refresh:
+        # Void all stale AUTO flags (provisional and final) so the next intraday
+        # run and eventual closeout produce fresh results from the corrected punch.
+        _delete_auto_flags_for_employee_date(employee=doc.employee, attendance_date=attendance_date)
+        enqueue_intraday_refresh(doc.employee, attendance_date)
+
+
 def _is_within_intraday_window() -> bool:
     tz_name = frappe.defaults.get_global_default("time_zone") or "UTC"
     try:

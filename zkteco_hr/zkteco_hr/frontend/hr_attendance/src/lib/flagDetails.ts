@@ -87,7 +87,16 @@ const GRACE_EVIDENCE_KEYS: Record<string, string> = {
   early_exit_grace_period: "HRMS early exit grace",
 };
 
+const EXTRA_EVIDENCE_KEYS: Record<string, string> = {
+  non_primary_checkins: "Off-site punches",
+  employee_branch: "Employee branch",
+  threshold_minutes: "Gap threshold",
+};
+
 const SKIP_EVIDENCE_KEYS = new Set([
+  "date",
+  "on_shift",
+  "provisional",
   "checkins_count",
   "shift_type",
   "employee",
@@ -186,7 +195,7 @@ function formatEvidenceValue(key: string, value: unknown, dateKey?: string): str
     return formatDurationMinutes(value);
   }
 
-  if (key === "minutes" && typeof value === "number") {
+  if ((key === "minutes" || key === "threshold_minutes") && typeof value === "number") {
     return formatDurationMinutes(value);
   }
 
@@ -198,8 +207,8 @@ function formatEvidenceValue(key: string, value: unknown, dateKey?: string): str
     return value.replaceAll("_", " ");
   }
 
-  if (key === "checkins_count" && typeof value === "number") {
-    return String(value);
+  if (key === "non_primary_checkins" && typeof value === "number") {
+    return value === 1 ? "1 punch" : `${value} punches`;
   }
 
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -224,10 +233,11 @@ export function formatFlagEvidenceDetails(
   const orderedKeys = [
     ...Object.keys(TIME_EVIDENCE_KEYS),
     ...Object.keys(GRACE_EVIDENCE_KEYS),
+    ...Object.keys(EXTRA_EVIDENCE_KEYS),
     "minutes",
+    "threshold_minutes",
     "reason",
     "kind",
-    "checkins_count",
   ];
 
   for (const key of orderedKeys) {
@@ -237,6 +247,7 @@ export function formatFlagEvidenceDetails(
     const label =
       TIME_EVIDENCE_KEYS[key] ??
       GRACE_EVIDENCE_KEYS[key] ??
+      EXTRA_EVIDENCE_KEYS[key] ??
       key.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
     rows.push({ label, value });
     consumed.add(key);

@@ -37,7 +37,9 @@
     "hr_section",
     "hr_note",
     "hr_user",
-    "hr_decided_at"
+    "hr_decided_at",
+    "status_changed_by",
+    "status_changed_at"
   ],
   "fields": [
     {
@@ -170,6 +172,19 @@
       "fieldname": "hr_decided_at",
       "fieldtype": "Datetime",
       "label": "HR Decided At"
+    },
+    {
+      "fieldname": "status_changed_by",
+      "fieldtype": "Link",
+      "label": "Status Changed By",
+      "options": "User",
+      "read_only": 1
+    },
+    {
+      "fieldname": "status_changed_at",
+      "fieldtype": "Datetime",
+      "label": "Status Changed At",
+      "read_only": 1
     }
   ],
   "is_submittable": 0,

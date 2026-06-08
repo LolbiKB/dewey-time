@@ -51,6 +51,12 @@ export function RunEngineDialog(props: RunEngineDialogProps) {
     clearStatus();
   }, [open, defaultStart, defaultEnd, clearStatus]);
 
+  useEffect(() => {
+    if (status?.type !== "success") return;
+    const timer = setTimeout(() => setOpen(false), 1800);
+    return () => clearTimeout(timer);
+  }, [status]);
+
   const rangeInvalid = useMemo(() => endDate < startDate, [endDate, startDate]);
   const runDisabled = !props.employee || loading || rangeInvalid;
 

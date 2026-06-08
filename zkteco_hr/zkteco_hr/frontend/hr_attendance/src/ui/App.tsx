@@ -7,7 +7,7 @@ import {
   useEmployeeCalendar,
 } from "@/hooks/useHrAttendanceData";
 import { useEmployeeSelection } from "@/hooks/useEmployeeSelection";
-import type { CalendarPayload, Day, Flag } from "@/types/calendar";
+import type { CalendarPayload, Day, Flag, Severity } from "@/types/calendar";
 import { addDays, format, startOfWeek } from "date-fns";
 import { useFrappeAuth } from "frappe-react-sdk";
 import { useEffect, useMemo, useState } from "react";
@@ -15,6 +15,7 @@ import { useOutletContext } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import {
   clampDateToNavBounds,
   computeWeekNavBounds,
@@ -162,6 +163,19 @@ export function App() {
     [daysByDate, weekDates]
   );
 
+  const weekFlagCounts = useMemo(() => {
+    const counts: Record<Severity, number> = { CRITICAL: 0, WARNING: 0, INFO: 0 };
+    for (const date of weekDates) {
+      const day = daysByDate.get(format(date, "yyyy-MM-dd"));
+      for (const flag of day?.flags ?? []) {
+        if (flag.severity === "CRITICAL") counts.CRITICAL++;
+        else if (flag.severity === "WARNING") counts.WARNING++;
+        else if (flag.severity === "INFO") counts.INFO++;
+      }
+    }
+    return counts;
+  }, [weekDates, daysByDate]);
+
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
   const loadError = employeesError ?? calendarError;
@@ -291,6 +305,7 @@ export function App() {
                 {weekDeviceAlerts.length > 0 ? (
                   <DeviceCloseoutBanner alerts={weekDeviceAlerts} />
                 ) : null}
+                <WeekFlagSummary counts={weekFlagCounts} loading={isCalendarLoading} />
                 <WeekViewAnimatedShell
                   loading={isCalendarLoading}
                   weekKey={weekKey}
@@ -333,5 +348,50 @@ export function App() {
         }}
       />
     </>
+  );
+}
+
+type FlagCounts = Record<Severity, number>;
+
+function WeekFlagSummary(props: { counts: FlagCounts; loading: boolean }) {
+  const { counts, loading } = props;
+  const total = counts.CRITICAL + counts.WARNING + counts.INFO;
+
+  if (loading || total === 0) return null;
+
+  return (
+    <div className="flex shrink-0 items-center gap-2 animate-in fade-in duration-200">
+      <span className="text-[11px] text-muted-foreground">This week:</span>
+      {counts.CRITICAL > 0 ? (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            "border-destructive/40 bg-destructive/10 text-destructive"
+          )}
+        >
+          {counts.CRITICAL} Critical
+        </span>
+      ) : null}
+      {counts.WARNING > 0 ? (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100"
+          )}
+        >
+          {counts.WARNING} Warning
+        </span>
+      ) : null}
+      {counts.INFO > 0 ? (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            "border-border bg-muted/40 text-muted-foreground"
+          )}
+        >
+          {counts.INFO} Info
+        </span>
+      ) : null}
+    </div>
   );
 }

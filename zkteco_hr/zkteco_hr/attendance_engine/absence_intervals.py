@@ -40,7 +40,7 @@ def _parse_shift_time_to_minutes(value) -> int | None:
 
 def present_hour_start_min(now: datetime | None = None) -> int:
     now = now or now_datetime()
-    return now.hour * 60
+    return now.hour * 60 + now.minute
 
 
 def missing_expected_max_end_min(attendance_date, now: datetime | None = None) -> int | None:

@@ -54,5 +54,6 @@ scheduler_events = {
 doc_events = {
     "Employee Checkin": {
         "after_insert": "zkteco_hr.attendance_engine.intraday.on_employee_checkin_after_insert",
+        "on_update": "zkteco_hr.attendance_engine.intraday.on_employee_checkin_on_update",
     },
 }

@@ -1,5 +1,6 @@
 import frappe
 from frappe.model.document import Document
+from frappe.utils import now_datetime
 
 
 FLAG_SEVERITY = {
@@ -20,6 +21,11 @@ FLAG_SEVERITY = {
 
 
 class AttendanceFlag(Document):
+    def before_save(self):
+        if self.has_value_changed("status"):
+            self.status_changed_by = frappe.session.user
+            self.status_changed_at = now_datetime()
+
     def before_insert(self):
         if not self.severity and self.flag_code:
             self.severity = FLAG_SEVERITY.get(self.flag_code, "WARNING")
