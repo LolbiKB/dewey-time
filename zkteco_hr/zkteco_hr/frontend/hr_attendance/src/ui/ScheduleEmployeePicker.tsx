@@ -12,10 +12,10 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
-  employeePickerSubtitle,
   employeeSearchHaystack,
   employeeShortName,
-  roleLine,
+  isWeeklyScheduleEligible,
+  scheduleEmployeeSubtitle,
 } from "@/lib/employeeCard";
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee } from "@/types/calendar";
@@ -63,11 +63,14 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
               <span className={cn("block truncate font-medium", props.compact && "text-sm")}>
                 {employeeShortName(selected, props.value)}
               </span>
-              {!props.compact ? (
-                <span className="block truncate text-xs text-muted-foreground">
-                  {employeePickerSubtitle(selected)}
-                </span>
-              ) : null}
+              <span
+                className={cn(
+                  "block truncate text-xs text-muted-foreground",
+                  props.compact && "text-[11px] leading-tight"
+                )}
+              >
+                {scheduleEmployeeSubtitle(selected)}
+              </span>
             </span>
           </span>
           {props.isLoading ? (
@@ -83,30 +86,36 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
           <CommandList>
             <CommandEmpty>No employees found.</CommandEmpty>
             <CommandGroup>
-              {props.employees.map((employee) => (
-                <CommandItem
-                  key={employee.id}
-                  value={employeeSearchHaystack(employee)}
-                  onSelect={() => {
-                    props.onChange(employee.id);
-                    setOpen(false);
-                  }}
-                  className="gap-2 py-2"
-                >
-                  <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      {employeeShortName(employee, employee.id)}
+              {props.employees.map((employee) => {
+                const eligible = isWeeklyScheduleEligible(employee.employment_type);
+
+                return (
+                  <CommandItem
+                    key={employee.id}
+                    value={employeeSearchHaystack(employee)}
+                    disabled={!eligible}
+                    onSelect={() => {
+                      if (!eligible) return;
+                      props.onChange(employee.id);
+                      setOpen(false);
+                    }}
+                    className="gap-2 py-2"
+                  >
+                    <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {employeeShortName(employee, employee.id)}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {scheduleEmployeeSubtitle(employee)}
+                      </span>
                     </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {[employee.id, roleLine(employee)].filter(Boolean).join(" · ")}
-                    </span>
-                  </span>
-                  {employee.id === props.value ? (
-                    <CheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
-                  ) : null}
-                </CommandItem>
-              ))}
+                    {employee.id === props.value ? (
+                      <CheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                    ) : null}
+                  </CommandItem>
+                );
+              })}
             </CommandGroup>
           </CommandList>
         </Command>

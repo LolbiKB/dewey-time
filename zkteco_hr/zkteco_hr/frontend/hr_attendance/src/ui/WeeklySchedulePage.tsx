@@ -51,6 +51,10 @@ import {
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
 import {
+  isWeeklyScheduleEligible,
+  weeklyScheduleIneligibleMessage,
+} from "@/lib/employeeCard";
+import {
   LoadingIndicator,
   WeeklyScheduleAnimatedShell,
   WeeklyScheduleEditorSkeleton,
@@ -90,12 +94,33 @@ export function WeeklySchedulePage() {
   const { employees, isLoading: employeesLoading } = useCalendarEmployees();
   const { employee, selectEmployee } = useEmployeeSelection(employees);
 
-  const { context, isLoading: contextLoading, refresh: refreshContext } = useScheduleContext(employee);
+  const selectedEmployee = useMemo(
+    () => employees.find((e) => e.id === employee) ?? null,
+    [employees, employee]
+  );
+
+  const scheduleEmployeeId = useMemo(() => {
+    if (!employee || !selectedEmployee) return null;
+    if (!isWeeklyScheduleEligible(selectedEmployee.employment_type)) return null;
+    return employee;
+  }, [employee, selectedEmployee]);
+
+  const ineligibleMessage = useMemo(
+    () => weeklyScheduleIneligibleMessage(selectedEmployee, employee),
+    [employee, selectedEmployee]
+  );
+
+  const awaitingEmployeeRow = Boolean(
+    employee && !selectedEmployee && employeesLoading
+  );
+
+  const { context, isLoading: contextLoading, refresh: refreshContext } =
+    useScheduleContext(scheduleEmployeeId);
 
   useEffect(() => {
-    if (!employee) return;
+    if (!scheduleEmployeeId) return;
     setEmployeeLoading(true);
-  }, [employee]);
+  }, [scheduleEmployeeId]);
 
   useEffect(() => {
     if (!contextLoading) setEmployeeLoading(false);
@@ -112,7 +137,7 @@ export function WeeklySchedulePage() {
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
   const { plan, resolving, resolveError } = useWeeklyScheduleResolve(
-    employee,
+    scheduleEmployeeId,
     weekPattern,
     effectiveFrom || null
   );
@@ -124,17 +149,12 @@ export function WeeklySchedulePage() {
   const previewOnly = Boolean(context && !canApply);
   const scheduleReadOnly = previewOnly;
   const isBootstrapping = employeesLoading && employees.length === 0;
-  const isScheduleLoading = contextLoading && !!employee;
-
-  const selectedEmployee = useMemo(
-    () => employees.find((e) => e.id === employee) ?? null,
-    [employees, employee]
-  );
+  const isScheduleLoading = contextLoading && !!scheduleEmployeeId;
 
   const employeeLabel = useMemo(() => {
-    if (!employee) return null;
-    return selectedEmployee?.employee_name ?? context?.employee_name ?? employee;
-  }, [employee, selectedEmployee, context?.employee_name]);
+    if (!scheduleEmployeeId) return null;
+    return selectedEmployee?.employee_name ?? context?.employee_name ?? scheduleEmployeeId;
+  }, [context?.employee_name, scheduleEmployeeId, selectedEmployee?.employee_name]);
 
   const static55Blocks = useMemo<ShiftBlock[]>(
     () => weekPatternToBlocks(apply55DayTemplate(emptyWeekPattern())),
@@ -169,13 +189,13 @@ export function WeeklySchedulePage() {
   }, [employee, shiftBlocks, templateOptions]);
 
   async function handleSave(confirmCreate = false) {
-    if (!employee || !effectiveFrom) return;
+    if (!scheduleEmployeeId || !effectiveFrom) return;
     if (limitGenerateThrough && !generateThrough) return;
     if (validationIssues.length || !canApply) return;
 
     clearStatus();
     const result = await apply({
-      employee,
+      employee: scheduleEmployeeId,
       week_pattern: weekPattern,
       create_shifts_after: effectiveFrom,
       generate_through: limitGenerateThrough ? generateThrough : "",
@@ -201,7 +221,7 @@ export function WeeklySchedulePage() {
     }
 
     if (result.ok) {
-      setSaveSuccessUrl(result.attendance_url ?? `/hr-attendance?employee=${employee}`);
+      setSaveSuccessUrl(result.attendance_url ?? `/hr-attendance?employee=${scheduleEmployeeId}`);
       void refreshContext();
     }
   }
@@ -235,7 +255,7 @@ export function WeeklySchedulePage() {
   const hasWorkingDays = weekPattern.days.some((day) => day.works);
 
   const saveDisabled =
-    !employee ||
+    !scheduleEmployeeId ||
     !canApply ||
     applying ||
     validationIssues.length > 0 ||
@@ -299,10 +319,11 @@ export function WeeklySchedulePage() {
                       compact
                     />
                     <ClearEmployeeScheduleDialog
-                      employee={employee}
+                      employee={scheduleEmployeeId}
                       employeeRow={selectedEmployee}
                       employeeLabel={employeeLabel}
                       triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                      disabled={!scheduleEmployeeId}
                       onSuccess={() => {
                         setSaveSuccessUrl(null);
                         void refreshContext();
@@ -312,6 +333,14 @@ export function WeeklySchedulePage() {
                 </div>
               </div>
             )}
+
+            {ineligibleMessage ? (
+              <Card className="border-amber-500/30 bg-amber-500/5">
+                <CardContent className="py-2.5 text-sm text-amber-950 dark:text-amber-100">
+                  {ineligibleMessage} Pick an eligible employee above to continue.
+                </CardContent>
+              </Card>
+            ) : null}
 
             {previewOnly ? (
               <Card className="border-amber-500/30 bg-amber-500/5">
@@ -339,17 +368,28 @@ export function WeeklySchedulePage() {
                 <WeeklyScheduleEditorSkeleton />
                 <LoadingIndicator label="Loading schedule…" className="justify-center pb-1" />
               </div>
-            ) : !employee ? (
+            ) : awaitingEmployeeRow ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-3">
+                <WeeklyScheduleEditorSkeleton />
+                <LoadingIndicator label="Loading employee…" className="justify-center pb-1" />
+              </div>
+            ) : !scheduleEmployeeId ? (
               <Card className="flex min-h-0 flex-1 items-center justify-center border-dashed">
                 <CardContent className="py-12 text-center">
-                  <p className="font-medium">Select an employee</p>
+                  <p className="font-medium">
+                    {ineligibleMessage ? "Employee not eligible" : "Select an employee"}
+                  </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Their current pattern loads when available.
+                    {ineligibleMessage ??
+                      "Their current pattern loads when available."}
                   </p>
                 </CardContent>
               </Card>
             ) : (
-              <WeeklyScheduleAnimatedShell loading={isScheduleLoading} employeeKey={employee}>
+              <WeeklyScheduleAnimatedShell
+                loading={isScheduleLoading}
+                employeeKey={scheduleEmployeeId}
+              >
                 <Card
                   className={cn(
                     "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -397,7 +437,7 @@ export function WeeklySchedulePage() {
             )}
           </main>
 
-          {employee ? (
+          {scheduleEmployeeId ? (
             <footer className="mt-3 shrink-0 border-t border-border/60 pt-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:max-w-2xl">
@@ -455,7 +495,7 @@ export function WeeklySchedulePage() {
                   ) : null}
                   <SchedulePreviewTrigger
                     onClick={() => setPreviewOpen(true)}
-                    disabled={!employee || shiftBlocks.length === 0}
+                    disabled={!scheduleEmployeeId || shiftBlocks.length === 0}
                     resolving={resolving}
                     groupCount={plan?.groups?.length}
                   />

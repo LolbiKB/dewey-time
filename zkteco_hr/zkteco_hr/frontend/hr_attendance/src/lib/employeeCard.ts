@@ -45,6 +45,49 @@ export function formatEmploymentType(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+/** Employment types allowed in the Weekly Schedule wizard picker. */
+export const WEEKLY_SCHEDULE_EMPLOYMENT_TYPES = [
+  "Full-time",
+  "Part-time Fixed",
+  "Probation",
+  "Intern",
+] as const;
+
+export function isWeeklyScheduleEligible(
+  employmentType: string | null | undefined
+): boolean {
+  const normalized = formatEmploymentType(employmentType).toLowerCase();
+  if (!normalized) return false;
+  return WEEKLY_SCHEDULE_EMPLOYMENT_TYPES.some(
+    (type) => type.toLowerCase() === normalized
+  );
+}
+
+/** Subtitle for Weekly Schedule employee picker — employment type only. */
+export function scheduleEmployeeSubtitle(
+  employee: CalendarEmployee | null | undefined
+): string {
+  if (!employee) return "Choose an employee";
+  return formatEmploymentType(employee.employment_type) || "Employment type not set";
+}
+
+/** User-facing message when calendar selection is not valid on Weekly Schedule. */
+export function weeklyScheduleIneligibleMessage(
+  employee: CalendarEmployee | null | undefined,
+  employeeId?: string | null
+): string | null {
+  if (!employee || isWeeklyScheduleEligible(employee.employment_type)) return null;
+
+  const name = employeeShortName(employee, employeeId);
+  const typeLabel = scheduleEmployeeSubtitle(employee);
+
+  if (typeLabel === "Employment type not set") {
+    return `${name} has no employment type set. Weekly Schedule supports Full-time, Part-time Fixed, Probation, and Intern only.`;
+  }
+
+  return `${name} (${typeLabel}) is not eligible for Weekly Schedule. Choose Full-time, Part-time Fixed, Probation, or Intern.`;
+}
+
 export function roleLine(employee: CalendarEmployee | null | undefined): string {
   return [employee?.title, employee?.department].filter(Boolean).join(" · ");
 }
