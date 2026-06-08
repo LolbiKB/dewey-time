@@ -10,3 +10,4 @@ zkteco_hr.patches.resync_hr_attendance_assets_v5
 zkteco_hr.patches.resync_hr_attendance_assets_v6
 zkteco_hr.patches.resync_hr_attendance_assets_v7
 zkteco_hr.patches.remove_zkteco_hr_desk_workspace
+zkteco_hr.patches.resync_hr_attendance_assets_v8
