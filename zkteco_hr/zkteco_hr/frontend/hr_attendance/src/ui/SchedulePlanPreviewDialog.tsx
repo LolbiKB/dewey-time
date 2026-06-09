@@ -1,6 +1,5 @@
 import { CalendarRangeIcon, Loader2Icon } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,8 +10,10 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
 import type { ResolvePlan, WeekPattern, WeekPatternDay } from "@/types/schedule";
-import { formatDayList, formatTimeInput, toApiTime } from "@/types/schedule";
+import { formatTimeInput, summarizeWeekPattern, toApiTime } from "@/types/schedule";
+import { ResolvePlanGroupsList } from "@/ui/ResolvePlanGroupsList";
 
 export type SchedulePlanPreviewDialogProps = {
   open: boolean;
@@ -26,8 +27,10 @@ export type SchedulePlanPreviewDialogProps = {
 };
 
 export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps) {
-  const workDays = props.weekPattern.days.filter((row) => row.works).length;
-  const offDays = props.weekPattern.days.length - workDays;
+  const { workDays, offDays, totalWeeklyMinutes } = summarizeWeekPattern(props.weekPattern);
+  const weeklyHoursLabel =
+    totalWeeklyMinutes > 0 ? formatScheduleDuration(totalWeeklyMinutes) : null;
+  const ssaCount = props.plan?.groups?.length ?? 0;
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -41,6 +44,8 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
               <DialogTitle className="text-base">Weekly schedule preview</DialogTitle>
               <DialogDescription className="text-xs">
                 {workDays} work · {offDays} off
+                {weeklyHoursLabel ? ` · ${weeklyHoursLabel}/wk` : null}
+                {ssaCount ? ` · ${ssaCount} SSA${ssaCount !== 1 ? "s" : ""}` : null}
                 {props.effectiveFrom
                   ? props.generateThrough
                     ? ` · ${props.effectiveFrom} → ${props.generateThrough}`
@@ -60,7 +65,7 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
             <div>
               <h3 className="text-sm font-medium">Matched patterns</h3>
               <p className="text-xs text-muted-foreground">
-                Shift Types and Shift Schedules that will be linked or created when you save.
+                One Shift Schedule Assignment (SSA) per group — same records created when you save.
               </p>
             </div>
 
@@ -72,56 +77,7 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
                 Matching patterns…
               </p>
             ) : props.plan?.groups?.length ? (
-              <ul className="space-y-2">
-                {props.plan.groups.map((group, index) => {
-                  const shiftTypeName =
-                    group.shift_type.action === "use"
-                      ? group.shift_type.name
-                      : group.shift_type.proposed_name;
-                  const scheduleName =
-                    group.shift_schedule.action === "use"
-                      ? group.shift_schedule.name
-                      : group.shift_schedule.proposed_name;
-                  const typeCreating = group.shift_type.action === "create";
-                  const scheduleCreating = group.shift_schedule.action === "create";
-                  return (
-                    <li
-                      key={`${index}-${scheduleName}`}
-                      className="rounded-xl border border-border/60 bg-card/50 p-3 space-y-2"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium">{formatDayList(group.days)}</span>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="w-[6.5rem] shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Shift Type</span>
-                          <span className="truncate text-xs text-foreground">{shiftTypeName}</span>
-                          {typeCreating ? (
-                            <Badge variant="outline" className="ml-auto shrink-0 text-[10px] font-normal">New</Badge>
-                          ) : null}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="w-[6.5rem] shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Shift Schedule</span>
-                          <span className="truncate text-xs text-foreground">{scheduleName}</span>
-                          {scheduleCreating ? (
-                            <Badge variant="outline" className="ml-auto shrink-0 text-[10px] font-normal">New</Badge>
-                          ) : null}
-                        </div>
-                      </div>
-                      <p className="text-xs tabular-nums text-muted-foreground">
-                        {formatTimeInput(group.profile.start_time)}–
-                        {formatTimeInput(group.profile.end_time)}
-                        {group.profile.lunch_start && group.profile.lunch_end
-                          ? ` · lunch ${formatTimeInput(group.profile.lunch_start)}–${formatTimeInput(group.profile.lunch_end)}`
-                          : " · no lunch"}
-                        {group.profile.grace_minutes
-                          ? ` · ${group.profile.grace_minutes}m grace`
-                          : null}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ul>
+              <ResolvePlanGroupsList groups={props.plan.groups} />
             ) : (
               <p className="text-sm text-muted-foreground">
                 Configure shift blocks to see which records will be used.

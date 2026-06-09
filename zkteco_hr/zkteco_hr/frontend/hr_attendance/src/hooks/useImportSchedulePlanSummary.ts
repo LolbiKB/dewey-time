@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
 import type { ResolvePlan, WeekPattern } from "@/types/schedule";
-import { weekPatternForApi } from "@/types/schedule";
+import { summarizeWeekPattern, weekPatternForApi } from "@/types/schedule";
 
 const RESOLVE_METHOD = "zkteco_hr.attendance_engine.schedule_api.resolve_weekly_schedule_plan";
 
@@ -22,11 +22,14 @@ export type ImportPatternPlan = ImportPatternBucket & {
 export type ImportPlanStats = {
   selectedEmployees: number;
   uniquePatterns: number;
+  totalSsaAssignments: number;
   newShiftSchedules: number;
   existingShiftSchedules: number;
   newShiftTypes: number;
   existingShiftTypes: number;
   needsCreate: boolean;
+  weeklyMinutesMin: number | null;
+  weeklyMinutesMax: number | null;
 };
 
 function patternKey(pattern: WeekPattern): string {
@@ -38,14 +41,21 @@ function collectStats(plans: ImportPatternPlan[]): ImportPlanStats {
   const shiftSchedulesUse = new Set<string>();
   const shiftTypesNew = new Set<string>();
   const shiftTypesUse = new Set<string>();
+  const weeklyMinutes: number[] = [];
   let needsCreate = false;
   let selectedEmployees = 0;
+  let totalSsaAssignments = 0;
 
   for (const entry of plans) {
     selectedEmployees += entry.employeeCount;
+    const { totalWeeklyMinutes } = summarizeWeekPattern(entry.weekPattern);
+    if (totalWeeklyMinutes > 0) weeklyMinutes.push(totalWeeklyMinutes);
+
     const plan = entry.plan;
     if (!plan) continue;
     if (plan.needs_create) needsCreate = true;
+    const groupCount = plan.groups?.length ?? 0;
+    totalSsaAssignments += groupCount * entry.employeeCount;
     for (const group of plan.groups ?? []) {
       const st = group.shift_type;
       const ss = group.shift_schedule;
@@ -59,11 +69,14 @@ function collectStats(plans: ImportPatternPlan[]): ImportPlanStats {
   return {
     selectedEmployees,
     uniquePatterns: plans.length,
+    totalSsaAssignments,
     newShiftSchedules: shiftSchedulesNew.size,
     existingShiftSchedules: shiftSchedulesUse.size,
     newShiftTypes: shiftTypesNew.size,
     existingShiftTypes: shiftTypesUse.size,
     needsCreate,
+    weeklyMinutesMin: weeklyMinutes.length ? Math.min(...weeklyMinutes) : null,
+    weeklyMinutesMax: weeklyMinutes.length ? Math.max(...weeklyMinutes) : null,
   };
 }
 

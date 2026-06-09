@@ -26,10 +26,11 @@ import {
   buildImportPatternBuckets,
   useImportSchedulePlanSummary,
 } from "@/hooks/useImportSchedulePlanSummary";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { cn } from "@/lib/utils";
 import { ImportSchedulePlanSummary } from "@/ui/ImportSchedulePlanSummary";
 import type { WeekPattern } from "@/types/schedule";
-import { weekPatternForApi } from "@/types/schedule";
+import { summarizeWeekPattern, weekPatternForApi } from "@/types/schedule";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -307,6 +308,9 @@ function PreviewRow(props: {
   const failed = applyStatus?.type === "error";
   const issues = row.issues.filter((i) => i.severity !== "info");
   const primaryIssue = issues.find((i) => i.severity === "error") ?? issues[0];
+  const weeklyMinutes = row.week_pattern
+    ? summarizeWeekPattern(row.week_pattern).totalWeeklyMinutes
+    : 0;
 
   return (
     <div
@@ -349,6 +353,9 @@ function PreviewRow(props: {
                 {formatShiftSummary(row)}
                 {row.schedule_shape === "full_day" && row.pm_from && row.pm_to ? (
                   <span> · lunch {row.am_to}–{row.pm_from}</span>
+                ) : null}
+                {weeklyMinutes > 0 ? (
+                  <span> · {formatScheduleDuration(weeklyMinutes)}/wk</span>
                 ) : null}
               </p>
             </div>

@@ -2,9 +2,11 @@ import { ChevronDownIcon, Loader2Icon, RepeatIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { cn } from "@/lib/utils";
 import type { ImportPatternPlan, ImportPlanStats } from "@/hooks/useImportSchedulePlanSummary";
-import { formatDayList, formatTimeInput } from "@/types/schedule";
+import { summarizeWeekPattern } from "@/types/schedule";
+import { ResolvePlanGroupsList } from "@/ui/ResolvePlanGroupsList";
 
 export type ImportSchedulePlanSummaryProps = {
   stats: ImportPlanStats;
@@ -14,43 +16,38 @@ export type ImportSchedulePlanSummaryProps = {
   className?: string;
 };
 
+function formatWeeklyHoursRange(min: number | null, max: number | null): string | null {
+  if (min === null || max === null || min <= 0) return null;
+  if (min === max) return `${formatScheduleDuration(min)}/wk`;
+  return `${formatScheduleDuration(min)}–${formatScheduleDuration(max)}/wk`;
+}
+
 export function ImportSchedulePlanSummary(props: ImportSchedulePlanSummaryProps) {
   const { stats, plans, loading, error } = props;
   const [expanded, setExpanded] = useState(false);
 
-  const scheduleLines = useMemo(() => {
-    const lines: Array<{
-      key: string;
-      label: string;
-      action: "use" | "create";
-      employeeCount: number;
-      days: string;
-      times: string;
-    }> = [];
+  const patternEntries = useMemo(
+    () =>
+      plans
+        .filter((entry) => entry.plan?.groups?.length)
+        .map((entry) => {
+          const { workDays, offDays, totalWeeklyMinutes } = summarizeWeekPattern(entry.weekPattern);
+          const ssaPerEmployee = entry.plan?.groups.length ?? 0;
+          return {
+            key: entry.patternKey,
+            entry,
+            workDays,
+            offDays,
+            totalWeeklyMinutes,
+            ssaPerEmployee,
+            totalSsaAssignments: ssaPerEmployee * entry.employeeCount,
+          };
+        })
+        .sort((a, b) => b.entry.employeeCount - a.entry.employeeCount),
+    [plans]
+  );
 
-    for (const entry of plans) {
-      if (!entry.plan) continue;
-      for (const group of entry.plan.groups) {
-        const scheduleName =
-          group.shift_schedule.action === "use"
-            ? group.shift_schedule.name
-            : group.shift_schedule.proposed_name;
-        if (!scheduleName) continue;
-
-        const times = `${formatTimeInput(group.profile.start_time)}–${formatTimeInput(group.profile.end_time)}`;
-        lines.push({
-          key: `${entry.patternKey}-${scheduleName}-${group.days.join(",")}`,
-          label: scheduleName,
-          action: group.shift_schedule.action,
-          employeeCount: entry.employeeCount,
-          days: formatDayList(group.days),
-          times,
-        });
-      }
-    }
-
-    return lines.sort((a, b) => b.employeeCount - a.employeeCount);
-  }, [plans]);
+  const weeklyHoursLabel = formatWeeklyHoursRange(stats.weeklyMinutesMin, stats.weeklyMinutesMax);
 
   if (stats.selectedEmployees === 0) return null;
 
@@ -65,7 +62,7 @@ export function ImportSchedulePlanSummary(props: ImportSchedulePlanSummaryProps)
         <RepeatIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-medium text-foreground">SSA patterns</span>
+            <span className="font-medium text-foreground">SSA assignment preview</span>
             {loading ? (
               <span className="inline-flex items-center gap-1 text-muted-foreground">
                 <Loader2Icon className="size-3 animate-spin" />
@@ -77,31 +74,41 @@ export function ImportSchedulePlanSummary(props: ImportSchedulePlanSummaryProps)
           <p className="leading-relaxed text-muted-foreground">
             {stats.selectedEmployees} employee{stats.selectedEmployees !== 1 ? "s" : ""} ·{" "}
             {stats.uniquePatterns} unique pattern{stats.uniquePatterns !== 1 ? "s" : ""}
+            {!loading && stats.totalSsaAssignments > 0 ? (
+              <>
+                {" · "}
+                <span className="text-foreground">{stats.totalSsaAssignments}</span> SSA
+                {stats.totalSsaAssignments !== 1 ? "s" : ""} total
+              </>
+            ) : null}
+            {!loading && weeklyHoursLabel ? (
+              <>
+                {" · "}
+                <span className="text-foreground">{weeklyHoursLabel}</span>
+              </>
+            ) : null}
             {!loading && stats.existingShiftSchedules > 0 ? (
               <>
                 {" · "}
-                <span className="text-foreground">{stats.existingShiftSchedules} existing</span> Shift
-                Schedule{stats.existingShiftSchedules !== 1 ? "s" : ""}
+                {stats.existingShiftSchedules} existing PAT
+                {stats.existingShiftSchedules !== 1 ? "s" : ""}
               </>
             ) : null}
             {!loading && stats.newShiftSchedules > 0 ? (
               <>
                 {" · "}
-                <span className="text-foreground">{stats.newShiftSchedules} new</span> Shift Schedule
-                {stats.newShiftSchedules !== 1 ? "s" : ""} will be created
+                {stats.newShiftSchedules} new PAT{stats.newShiftSchedules !== 1 ? "s" : ""}
               </>
             ) : null}
-            {!loading &&
-            stats.newShiftSchedules === 0 &&
-            stats.existingShiftSchedules === 0 &&
-            !error ? (
-              <> · uses existing site patterns</>
-            ) : null}
+          </p>
+
+          <p className="text-[11px] text-muted-foreground">
+            Same resolve plan as manual Weekly Schedule — one SSA per matched group when you apply.
           </p>
 
           {error ? <p className="text-destructive">{error}</p> : null}
 
-          {!loading && scheduleLines.length > 0 ? (
+          {!loading && patternEntries.length > 0 ? (
             <div className="pt-0.5">
               <button
                 type="button"
@@ -111,30 +118,44 @@ export function ImportSchedulePlanSummary(props: ImportSchedulePlanSummaryProps)
                 <ChevronDownIcon
                   className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
                 />
-                {expanded ? "Hide" : "Show"} Shift Schedule details
+                {expanded ? "Hide" : "Show"} SSA groups
               </button>
 
               {expanded ? (
-                <ul className="mt-2 max-h-36 space-y-1.5 overflow-y-auto pr-1">
-                  {scheduleLines.map((line) => (
+                <ul className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
+                  {patternEntries.map((item) => (
                     <li
-                      key={line.key}
-                      className="rounded-md border border-border/50 bg-muted/20 px-2 py-1.5"
+                      key={item.key}
+                      className="rounded-md border border-border/50 bg-muted/20 px-2 py-2"
                     >
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="truncate font-medium text-foreground">{line.label}</span>
-                        {line.action === "create" ? (
-                          <Badge variant="outline" className="text-[10px] font-normal">
-                            New
-                          </Badge>
-                        ) : null}
-                        <span className="ml-auto tabular-nums text-muted-foreground">
-                          {line.employeeCount} emp
+                      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className="font-medium text-foreground">
+                          {item.entry.employeeCount} employee
+                          {item.entry.employeeCount !== 1 ? "s" : ""}
                         </span>
+                        <span className="text-muted-foreground">
+                          {item.workDays} work · {item.offDays} off
+                          {item.totalWeeklyMinutes > 0
+                            ? ` · ${formatScheduleDuration(item.totalWeeklyMinutes)}/wk`
+                            : null}
+                        </span>
+                        <Badge variant="secondary" className="ml-auto text-[10px] font-normal">
+                          {item.ssaPerEmployee} SSA{item.ssaPerEmployee !== 1 ? "s" : ""}/emp
+                        </Badge>
                       </div>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
-                        {line.days} · {line.times}
-                      </p>
+                      <ResolvePlanGroupsList groups={item.entry.plan!.groups} compact />
+                      {item.entry.plan?.warnings?.length ? (
+                        <ul className="mt-2 space-y-0.5">
+                          {item.entry.plan.warnings.map((warning, index) => (
+                            <li
+                              key={index}
+                              className="text-[11px] text-amber-700 dark:text-amber-400"
+                            >
+                              {warning}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

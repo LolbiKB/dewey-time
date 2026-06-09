@@ -397,6 +397,32 @@ function timeToMinutes(value: string | null | undefined): number | null {
   return hours * 60 + minutes;
 }
 
+/** Net working minutes for one day (end − start − lunch), matching calendar week schedule. */
+export function weekPatternDayNetMinutes(row: WeekPatternDay): number {
+  if (!row.works) return 0;
+  const start = timeToMinutes(row.start_time);
+  const end = timeToMinutes(row.end_time);
+  if (start === null || end === null || end <= start) return 0;
+  const lunchStart = timeToMinutes(row.lunch_start);
+  const lunchEnd = timeToMinutes(row.lunch_end);
+  const lunch =
+    lunchStart !== null && lunchEnd !== null && lunchEnd > lunchStart
+      ? lunchEnd - lunchStart
+      : 0;
+  return end - start - lunch;
+}
+
+export function weekPatternWeeklyMinutes(pattern: WeekPattern): number {
+  return pattern.days.reduce((sum, day) => sum + weekPatternDayNetMinutes(day), 0);
+}
+
+export function summarizeWeekPattern(pattern: WeekPattern) {
+  const workDays = pattern.days.filter((day) => day.works).length;
+  const offDays = pattern.days.length - workDays;
+  const totalWeeklyMinutes = weekPatternWeeklyMinutes(pattern);
+  return { workDays, offDays, totalWeeklyMinutes };
+}
+
 /** Same grouping as server `group_week_pattern` — days with identical hours become one block. */
 export function weekPatternToBlocks(pattern: WeekPattern): ShiftBlock[] {
   const buckets = new Map<string, { days: Weekday[]; profile: ShiftBlock["profile"] }>();
