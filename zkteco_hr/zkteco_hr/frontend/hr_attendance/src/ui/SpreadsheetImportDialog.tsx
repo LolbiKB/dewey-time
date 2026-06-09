@@ -22,9 +22,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Separator } from "@/components/ui/separator";
+import {
+  buildImportPatternBuckets,
+  useImportSchedulePlanSummary,
+} from "@/hooks/useImportSchedulePlanSummary";
 import { cn } from "@/lib/utils";
-import type { WeekPattern, Weekday } from "@/types/schedule";
+import { ImportSchedulePlanSummary } from "@/ui/ImportSchedulePlanSummary";
+import type { WeekPattern } from "@/types/schedule";
 import { weekPatternForApi } from "@/types/schedule";
 
 // ---------------------------------------------------------------------------
@@ -291,26 +295,6 @@ function IssueBadge(props: { issue: ImportIssue }) {
   );
 }
 
-function RowStatusIcon(props: { row: ParsedRow; applyStatus?: RowApplyStatus }) {
-  const { row, applyStatus } = props;
-  if (applyStatus?.type === "applying") {
-    return <Loader2Icon className="size-4 shrink-0 animate-spin text-muted-foreground" />;
-  }
-  if (applyStatus?.type === "ok") {
-    return <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />;
-  }
-  if (applyStatus?.type === "error") {
-    return <XCircleIcon className="size-4 shrink-0 text-destructive" />;
-  }
-  if (!row.importable) {
-    if (row.issues.some((i) => i.severity === "error")) {
-      return <XCircleIcon className="size-4 shrink-0 text-destructive" />;
-    }
-    return <AlertCircleIcon className="size-4 shrink-0 text-amber-500" />;
-  }
-  return <CheckCircle2Icon className="size-4 shrink-0 text-emerald-500" />;
-}
-
 function PreviewRow(props: {
   row: ParsedRow;
   selected: boolean;
@@ -321,90 +305,97 @@ function PreviewRow(props: {
   const canSelect = row.importable;
   const applied = applyStatus?.type === "ok";
   const failed = applyStatus?.type === "error";
-  const errors = row.issues.filter((i) => i.severity === "error");
-  const warnings = row.issues.filter((i) => i.severity === "warning");
+  const issues = row.issues.filter((i) => i.severity !== "info");
+  const primaryIssue = issues.find((i) => i.severity === "error") ?? issues[0];
 
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors",
+        "rounded-lg border px-3 py-2.5 text-sm transition-colors",
         applied
           ? "border-emerald-500/30 bg-emerald-500/5"
           : failed
             ? "border-destructive/30 bg-destructive/5"
             : selected
               ? "border-primary/30 bg-primary/[0.03]"
-              : "border-border/50 bg-card/50"
+              : "border-border/60 bg-card/40"
       )}
     >
-      <div className="flex items-center pt-0.5">
+      <div className="flex items-start gap-2.5">
         <Checkbox
           checked={canSelect && selected}
           disabled={!canSelect || applied || applyStatus?.type === "applying"}
           onCheckedChange={onToggle}
           aria-label={`Include row ${row.row_number}`}
+          className="mt-0.5"
         />
-      </div>
 
-      <RowStatusIcon row={row} applyStatus={applyStatus} />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="font-medium leading-snug">
+                  {row.employee_name ?? row.id_card ?? "—"}
+                </span>
+                {row.id_card && row.employee_name ? (
+                  <span className="truncate text-xs text-muted-foreground">{row.id_card}</span>
+                ) : null}
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                <span className="tabular-nums">Row {row.row_number}</span>
+                {" · "}
+                {formatWorkDays(row)}
+                {" · "}
+                {formatShiftSummary(row)}
+                {row.schedule_shape === "full_day" && row.pm_from && row.pm_to ? (
+                  <span> · lunch {row.am_to}–{row.pm_from}</span>
+                ) : null}
+              </p>
+            </div>
 
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="text-[10px] tabular-nums text-muted-foreground">#{row.row_number}</span>
-          <span className="font-medium">{row.employee_name ?? row.id_card ?? "—"}</span>
-          {row.id_card ? (
-            <span className="text-xs text-muted-foreground">{row.id_card}</span>
-          ) : null}
-          {row.schedule_shape !== "invalid" ? (
-            <Badge variant="secondary" className="text-[10px] font-normal">
-              {SHAPE_LABELS[row.schedule_shape] ?? row.schedule_shape}
-            </Badge>
-          ) : null}
-        </div>
-
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{formatWorkDays(row)}</span>
-          <span>{formatShiftSummary(row)}</span>
-          {row.schedule_shape === "full_day" && row.pm_from && row.pm_to ? (
-            <span className="text-muted-foreground/70">
-              lunch {row.am_to}–{row.pm_from}
-            </span>
-          ) : null}
-        </div>
-
-        {errors.length > 0 || warnings.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {errors.map((i) => (
-              <IssueBadge key={`e-${i.code}-${i.field}`} issue={i} />
-            ))}
-            {warnings.map((i) => (
-              <IssueBadge key={`w-${i.code}-${i.field}`} issue={i} />
-            ))}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {row.schedule_shape !== "invalid" ? (
+                <Badge variant="secondary" className="text-[10px] font-normal">
+                  {SHAPE_LABELS[row.schedule_shape] ?? row.schedule_shape}
+                </Badge>
+              ) : null}
+              {applyStatus?.type === "applying" ? (
+                <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+              ) : applied ? (
+                <CheckCircle2Icon className="size-4 text-emerald-500" />
+              ) : failed ? (
+                <XCircleIcon className="size-4 text-destructive" />
+              ) : row.importable ? (
+                <CheckCircle2Icon className="size-4 text-emerald-500/80" />
+              ) : issues.some((i) => i.severity === "error") ? (
+                <XCircleIcon className="size-4 text-destructive" />
+              ) : issues.length > 0 ? (
+                <AlertCircleIcon className="size-4 text-amber-500" />
+              ) : null}
+            </div>
           </div>
-        ) : null}
 
-        {(errors[0]?.suggestion ?? warnings[0]?.suggestion) ? (
-          <p className="text-[11px] text-muted-foreground">
-            💡 {errors[0]?.suggestion ?? warnings[0]?.suggestion}
-          </p>
-        ) : null}
+          {issues.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {issues.map((i) => (
+                <IssueBadge key={`${i.code}-${i.field ?? ""}`} issue={i} />
+              ))}
+            </div>
+          ) : null}
 
-        {applyStatus?.type === "error" ? (
-          <p className="text-[11px] text-destructive">✗ {applyStatus.message}</p>
-        ) : applyStatus?.type === "ok" ? (
-          <p className="text-[11px] text-emerald-600 dark:text-emerald-400">✓ Schedule saved</p>
-        ) : null}
-      </div>
+          {primaryIssue?.suggestion ? (
+            <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+              {primaryIssue.suggestion}
+            </p>
+          ) : null}
 
-      {row.day_off.full_off.length > 0 ? (
-        <div className="hidden shrink-0 flex-col items-end gap-1 sm:flex">
-          {row.day_off.full_off.map((d) => (
-            <Badge key={d} variant="secondary" className="text-[10px] font-normal">
-              {d.slice(0, 3)} off
-            </Badge>
-          ))}
+          {applyStatus?.type === "error" ? (
+            <p className="text-[11px] text-destructive">{applyStatus.message}</p>
+          ) : applyStatus?.type === "ok" ? (
+            <p className="text-[11px] text-emerald-600 dark:text-emerald-400">Schedule saved</p>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -414,6 +405,10 @@ function SummaryBar(props: {
   filter: RowFilter;
   onFilterChange: (f: RowFilter) => void;
   visibleCount: number;
+  feedbackCount: number;
+  feedbackFilename: string;
+  feedbackRows: FeedbackRow[];
+  showFeedbackDownload: boolean;
 }) {
   const { summary, filter, onFilterChange, visibleCount } = props;
 
@@ -426,53 +421,55 @@ function SummaryBar(props: {
   ];
 
   return (
-    <div className="border-b border-border/60 bg-muted/20 px-5 py-2.5 space-y-2">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>
-          <strong className="text-foreground">{summary.importable}</strong> ready to import
-        </span>
-        <span>
-          <strong className="text-foreground">{summary.matched}</strong> matched in Frappe
-        </span>
-        {summary.garbage_rows > 0 ? (
-          <span className="text-destructive">{summary.garbage_rows} garbage rows</span>
-        ) : null}
-        <span className="ml-auto text-muted-foreground/80">
-          Showing {visibleCount} of {summary.total_rows}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap gap-1.5">
-        {chips.map((chip) => (
-          <button
-            key={chip.key}
-            type="button"
-            onClick={() => onFilterChange(chip.key)}
-            className={cn(
-              "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-              filter === chip.key
-                ? "border-primary/50 bg-primary/10 text-primary"
-                : "border-border/60 bg-background/60 text-muted-foreground hover:border-primary/30"
-            )}
-          >
-            <span className={chip.tone}>{chip.label}</span>
-            <span className="ml-1 tabular-nums opacity-80">{chip.count}</span>
-          </button>
-        ))}
-      </div>
-
-      {Object.keys(summary.by_code).length > 0 ? (
-        <div className="flex flex-wrap gap-1">
-          {Object.entries(summary.by_code)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 8)
-            .map(([code, count]) => (
-              <Badge key={code} variant="outline" className="text-[10px] font-normal">
-                {ISSUE_CODE_LABELS[code] ?? code} ×{count}
-              </Badge>
-            ))}
+    <div className="shrink-0 space-y-3 border-b border-border/60 bg-muted/20 px-5 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1 text-xs text-muted-foreground">
+          <p>
+            <strong className="text-foreground">{summary.importable}</strong> ready ·{" "}
+            <strong className="text-foreground">{summary.matched}</strong> matched
+            {summary.garbage_rows > 0 ? (
+              <span className="text-destructive"> · {summary.garbage_rows} garbage</span>
+            ) : null}
+          </p>
+          <p>
+            Showing {visibleCount} of {summary.total_rows} rows
+          </p>
         </div>
-      ) : null}
+
+        {props.showFeedbackDownload ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 gap-1.5 text-xs"
+            onClick={() => downloadFeedbackCsv(props.feedbackRows, props.feedbackFilename)}
+          >
+            <DownloadIcon className="size-3.5" />
+            AI feedback ({props.feedbackCount})
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
+        <div className="flex w-max min-w-full gap-1.5">
+          {chips.map((chip) => (
+            <button
+              key={chip.key}
+              type="button"
+              onClick={() => onFilterChange(chip.key)}
+              className={cn(
+                "shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                filter === chip.key
+                  ? "border-primary/50 bg-primary/10 text-primary"
+                  : "border-border/60 bg-background text-muted-foreground hover:border-primary/30"
+              )}
+            >
+              <span className={chip.tone}>{chip.label}</span>
+              <span className="ml-1 tabular-nums opacity-80">{chip.count}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -630,27 +627,41 @@ export function SpreadsheetImportDialog(props: {
   const isApplying = step === "applying";
   const isDone = step === "done";
 
+  const importPatternBuckets = useMemo(
+    () => buildImportPatternBuckets(rows, selected),
+    [rows, selected]
+  );
+
+  const planSummary = useImportSchedulePlanSummary(
+    importPatternBuckets,
+    step === "preview" && effectiveFrom ? effectiveFrom : null
+  );
+
+  const feedbackFilename = `schedule-import-feedback-${currentFile?.name?.replace(/\.[^.]+$/, "") ?? "upload"}.csv`;
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-2xl" showCloseButton>
-        <DialogHeader className="space-y-1 border-b border-border/60 px-5 py-4 text-left">
+      <DialogContent
+        className="flex max-h-[min(90dvh,44rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg lg:max-w-2xl"
+        showCloseButton
+      >
+        <DialogHeader className="shrink-0 space-y-1 border-b border-border/60 px-5 py-4 pr-12 text-left">
           <div className="flex items-start gap-3">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <UploadIcon className="size-5" />
             </span>
             <div className="min-w-0 flex-1">
               <DialogTitle className="text-base">Import from spreadsheet</DialogTitle>
-              <DialogDescription className="text-xs">
-                Validates AI-normalised CSV, flags rows to fix, and exports feedback for the
-                normaliser
+              <DialogDescription className="text-sm leading-relaxed">
+                Upload a normalised CSV, review validation issues, then apply schedules in bulk.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <div className="max-h-[min(70dvh,36rem)] overflow-y-auto">
-          {(step === "idle" || step === "parsing") && (
-            <div className="space-y-4 px-5 py-5">
+        {(step === "idle" || step === "parsing") && (
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+            <div className="space-y-4">
               {parseError ? (
                 <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                   {parseError}
@@ -664,40 +675,26 @@ export function SpreadsheetImportDialog(props: {
                 </p>
               ) : null}
             </div>
-          )}
+          </div>
+        )}
 
-          {(step === "preview" || step === "applying" || step === "done") && summary ? (
-            <>
-              <SummaryBar
-                summary={summary}
-                filter={rowFilter}
-                onFilterChange={setRowFilter}
-                visibleCount={visibleRows.length}
-              />
+        {(step === "preview" || step === "applying" || step === "done") && summary ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <SummaryBar
+              summary={summary}
+              filter={rowFilter}
+              onFilterChange={setRowFilter}
+              visibleCount={visibleRows.length}
+              feedbackCount={feedbackRows.length}
+              feedbackFilename={feedbackFilename}
+              feedbackRows={feedbackRows}
+              showFeedbackDownload={feedbackRows.length > 0 && !isDone}
+            />
 
-              {feedbackRows.length > 0 && !isDone ? (
-                <div className="flex items-center justify-end gap-2 border-b border-border/40 px-5 py-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5 text-xs"
-                    onClick={() =>
-                      downloadFeedbackCsv(
-                        feedbackRows,
-                        `schedule-import-feedback-${currentFile?.name?.replace(/\.[^.]+$/, "") ?? "upload"}.csv`
-                      )
-                    }
-                  >
-                    <DownloadIcon className="size-3.5" />
-                    Download AI feedback ({feedbackRows.length})
-                  </Button>
-                </div>
-              ) : null}
-
-              <div className="space-y-2 px-5 py-3">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+              <div className="space-y-2 pb-1">
                 {visibleRows.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
+                  <p className="py-10 text-center text-sm text-muted-foreground">
                     No rows match this filter.
                   </p>
                 ) : (
@@ -712,83 +709,93 @@ export function SpreadsheetImportDialog(props: {
                   ))
                 )}
               </div>
-            </>
-          ) : null}
-        </div>
+            </div>
 
-        {(step === "preview" || step === "applying" || step === "done") && (
-          <>
-            <Separator />
-            <DialogFooter className="flex-col items-stretch gap-3 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
-              <div className="flex items-end gap-3">
+            <div className="shrink-0 space-y-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
                 <DatePickerInput
                   id="import-effective-from"
                   label="Effective from"
                   value={effectiveFrom}
                   onChange={setEffectiveFrom}
                   disabled={isApplying || isDone}
+                  className="min-w-[11rem] flex-1 sm:max-w-[14rem]"
                 />
                 {!isDone && visibleRows.some(({ row }) => row.importable) ? (
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-9 shrink-0 text-xs"
+                    className="h-9 shrink-0 px-2 text-xs"
                     onClick={toggleAllVisible}
                     disabled={isApplying}
                   >
                     Toggle visible
                   </Button>
                 ) : null}
-                {isDone ? (
+              </div>
+
+              {!isDone && effectiveFrom && eligibleCount > 0 ? (
+                <ImportSchedulePlanSummary
+                  stats={planSummary.stats}
+                  plans={planSummary.plans}
+                  loading={planSummary.loading}
+                  error={planSummary.error}
+                />
+              ) : null}
+            </div>
+
+            <DialogFooter className="mx-0 mb-0 flex shrink-0 flex-row flex-wrap items-center justify-end gap-2 rounded-b-xl border-t border-border/60 bg-muted/50 px-5 py-4">
+              {isDone ? (
+                <>
+                  {doneCount > 0 ? (
+                    <span className="mr-auto self-center text-xs text-emerald-600 dark:text-emerald-400">
+                      {doneCount} saved
+                    </span>
+                  ) : null}
+                  {failCount > 0 ? (
+                    <span className="self-center text-xs text-destructive">{failCount} failed</span>
+                  ) : null}
                   <Button type="button" variant="outline" size="default" className="h-9" onClick={reset}>
                     Import another
                   </Button>
-                ) : null}
-              </div>
-
-              <div className="flex items-center gap-2 sm:justify-end">
-                {isDone ? (
-                  <>
-                    {doneCount > 0 ? (
-                      <span className="text-xs text-emerald-600 dark:text-emerald-400">
-                        ✓ {doneCount} saved
-                      </span>
-                    ) : null}
-                    {failCount > 0 ? (
-                      <span className="text-xs text-destructive">✗ {failCount} failed</span>
-                    ) : null}
-                    <Button type="button" size="default" className="h-9" onClick={() => handleOpenChange(false)}>
-                      Done
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <Button type="button" variant="ghost" size="default" className="h-9" onClick={reset} disabled={isApplying}>
-                      Back
-                    </Button>
-                    <Button
-                      type="button"
-                      size="default"
-                      className="h-9 min-w-[9rem]"
-                      onClick={() => void handleApply()}
-                      disabled={!eligibleCount || !effectiveFrom || isApplying}
-                    >
-                      {isApplying ? (
-                        <>
-                          <Loader2Icon className="size-3.5 animate-spin" />
-                          Applying…
-                        </>
-                      ) : (
-                        `Apply ${eligibleCount} employee${eligibleCount !== 1 ? "s" : ""}`
-                      )}
-                    </Button>
-                  </>
-                )}
-              </div>
+                  <Button type="button" size="default" className="h-9" onClick={() => handleOpenChange(false)}>
+                    Done
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="default"
+                    className="h-9"
+                    onClick={reset}
+                    disabled={isApplying}
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    type="button"
+                    size="default"
+                    className="h-9 min-w-[9rem]"
+                    onClick={() => void handleApply()}
+                    disabled={!eligibleCount || !effectiveFrom || isApplying}
+                  >
+                    {isApplying ? (
+                      <>
+                        <Loader2Icon className="size-3.5 animate-spin" />
+                        Applying…
+                      </>
+                    ) : (
+                      `Apply ${eligibleCount} employee${eligibleCount !== 1 ? "s" : ""}`
+                    )}
+                  </Button>
+                </>
+              )}
             </DialogFooter>
-          </>
-        )}
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

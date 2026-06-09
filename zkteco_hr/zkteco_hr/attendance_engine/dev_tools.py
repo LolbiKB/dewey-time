@@ -9,7 +9,10 @@ from zkteco_hr.attendance_engine.closeout import _generate_for_employee_date
 from zkteco_hr.attendance_engine.hr_calendar import _require_hr_role
 from zkteco_hr.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
 from zkteco_hr.attendance_engine.schedule_resolver import (
+    CLEAR_ALL_CONFIRM_PHRASE,
+    clear_all_employee_schedules,
     clear_employee_schedule,
+    preview_clear_all_employee_schedules,
     preview_clear_employee_schedule,
 )
 
@@ -158,6 +161,52 @@ def clear_employee_schedule_api(employee: str | None = None, confirm=None):
 
     try:
         result = clear_employee_schedule(employee)
+        frappe.db.commit()
+        return result
+    except Exception:
+        frappe.db.rollback()
+        raise
+
+
+def _parse_include_all_active(value) -> bool:
+    if value is None:
+        return False
+    return _parse_confirm(value)
+
+
+@frappe.whitelist()
+def preview_clear_all_employee_schedules_api(include_all_active=None):
+    """Dev-only: site-wide SSA / SA / Attendance Flag counts before nuclear clear."""
+    _require_system_manager_for_clear()
+    include_all_active = _parse_include_all_active(
+        include_all_active if include_all_active is not None else frappe.form_dict.get("include_all_active")
+    )
+    return preview_clear_all_employee_schedules(include_all_active=include_all_active)
+
+
+@frappe.whitelist()
+def clear_all_employee_schedules_api(confirm=None, confirm_phrase=None, include_all_active=None):
+    """Dev-only: delete all SSA, SA, and Attendance Flags for every affected employee."""
+    _require_system_manager_for_clear()
+
+    include_all_active = _parse_include_all_active(
+        include_all_active if include_all_active is not None else frappe.form_dict.get("include_all_active")
+    )
+
+    confirm_value = confirm
+    if confirm_value is None:
+        confirm_value = frappe.form_dict.get("confirm")
+
+    if not _parse_confirm(confirm_value):
+        preview = preview_clear_all_employee_schedules(include_all_active=include_all_active)
+        return {"needs_confirm": True, "preview": preview}
+
+    phrase = (confirm_phrase or frappe.form_dict.get("confirm_phrase") or "").strip()
+    if phrase != CLEAR_ALL_CONFIRM_PHRASE:
+        frappe.throw(f'Type "{CLEAR_ALL_CONFIRM_PHRASE}" to confirm')
+
+    try:
+        result = clear_all_employee_schedules(include_all_active=include_all_active)
         frappe.db.commit()
         return result
     except Exception:

@@ -882,3 +882,85 @@ def clear_employee_schedule(employee: str) -> dict:
         "disabled_ssas": disabled_ssas,
         "deleted_flags": deleted_flags,
     }
+
+
+CLEAR_ALL_CONFIRM_PHRASE = "CLEAR ALL SCHEDULES"
+
+
+def _employees_for_schedule_clear(*, include_all_active: bool = False) -> list[str]:
+    """Employees with SSA / Shift Assignment / Attendance Flag rows, optionally all Active."""
+    employees: set[str] = set()
+    for doctype in ("Shift Assignment", "Shift Schedule Assignment", "Attendance Flag"):
+        if frappe.db.table_exists(doctype):
+            names = frappe.get_all(doctype, pluck="employee", distinct=True) or []
+            employees.update(name for name in names if name)
+    if include_all_active:
+        active = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name") or []
+        employees.update(active)
+    return sorted(employees)
+
+
+def preview_clear_all_employee_schedules(*, include_all_active: bool = False) -> dict:
+    """Dev: site-wide counts before nuclear schedule clear."""
+    employees = _employees_for_schedule_clear(include_all_active=include_all_active)
+    shift_assignment_count = (
+        frappe.db.count("Shift Assignment") if frappe.db.table_exists("Shift Assignment") else 0
+    )
+    ssa_count = (
+        frappe.db.count("Shift Schedule Assignment")
+        if frappe.db.table_exists("Shift Schedule Assignment")
+        else 0
+    )
+    attendance_flag_count = (
+        frappe.db.count("Attendance Flag") if frappe.db.table_exists("Attendance Flag") else 0
+    )
+
+    return {
+        "include_all_active": include_all_active,
+        "employee_count": len(employees),
+        "shift_assignment_count": shift_assignment_count,
+        "ssa_count": ssa_count,
+        "attendance_flag_count": attendance_flag_count,
+        "sample_employees": employees[:_CLEAR_SAMPLE_CAP],
+        "confirm_phrase": CLEAR_ALL_CONFIRM_PHRASE,
+    }
+
+
+def clear_all_employee_schedules(*, include_all_active: bool = False) -> dict:
+    """
+    Dev: run clear_employee_schedule for every affected employee.
+    Does not delete Shift Type / Shift Schedule masters.
+    """
+    employees = _employees_for_schedule_clear(include_all_active=include_all_active)
+    totals = {
+        "cancelled_assignments": 0,
+        "deleted_assignments": 0,
+        "deleted_ssas": 0,
+        "disabled_ssas": 0,
+        "deleted_flags": 0,
+    }
+    cleared_employees: list[str] = []
+    errors: list[dict] = []
+
+    for employee in employees:
+        try:
+            result = clear_employee_schedule(employee)
+            cleared_employees.append(employee)
+            totals["cancelled_assignments"] += len(result.get("cancelled_assignments") or [])
+            totals["deleted_assignments"] += len(result.get("deleted_assignments") or [])
+            totals["deleted_ssas"] += len(result.get("deleted_ssas") or [])
+            totals["disabled_ssas"] += len(result.get("disabled_ssas") or [])
+            totals["deleted_flags"] += int(result.get("deleted_flags") or 0)
+        except Exception as exc:
+            errors.append({"employee": employee, "error": str(exc)})
+
+    return {
+        "ok": not errors,
+        "include_all_active": include_all_active,
+        "employee_count": len(employees),
+        "cleared_count": len(cleared_employees),
+        "error_count": len(errors),
+        "errors": errors[:_CLEAR_SAMPLE_CAP],
+        "sample_cleared_employees": cleared_employees[:_CLEAR_SAMPLE_CAP],
+        **totals,
+    }

@@ -193,3 +193,110 @@ class TestClearEmployeeScheduleApi(unittest.TestCase):
         clear_fn.assert_called_once_with("DI-1138")
         frappe.db.commit.assert_called()
         self.assertTrue(result["ok"])
+
+
+class TestClearAllEmployeeSchedules(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.schedule_resolver._employees_for_schedule_clear")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.clear_employee_schedule")
+    def test_clear_all_aggregates_totals(self, clear_fn, list_fn):
+        from zkteco_hr.attendance_engine.schedule_resolver import clear_all_employee_schedules
+
+        list_fn.return_value = ["E-1", "E-2"]
+        clear_fn.side_effect = [
+            {
+                "ok": True,
+                "employee": "E-1",
+                "cancelled_assignments": ["SA-1"],
+                "deleted_assignments": ["SA-1"],
+                "deleted_ssas": ["SSA-1"],
+                "disabled_ssas": [],
+                "deleted_flags": 2,
+            },
+            {
+                "ok": True,
+                "employee": "E-2",
+                "cancelled_assignments": [],
+                "deleted_assignments": ["SA-2"],
+                "deleted_ssas": [],
+                "disabled_ssas": ["SSA-2"],
+                "deleted_flags": 1,
+            },
+        ]
+
+        result = clear_all_employee_schedules()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["employee_count"], 2)
+        self.assertEqual(result["cleared_count"], 2)
+        self.assertEqual(result["cancelled_assignments"], 1)
+        self.assertEqual(result["deleted_assignments"], 2)
+        self.assertEqual(result["deleted_ssas"], 1)
+        self.assertEqual(result["disabled_ssas"], 1)
+        self.assertEqual(result["deleted_flags"], 3)
+
+    @patch("zkteco_hr.attendance_engine.schedule_resolver._employees_for_schedule_clear")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.clear_employee_schedule")
+    def test_clear_all_collects_errors(self, clear_fn, list_fn):
+        from zkteco_hr.attendance_engine.schedule_resolver import clear_all_employee_schedules
+
+        list_fn.return_value = ["E-1", "E-2"]
+        clear_fn.side_effect = [
+            {
+                "ok": True,
+                "employee": "E-1",
+                "cancelled_assignments": [],
+                "deleted_assignments": [],
+                "deleted_ssas": [],
+                "disabled_ssas": [],
+                "deleted_flags": 0,
+            },
+            Exception("blocked"),
+        ]
+
+        result = clear_all_employee_schedules()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["cleared_count"], 1)
+        self.assertEqual(result["error_count"], 1)
+        self.assertEqual(result["errors"][0]["employee"], "E-2")
+
+
+class TestClearAllEmployeeSchedulesApi(unittest.TestCase):
+    def setUp(self):
+        frappe.get_roles.return_value = ["System Manager"]
+        frappe.session.user = "admin@example.com"
+        frappe.form_dict = {}
+        frappe.throw = MagicMock(side_effect=lambda msg, **kwargs: (_ for _ in ()).throw(Exception(msg)))
+
+    @patch("zkteco_hr.attendance_engine.dev_tools.preview_clear_all_employee_schedules")
+    def test_api_without_confirm_returns_preview(self, preview_fn):
+        import zkteco_hr.attendance_engine.dev_tools as dev_tools
+
+        preview_fn.return_value = {"employee_count": 12}
+        result = dev_tools.clear_all_employee_schedules_api(confirm=False)
+
+        self.assertTrue(result["needs_confirm"])
+        self.assertEqual(result["preview"]["employee_count"], 12)
+
+    @patch("zkteco_hr.attendance_engine.dev_tools.clear_all_employee_schedules")
+    def test_api_requires_confirm_phrase(self, clear_fn):
+        import zkteco_hr.attendance_engine.dev_tools as dev_tools
+
+        with self.assertRaises(Exception):
+            dev_tools.clear_all_employee_schedules_api(confirm=True, confirm_phrase="nope")
+
+        clear_fn.assert_not_called()
+
+    @patch("zkteco_hr.attendance_engine.dev_tools.clear_all_employee_schedules")
+    def test_api_with_phrase_commits(self, clear_fn):
+        import zkteco_hr.attendance_engine.dev_tools as dev_tools
+
+        clear_fn.return_value = {"ok": True, "cleared_count": 5}
+        result = dev_tools.clear_all_employee_schedules_api(
+            confirm=True,
+            confirm_phrase="CLEAR ALL SCHEDULES",
+        )
+
+        clear_fn.assert_called_once_with(include_all_active=False)
+        frappe.db.commit.assert_called()
+        self.assertTrue(result["ok"])
