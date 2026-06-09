@@ -126,4 +126,21 @@ npm install
 npm run build
 ```
 
-**Frappe Cloud deploy notes** (404 / MIME errors, sync pitfalls, cache bust): see [`docs/HR_ATTENDANCE_DEPLOY.md`](zkteco_hr/zkteco_hr/docs/HR_ATTENDANCE_DEPLOY.md).
+**Frappe Cloud deploy** (after `git push`):
+
+1. Let the site **deploy** finish (app code + `public/hr_attendance/assets/` from git).
+2. Run **Migrate** on the site (Dashboard → Migrate, or `bench --site <site> migrate`).
+   - `after_migrate` runs `sync_hr_attendance_assets` (copies bundle into `sites/assets/` when missing or `build-id.txt` changed).
+   - One-time repair patches (e.g. `resync_hr_attendance_assets_v9`) also run on migrate.
+3. Hard-refresh `/hr-attendance` (check `www/hr-attendance.html` has a new `?v=` on CSS/JS).
+
+**404 on `index.css` / MIME type `text/html`:** the asset path 404s — Frappe returns an HTML error page. Almost always fixed by **Migrate** after deploy. Full troubleshooting: [`zkteco_hr/zkteco_hr/docs/HR_ATTENDANCE_DEPLOY.md`](zkteco_hr/zkteco_hr/docs/HR_ATTENDANCE_DEPLOY.md).
+
+**Bench console repair** (if migrate is not enough):
+
+```python
+from zkteco_hr.utils.sync_hr_attendance_assets import force_sync_hr_attendance_assets
+force_sync_hr_attendance_assets()
+import frappe
+frappe.db.commit()  # not required for files; included for consistency in console
+```

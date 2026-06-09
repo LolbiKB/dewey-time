@@ -44,8 +44,10 @@ Runs on every `bench migrate` (`hooks.py` → `after_migrate`).
 
 **Rules (do not break these):**
 
-1. **If `index.js` and `index.css` are already reachable under `sites/assets/.../hr_attendance` → skip sync.**  
-   Works for a healthy bench symlink or an existing copy. Never partial-sync `assets/` through a symlink (that deletes the app bundle).
+1. **If `index.js` and `index.css` exist under `sites/assets/.../hr_attendance` and `assets/build-id.txt` matches app `public/` → skip sync.**  
+   Works for a healthy bench symlink or an up-to-date copy. Never partial-sync `assets/` through a symlink (that deletes the app bundle).
+
+   When you ship a new frontend build, `build-id.txt` changes — migrate republishes the bundle automatically.
 
 2. **If the bundle is missing** (empty dir, broken symlink, or wiped symlink target) → remove `dest` and **full `copytree`** of `public/hr_attendance/`, excluding `index.html`.  
    A dangling symlink is unlinked first; the copy is never written through a symlink.
@@ -55,7 +57,7 @@ Runs on every `bench migrate` (`hooks.py` → `after_migrate`).
 
 4. **Cache bust with a build-time literal** in `copy-html-entry.mjs` (`?v=1730123456`), not server-side template vars.
 
-One-time repair for sites that still 404 after deploy: patch `resync_hr_attendance_assets_v4` (SPA bundle) and `resync_hr_attendance_assets_v5` (branding SVG under `public/images/`).
+One-time repair for sites that still 404 after deploy: latest `resync_hr_attendance_assets_v*` patch (currently **v9**) or bench console `force_sync_hr_attendance_assets()`. Older patches: v4 (SPA bundle), v5 (branding SVG under `public/images/`).
 
 Implementation: `zkteco_hr/utils/sync_hr_attendance_assets.py`
 

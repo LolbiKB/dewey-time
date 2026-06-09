@@ -16,6 +16,39 @@ def _hr_attendance_bundle_ok(base_dir: str) -> bool:
     )
 
 
+def _read_build_id(base_dir: str) -> str | None:
+    path = os.path.join(base_dir, "assets", "build-id.txt")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = handle.read().strip()
+            return value or None
+    except OSError:
+        return None
+
+
+def _needs_hr_attendance_resync(src_dir: str, dest_dir: str) -> bool:
+    """True when sites/assets must be republished from app public/."""
+    if not os.path.lexists(dest_dir):
+        return True
+
+    try:
+        resolved = os.path.realpath(dest_dir)
+    except OSError:
+        return True
+
+    if not _hr_attendance_bundle_ok(resolved):
+        return True
+
+    src_build = _read_build_id(src_dir)
+    dest_build = _read_build_id(resolved)
+    if src_build and dest_build != src_build:
+        return True
+
+    return False
+
+
 def _remove_dest(dest_dir: str) -> None:
     if os.path.islink(dest_dir):
         os.unlink(dest_dir)
@@ -162,16 +195,11 @@ def sync_hr_attendance_assets():
         sync_app_branding_assets()
         return
 
+    if os.path.lexists(dest_dir) and not _needs_hr_attendance_resync(src_dir, dest_dir):
+        sync_app_branding_assets()
+        return
+
     if os.path.lexists(dest_dir):
-        try:
-            resolved = os.path.realpath(dest_dir)
-        except OSError:
-            resolved = ""
-
-        if _hr_attendance_bundle_ok(resolved):
-            sync_app_branding_assets()
-            return
-
         _remove_dest(dest_dir)
 
     if os.path.lexists(dest_dir):
