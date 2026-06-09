@@ -64,7 +64,15 @@ Seeded or historical **Employee Checkin** rows do not always produce **Attendanc
 3. Week header **`OFF_SHIFT`** chip opens the same flag review for that day.
 4. Verify rows in Desk **Attendance Flag**.
 
-**UI (`/hr-schedule`):** **Clear schedule data (dev)** — removes SSAs, Shift Assignments, Attendance Flags, and linked checkins/attendance for re-testing.
+**UI (`/hr-schedule`, System Manager):**
+
+| Dev action | What it removes |
+|------------|-----------------|
+| **Clear schedule (dev)** | One employee: SSAs, Shift Assignments, Attendance Flags, linked checkins/attendance in those windows |
+| **Clear all (dev)** | Same, for every employee with schedule data |
+| **Wipe patterns (dev)** | All **Shift Schedules (PAT)** + **Shift Types** site-wide; optionally runs **Clear all** first — full reset before bulk import |
+
+Shared PAT/FT masters are **not** deleted by Clear all alone; use **Wipe patterns** when you want import to recreate every pattern from scratch.
 
 Closeout is **idempotent for AUTO flags**: each run deletes and recreates AUTO rows for that employee/date; HR and employee-sourced flags are untouched.
 

@@ -378,7 +378,19 @@ class TestEnabledSsaGate(unittest.TestCase):
         self.assertFalse(employee_has_enabled_ssas("EMP-1"))
 
 
+class TestWeeklyScheduleEligibility(unittest.TestCase):
+    def test_is_weekly_schedule_eligible(self):
+        from zkteco_hr.attendance_engine.schedule_resolver import is_weekly_schedule_eligible
+
+        self.assertTrue(is_weekly_schedule_eligible("Full-time"))
+        self.assertTrue(is_weekly_schedule_eligible("part-time fixed"))
+        self.assertFalse(is_weekly_schedule_eligible("Part-time Flexible"))
+        self.assertFalse(is_weekly_schedule_eligible(None))
+        self.assertFalse(is_weekly_schedule_eligible(""))
+
+
 class TestScheduleApi(unittest.TestCase):
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.db.has_column", return_value=True)
     @patch("zkteco_hr.attendance_engine.schedule_api.employee_has_enabled_ssas")
     @patch("zkteco_hr.attendance_engine.schedule_resolver.add_days")
     @patch("zkteco_hr.attendance_engine.schedule_resolver.getdate")
@@ -387,11 +399,12 @@ class TestScheduleApi(unittest.TestCase):
     @patch("zkteco_hr.attendance_engine.schedule_api._employee_header")
     @patch("zkteco_hr.attendance_engine.schedule_api._require_hr_role")
     def test_apply_returns_needs_confirm_without_flag(
-        self, _role, _header, build_plan, api_getdate, resolver_getdate, resolver_add_days, has_enabled
+        self, _role, _header, build_plan, api_getdate, resolver_getdate, resolver_add_days, has_enabled, _has_col
     ):
         from zkteco_hr.attendance_engine import schedule_api
 
         has_enabled.return_value = False
+        _header.return_value = {"employment_type": "Full-time", "company": "Co"}
         build_plan.return_value = {"needs_create": True, "groups": []}
         parse = lambda value: date.fromisoformat(str(value))
         api_getdate.side_effect = parse
@@ -409,13 +422,31 @@ class TestScheduleApi(unittest.TestCase):
         self.assertTrue(result["needs_confirm"])
         self.assertIn("plan", result)
 
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.db.has_column", return_value=True)
+    @patch("zkteco_hr.attendance_engine.schedule_api.employee_has_enabled_ssas", return_value=False)
+    @patch("zkteco_hr.attendance_engine.schedule_api._employee_header")
+    @patch("zkteco_hr.attendance_engine.schedule_api._require_hr_role")
+    def test_apply_blocked_when_employment_type_ineligible(self, _role, _header, _has_enabled, _has_col):
+        from zkteco_hr.attendance_engine import schedule_api
+
+        _header.return_value = {"employment_type": "Part-time Flexible", "company": "Co"}
+
+        with self.assertRaises(Exception):
+            schedule_api.apply_weekly_schedule(
+                employee="EMP-1",
+                week_pattern=json.dumps({"frequency": "Every Week", "days": []}),
+                create_shifts_after="2026-06-02",
+            )
+
+    @patch("zkteco_hr.attendance_engine.schedule_api.frappe.db.has_column", return_value=True)
     @patch("zkteco_hr.attendance_engine.schedule_api.employee_has_enabled_ssas")
     @patch("zkteco_hr.attendance_engine.schedule_api._employee_header")
     @patch("zkteco_hr.attendance_engine.schedule_api._require_hr_role")
-    def test_apply_blocked_when_employee_has_enabled_ssa(self, _role, _header, has_enabled):
+    def test_apply_blocked_when_employee_has_enabled_ssa(self, _role, _header, has_enabled, _has_col):
         from zkteco_hr.attendance_engine import schedule_api
 
         has_enabled.return_value = True
+        _header.return_value = {"employment_type": "Full-time", "company": "Co"}
 
         with self.assertRaises(Exception):
             schedule_api.apply_weekly_schedule(

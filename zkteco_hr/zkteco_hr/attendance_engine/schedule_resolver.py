@@ -29,6 +29,22 @@ WEEKDAY_SHORT: dict[str, str] = {
 
 WEEKDAY_TO_INDEX = {day: idx for idx, day in enumerate(WEEKDAYS)}
 
+# Mirror frontend WEEKLY_SCHEDULE_EMPLOYMENT_TYPES (employeeCard.ts).
+WEEKLY_SCHEDULE_EMPLOYMENT_TYPES: tuple[str, ...] = (
+    "Full-time",
+    "Part-time Fixed",
+    "Probation",
+    "Intern",
+)
+
+
+def is_weekly_schedule_eligible(employment_type: str | None) -> bool:
+    normalized = (employment_type or "").strip().lower()
+    if not normalized:
+        return False
+    allowed = {value.lower() for value in WEEKLY_SCHEDULE_EMPLOYMENT_TYPES}
+    return normalized in allowed
+
 
 def normalize_time(value) -> str | None:
     if value is None:
@@ -56,6 +72,51 @@ def time_to_minutes(value) -> int | None:
     except Exception:
         return None
     return parsed.hour * 60 + parsed.minute
+
+
+def validate_week_pattern(week_pattern: dict) -> list[dict]:
+    """Same rules as frontend validateWeekPattern — one issue dict per day."""
+    issues: list[dict] = []
+    for row in week_pattern.get("days") or []:
+        if not row.get("works"):
+            continue
+        weekday = row.get("weekday") or "?"
+        start = normalize_time(row.get("start_time"))
+        end = normalize_time(row.get("end_time"))
+        if not start or not end:
+            issues.append(
+                {
+                    "weekday": weekday,
+                    "message": "Start and end are required when working.",
+                }
+            )
+            continue
+        if start >= end:
+            issues.append(
+                {
+                    "weekday": weekday,
+                    "message": "End must be after start (same-day shifts only).",
+                }
+            )
+        lunch_start = normalize_time(row.get("lunch_start"))
+        lunch_end = normalize_time(row.get("lunch_end"))
+        if (lunch_start and not lunch_end) or (not lunch_start and lunch_end):
+            issues.append(
+                {
+                    "weekday": weekday,
+                    "message": "Set both lunch start and end, or leave both empty.",
+                }
+            )
+            continue
+        if lunch_start and lunch_end:
+            if lunch_start < start or lunch_end > end or lunch_start >= lunch_end:
+                issues.append(
+                    {
+                        "weekday": weekday,
+                        "message": "Lunch must fall inside the shift window.",
+                    }
+                )
+    return issues
 
 
 def time_to_hhmm(value) -> str:
@@ -963,4 +1024,147 @@ def clear_all_employee_schedules(*, include_all_active: bool = False) -> dict:
         "errors": errors[:_CLEAR_SAMPLE_CAP],
         "sample_cleared_employees": cleared_employees[:_CLEAR_SAMPLE_CAP],
         **totals,
+    }
+
+
+CLEAR_SITE_PATTERNS_CONFIRM_PHRASE = "CLEAR SITE PATTERNS"
+
+
+def _delete_shift_schedule(name: str) -> str:
+    doc = frappe.get_doc("Shift Schedule", name)
+    if doc.docstatus == 1:
+        doc.cancel()
+    frappe.delete_doc("Shift Schedule", name, force=1)
+    return name
+
+
+def _delete_shift_type(name: str) -> str:
+    frappe.delete_doc("Shift Type", name, force=1)
+    return name
+
+
+def _sweep_remaining_shift_links() -> dict:
+    """Remove any Shift Assignments / SSAs still on site after per-employee clear."""
+    deleted_assignments: list[str] = []
+    assignment_errors: list[dict] = []
+    deleted_ssas: list[str] = []
+    disabled_ssas: list[str] = []
+    ssa_errors: list[dict] = []
+
+    if frappe.db.table_exists("Shift Assignment"):
+        for name in frappe.get_all("Shift Assignment", pluck="name") or []:
+            try:
+                _cancelled, deleted = _delete_shift_assignment(name)
+                deleted_assignments.append(deleted)
+            except Exception as exc:
+                assignment_errors.append({"name": name, "error": str(exc)})
+
+    if frappe.db.table_exists("Shift Schedule Assignment"):
+        for name in frappe.get_all("Shift Schedule Assignment", pluck="name") or []:
+            try:
+                deleted, disabled = _delete_ssa(name)
+                if deleted:
+                    deleted_ssas.append(deleted)
+                if disabled:
+                    disabled_ssas.append(disabled)
+            except Exception as exc:
+                ssa_errors.append({"name": name, "error": str(exc)})
+
+    return {
+        "deleted_assignments": deleted_assignments,
+        "assignment_errors": assignment_errors,
+        "deleted_ssas": deleted_ssas,
+        "disabled_ssas": disabled_ssas,
+        "ssa_errors": ssa_errors,
+    }
+
+
+def preview_clear_site_schedule_patterns(*, clear_employee_data: bool = True) -> dict:
+    """Dev: counts before wiping shared Shift Schedule (PAT) and Shift Type masters."""
+    employee_preview = (
+        preview_clear_all_employee_schedules() if clear_employee_data else None
+    )
+    shift_schedule_count = (
+        frappe.db.count("Shift Schedule") if frappe.db.table_exists("Shift Schedule") else 0
+    )
+    shift_type_count = (
+        frappe.db.count("Shift Type") if frappe.db.table_exists("Shift Type") else 0
+    )
+    remaining_sa = (
+        frappe.db.count("Shift Assignment") if frappe.db.table_exists("Shift Assignment") else 0
+    )
+    remaining_ssa = (
+        frappe.db.count("Shift Schedule Assignment")
+        if frappe.db.table_exists("Shift Schedule Assignment")
+        else 0
+    )
+
+    sample_schedules: list[str] = []
+    if frappe.db.table_exists("Shift Schedule"):
+        sample_schedules = frappe.get_all("Shift Schedule", pluck="name", limit=_CLEAR_SAMPLE_CAP) or []
+
+    sample_types: list[str] = []
+    if frappe.db.table_exists("Shift Type"):
+        sample_types = frappe.get_all("Shift Type", pluck="name", limit=_CLEAR_SAMPLE_CAP) or []
+
+    return {
+        "clear_employee_data": clear_employee_data,
+        "employee_preview": employee_preview,
+        "shift_schedule_count": shift_schedule_count,
+        "shift_type_count": shift_type_count,
+        "remaining_shift_assignment_count": remaining_sa,
+        "remaining_ssa_count": remaining_ssa,
+        "sample_shift_schedules": sample_schedules,
+        "sample_shift_types": sample_types,
+        "confirm_phrase": CLEAR_SITE_PATTERNS_CONFIRM_PHRASE,
+    }
+
+
+def clear_site_schedule_patterns(*, clear_employee_data: bool = True) -> dict:
+    """
+    Dev: wipe site Shift Schedule + Shift Type masters after clearing employee links.
+    When clear_employee_data is True, runs clear_all_employee_schedules first.
+    """
+    employee_clear: dict | None = None
+    if clear_employee_data:
+        employee_clear = clear_all_employee_schedules()
+
+    sweep = _sweep_remaining_shift_links()
+
+    deleted_shift_schedules: list[str] = []
+    shift_schedule_errors: list[dict] = []
+    if frappe.db.table_exists("Shift Schedule"):
+        for name in frappe.get_all("Shift Schedule", pluck="name") or []:
+            try:
+                deleted_shift_schedules.append(_delete_shift_schedule(name))
+            except Exception as exc:
+                shift_schedule_errors.append({"name": name, "error": str(exc)})
+
+    deleted_shift_types: list[str] = []
+    shift_type_errors: list[dict] = []
+    if frappe.db.table_exists("Shift Type"):
+        for name in frappe.get_all("Shift Type", pluck="name") or []:
+            try:
+                deleted_shift_types.append(_delete_shift_type(name))
+            except Exception as exc:
+                shift_type_errors.append({"name": name, "error": str(exc)})
+
+    error_count = (
+        len(sweep.get("assignment_errors") or [])
+        + len(sweep.get("ssa_errors") or [])
+        + len(shift_schedule_errors)
+        + len(shift_type_errors)
+        + int((employee_clear or {}).get("error_count") or 0)
+    )
+
+    return {
+        "ok": error_count == 0,
+        "clear_employee_data": clear_employee_data,
+        "employee_clear": employee_clear,
+        "sweep": sweep,
+        "deleted_shift_schedules": deleted_shift_schedules,
+        "deleted_shift_types": deleted_shift_types,
+        "shift_schedule_errors": shift_schedule_errors[:_CLEAR_SAMPLE_CAP],
+        "shift_type_errors": shift_type_errors[:_CLEAR_SAMPLE_CAP],
+        "error_count": error_count,
     }

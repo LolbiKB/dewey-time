@@ -300,3 +300,98 @@ class TestClearAllEmployeeSchedulesApi(unittest.TestCase):
         clear_fn.assert_called_once_with(include_all_active=False)
         frappe.db.commit.assert_called()
         self.assertTrue(result["ok"])
+
+
+class TestClearSiteSchedulePatterns(unittest.TestCase):
+    def setUp(self):
+        frappe.db.table_exists = MagicMock(return_value=True)
+        frappe.get_all = MagicMock(return_value=[])
+        frappe.delete_doc = MagicMock()
+        frappe.get_doc = MagicMock()
+
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.preview_clear_all_employee_schedules")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.frappe.db.count", return_value=3)
+    def test_preview_includes_pattern_counts(self, _count, employee_preview):
+        from zkteco_hr.attendance_engine.schedule_resolver import preview_clear_site_schedule_patterns
+
+        employee_preview.return_value = {"employee_count": 2}
+        frappe.get_all.side_effect = lambda doctype, **kwargs: (
+            ["PAT-1", "PAT-2"] if doctype == "Shift Schedule" else ["FT-1"]
+        )
+
+        result = preview_clear_site_schedule_patterns(clear_employee_data=True)
+
+        self.assertEqual(result["shift_schedule_count"], 3)
+        self.assertEqual(result["shift_type_count"], 3)
+        self.assertEqual(result["sample_shift_schedules"], ["PAT-1", "PAT-2"])
+        employee_preview.assert_called_once()
+
+    @patch("zkteco_hr.attendance_engine.schedule_resolver._delete_shift_type")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver._delete_shift_schedule")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver._sweep_remaining_shift_links")
+    @patch("zkteco_hr.attendance_engine.schedule_resolver.clear_all_employee_schedules")
+    def test_clear_deletes_patterns_after_employee_clear(
+        self, clear_all, sweep, delete_schedule, delete_type
+    ):
+        from zkteco_hr.attendance_engine.schedule_resolver import clear_site_schedule_patterns
+
+        clear_all.return_value = {"ok": True, "cleared_count": 1, "error_count": 0}
+        sweep.return_value = {
+            "deleted_assignments": [],
+            "assignment_errors": [],
+            "deleted_ssas": [],
+            "disabled_ssas": [],
+            "ssa_errors": [],
+        }
+
+        def get_all_side_effect(doctype, **kwargs):
+            if doctype == "Shift Schedule":
+                return ["PAT-A"]
+            if doctype == "Shift Type":
+                return ["FT-A"]
+            return []
+
+        frappe.get_all.side_effect = get_all_side_effect
+        delete_schedule.return_value = "PAT-A"
+        delete_type.return_value = "FT-A"
+
+        result = clear_site_schedule_patterns(clear_employee_data=True)
+
+        clear_all.assert_called_once()
+        delete_schedule.assert_called_once_with("PAT-A")
+        delete_type.assert_called_once_with("FT-A")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["deleted_shift_schedules"], ["PAT-A"])
+        self.assertEqual(result["deleted_shift_types"], ["FT-A"])
+
+
+class TestClearSiteSchedulePatternsApi(unittest.TestCase):
+    def setUp(self):
+        frappe.get_roles.return_value = ["System Manager"]
+        frappe.session.user = "admin@example.com"
+        frappe.form_dict = {}
+        frappe.throw = MagicMock(side_effect=lambda msg, **kwargs: (_ for _ in ()).throw(Exception(msg)))
+
+    @patch("zkteco_hr.attendance_engine.dev_tools.preview_clear_site_schedule_patterns")
+    def test_api_without_confirm_returns_preview(self, preview_fn):
+        import zkteco_hr.attendance_engine.dev_tools as dev_tools
+
+        preview_fn.return_value = {"shift_schedule_count": 4}
+        result = dev_tools.clear_site_schedule_patterns_api(confirm=False)
+
+        self.assertTrue(result["needs_confirm"])
+        self.assertEqual(result["preview"]["shift_schedule_count"], 4)
+
+    @patch("zkteco_hr.attendance_engine.dev_tools.clear_site_schedule_patterns")
+    def test_api_with_phrase_commits(self, clear_fn):
+        import zkteco_hr.attendance_engine.dev_tools as dev_tools
+
+        clear_fn.return_value = {"ok": True, "deleted_shift_schedules": ["PAT-1"]}
+        result = dev_tools.clear_site_schedule_patterns_api(
+            confirm=True,
+            confirm_phrase="CLEAR SITE PATTERNS",
+        )
+
+        clear_fn.assert_called_once_with(clear_employee_data=True)
+        frappe.db.commit.assert_called()
+        self.assertTrue(result["ok"])

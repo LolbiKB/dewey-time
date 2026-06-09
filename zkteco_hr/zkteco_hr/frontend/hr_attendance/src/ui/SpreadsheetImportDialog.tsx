@@ -50,6 +50,7 @@ type ParsedRow = {
   email: string;
   employee: string | null;
   employee_name: string | null;
+  employment_type?: string | null;
   matched: boolean;
   am_from: string | null;
   am_to: string | null;
@@ -141,6 +142,9 @@ const ISSUE_CODE_LABELS: Record<string, string> = {
   PM_ONLY: "PM only",
   CONTINUOUS_SHIFT: "Continuous",
   AM_ONLY: "AM only",
+  INELIGIBLE_EMPLOYMENT_TYPE: "Employment type",
+  ACTIVE_SSA_EXISTS: "Active SSA",
+  INVALID_WEEK_PATTERN: "Pattern invalid",
 };
 
 // ---------------------------------------------------------------------------

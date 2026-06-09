@@ -122,6 +122,9 @@ import if the employee matches Frappe.
 | `END_BEFORE_START` | error | End time ≤ start | Check am_to / pm_from / pm_to order |
 | `NO_WORKING_DAYS` | error | All weekdays in days_off | Employee would never work |
 | `GARBAGE_ROW` | error | Row looks like failed normalisation | Drop or re-normalise source row |
+| `INELIGIBLE_EMPLOYMENT_TYPE` | error | Not Full-time / Part-time Fixed / Probation / Intern | Same gate as Weekly Schedule wizard — fix in Employee master or exclude row |
+| `ACTIVE_SSA_EXISTS` | error | Employee already has active SSA | Clear schedule (dev) or disable SSAs in Desk first |
+| `INVALID_WEEK_PATTERN` | error | Shift/lunch times invalid on a weekday | Fix times to match Weekly Schedule validation |
 | `MIDNIGHT_AS_NOON` | warning | `00:00` in am_to or pm_from | Use `12:00` for noon lunch end |
 | `INVALID_EMAIL` | warning | Malformed email column | Single address; no commas in field |
 | `INVALID_DAYS_OFF_TOKEN` | warning | Unrecognised weekday token | Full names: `Saturday`, not `Sat` |

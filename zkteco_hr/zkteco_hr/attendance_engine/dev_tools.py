@@ -10,10 +10,13 @@ from zkteco_hr.attendance_engine.hr_calendar import _require_hr_role
 from zkteco_hr.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
 from zkteco_hr.attendance_engine.schedule_resolver import (
     CLEAR_ALL_CONFIRM_PHRASE,
+    CLEAR_SITE_PATTERNS_CONFIRM_PHRASE,
     clear_all_employee_schedules,
     clear_employee_schedule,
+    clear_site_schedule_patterns,
     preview_clear_all_employee_schedules,
     preview_clear_employee_schedule,
+    preview_clear_site_schedule_patterns,
 )
 
 VALID_MODES = frozenset({"intraday", "closeout", "both"})
@@ -207,6 +210,50 @@ def clear_all_employee_schedules_api(confirm=None, confirm_phrase=None, include_
 
     try:
         result = clear_all_employee_schedules(include_all_active=include_all_active)
+        frappe.db.commit()
+        return result
+    except Exception:
+        frappe.db.rollback()
+        raise
+
+
+@frappe.whitelist()
+def preview_clear_site_schedule_patterns_api(clear_employee_data=None):
+    """Dev-only: PAT / Shift Type counts before full site pattern wipe."""
+    _require_system_manager_for_clear()
+    clear_first = _parse_include_all_active(
+        clear_employee_data
+        if clear_employee_data is not None
+        else frappe.form_dict.get("clear_employee_data", 1)
+    )
+    return preview_clear_site_schedule_patterns(clear_employee_data=clear_first)
+
+
+@frappe.whitelist()
+def clear_site_schedule_patterns_api(confirm=None, confirm_phrase=None, clear_employee_data=None):
+    """Dev-only: delete all Shift Schedules and Shift Types (optionally employee data first)."""
+    _require_system_manager_for_clear()
+
+    clear_first = _parse_include_all_active(
+        clear_employee_data
+        if clear_employee_data is not None
+        else frappe.form_dict.get("clear_employee_data", 1)
+    )
+
+    confirm_value = confirm
+    if confirm_value is None:
+        confirm_value = frappe.form_dict.get("confirm")
+
+    if not _parse_confirm(confirm_value):
+        preview = preview_clear_site_schedule_patterns(clear_employee_data=clear_first)
+        return {"needs_confirm": True, "preview": preview}
+
+    phrase = (confirm_phrase or frappe.form_dict.get("confirm_phrase") or "").strip()
+    if phrase != CLEAR_SITE_PATTERNS_CONFIRM_PHRASE:
+        frappe.throw(f'Type "{CLEAR_SITE_PATTERNS_CONFIRM_PHRASE}" to confirm')
+
+    try:
+        result = clear_site_schedule_patterns(clear_employee_data=clear_first)
         frappe.db.commit()
         return result
     except Exception:

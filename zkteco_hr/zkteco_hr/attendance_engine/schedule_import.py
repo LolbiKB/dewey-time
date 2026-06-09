@@ -22,6 +22,13 @@ from typing import Literal
 
 import frappe
 
+from zkteco_hr.attendance_engine.schedule_resolver import (
+    WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
+    employee_has_enabled_ssas,
+    is_weekly_schedule_eligible,
+    validate_week_pattern,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -66,6 +73,9 @@ ISSUE_CODES = {
     "PM_ONLY": "info",
     "CONTINUOUS_SHIFT": "info",
     "AM_ONLY": "info",
+    "INELIGIBLE_EMPLOYMENT_TYPE": "error",
+    "ACTIVE_SSA_EXISTS": "error",
+    "INVALID_WEEK_PATTERN": "error",
 }
 
 AI_SUGGESTIONS: dict[str, str] = {
@@ -85,6 +95,15 @@ AI_SUGGESTIONS: dict[str, str] = {
     "PM_ONLY": "Afternoon-only employee — am_from/am_to should both be off.",
     "CONTINUOUS_SHIFT": "Long span without lunch — am_to/pm_from are off; using am_from→pm_to.",
     "AM_ONLY": "Morning-only employee — pm_from/pm_to should both be off.",
+    "INELIGIBLE_EMPLOYMENT_TYPE": (
+        "Employment type must be Full-time, Part-time Fixed, Probation, or Intern — "
+        "same as Weekly Schedule wizard."
+    ),
+    "ACTIVE_SSA_EXISTS": (
+        "Employee already has an active Shift Schedule Assignment. "
+        "Use Clear schedule (dev) or disable SSAs in Desk before importing."
+    ),
+    "INVALID_WEEK_PATTERN": "Fix shift times/lunch on the affected weekday(s) before import.",
 }
 
 
@@ -113,6 +132,7 @@ class ParsedScheduleRow:
     email: str
     employee: str | None = None
     employee_name: str | None = None
+    employment_type: str | None = None
     matched: bool = False
     am_from: str | None = None
     am_to: str | None = None
@@ -136,6 +156,7 @@ class ParsedScheduleRow:
             "email": self.email,
             "employee": self.employee,
             "employee_name": self.employee_name,
+            "employment_type": self.employment_type,
             "matched": self.matched,
             "am_from": self.am_from,
             "am_to": self.am_to,
@@ -441,16 +462,24 @@ def _find_data_start(rows: list[list]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _lookup_employee(id_card: str, email: str = "") -> tuple[str | None, str | None]:
+def _employee_lookup_fields() -> list[str]:
+    fields = ["name", "employee_name"]
+    if frappe.db.has_column("Employee", "employment_type"):
+        fields.append("employment_type")
+    return fields
+
+
+def _lookup_employee(id_card: str, email: str = "") -> tuple[str | None, str | None, str | None]:
+    fields = _employee_lookup_fields()
     for fieldname in ("employee_number", "attendance_device_id"):
         result = frappe.db.get_value(
             "Employee",
             {fieldname: id_card, "status": "Active"},
-            ["name", "employee_name"],
+            fields,
             as_dict=True,
         )
         if result:
-            return result["name"], result["employee_name"]
+            return result["name"], result["employee_name"], result.get("employment_type")
 
     if email:
         cleaned = email.strip().strip('"')
@@ -458,13 +487,77 @@ def _lookup_employee(id_card: str, email: str = "") -> tuple[str | None, str | N
             result = frappe.db.get_value(
                 "Employee",
                 {email_field: cleaned, "status": "Active"},
-                ["name", "employee_name"],
+                fields,
                 as_dict=True,
             )
             if result:
-                return result["name"], result["employee_name"]
+                return result["name"], result["employee_name"], result.get("employment_type")
 
-    return None, None
+    return None, None, None
+
+
+def _allowed_employment_types_label() -> str:
+    return ", ".join(WEEKLY_SCHEDULE_EMPLOYMENT_TYPES)
+
+
+def _apply_employee_schedule_gates(
+    row: ParsedScheduleRow,
+    employment_type: str | None,
+    issues: list[ImportIssue],
+) -> None:
+    """Same blockers as manual Weekly Schedule save (eligibility + no active SSA)."""
+    if not row.employee:
+        return
+
+    if not is_weekly_schedule_eligible(employment_type):
+        if not (employment_type or "").strip():
+            message = (
+                f"Employee has no employment type set. "
+                f"Weekly Schedule supports {_allowed_employment_types_label()} only."
+            )
+        else:
+            message = (
+                f"Employment type {employment_type!r} is not eligible for Weekly Schedule. "
+                f"Supported: {_allowed_employment_types_label()}."
+            )
+        issues.append(
+            ImportIssue(
+                code="INELIGIBLE_EMPLOYMENT_TYPE",
+                severity="error",
+                message=message,
+                field="employment_type",
+            )
+        )
+
+    if employee_has_enabled_ssas(row.employee):
+        issues.append(
+            ImportIssue(
+                code="ACTIVE_SSA_EXISTS",
+                severity="error",
+                message=(
+                    "This employee already has an active Shift Schedule Assignment. "
+                    "Clear schedule data (dev) or disable SSAs in Desk before importing."
+                ),
+                field="employee_id",
+            )
+        )
+
+
+def _apply_week_pattern_validation(
+    week_pattern: dict | None,
+    issues: list[ImportIssue],
+) -> None:
+    if not week_pattern:
+        return
+    for item in validate_week_pattern(week_pattern):
+        issues.append(
+            ImportIssue(
+                code="INVALID_WEEK_PATTERN",
+                severity="error",
+                message=f"{item['weekday']}: {item['message']}",
+                field="week_pattern",
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -596,12 +689,13 @@ def _parse_row(raw: list, row_number: int) -> ParsedScheduleRow:
             ))
             week_pattern = None
     row.week_pattern = week_pattern
+    _apply_week_pattern_validation(week_pattern, issues)
 
-    employee, employee_name = (None, None)
+    employee, employee_name, employment_type = (None, None, None)
     if id_card:
-        employee, employee_name = _lookup_employee(id_card, email)
+        employee, employee_name, employment_type = _lookup_employee(id_card, email)
     elif email and "@" in email:
-        employee, employee_name = _lookup_employee("", email)
+        employee, employee_name, employment_type = _lookup_employee("", email)
 
     if not id_card:
         if employee:
@@ -621,7 +715,10 @@ def _parse_row(raw: list, row_number: int) -> ParsedScheduleRow:
 
     row.employee = employee
     row.employee_name = employee_name
+    row.employment_type = employment_type
     row.matched = bool(employee)
+
+    _apply_employee_schedule_gates(row, employment_type, issues)
 
     if id_card and not employee:
         issues.append(ImportIssue(

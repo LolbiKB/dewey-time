@@ -22,6 +22,8 @@ from zkteco_hr.attendance_engine.schedule_resolver import (
     create_shift_schedule,
     create_shift_type,
     employee_has_enabled_ssas,
+    is_weekly_schedule_eligible,
+    validate_week_pattern,
     DEFAULT_SHIFT_GENERATION_DAYS,
     generate_shifts_for_ssa,
     group_week_pattern,
@@ -63,12 +65,10 @@ def _employee_header(employee: str) -> dict:
     if not frappe.db.exists("Employee", employee):
         frappe.throw(f"Employee {employee} not found")
 
-    row = frappe.db.get_value(
-        "Employee",
-        employee,
-        ["employee_name", "company", "branch", "status"],
-        as_dict=True,
-    ) or {}
+    fields = ["employee_name", "company", "branch", "status"]
+    if frappe.db.has_column("Employee", "employment_type"):
+        fields.append("employment_type")
+    row = frappe.db.get_value("Employee", employee, fields, as_dict=True) or {}
     if (row.get("status") or "").lower() in ("inactive", "left"):
         frappe.throw(f"Employee {employee} is inactive")
 
@@ -77,6 +77,7 @@ def _employee_header(employee: str) -> dict:
         "employee_name": row.get("employee_name") or employee,
         "company": row.get("company"),
         "branch": row.get("branch"),
+        "employment_type": row.get("employment_type"),
     }
 
 
@@ -322,6 +323,30 @@ def apply_weekly_schedule(
 
     pattern = _parse_week_pattern(week_pattern or frappe.form_dict.get("week_pattern"))
     employee_info = _employee_header(employee)
+
+    employment_type = employee_info.get("employment_type")
+    if frappe.db.has_column("Employee", "employment_type") and not is_weekly_schedule_eligible(
+        employment_type
+    ):
+        if not (employment_type or "").strip():
+            frappe.throw(
+                "This employee has no employment type set. "
+                "Weekly Schedule supports Full-time, Part-time Fixed, Probation, and Intern only.",
+                exc=frappe.ValidationError,
+            )
+        frappe.throw(
+            f"This employee ({employment_type}) is not eligible for Weekly Schedule. "
+            "Choose Full-time, Part-time Fixed, Probation, or Intern.",
+            exc=frappe.ValidationError,
+        )
+
+    pattern_issues = validate_week_pattern(pattern)
+    if pattern_issues:
+        first = pattern_issues[0]
+        frappe.throw(
+            f"{first.get('weekday')}: {first.get('message')}",
+            exc=frappe.ValidationError,
+        )
 
     if employee_has_enabled_ssas(employee):
         frappe.throw(

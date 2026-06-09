@@ -62,6 +62,7 @@ import {
   WeeklySchedulePageSkeleton,
 } from "@/ui/AttendanceLoading";
 import { ClearAllSchedulesDialog } from "@/ui/ClearAllSchedulesDialog";
+import { ClearSitePatternsDialog } from "@/ui/ClearSitePatternsDialog";
 import { ClearEmployeeScheduleDialog } from "@/ui/ClearEmployeeScheduleDialog";
 import { ScheduleEmployeePicker } from "@/ui/ScheduleEmployeePicker";
 import {
@@ -348,6 +349,13 @@ export function WeeklySchedulePage() {
                       }}
                     />
                     <ClearAllSchedulesDialog
+                      triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                      onSuccess={() => {
+                        setSaveSuccessUrl(null);
+                        void refreshContext();
+                      }}
+                    />
+                    <ClearSitePatternsDialog
                       triggerClassName="h-9 w-full shrink-0 sm:w-auto"
                       onSuccess={() => {
                         setSaveSuccessUrl(null);

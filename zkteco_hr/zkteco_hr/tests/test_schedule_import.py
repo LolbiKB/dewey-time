@@ -17,10 +17,33 @@ def _csv_b64(content: str) -> str:
     return base64.b64encode(content.encode("utf-8")).decode("ascii")
 
 
-def _parse(content: str) -> dict:
-    with patch.object(mod.frappe, "db") as mock_db:
-        mock_db.get_value.return_value = None
-        return mod.parse_schedule_upload(_csv_b64(content), "test.csv")
+def _parse(
+    content: str,
+    *,
+    match_employee: str | None = None,
+    employment_type: str = "Full-time",
+    has_ssa: bool = False,
+) -> dict:
+    with patch.object(mod, "employee_has_enabled_ssas", return_value=has_ssa):
+        with patch.object(mod.frappe, "db") as mock_db:
+            mock_db.has_column.return_value = True
+
+            def get_value(doctype, filters, fields, as_dict=False):
+                if doctype != "Employee" or not match_employee:
+                    return None
+                if isinstance(filters, dict) and filters.get("status") == "Active":
+                    badge = filters.get("employee_number") or filters.get("attendance_device_id")
+                    email = filters.get("company_email") or filters.get("personal_email")
+                    if badge or email:
+                        return {
+                            "name": match_employee,
+                            "employee_name": "Test User",
+                            "employment_type": employment_type,
+                        }
+                return None
+
+            mock_db.get_value.side_effect = get_value
+            return mod.parse_schedule_upload(_csv_b64(content), "test.csv")
 
 
 HEADER = "employee_id,email,am_from,am_to,pm_from,pm_to,days_off\n"
@@ -114,6 +137,35 @@ class TestScheduleImportValidation(unittest.TestCase):
         fb = result["feedback_rows"][0]
         self.assertIn("suggestion", fb)
         self.assertIn("code", fb)
+
+    def test_ineligible_employment_type_blocks_import(self):
+        result = _parse(
+            HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:30,12:00,13:00,17:00,Sunday\n",
+            match_employee="EMP-1",
+            employment_type="Part-time Flexible",
+        )
+        row = result["rows"][0]
+        self.assertFalse(row["importable"])
+        self.assertTrue(any(i["code"] == "INELIGIBLE_EMPLOYMENT_TYPE" for i in row["issues"]))
+
+    def test_active_ssa_blocks_import(self):
+        result = _parse(
+            HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:30,12:00,13:00,17:00,Sunday\n",
+            match_employee="EMP-1",
+            has_ssa=True,
+        )
+        row = result["rows"][0]
+        self.assertFalse(row["importable"])
+        self.assertTrue(any(i["code"] == "ACTIVE_SSA_EXISTS" for i in row["issues"]))
+
+    def test_eligible_employee_can_import(self):
+        result = _parse(
+            HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:30,12:00,13:00,17:00,Sunday\n",
+            match_employee="EMP-1",
+            employment_type="Full-time",
+        )
+        row = result["rows"][0]
+        self.assertTrue(row["importable"])
 
 
 if __name__ == "__main__":

@@ -187,6 +187,36 @@ export type ClearAllSchedulesResult = {
 
 export type ClearAllSchedulesResponse = ClearAllSchedulesNeedsConfirm | ClearAllSchedulesResult;
 
+export type ClearSitePatternsPreview = {
+  clear_employee_data: boolean;
+  employee_preview: ClearAllSchedulesPreview | null;
+  shift_schedule_count: number;
+  shift_type_count: number;
+  remaining_shift_assignment_count: number;
+  remaining_ssa_count: number;
+  sample_shift_schedules: string[];
+  sample_shift_types: string[];
+  confirm_phrase: string;
+};
+
+export type ClearSitePatternsNeedsConfirm = {
+  needs_confirm: true;
+  preview: ClearSitePatternsPreview;
+};
+
+export type ClearSitePatternsResult = {
+  ok: boolean;
+  clear_employee_data: boolean;
+  employee_clear: ClearAllSchedulesResult | null;
+  deleted_shift_schedules: string[];
+  deleted_shift_types: string[];
+  shift_schedule_errors: Array<{ name: string; error: string }>;
+  shift_type_errors: Array<{ name: string; error: string }>;
+  error_count: number;
+};
+
+export type ClearSitePatternsResponse = ClearSitePatternsNeedsConfirm | ClearSitePatternsResult;
+
 export function emptyWeekPattern(): WeekPattern {
   return {
     frequency: "Every Week",
