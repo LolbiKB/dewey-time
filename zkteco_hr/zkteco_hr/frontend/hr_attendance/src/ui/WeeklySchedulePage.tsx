@@ -63,6 +63,10 @@ import {
 } from "@/ui/AttendanceLoading";
 import { ClearEmployeeScheduleDialog } from "@/ui/ClearEmployeeScheduleDialog";
 import { ScheduleEmployeePicker } from "@/ui/ScheduleEmployeePicker";
+import {
+  SpreadsheetImportDialog,
+  SpreadsheetImportTrigger,
+} from "@/ui/SpreadsheetImportDialog";
 import { WeekPatternGroupEditor } from "@/ui/WeekPatternGroupEditor";
 import {
   WeeklyScheduleTemplatePickerDialog,
@@ -85,6 +89,7 @@ export function WeeklySchedulePage() {
   >([]);
   const [saveSuccessUrl, setSaveSuccessUrl] = useState<string | null>(null);
   const [templateKey, setTemplateKey] = useState<string>("manual");
+  const [importOpen, setImportOpen] = useState(false);
   const appliedTemplateFingerprint = useRef<string | null>(null);
   const [employeeLoading, setEmployeeLoading] = useState(false);
 
@@ -326,6 +331,10 @@ export function WeeklySchedulePage() {
                       className="h-9 w-full sm:w-64"
                       compact
                     />
+                    <SpreadsheetImportTrigger
+                      onClick={() => setImportOpen(true)}
+                      className="w-full sm:w-auto"
+                    />
                     <ClearEmployeeScheduleDialog
                       employee={scheduleEmployeeId}
                       employeeRow={selectedEmployee}
@@ -532,6 +541,13 @@ export function WeeklySchedulePage() {
           ) : null}
         </div>
       </div>
+
+      <SpreadsheetImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        defaultEffectiveFrom={effectiveFrom}
+        onSuccess={() => void refreshContext()}
+      />
 
       <SchedulePlanPreviewDialog
         open={previewOpen}
