@@ -19,7 +19,10 @@ import frappe
 import requests
 from frappe import _
 
-ALLOWED_ROLES = {"System Manager"}
+# "ADMS Admin" is a custom website-only role created by
+# patches.add_adms_admin_role — assign it in Desk → User instead of handing
+# out System Manager. The bridge admin list is still the second gate.
+ALLOWED_ROLES = {"System Manager", "ADMS Admin"}
 EXCHANGE_TIMEOUT_SECONDS = 20
 
 

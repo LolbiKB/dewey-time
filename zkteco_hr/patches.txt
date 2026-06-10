@@ -12,3 +12,4 @@ zkteco_hr.patches.resync_hr_attendance_assets_v7
 zkteco_hr.patches.remove_zkteco_hr_desk_workspace
 zkteco_hr.patches.resync_hr_attendance_assets_v8
 zkteco_hr.patches.resync_hr_attendance_assets_v9
+zkteco_hr.patches.add_adms_admin_role

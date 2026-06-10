@@ -157,7 +157,7 @@ class TestClearEmployeeScheduleApi(unittest.TestCase):
         frappe.session.user = "hr@example.com"
         frappe.db.exists.return_value = True
         frappe.form_dict = {}
-        frappe.throw = MagicMock(side_effect=lambda msg, **kwargs: (_ for _ in ()).throw(Exception(msg)))
+        frappe.throw = MagicMock(side_effect=lambda msg, *args, **kwargs: (_ for _ in ()).throw(Exception(msg)))
 
     @patch("zkteco_hr.attendance_engine.dev_tools.preview_clear_employee_schedule")
     def test_api_without_confirm_returns_preview(self, preview_fn):
@@ -266,7 +266,7 @@ class TestClearAllEmployeeSchedulesApi(unittest.TestCase):
         frappe.get_roles.return_value = ["System Manager"]
         frappe.session.user = "admin@example.com"
         frappe.form_dict = {}
-        frappe.throw = MagicMock(side_effect=lambda msg, **kwargs: (_ for _ in ()).throw(Exception(msg)))
+        frappe.throw = MagicMock(side_effect=lambda msg, *args, **kwargs: (_ for _ in ()).throw(Exception(msg)))
 
     @patch("zkteco_hr.attendance_engine.dev_tools.preview_clear_all_employee_schedules")
     def test_api_without_confirm_returns_preview(self, preview_fn):
@@ -370,7 +370,7 @@ class TestClearSiteSchedulePatternsApi(unittest.TestCase):
         frappe.get_roles.return_value = ["System Manager"]
         frappe.session.user = "admin@example.com"
         frappe.form_dict = {}
-        frappe.throw = MagicMock(side_effect=lambda msg, **kwargs: (_ for _ in ()).throw(Exception(msg)))
+        frappe.throw = MagicMock(side_effect=lambda msg, *args, **kwargs: (_ for _ in ()).throw(Exception(msg)))
 
     @patch("zkteco_hr.attendance_engine.dev_tools.preview_clear_site_schedule_patterns")
     def test_api_without_confirm_returns_preview(self, preview_fn):
