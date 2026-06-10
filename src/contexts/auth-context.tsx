@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { isFrappeMode } from '@/lib/auth-mode'
+import {
+  getFrappeToken,
+  getFrappeTokenState,
+  subscribeFrappeToken,
+} from '@/lib/frappe-token'
 import type { User, Session } from '@supabase/supabase-js'
 
 export type AdminRole = 'admin' | 'super_admin'
@@ -48,7 +54,65 @@ async function checkAdminStatus(
   }
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+/**
+ * Frappe-mode provider: the Frappe session is the credential. A successful
+ * token exchange (zkteco_hr get_dashboard_token → bridge) already proves the
+ * caller is a logged-in Frappe admin AND a bridge admin (admin_users), so the
+ * exchange response IS the auth state — no supabase.auth anywhere (it is a
+ * throwing Proxy in this mode). Auth failures redirect to Frappe login inside
+ * lib/frappe-token.ts.
+ */
+function FrappeAuthProvider({ children }: { children: React.ReactNode }) {
+  const [tokenState, setTokenState] = useState(getFrappeTokenState())
+  const [loading, setLoading] = useState(!tokenState)
+
+  useEffect(() => {
+    const unsubscribe = subscribeFrappeToken(setTokenState)
+    getFrappeToken()
+      .catch(() => {
+        // 401/403 already redirected to Frappe login; other errors keep
+        // loading=false so the access-denied screen shows rather than a spinner.
+      })
+      .finally(() => setLoading(false))
+    return unsubscribe
+  }, [])
+
+  // Minimal User shim — consumers only read `email` (and identity-ish fields).
+  const user = tokenState
+    ? ({ id: tokenState.email, email: tokenState.email } as unknown as User)
+    : null
+
+  const signOut = async () => {
+    try {
+      await fetch('/api/method/logout', { credentials: 'same-origin' })
+    } finally {
+      window.location.href = '/login'
+    }
+  }
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        session: null,
+        isAdmin: !!tokenState,
+        adminRole: tokenState?.role ?? null,
+        isSuperAdmin: tokenState?.role === 'super_admin',
+        loading,
+        isAdminLoading: loading,
+        // Login is the Frappe site's job; land back on the dashboard after.
+        signInWithGoogle: async () => {
+          window.location.href = '/login?redirect-to=' + encodeURIComponent('/adms')
+        },
+        signOut,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  )
+}
+
+function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -193,6 +257,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     >
       {children}
     </AuthContext.Provider>
+  )
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  return isFrappeMode ? (
+    <FrappeAuthProvider>{children}</FrappeAuthProvider>
+  ) : (
+    <SupabaseAuthProvider>{children}</SupabaseAuthProvider>
   )
 }
 

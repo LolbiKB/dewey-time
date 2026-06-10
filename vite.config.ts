@@ -6,6 +6,9 @@ import { defineConfig } from "vite"
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Frappe-hosted builds set VITE_BASE=/assets/zkteco_hr/adms/ (asset path);
+  // standalone builds serve from the root.
+  base: process.env.VITE_BASE ?? '/',
   plugins: [react(), tailwindcss(), ViteMcp()],
   resolve: {
     alias: {

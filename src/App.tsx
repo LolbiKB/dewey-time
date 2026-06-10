@@ -1,7 +1,8 @@
 import { ThemeProvider } from 'next-themes'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
-import { BrowserRouter, Routes, Route, useLocation, Link, Navigate } from 'react-router-dom'
+import { BrowserRouter, HashRouter, Routes, Route, useLocation, Link, Navigate } from 'react-router-dom'
+import { isFrappeMode } from '@/lib/auth-mode'
 import { AttendanceLogs } from './pages/AttendanceLogs'
 import { Devices } from './pages/Devices'
 import { Users } from './pages/Users'
@@ -154,14 +155,19 @@ function AppContent() {
   )
 }
 
+// HashRouter under Frappe (/adms is a single www page — hash routes need no
+// server-side rewrite rules and survive deep-link refreshes); BrowserRouter
+// for the standalone deployment.
+const Router = isFrappeMode ? HashRouter : BrowserRouter
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
         <AuthProvider>
-          <BrowserRouter>
+          <Router>
             <AppContent />
-          </BrowserRouter>
+          </Router>
         </AuthProvider>
         <Toaster />
       </ThemeProvider>

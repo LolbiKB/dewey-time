@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { getAuthHeaders } from '@/lib/auth-token'
 
 export interface PhotoCacheEntry {
   userId: string
@@ -29,14 +30,9 @@ export class PhotoService {
     try {
       console.log(`[PhotoService] Processing photo for user ${userId}`)
 
-      const { data: { session } } = await supabase.auth.getSession()
-      
       const response = await fetch(`${API_URL}/admin/photo/process`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || ''}`,
-        },
+        headers: await getAuthHeaders(),
         body: JSON.stringify({
           user_id: userId,
           ...(frappeEmployeeId ? { frappe_employee_id: frappeEmployeeId } : {}),
@@ -208,12 +204,9 @@ export class PhotoService {
     needsRefresh?: boolean
     photo_cache_status?: string
   }> {
-    const { data: { session } } = await supabase.auth.getSession()
     const response = await fetch(
       `${API_URL}/admin/photo/${userId}/check${PhotoService.photoQuery(frappeEmployeeId)}`,
-      {
-      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
-    }
+      { headers: await getAuthHeaders() }
     )
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
@@ -230,12 +223,9 @@ export class PhotoService {
     needsRefresh?: boolean
     photo_cache_status?: string
   }> {
-    const { data: { session } } = await supabase.auth.getSession()
     const response = await fetch(
       `${API_URL}/admin/photo/${userId}/head-check${PhotoService.photoQuery(frappeEmployeeId)}`,
-      {
-      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
-    }
+      { headers: await getAuthHeaders() }
     )
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))

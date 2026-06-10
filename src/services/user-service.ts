@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { getAuthHeaders } from '@/lib/auth-token'
 
 // Custom error for user operation locks (423 Locked)
 export class UserOperationLockedError extends Error {
@@ -188,11 +189,7 @@ const API_URL = import.meta.env.VITE_API_URL || '' // Empty string uses Vite pro
 
 export class UserService {
   private static async getAuthHeaders(): Promise<HeadersInit> {
-    const { data: { session } } = await supabase.auth.getSession()
-    return {
-      'Content-Type': 'application/json',
-      ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` }),
-    }
+    return getAuthHeaders()
   }
 
   private static async fetchApi<T>(path: string, options?: RequestInit): Promise<T> {

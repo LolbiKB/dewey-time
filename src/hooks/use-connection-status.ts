@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { supabase } from '@/lib/supabase'
+import { getAuthToken } from '@/lib/auth-token'
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'offline'
 
@@ -25,10 +25,10 @@ const checkConnection = async (): Promise<ConnectionState> => {
     return newState
   }
 
-  // Check Supabase
+  // Check auth/session presence (in frappe mode: a valid bridge token)
   try {
-    const { data: { session } } = await supabase.auth.getSession()
-    newState.supabase = !!session
+    const token = await getAuthToken()
+    newState.supabase = !!token
   } catch {
     newState.supabase = false
   }

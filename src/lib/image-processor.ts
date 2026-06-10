@@ -328,13 +328,12 @@ function getImageDimensions(dataUrl: string): Promise<{ width: number; height: n
 }
 
 /**
- * Get Supabase session token
+ * Get the API auth token (mode-aware: Supabase session or bridge-minted)
  */
 async function getSessionToken(): Promise<string> {
   // Import dynamically to avoid circular dependencies
-  const { supabase } = await import('./supabase')
-  const { data: { session } } = await supabase.auth.getSession()
-  return session?.access_token || ''
+  const { getAuthToken } = await import('./auth-token')
+  return (await getAuthToken()) || ''
 }
 
 /**

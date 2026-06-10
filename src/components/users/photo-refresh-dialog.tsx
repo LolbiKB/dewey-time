@@ -13,6 +13,7 @@ import { Progress } from '@/components/ui/progress'
 import { Loader2, Check, X, Download, RefreshCw, Image } from 'lucide-react'
 import type { UserEntry } from '@/services/user-service'
 import { supabase } from '@/lib/supabase'
+import { getAuthHeaders } from '@/lib/auth-token'
 
 interface PhotoRefreshDialogProps {
   user: UserEntry | null
@@ -57,14 +58,11 @@ export function PhotoRefreshDialog({ user, open, onOpenChange, onSuccess }: Phot
 
         // The check endpoint fetches fresh from Frappe using frappe_employee_id
         // So we always call it regardless of stored photo_url
-        const { data: { session } } = await supabase.auth.getSession()
         const API_URL = import.meta.env.VITE_API_URL || ''
 
         try {
           const response = await fetch(`${API_URL}/admin/photo/${user.id}/check`, {
-            headers: {
-              'Authorization': `Bearer ${session?.access_token || ''}`,
-            },
+            headers: await getAuthHeaders(),
           })
 
           let needsRefresh = true // default to refresh if can't check
@@ -119,18 +117,14 @@ export function PhotoRefreshDialog({ user, open, onOpenChange, onSuccess }: Phot
       setProgress(20)
       
       // Call the backend to process photo
-      const { data: { session } } = await supabase.auth.getSession()
       const API_URL = import.meta.env.VITE_API_URL || ''
-      
+
       setProgressStage('Processing photo...')
       setProgress(50)
 
       const response = await fetch(`${API_URL}/admin/photo/process`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || ''}`,
-        },
+        headers: await getAuthHeaders(),
         body: JSON.stringify({
           user_id: user.id,
         }),

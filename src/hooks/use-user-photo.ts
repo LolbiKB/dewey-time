@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { PhotoService } from '@/services/photo-service'
-import { supabase } from '@/lib/supabase'
+import { getAuthToken } from '@/lib/auth-token'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -29,9 +29,7 @@ export function useUserPhoto({ hasCachedPhoto, frappeEmployeeId, userId, enabled
   const [token, setToken] = useState('')
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setToken(session?.access_token || '')
-    })
+    getAuthToken().then((t) => setToken(t || ''))
   }, [])
 
   if (!enabled) {

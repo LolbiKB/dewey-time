@@ -3,6 +3,7 @@
 // ============================================================
 
 import { supabase } from '@/lib/supabase'
+import { getAuthHeaders } from '@/lib/auth-token'
 import { getDevicePresence } from '@/lib/device-status'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -428,11 +429,7 @@ export class DeviceService {
   }
 
   private static async authHeaders(): Promise<HeadersInit> {
-    const { data: { session } } = await supabase.auth.getSession()
-    return {
-      'Content-Type': 'application/json',
-      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-    }
+    return getAuthHeaders()
   }
 
   /** Super Admin: set comm_key or connection_status via bridge API */

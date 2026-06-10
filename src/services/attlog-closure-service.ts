@@ -1,16 +1,6 @@
-import { supabase } from '@/lib/supabase'
+import { getAuthHeaders } from '@/lib/auth-token'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
-
-async function getAuthHeaders(): Promise<HeadersInit> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
-  return {
-    'Content-Type': 'application/json',
-    ...(session?.access_token && { Authorization: `Bearer ${session.access_token}` }),
-  }
-}
 
 async function fetchAdmin<T>(path: string, options?: RequestInit): Promise<T> {
   const hasBody = !!options?.body
