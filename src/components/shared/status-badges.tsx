@@ -12,24 +12,34 @@ import { attlogClosureBadgeConfig } from '@/lib/attlog-closure-display'
 
 const badgeBase = 'w-fit pointer-events-none shrink-0 gap-1'
 
+/**
+ * Calm status indicator: a small colored dot + plain text (the zkteco_hr
+ * design archetype) instead of icon-chips. `className` supplies the text
+ * color; the dot inherits it via bg-current. Active/running states pulse.
+ */
 function SecondaryToneBadge({
   label,
   className,
-  icon: Icon,
   iconSpin,
   title,
 }: {
   label: string
   className: string
-  icon: LucideIcon
+  icon?: LucideIcon // accepted for caller compatibility; no longer rendered
   iconSpin?: boolean
   title?: string
 }) {
   return (
-    <Badge variant="secondary" title={title} className={cn(className, badgeBase)}>
-      <Icon className={cn('h-3 w-3', iconSpin && 'animate-spin')} />
-      {label}
-    </Badge>
+    <span
+      title={title}
+      className={cn('inline-flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap', className)}
+    >
+      <span
+        aria-hidden
+        className={cn('size-1.5 rounded-full bg-current opacity-80', iconSpin && 'animate-pulse')}
+      />
+      <span className="text-foreground/75">{label}</span>
+    </span>
   )
 }
 

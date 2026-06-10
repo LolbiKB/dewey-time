@@ -1,13 +1,4 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { Badge } from '@/components/ui/badge'
-import {
-  Fingerprint,
-  ScanFace,
-  KeyRound,
-  Monitor,
-  MapPin,
-  AlertTriangle,
-} from 'lucide-react'
 import {
   SelectFilterHeader,
   DateFilterHeader,
@@ -50,9 +41,9 @@ export function createAttendanceLogColumns({
         return (
           <div className="flex flex-col gap-0.5">
             <span className="font-mono font-medium">{seq}</span>
-            <Badge variant="outline" className="text-[10px] w-fit pointer-events-none">
-              ERP {preview} (preview)
-            </Badge>
+            <span className="text-[10px] text-muted-foreground" title="ERP pairing preview">
+              ERP {preview}
+            </span>
           </div>
         )
       },
@@ -98,19 +89,9 @@ export function createAttendanceLogColumns({
             ? `${deviceName} (${device.location})`
             : deviceName
         return (
-          <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-              <Monitor className="h-4 w-4 text-primary" />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-medium flex items-center gap-1">
-                {deviceDisplay}
-                {device?.location && device?.location !== device?.name && (
-                  <MapPin className="h-3 w-3 text-muted-foreground" />
-                )}
-              </span>
-              <span className="text-sm text-muted-foreground font-mono">{sn}</span>
-            </div>
+          <div className="flex flex-col">
+            <span className="font-medium">{deviceDisplay}</span>
+            <span className="font-mono text-xs text-muted-foreground">{sn}</span>
           </div>
         )
       },
@@ -122,25 +103,20 @@ export function createAttendanceLogColumns({
         const pin = row.original.user_pin
         const user = row.original.users
         return (
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-              <KeyRound className="h-4 w-4 text-primary" />
-            </div>
-            <div className="flex flex-col">
-              {user?.name ? (
-                <>
-                  <span className="font-medium">{user.name}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {user.frappe_employee_id || `PIN: ${pin}`}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <code className="font-mono font-medium">{pin}</code>
-                  <span className="text-xs text-amber-600">Unknown PIN</span>
-                </>
-              )}
-            </div>
+          <div className="flex flex-col">
+            {user?.name ? (
+              <>
+                <span className="font-medium">{user.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {user.frappe_employee_id || `PIN: ${pin}`}
+                </span>
+              </>
+            ) : (
+              <>
+                <code className="font-mono font-medium">{pin}</code>
+                <span className="text-xs text-amber-700 dark:text-amber-400">Unknown PIN</span>
+              </>
+            )}
           </div>
         )
       },
@@ -164,21 +140,14 @@ export function createAttendanceLogColumns({
         : 'Verify',
       cell: ({ row }) => {
         const type = row.getValue('verify_type') as number
-        const config: Record<
-          number,
-          { label: string; className: string; icon: typeof KeyRound }
-        > = {
-          0: { label: 'Password', className: 'text-gray-600', icon: KeyRound },
-          1: { label: 'Fingerprint', className: 'text-blue-700', icon: Fingerprint },
-          15: { label: 'Face', className: 'text-purple-700', icon: ScanFace },
-          255: { label: 'Other', className: 'text-slate-600', icon: KeyRound },
+        const labels: Record<number, string> = {
+          0: 'Password',
+          1: 'Fingerprint',
+          15: 'Face',
+          255: 'Other',
         }
-        const { label, className, icon: Icon } = config[type] || config[255]
         return (
-          <Badge variant="secondary" className={`${className} pointer-events-none`}>
-            <Icon className="h-3 w-3 mr-1" />
-            {label}
-          </Badge>
+          <span className="text-sm text-muted-foreground">{labels[type] ?? labels[255]}</span>
         )
       },
     },
@@ -220,10 +189,10 @@ export function createAttendanceLogColumns({
               ? 'Duplicate within 10 min'
               : log.suspicious_reason || 'Flagged'
         return (
-          <Badge variant="destructive" className="pointer-events-none gap-1">
-            <AlertTriangle className="h-3 w-3" />
+          <span className="inline-flex items-center gap-1.5 text-xs text-destructive">
+            <span aria-hidden className="size-1.5 rounded-full bg-current opacity-80" />
             {reason}
-          </Badge>
+          </span>
         )
       },
     },
