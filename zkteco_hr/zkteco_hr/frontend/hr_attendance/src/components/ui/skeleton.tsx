@@ -1,13 +1,3 @@
-import { cn } from "@/lib/utils"
-
-function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="skeleton"
-      className={cn("animate-pulse rounded-md bg-muted", className)}
-      {...props}
-    />
-  )
-}
-
-export { Skeleton }
+// Re-export shim: this primitive now lives in the shared Dewey design
+// system. Keep importing from "@/components/ui/skeleton" — only the source moved.
+export { Skeleton } from "@lolbikb/dewey-ui"
