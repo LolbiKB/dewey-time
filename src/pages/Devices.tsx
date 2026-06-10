@@ -16,7 +16,10 @@ import {
 import { EditDeviceDialog } from '@/components/devices/edit-device-dialog'
 import { DeviceSecuritySetupHint } from '@/components/devices/device-security-banner'
 import { DeviceDetailDialog } from '@/components/devices/device-detail-dialog'
+import type { DeviceDetailTab } from '@/components/devices/device-detail-tabs'
 import type { DeviceFilters, DeviceEntry } from '@/services/device-service'
+
+import { Page } from '@lolbikb/dewey-ui'
 
 export function Devices() {
   const [filters, setFilters] = useState<DeviceFilters>({
@@ -41,6 +44,7 @@ export function Devices() {
   const [editOpen, setEditOpen] = useState(false)
   const [detailDevice, setDetailDevice] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [detailInitialTab, setDetailInitialTab] = useState<DeviceDetailTab>('users')
 
   // Handle device command
   const handleDeviceCommand = async (
@@ -75,8 +79,9 @@ export function Devices() {
   }
 
   // Handle show device detail
-  const handleShowDetail = (serialNumber: string) => {
+  const handleShowDetail = (serialNumber: string, tab: DeviceDetailTab = 'users') => {
     setDetailDevice(serialNumber)
+    setDetailInitialTab(tab)
     setDetailOpen(true)
   }
 
@@ -125,7 +130,7 @@ export function Devices() {
   })) as DeviceEntry[]
 
   return (
-    <div className="h-full flex flex-col gap-4">
+    <Page>
       <div className="flex-1 min-h-0">
         <DeviceDataTable
           columns={columns}
@@ -165,7 +170,8 @@ export function Devices() {
         deviceSn={detailDevice}
         open={detailOpen}
         onOpenChange={setDetailOpen}
+        initialTab={detailInitialTab}
       />
-    </div>
+    </Page>
   )
 }

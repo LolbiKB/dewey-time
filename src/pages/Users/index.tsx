@@ -17,6 +17,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Page } from '@lolbikb/dewey-ui'
 import { AlertCircle, AlertTriangle } from 'lucide-react'
 
 export function Users() {
@@ -54,7 +55,7 @@ export function Users() {
   }
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <Page>
       {!showingCompromised && compromisedCount > 0 && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
@@ -138,6 +139,6 @@ export function Users() {
         open={!!registerEmployee}
         onOpenChange={(open) => !open && setRegisterEmployee(null)}
       />
-    </div>
+    </Page>
   )
 }

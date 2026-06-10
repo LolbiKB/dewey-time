@@ -12,6 +12,7 @@ import {
   useYesterdayAttlogClosure,
 } from '@/hooks'
 import { AttlogClosureBadge } from '@/components/shared/status-badges'
+import { Page } from '@lolbikb/dewey-ui'
 import type {
   AttendanceLogFilters,
   AttendanceLogStatFilter,
@@ -159,7 +160,7 @@ export function AttendanceLogs() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <Page className="min-h-0 gap-0">
       {closureAlerts && (
         <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <span>Yesterday ledger closeout:</span>
@@ -196,6 +197,6 @@ export function AttendanceLogs() {
           onRefresh={() => void refetchAttendanceLogs()}
         />
       </div>
-    </div>
+    </Page>
   )
 }
