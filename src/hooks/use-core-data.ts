@@ -17,6 +17,7 @@ export interface DeviceFilters {
   name?: string
   location?: string
   is_master?: boolean
+  status?: 'online' | 'offline'
 }
 
 /**
@@ -32,15 +33,16 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
   const sortOrder = filters?.sortOrder || 'desc'
   
   const query = useQuery({
-    queryKey: queryKeys.devices.list({ 
-      page, limit, sortBy, sortOrder, 
-      search: filters?.search, name: filters?.name, location: filters?.location, is_master: filters?.is_master 
+    queryKey: queryKeys.devices.list({
+      page: filters?.status ? 1 : page, limit: filters?.status ? 500 : limit, sortBy, sortOrder,
+      search: filters?.search, name: filters?.name, location: filters?.location, is_master: filters?.is_master,
+      status: filters?.status,
     }),
     queryFn: async () => {
       let dbQuery = supabase
         .from('devices')
         .select('*', { count: 'exact' })
-      
+
       if (filters?.search) {
         dbQuery = dbQuery.or(`serial_number.ilike.%${filters.search}%,name.ilike.%${filters.search}%,location.ilike.%${filters.search}%`)
       }
@@ -53,22 +55,26 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
       if (filters?.is_master !== undefined) {
         dbQuery = dbQuery.eq('is_master', filters.is_master)
       }
-      
+
       dbQuery = dbQuery.order(sortBy, { ascending: sortOrder === 'asc' })
-      dbQuery = dbQuery.range(from, to)
-      
+
+      // When status (online/offline) filter is active, fetch all devices so we can
+      // filter by derived isOnline field client-side. Device count is always small.
+      if (filters?.status) {
+        dbQuery = dbQuery.limit(500)
+      } else {
+        dbQuery = dbQuery.range(from, to)
+      }
+
       const { data, error, count } = await dbQuery
-      
+
       if (error) throw error
-      
+
       return {
         devices: data || [],
-        total: count || 0,
+        rawTotal: count || 0,
         page,
         limit,
-        totalPages: Math.ceil((count || 0) / limit),
-        hasNext: (page * limit) < (count || 0),
-        hasPrev: page > 1,
       }
     },
     staleTime: 30000,
@@ -76,20 +82,39 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
     ...options,
   })
   
-  // Calculate isOnline fresh from last_seen on every render
+  // Calculate isOnline fresh from last_seen on every render; apply status filter client-side
   const enrichedData = useMemo(() => {
     if (!query.data) return undefined
-    
+
     const devicesWithStatus = query.data.devices.map(device => ({
       ...device,
       isOnline: isDeviceOnline(device.last_seen),
     }))
-    
+
+    // status is a derived field (online/offline from last_seen) — filter client-side
+    const filtered = filters?.status
+      ? devicesWithStatus.filter(d => (d.isOnline ? 'online' : 'offline') === filters.status)
+      : devicesWithStatus
+
+    // When status filter is active we fetched all records; paginate in JS
+    const paged = filters?.status
+      ? filtered.slice(from, to + 1)
+      : filtered
+
+    const total = filters?.status ? filtered.length : query.data.rawTotal
+    const totalPages = Math.ceil(total / limit)
+
     return {
-      ...query.data,
-      devices: devicesWithStatus,
+      devices: paged,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page * limit < total,
+      hasPrev: page > 1,
     }
-  }, [query.data])
+  // from, to, page, limit are all derived from filters — using filters as dep covers them
+  }, [query.data, filters])
   
   return {
     ...query,
@@ -177,14 +202,17 @@ export function useCommandQueue(options?: { enabled?: boolean }) {
  * Master users query - paginated user list
  * 2 minute stale time is reasonable for employee directory
  */
-export function useUsersList(filters?: { 
+export function useUsersList(filters?: {
   page?: number
   limit?: number
   search?: string
   status?: 'active' | 'inactive' | 'compromised' | 'archived'
+  registration_status?: 'registered' | 'unregistered' | 'inactive'
+  sortBy?: string
+  sortOrder?: 'asc' | 'desc'
 }, options?: { enabled?: boolean }) {
   const filterKey = filters || {}
-  
+
   return useQuery({
     queryKey: queryKeys.users.list(filterKey),
     queryFn: async () => {
@@ -194,6 +222,9 @@ export function useUsersList(filters?: {
         limit: filters?.limit,
         search: filters?.search,
         status: filters?.status,
+        registration_status: filters?.registration_status,
+        sortBy: filters?.sortBy,
+        sortOrder: filters?.sortOrder,
       })
       // Return same structure as legacy useUsers for compatibility
       return {

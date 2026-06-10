@@ -526,7 +526,9 @@ export class UserService {
     if (filters.search) params.append('search', filters.search)
     if (filters.status) params.append('status', filters.status)
     if (filters.registration_status) params.append('registration_status', filters.registration_status)
-    
+    if (filters.sortBy) params.append('sortBy', filters.sortBy)
+    if (filters.sortOrder) params.append('sortOrder', filters.sortOrder)
+
     return this.fetchApi<UsersResponse>(`/admin/frappe-employees?${params}`)
   }
 

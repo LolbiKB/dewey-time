@@ -32,6 +32,7 @@ export function Users() {
     limit: filters.limit,
     search: filters.search,
     status: filters.status,
+    registration_status: filters.registration_status,
   })
 
   const compromisedCount = useMemo(() => {

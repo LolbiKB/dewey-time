@@ -81,6 +81,8 @@ const TODAY_SCOPED_PRESETS: AttendanceLogPreset[] = [
 ]
 
 function applyPresetToFilters(filters: AttendanceLogFilters): AttendanceLogFilters {
+  // Strip sync_status — preset-based Frappe status filters use synced_to_frappe/last_error_message
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { sync_status: _sync, ...rest } = filters
   const next: AttendanceLogFilters = { ...rest }
   if (filters.preset && TODAY_SCOPED_PRESETS.includes(filters.preset)) {
@@ -88,12 +90,8 @@ function applyPresetToFilters(filters: AttendanceLogFilters): AttendanceLogFilte
     next.dateFrom = formatISO(startOfDay(now))
     next.dateTo = formatISO(endOfDay(now))
   }
-  if (filters.preset === 'pending_sync') {
-    next.sync_status = 'PENDING'
-  }
-  if (filters.preset === 'failed_sync') {
-    next.sync_status = 'FAILED'
-  }
+  // pending_sync / failed_sync: handled in applyFiltersToQuery via synced_to_frappe /
+  // last_error_message — NOT via sync_status (DB only has 'SKIPPED' and 'SUCCESS')
   return next
 }
 
@@ -126,6 +124,14 @@ function applyFiltersToQuery(
   }
   if (filters.sync_status) {
     q = q.eq('sync_status', filters.sync_status)
+  }
+  if (filters.preset === 'pending_sync') {
+    // Records not yet sent to Frappe: synced_to_frappe=false and not intentionally SKIPPED
+    q = q.eq('synced_to_frappe', false).or('sync_status.is.null,sync_status.neq.SKIPPED')
+  }
+  if (filters.preset === 'failed_sync') {
+    // Records that have a Frappe error message; use filter() for correct TS types
+    q = q.filter('last_error_message', 'not.is', null)
   }
   if (filters.preset === 'suspicious') {
     q = q.eq('is_suspicious', true)
@@ -216,18 +222,21 @@ export async function fetchAttendanceLogSummary(): Promise<AttendanceLogSummary>
       .select('*', { count: 'exact', head: true })
       .gte('check_time', todayStart)
       .lte('check_time', todayEnd),
+    // pending: synced_to_frappe=false and not intentionally SKIPPED
     supabase
       .from('attendance_logs')
       .select('*', { count: 'exact', head: true })
       .gte('check_time', todayStart)
       .lte('check_time', todayEnd)
-      .eq('sync_status', 'PENDING'),
+      .eq('synced_to_frappe', false)
+      .or('sync_status.is.null,sync_status.neq.SKIPPED'),
+    // failed: has a Frappe error message
     supabase
       .from('attendance_logs')
       .select('*', { count: 'exact', head: true })
       .gte('check_time', todayStart)
       .lte('check_time', todayEnd)
-      .eq('sync_status', 'FAILED'),
+      .filter('last_error_message', 'not.is', null),
     supabase
       .from('attendance_logs')
       .select('*', { count: 'exact', head: true })
