@@ -21,8 +21,6 @@ import {
   Wifi, 
   WifiOff, 
   Users, 
-  CheckCircle2,
-  AlertCircle,
   Loader2,
   RotateCcw,
   Zap,
@@ -69,23 +67,28 @@ interface DeviceDetailDialogProps {
   initialTab?: DeviceDetailTab
 }
 
-// Component to show individual sync component status
-// Simple icon-only status indicator
-function StatusIcon({ status }: { status: SyncComponentState }) {
-  switch (status) {
-    case 'not_enrolled':
-      return <span className="text-muted-foreground/40">-</span>
-    case 'syncing':
-      return <Loader2 className="h-5 w-5 text-blue-500 animate-spin mx-auto" />
-    case 'synced':
-      return <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
-    case 'pending':
-      return <Clock className="h-5 w-5 text-amber-500 mx-auto" />
-    case 'failed':
-      return <AlertCircle className="h-5 w-5 text-red-500 mx-auto" />
-    default:
-      return <span className="text-muted-foreground/40">-</span>
-  }
+// Collapsed-row summary: worst state across user/FP/face/photo. The full
+// per-component breakdown lives in the expanded accordion cards, so the row
+// carries one calm dot+text instead of four icon columns.
+function rowAggregateStatus(user: any): { state: SyncComponentState; label: string } {
+  const states: SyncComponentState[] = [
+    user.userComponentStatus,
+    user.fingerprintStatus,
+    user.faceStatus,
+    user.photoStatus,
+  ]
+  const active = states.filter((st) => st && st !== 'not_enrolled')
+  if (active.includes('failed')) return { state: 'failed', label: 'Failed' }
+  if (active.includes('syncing')) return { state: 'syncing', label: 'Syncing' }
+  if (active.includes('pending')) return { state: 'pending', label: 'Pending' }
+  return { state: 'synced', label: 'Synced' }
+}
+
+const ROW_STATUS_TONE: Record<string, string> = {
+  synced: 'text-green-600 dark:text-green-400',
+  syncing: 'text-blue-600 dark:text-blue-400',
+  pending: 'text-amber-600 dark:text-amber-400',
+  failed: 'text-destructive',
 }
 
 // User row component with animated accordion
@@ -129,19 +132,22 @@ function UserSyncRow({
             {user.employeeId && (
               <Badge variant="secondary" className="text-[10px] font-mono">{user.employeeId}</Badge>
             )}
-            <span className={`w-1.5 h-1.5 rounded-full ${
-              user.userStatus === 'synced' ? 'bg-green-500' :
-              user.userStatus === 'syncing' ? 'bg-blue-500' :
-              user.userStatus === 'failed' ? 'bg-red-500' :
-              'bg-muted-foreground/40'
-            }`} />
             <span className="text-xs text-muted-foreground">PIN: {user.userPin}</span>
           </div>
-          <div className="flex items-center gap-1 ml-auto">
-            <StatusIcon status={user.userComponentStatus} />
-            <StatusIcon status={user.fingerprintStatus} />
-            <StatusIcon status={user.faceStatus} />
-            <StatusIcon status={user.photoStatus} />
+          <div className="ml-auto flex items-center gap-2">
+            {(() => {
+              const { state, label } = rowAggregateStatus(user)
+              return (
+                <span className={cn('inline-flex items-center gap-1.5 text-xs', ROW_STATUS_TONE[state] ?? 'text-muted-foreground')}>
+                  {state === 'syncing' ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                  )}
+                  {label}
+                </span>
+              )
+            })()}
             {/* Avoid nested <button> inside AccordionTrigger (Radix Trigger is a <button>) */}
             <Button variant="ghost" size="sm" asChild disabled={isSyncing} title={isSyncing ? 'Sync in progress' : 'Force sync'}>
               <span
@@ -516,25 +522,6 @@ export function DeviceDetailDialog({
                   )}
                 </div>
               )}
-              <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                <span className="font-medium">Row icons:</span>
-                <span className="inline-flex items-center gap-1">
-                  <StatusIcon status="synced" />
-                  User
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <StatusIcon status="synced" />
-                  FP
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <StatusIcon status="synced" />
-                  Face
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <StatusIcon status="synced" />
-                  Photo
-                </span>
-              </div>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
