@@ -19,7 +19,7 @@ export function AttlogSection({
 }: AttlogSectionProps) {
   return (
     <section
-      className={`rounded-xl border border-slate-200 bg-white p-4 sm:p-5 ${className ?? ''}`}
+      className={`rounded-xl border border-border bg-card p-4 sm:p-5 ${className ?? ''}`}
     >
       <div className="mb-4">
         <div className="flex items-center gap-2 text-sm font-medium">

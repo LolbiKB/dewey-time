@@ -130,7 +130,9 @@ export function DeviceAttlogOverviewTab({
   }, [meta?.attlog_last_device_purge_at])
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-4">
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Scrollable content; whole-view actions live in the pinned bar below. */}
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-4">
       {postPurgeRecent && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900 dark:text-amber-100">
           Device log buffer was cleared recently — bridge is the source of truth for archived days.
@@ -164,6 +166,7 @@ export function DeviceAttlogOverviewTab({
         <AttlogHealthMetric
           label="Time drift"
           value={meta?.attlog_time_drift_suspected ? 'Suspected' : 'OK'}
+          hint="Checked after each LOG upload: if the newest punch is more than 48h from server time, the device clock is suspect and recent days are automatically re-verified. Can flag falsely after multi-day quiet periods (no punches) — it clears on the next punch."
           highlight={!!meta?.attlog_time_drift_suspected}
           icon={
             meta?.attlog_time_drift_suspected ? (
@@ -198,7 +201,7 @@ export function DeviceAttlogOverviewTab({
                     'flex flex-col items-center gap-1 rounded-lg border px-1 py-2 transition-colors',
                     today
                       ? 'border-blue-200 bg-blue-50/60 ring-1 ring-blue-200/80'
-                      : 'border-slate-100 bg-slate-50/60 hover:bg-slate-50'
+                      : 'border-border/60 bg-muted/40 hover:bg-muted/60'
                   )}
                   title={`${localDate}: ${attlogClosureLabel(status)}`}
                 >
@@ -224,9 +227,31 @@ export function DeviceAttlogOverviewTab({
         </div>
 
         <AttlogClosureLegend compact />
+      </AttlogSection>
 
-        <div className="border-t border-slate-100 pt-4 space-y-2.5">
-          <div className="flex flex-wrap items-center gap-2">
+      {inFlight.length > 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 space-y-2">
+          <div className="text-sm font-medium text-amber-900 dark:text-amber-100">
+            In-flight ATTLOG commands
+          </div>
+          {inFlight.map((cmd) => (
+            <div key={cmd.id} className="flex flex-wrap gap-2 items-center text-xs">
+              <AttlogCommandTypeBadge commandType={cmd.command_type} />
+              <span className="text-muted-foreground truncate max-w-md">{cmd.command}</span>
+              <CommandQueueStatusBadge status={cmd.status} />
+            </div>
+          ))}
+        </div>
+      )}
+      </div>
+
+      {/* Pinned whole-view actions (info top, commands bottom — app-wide rule). */}
+      <DialogFooter variant="bar" className="flex-wrap">
+        {!isOnline && (
+          <p className="mr-auto self-center text-xs text-muted-foreground">
+            Device offline — LOG and sync actions resume when it reconnects.
+          </p>
+        )}
             <Button
               size="sm"
               variant="outline"
@@ -326,29 +351,7 @@ export function DeviceAttlogOverviewTab({
                 </DialogContent>
               </Dialog>
             )}
-          </div>
-          {!isOnline && (
-            <p className="text-xs text-muted-foreground">
-              Device is offline — LOG and sync actions are disabled until it reconnects.
-            </p>
-          )}
-        </div>
-      </AttlogSection>
-
-      {inFlight.length > 0 && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 space-y-2">
-          <div className="text-sm font-medium text-amber-900 dark:text-amber-100">
-            In-flight ATTLOG commands
-          </div>
-          {inFlight.map((cmd) => (
-            <div key={cmd.id} className="flex flex-wrap gap-2 items-center text-xs">
-              <AttlogCommandTypeBadge commandType={cmd.command_type} />
-              <span className="text-muted-foreground truncate max-w-md">{cmd.command}</span>
-              <CommandQueueStatusBadge status={cmd.status} />
-            </div>
-          ))}
-        </div>
-      )}
+      </DialogFooter>
     </div>
   )
 }
