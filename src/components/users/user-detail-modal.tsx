@@ -1158,7 +1158,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
   return (
     <>
       <Dialog open={open && !enrollOpen} onOpenChange={onOpenChange}>
-        <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden">
+        <DialogContent size="panel" className="flex flex-col overflow-hidden">
           <DialogHeader>
             <div className="flex items-center gap-3">
               <div className="relative">
