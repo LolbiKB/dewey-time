@@ -38,30 +38,17 @@ export function BaseModal({
 }: BaseModalProps) {
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent size={size} className="flex max-h-[90vh] flex-col gap-0 p-0">
-        <DialogHeader className="contents space-y-0 text-left">
-          {/* Sticky Header with Title and Description */}
-          <div className="border-b">
-            <DialogTitle className="px-6 pt-6">{title}</DialogTitle>
-            {description && (
-              <DialogDescription className="px-6 pt-2 pb-3">
-                {description}
-              </DialogDescription>
-            )}
-          </div>
-
-          {/* Scrollable Content Only */}
-          <div className="flex max-h-full flex-col overflow-auto px-6 pt-4 pb-6">
-            {children}
-          </div>
+      {/* Clean canonical layout: header / scrollable body / footer share the
+          dialog's p-6 + gap-5; body scrolls only when content is tall. */}
+      <DialogContent size={size} className="flex max-h-[85vh] flex-col text-left">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
 
-        {/* Sticky Footer */}
-        {footer && (
-          <DialogFooter className="flex-row items-center justify-end border-t px-6 py-4">
-            {footer}
-          </DialogFooter>
-        )}
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{children}</div>
+
+        {footer && <DialogFooter>{footer}</DialogFooter>}
       </DialogContent>
     </Dialog>
   )
