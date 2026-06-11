@@ -54,7 +54,7 @@ function AppContent() {
   const pageTitle = routeTitles[location.pathname] || 'User Management'
   const isUsersHome = location.pathname === '/users'
   const { user, isAdmin, loading, isAdminLoading, signOut } = useAuth()
-  
+
   // Global realtime for devices - available to all pages
   useRealtimeDevices()
 
