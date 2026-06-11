@@ -471,7 +471,7 @@ export function DeviceDetailDialog({
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="users" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <TabsContent value="users" className="flex-1 flex flex-col min-h-0">
             <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b pb-3 mb-2 shrink-0 space-y-2.5">
               {/* Full-width search (no viewport-based side-by-side — the modal
                   is fixed-width, so always stack to avoid clipping). */}
@@ -566,7 +566,7 @@ export function DeviceDetailDialog({
             </div>
           </TabsContent>
           
-          <TabsContent value="info" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <TabsContent value="info" className="flex-1 flex flex-col min-h-0">
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
             <div className="space-y-6 pb-4">
               {/* Header Card */}
@@ -679,7 +679,7 @@ export function DeviceDetailDialog({
             </div>
           </TabsContent>
 
-          <TabsContent value="overview" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <TabsContent value="overview" className="flex-1 flex flex-col min-h-0">
             {deviceSn && (
               <div className="flex flex-col flex-1 min-h-0">
                 <DeviceAttlogOverviewTab
@@ -691,7 +691,7 @@ export function DeviceDetailDialog({
             )}
           </TabsContent>
 
-          <TabsContent value="closeout" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <TabsContent value="closeout" className="flex-1 flex flex-col min-h-0">
             {deviceSn && (
               <div className="flex flex-col flex-1 min-h-0">
                 <DeviceAttlogDailyCloseoutTab
