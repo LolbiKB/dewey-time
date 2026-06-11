@@ -74,7 +74,7 @@ interface DeviceDetailDialogProps {
 function StatusIcon({ status }: { status: SyncComponentState }) {
   switch (status) {
     case 'not_enrolled':
-      return <span className="text-gray-300">-</span>
+      return <span className="text-muted-foreground/40">-</span>
     case 'syncing':
       return <Loader2 className="h-5 w-5 text-blue-500 animate-spin mx-auto" />
     case 'synced':
@@ -84,7 +84,7 @@ function StatusIcon({ status }: { status: SyncComponentState }) {
     case 'failed':
       return <AlertCircle className="h-5 w-5 text-red-500 mx-auto" />
     default:
-      return <span className="text-gray-300">-</span>
+      return <span className="text-muted-foreground/40">-</span>
   }
 }
 
@@ -133,7 +133,7 @@ function UserSyncRow({
               user.userStatus === 'synced' ? 'bg-green-500' :
               user.userStatus === 'syncing' ? 'bg-blue-500' :
               user.userStatus === 'failed' ? 'bg-red-500' :
-              'bg-gray-400'
+              'bg-muted-foreground/40'
             }`} />
             <span className="text-xs text-muted-foreground">PIN: {user.userPin}</span>
           </div>
@@ -194,7 +194,7 @@ function UserSyncRow({
           
           {/* Error message */}
           {user.errorMessage && (
-            <div className="text-sm text-red-600 p-2.5 bg-red-50 border border-red-200 rounded-lg mt-2 break-words">
+            <div className="text-sm text-destructive p-2.5 bg-destructive/10 border border-destructive/20 rounded-lg mt-2 break-words">
               {user.errorMessage}
             </div>
           )}
@@ -570,47 +570,48 @@ export function DeviceDetailDialog({
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
             <div className="space-y-6 pb-4">
               {/* Header Card */}
-              <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-5 text-white">
-                <div className="flex items-center justify-between">
+              <div className="rounded-xl border border-border bg-card p-5">
+                <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-semibold">{device?.name || 'Unnamed Device'}</h3>
-                    <p className="text-blue-100 text-sm font-mono mt-1">{device?.serial_number}</p>
+                    <p className="mt-1 font-mono text-sm text-muted-foreground">{device?.serial_number}</p>
                   </div>
-                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${device?.isOnline ? 'bg-white/20' : 'bg-gray-500/30'}`}>
-                    {device?.isOnline ? (
-                      <Wifi className="h-4 w-4" />
-                    ) : (
-                      <WifiOff className="h-4 w-4" />
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1.5 text-xs font-medium',
+                      device?.isOnline ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'
                     )}
-                    <span className="text-sm font-medium">{device?.isOnline ? 'Online' : 'Offline'}</span>
-                  </div>
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                    {device?.isOnline ? 'Online' : 'Offline'}
+                  </span>
                 </div>
               </div>
 
               {/* Info Grid */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
                   <div className="flex items-center gap-2 text-muted-foreground mb-1">
                     <MapPin className="h-3.5 w-3.5" />
                     <span className="text-xs">Location</span>
                   </div>
                   <div className="text-sm font-medium">{device?.location || '-'}</div>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
                   <div className="flex items-center gap-2 text-muted-foreground mb-1">
                     <Clock className="h-3.5 w-3.5" />
                     <span className="text-xs">Last Seen</span>
                   </div>
                   <div className="text-sm font-medium">{device?.last_seen ? new Date(device.last_seen).toLocaleString() : 'Never'}</div>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
                   <div className="flex items-center gap-2 text-muted-foreground mb-1">
                     <Zap className="h-3.5 w-3.5" />
                     <span className="text-xs">Registrar</span>
                   </div>
                   <div className="text-sm font-medium">{device?.is_registrar ? 'Enabled' : 'Disabled'}</div>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
                   <div className="flex items-center gap-2 text-muted-foreground mb-1">
                     <Users className="h-3.5 w-3.5" />
                     <span className="text-xs">Users</span>
@@ -625,7 +626,7 @@ export function DeviceDetailDialog({
                   <div className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wide">Registrar Capabilities</div>
                   <div className="flex gap-2 flex-wrap">
                     {device.registrar_capabilities.map((cap: string) => (
-                      <span key={cap} className="px-3 py-1.5 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg text-xs font-medium text-blue-700">
+                      <span key={cap} className="rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground/80">
                         {cap}
                       </span>
                     ))}
@@ -634,7 +635,7 @@ export function DeviceDetailDialog({
               )}
 
               {/* Provisioning (MVP: approved SN only) */}
-              <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+              <div className="rounded-xl border border-border bg-card p-4 space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Shield className="h-4 w-4 text-muted-foreground" />
                   Provisioning
@@ -664,7 +665,7 @@ export function DeviceDetailDialog({
                   </div>
                 </div>
                 {infoDevice?.connection_status === 'pending' && (
-                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900">
                     This serial is not approved yet. Use Edit device → Approve SN before the terminal
                     can sync users or attendance.
                   </p>

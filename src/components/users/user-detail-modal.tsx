@@ -254,7 +254,7 @@ function DeviceCard({
       <AccordionItem value={status.id} className="border-0">
         <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 hover:no-underline rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isOnline ? "bg-green-500" : "bg-gray-400")} />
+            <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isOnline ? "bg-green-500" : "bg-muted-foreground/40")} />
             {allSynced && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
             <span className="text-sm font-medium truncate">{device?.name || status.device_sn}</span>
             {hasActiveCommands && <Loader2 className="h-3 w-3 animate-spin text-blue-500 shrink-0" />}
@@ -710,7 +710,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
                           'relative aspect-square rounded-lg border-2 flex items-center justify-center transition-all',
                           isSelected && 'border-blue-500 bg-blue-100',
                           !isSelected && enrolled && 'border-red-200 bg-red-50 opacity-50 cursor-not-allowed',
-                          !isSelected && !enrolled && 'border-dashed border-gray-300 text-gray-400 hover:border-blue-300'
+                          !isSelected && !enrolled && 'border-dashed border-border text-muted-foreground/70 hover:border-blue-300'
                         )}
                       >
                         <span className="text-xs font-bold">{ZK_PROTOCOL_FINGER_GRID_LETTERS[id]}</span>
@@ -735,7 +735,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
                           'relative aspect-square rounded-lg border-2 flex items-center justify-center transition-all',
                           isSelected && 'border-blue-500 bg-blue-100',
                           !isSelected && enrolled && 'border-red-200 bg-red-50 opacity-50 cursor-not-allowed',
-                          !isSelected && !enrolled && 'border-dashed border-gray-300 text-gray-400 hover:border-blue-300'
+                          !isSelected && !enrolled && 'border-dashed border-border text-muted-foreground/70 hover:border-blue-300'
                         )}
                       >
                         <span className="text-xs font-bold">{ZK_PROTOCOL_FINGER_GRID_LETTERS[id]}</span>
@@ -821,12 +821,12 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
               return (
                 <div key={p} className="flex items-center">
                   <div className="flex flex-col items-center gap-0.5">
-                    <div className={cn("w-7 h-7 rounded-full flex items-center justify-center border-2 text-xs font-bold", isCompleted && "border-green-500 bg-green-100 text-green-600", isCurrent && !isFailed && "border-blue-500 bg-blue-100 text-blue-600", isFailed && "border-red-500 bg-red-100 text-red-600", !isCompleted && !isCurrent && !isFailed && "border-gray-200 bg-gray-50 text-gray-400")}>
+                    <div className={cn("w-7 h-7 rounded-full flex items-center justify-center border-2 text-xs font-bold", isCompleted && "border-green-500 bg-green-100 text-green-600", isCurrent && !isFailed && "border-blue-500 bg-blue-100 text-blue-600", isFailed && "border-red-500 bg-red-100 text-red-600", !isCompleted && !isCurrent && !isFailed && "border-border bg-muted text-muted-foreground")}>
                       {isCompleted ? <CheckCircle2 className="h-4 w-4" /> : isCurrent && !isFailed ? <Loader2 className="h-4 w-4 animate-spin" /> : isFailed ? <AlertCircle className="h-4 w-4" /> : idx + 1}
                     </div>
                     <span className="text-[9px] font-medium">{p === 'queued' ? 'Queued' : p === 'enrolling' ? 'Capture' : p === 'accepted' ? 'Process' : 'Done'}</span>
                   </div>
-                  {idx < 3 && <div className={cn("h-0.5 w-5 mx-0.5", isCompleted ? "bg-green-500" : "bg-gray-200")} />}
+                  {idx < 3 && <div className={cn("h-0.5 w-5 mx-0.5", isCompleted ? "bg-green-500" : "bg-border")} />}
                 </div>
               )
             })}
@@ -1247,7 +1247,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
                       )}
                       {stats.notSynced > 0 && (
                         <div className="flex items-center gap-2">
-                          <div className="h-4 w-4 rounded-full border-2 border-dashed border-gray-400" />
+                          <div className="h-4 w-4 rounded-full border-2 border-dashed border-muted-foreground/40" />
                           <span>{stats.notSynced} pending</span>
                         </div>
                       )}

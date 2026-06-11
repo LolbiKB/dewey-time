@@ -72,9 +72,9 @@ export const columns: ColumnDef<UserEntry>[] = [
 
       const statusConfig = {
         active: { label: 'Active', className: 'text-green-700 dark:text-green-400' },
-        inactive: { label: 'Inactive', className: 'text-gray-500 dark:text-gray-400' },
+        inactive: { label: 'Inactive', className: 'text-muted-foreground dark:text-muted-foreground/70' },
         compromised: { label: 'Compromised', className: 'text-red-700 dark:text-red-400' },
-        archived: { label: 'Archived', className: 'text-slate-500 dark:text-slate-400' },
+        archived: { label: 'Archived', className: 'text-muted-foreground' },
       }
 
       const config = statusConfig[status]

@@ -218,7 +218,7 @@ export function PhotoRefreshDialog({ user, open, onOpenChange, onSuccess }: Phot
             {status === 'ready' && photoInfo && (
               <div className={`p-3 rounded-lg border ${
                 !photoInfo.frappeUrl 
-                  ? 'bg-gray-50 border-gray-200'
+                  ? 'bg-muted/40 border-border'
                   : !photoInfo.hasCached 
                     ? 'bg-blue-50 border-blue-200' 
                     : 'bg-green-50 border-green-200'
@@ -226,8 +226,8 @@ export function PhotoRefreshDialog({ user, open, onOpenChange, onSuccess }: Phot
                 <div className="flex items-center gap-2">
                   {!photoInfo.frappeUrl ? (
                     <>
-                      <X className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm text-gray-500">
+                      <X className="h-4 w-4 text-muted-foreground/70" />
+                      <span className="text-sm text-muted-foreground">
                         No photo in Frappe - cannot refresh
                       </span>
                     </>

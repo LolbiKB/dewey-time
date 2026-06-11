@@ -36,7 +36,7 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
               className={`gap-1.5 cursor-help ${
                 is_fully_synced && !isSyncing
                   ? 'text-green-700 dark:text-green-400'
-                  : 'text-gray-500 dark:text-gray-400'
+                  : 'text-muted-foreground dark:text-muted-foreground/70'
               }`}
             >
               {is_fully_synced && !isSyncing && <Check className="h-3 w-3" />}
@@ -58,7 +58,7 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
                 <span className="text-muted-foreground">Synced:</span>
                 <span className="text-green-600 font-medium">{synced}</span>
                 <span className="text-muted-foreground">Not synced:</span>
-                <span className={notSynced > 0 ? 'text-gray-600 font-medium' : ''}>{notSynced}</span>
+                <span className={notSynced > 0 ? 'text-foreground font-medium' : ''}>{notSynced}</span>
                 {aggregate.syncing > 0 && (
                   <>
                     <span className="text-muted-foreground">In progress:</span>
@@ -90,7 +90,7 @@ export function SyncStatusSummary({ userId, variant = 'badge' }: SyncStatusSumma
             All devices synced
           </Badge>
         ) : (
-          <Badge variant="secondary" className="gap-1.5 text-gray-500 dark:text-gray-400">
+          <Badge variant="secondary" className="gap-1.5 text-muted-foreground dark:text-muted-foreground/70">
             {synced}/{total_devices} devices
           </Badge>
         )}

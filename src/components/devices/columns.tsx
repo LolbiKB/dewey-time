@@ -103,7 +103,7 @@ export function createDeviceColumns({
         
         return (
           <div className="flex justify-center">
-            <Badge variant="secondary" className={isOnline ? 'text-green-700' : 'text-gray-500'}>
+            <Badge variant="secondary" className={isOnline ? 'text-green-700' : 'text-muted-foreground'}>
               {isOnline ? (
                 <Wifi className="h-3 w-3 mr-1" />
               ) : (
@@ -205,7 +205,7 @@ export function createDeviceColumns({
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-gray-100">
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-muted">
                 <MoreHorizontal className="h-4 w-4" />
                 <span className="sr-only">Open menu</span>
               </Button>

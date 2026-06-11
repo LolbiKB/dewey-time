@@ -137,7 +137,7 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
       )
     }
     return (
-      <Badge variant="secondary" className="text-gray-500">
+      <Badge variant="secondary" className="text-muted-foreground">
         <WifiOff className="h-3 w-3 mr-1" /> Offline
       </Badge>
     )

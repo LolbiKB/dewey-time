@@ -258,7 +258,7 @@ export function AvatarCell({
 
   return (
     <div className="relative">
-      <Avatar className={`${sizeClasses[size]} bg-gray-100`}>
+      <Avatar className={`${sizeClasses[size]} bg-muted`}>
         <AvatarImage
           key={displayUrl || 'no-photo'}
           src={displayUrl || undefined}

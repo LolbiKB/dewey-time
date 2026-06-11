@@ -46,8 +46,8 @@ interface CommandHistoryDialogProps {
 const STATUS_CONFIG = {
   pending: {
     icon: Clock,
-    color: 'text-gray-500',
-    border: 'border-gray-200',
+    color: 'text-muted-foreground',
+    border: 'border-border',
   },
   sent: {
     icon: Loader2,
@@ -66,8 +66,8 @@ const STATUS_CONFIG = {
   },
   cancelled: {
     icon: Clock,
-    color: 'text-gray-400',
-    border: 'border-gray-200',
+    color: 'text-muted-foreground/70',
+    border: 'border-border',
   },
 }
 
@@ -182,13 +182,13 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                   </>
                 ) : (
                   <>
-                    <WifiOff className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="text-gray-500">Offline</span>
+                    <WifiOff className="h-3.5 w-3.5 text-muted-foreground/70" />
+                    <span className="text-muted-foreground">Offline</span>
                   </>
                 )}
               </span>
               {device?.last_seen && (
-                <span className="text-gray-400">
+                <span className="text-muted-foreground/70">
                   {formatDistanceToNow(new Date(device.last_seen), { addSuffix: true })}
                 </span>
               )}
@@ -220,7 +220,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                 </SelectContent>
               </Select>
 
-              <div className="text-xs text-gray-400 ml-auto">
+              <div className="text-xs text-muted-foreground/70 ml-auto">
                 {meta?.total ?? 0} total
               </div>
             </div>
@@ -230,10 +230,10 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
         <div className="flex-1 overflow-y-auto py-2">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/70" />
             </div>
           ) : commands.length === 0 ? (
-            <div className="text-center py-12 text-gray-400">
+            <div className="text-center py-12 text-muted-foreground/70">
               <Server className="h-12 w-12 mx-auto mb-3 opacity-20" />
               <p className="text-sm">No commands found</p>
               <p className="text-xs mt-1">Try adjusting your filters</p>
@@ -250,7 +250,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                 return (
                   <div
                     key={cmd.id}
-                    className={`p-3 rounded-lg border ${statusCfg.border} bg-white hover:shadow-sm transition-shadow`}
+                    className={`p-3 rounded-lg border ${statusCfg.border} bg-card hover:shadow-sm transition-shadow`}
                   >
                     <div className="flex items-start gap-3">
                       <div className={`mt-0.5 ${statusCfg.color}`}>
@@ -260,7 +260,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-medium text-sm">{label}</span>
-                          <span className="text-xs text-gray-400 ml-auto">
+                          <span className="text-xs text-muted-foreground/70 ml-auto">
                             {format(new Date(cmd.created_at), 'MMM d, h:mm a')}
                           </span>
                         </div>
@@ -279,14 +279,14 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                               return (
                                 <div className="space-y-1">
                                   <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-400">Command</span>
-                                    <span className="text-[10px] text-gray-400">{size}</span>
+                                    <span className="text-[10px] text-muted-foreground/70">Command</span>
+                                    <span className="text-[10px] text-muted-foreground/70">{size}</span>
                                   </div>
-                                  <code className="text-[10px] font-mono text-gray-600 block break-all bg-gray-50 p-2 rounded border">
+                                  <code className="text-[10px] font-mono text-foreground/80 block break-all bg-muted/40 p-2 rounded border">
                                     {display}
                                   </code>
                                   {wasTruncated && (
-                                    <p className="text-[10px] text-gray-400">
+                                    <p className="text-[10px] text-muted-foreground/70">
                                       Command truncated — use Copy to get full command
                                     </p>
                                   )}
@@ -299,7 +299,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                                   navigator.clipboard?.writeText(cmd.command)
                                   notifySuccess('Copied')
                                 }}
-                                className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
                               >
                                 <Copy className="h-3 w-3" />
                                 Copy
@@ -320,7 +320,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
 
                       <button
                         onClick={() => toggleExpand(cmd.id)}
-                        className="text-gray-400 hover:text-gray-600 p-1"
+                        className="text-muted-foreground/70 hover:text-foreground p-1"
                       >
                         {isExpanded ? (
                           <ChevronDown className="h-4 w-4" />
@@ -339,7 +339,7 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
         {/* Pagination */}
         {meta && meta.totalPages > 1 && (
           <div className="shrink-0 pt-4 border-t flex items-center justify-between">
-            <div className="text-xs text-gray-400">
+            <div className="text-xs text-muted-foreground/70">
               Page {meta.page} of {meta.totalPages}
             </div>
             <div className="flex items-center gap-1">
@@ -374,8 +374,8 @@ export function CommandHistoryDialog({ deviceSn, open, onOpenChange }: CommandHi
                       onClick={() => handlePageChange(pageNum)}
                       className={`h-8 w-8 rounded text-xs font-medium transition-colors ${
                         pageNum === meta.page
-                          ? 'bg-gray-900 text-white'
-                          : 'hover:bg-gray-100 text-gray-600'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-muted text-muted-foreground'
                       }`}
                       disabled={isFetching}
                     >
