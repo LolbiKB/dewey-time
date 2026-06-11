@@ -224,7 +224,6 @@ export class UserService {
     }
     try {
       const result = await response.json()
-      console.log('=== API Response ===', JSON.stringify(result).slice(0, 200))
       return result
     } catch (e) {
       console.error('JSON parse error:', e)

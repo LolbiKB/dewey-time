@@ -20,9 +20,11 @@ import type { UserFilters, UsersResponse } from '@/services/user-service'
 export function isBetaDirectReads(): boolean {
   if (!isFrappeMode) return false
   try {
-    return localStorage.getItem('adms_beta_direct') === '1'
+    // Promoted to the default in embedded mode after the shadow-compare proved
+    // parity. `adms_beta_direct === '0'` is the kill-switch back to bridge-only.
+    return localStorage.getItem('adms_beta_direct') !== '0'
   } catch {
-    return false
+    return true
   }
 }
 
