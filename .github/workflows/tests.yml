@@ -1,0 +1,98 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    services:
+      mariadb:
+        image: mariadb:10.6
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=15
+      redis-cache:
+        image: redis:6.2-alpine
+        ports: ["13000:6379"]
+      redis-queue:
+        image: redis:6.2-alpine
+        ports: ["11000:6379"]
+
+    env:
+      # Match the Frappe Cloud site's major version. Bump here if the site is on a
+      # different track (e.g. version-14).
+      FRAPPE_BRANCH: version-15
+      ERPNEXT_BRANCH: version-15
+      HRMS_BRANCH: version-15
+      DB_ROOT_PASSWORD: root
+
+    steps:
+      - name: Checkout zkteco_hr
+        uses: actions/checkout@v4
+        with:
+          path: zkteco_hr-src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mariadb-client
+
+      - name: Install frappe-bench
+        run: pip install frappe-bench
+
+      - name: Init bench + fetch apps (frappe → erpnext → hrms → zkteco_hr)
+        run: |
+          bench init --skip-redis-config-generation --skip-assets \
+            --frappe-branch "$FRAPPE_BRANCH" --python "$(which python)" frappe-bench
+          cd frappe-bench
+          bench get-app erpnext --branch "$ERPNEXT_BRANCH"
+          bench get-app hrms --branch "$HRMS_BRANCH"
+          bench get-app zkteco_hr "$GITHUB_WORKSPACE/zkteco_hr-src"
+
+      - name: MariaDB charset (utf8mb4)
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -p"$DB_ROOT_PASSWORD" \
+            -e "SET GLOBAL character_set_server='utf8mb4'; SET GLOBAL collation_server='utf8mb4_unicode_ci';"
+
+      - name: Create site + install apps
+        working-directory: frappe-bench
+        run: |
+          bench set-config -g db_host 127.0.0.1
+          bench set-config -g redis_cache "redis://127.0.0.1:13000"
+          bench set-config -g redis_queue "redis://127.0.0.1:11000"
+          bench set-config -g redis_socketio "redis://127.0.0.1:11000"
+          bench new-site test_site \
+            --no-mariadb-socket \
+            --db-host 127.0.0.1 \
+            --mariadb-root-password "$DB_ROOT_PASSWORD" \
+            --admin-password admin
+          bench --site test_site install-app erpnext hrms zkteco_hr
+          bench --site test_site set-config allow_tests true
+
+      - name: Run zkteco_hr tests
+        working-directory: frappe-bench
+        run: bench --site test_site run-tests --app zkteco_hr
