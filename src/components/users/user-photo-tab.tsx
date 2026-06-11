@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/base-modal'
+import { DialogFooter } from '@/components/ui/dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Loader2, RefreshCw, Upload, CheckCircle2, Image } from 'lucide-react'
 import { useUserPhoto } from '@/hooks/use-user-photo'
@@ -130,44 +131,48 @@ export function UserPhotoTab({ user, syncStatus, onProcessed }: UserPhotoTabProp
   }
 
   return (
-    <div className="flex flex-col gap-4 py-1">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <Badge variant={PHOTO_CACHE_STATUS_VARIANT[displayStatus]}>
-          {PHOTO_CACHE_STATUS_LABELS[displayStatus]}
-        </Badge>
-        {user.photo_synced_at && (
-          <span className="text-[11px] text-muted-foreground">
-            Cache updated {new Date(user.photo_synced_at).toLocaleString()}
-          </span>
-        )}
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        HR (Frappe) ↔ bridge cache. Device photo status is on the Sync tab.
-      </p>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-lg border p-3 space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">Frappe (HR)</div>
-          <Avatar className="h-20 w-20 mx-auto">
-            <AvatarImage src={frappePreviewUrl || undefined} className="object-cover" />
-            <AvatarFallback><Image className="h-6 w-6 text-muted-foreground" /></AvatarFallback>
-          </Avatar>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-1">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <Badge variant={PHOTO_CACHE_STATUS_VARIANT[displayStatus]}>
+            {PHOTO_CACHE_STATUS_LABELS[displayStatus]}
+          </Badge>
+          {user.photo_synced_at && (
+            <span className="text-[11px] text-muted-foreground">
+              Cache updated {new Date(user.photo_synced_at).toLocaleString()}
+            </span>
+          )}
         </div>
-        <div className="rounded-lg border p-3 space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">Bridge cache</div>
-          <Avatar className="h-20 w-20 mx-auto">
-            <AvatarImage src={cachedPhotoUrl || undefined} className="object-cover" />
-            <AvatarFallback><Image className="h-6 w-6 text-muted-foreground" /></AvatarFallback>
-          </Avatar>
+
+        <p className="text-xs text-muted-foreground">
+          HR (Frappe) ↔ bridge cache. Device photo status is on the Sync tab.
+        </p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="rounded-lg border p-3 space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">Frappe (HR)</div>
+            <Avatar className="h-20 w-20 mx-auto">
+              <AvatarImage src={frappePreviewUrl || undefined} className="object-cover" />
+              <AvatarFallback><Image className="h-6 w-6 text-muted-foreground" /></AvatarFallback>
+            </Avatar>
+          </div>
+          <div className="rounded-lg border p-3 space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">Bridge cache</div>
+            <Avatar className="h-20 w-20 mx-auto">
+              <AvatarImage src={cachedPhotoUrl || undefined} className="object-cover" />
+              <AvatarFallback><Image className="h-6 w-6 text-muted-foreground" /></AvatarFallback>
+            </Avatar>
+          </div>
+        </div>
+
+        <div className="text-xs text-muted-foreground rounded-md bg-muted/50 px-3 py-2">
+          Devices: {devicesWithPhoto}/{deviceTotal} have photo synced (cloud → terminal)
         </div>
       </div>
 
-      <div className="text-xs text-muted-foreground rounded-md bg-muted/50 px-3 py-2">
-        Devices: {devicesWithPhoto}/{deviceTotal} have photo synced (cloud → terminal)
-      </div>
-
-      <div className="flex flex-wrap gap-2">
+      {/* Pinned action bar — Frappe↔cache↔device actions stay reachable while
+          the previews above scroll. */}
+      <DialogFooter variant="bar" className="sm:justify-start">
         <Button
           size="sm"
           onClick={handleProcess}
@@ -201,7 +206,7 @@ export function UserPhotoTab({ user, syncStatus, onProcessed }: UserPhotoTabProp
           {pushing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
           Push to devices
         </Button>
-      </div>
+      </DialogFooter>
 
       <ConfirmationDialog
         isOpen={pushConfirmOpen}

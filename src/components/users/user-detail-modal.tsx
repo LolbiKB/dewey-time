@@ -1315,7 +1315,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
               )}
             </TabsContent>
 
-            <TabsContent value="photo" className="flex-1 flex flex-col min-h-0 mt-4 overflow-y-auto">
+            <TabsContent value="photo" className="flex-1 flex flex-col min-h-0 mt-4">
               {!isRegistered ? (
                 <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
                   Register first to manage HR photo cache
