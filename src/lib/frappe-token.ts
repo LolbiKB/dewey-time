@@ -36,12 +36,24 @@ function notify() {
   for (const fn of subscribers) fn(state)
 }
 
-/** Frappe session is gone or user lacks access — hand over to Frappe login. */
+/** Frappe session is gone — hand over to Frappe login. */
 function redirectToFrappeLogin(): never {
   const target = '/login?redirect-to=' + encodeURIComponent('/adms')
   window.location.href = target
   // Halt callers; navigation is already underway.
   throw new Error('Redirecting to Frappe login')
+}
+
+/**
+ * Logged in to Frappe, but the account is not an ADMS admin. This is terminal:
+ * redirecting to /login would just bounce the active session back to /adms and
+ * loop forever. Callers render an access-denied screen instead.
+ */
+export class AdmsForbiddenError extends Error {
+  constructor(message = 'Your Frappe account is not registered as an ADMS admin.') {
+    super(message)
+    this.name = 'AdmsForbiddenError'
+  }
 }
 
 async function fetchToken(): Promise<FrappeTokenState> {
@@ -54,8 +66,13 @@ async function fetchToken(): Promise<FrappeTokenState> {
     },
   })
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
+    // No / expired Frappe session — log in.
     redirectToFrappeLogin()
+  }
+  if (res.status === 403) {
+    // Authenticated but not an ADMS admin — terminal, do NOT redirect (loops).
+    throw new AdmsForbiddenError()
   }
   if (!res.ok) {
     throw new Error(`Token exchange failed: HTTP ${res.status}`)

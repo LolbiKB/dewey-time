@@ -5,6 +5,7 @@ import {
   getFrappeToken,
   getFrappeTokenState,
   subscribeFrappeToken,
+  AdmsForbiddenError,
 } from '@/lib/frappe-token'
 import type { User, Session } from '@supabase/supabase-js'
 
@@ -65,17 +66,47 @@ async function checkAdminStatus(
 function FrappeAuthProvider({ children }: { children: React.ReactNode }) {
   const [tokenState, setTokenState] = useState(getFrappeTokenState())
   const [loading, setLoading] = useState(!tokenState)
+  const [forbidden, setForbidden] = useState<string | null>(null)
 
   useEffect(() => {
     const unsubscribe = subscribeFrappeToken(setTokenState)
     getFrappeToken()
-      .catch(() => {
-        // 401/403 already redirected to Frappe login; other errors keep
-        // loading=false so the access-denied screen shows rather than a spinner.
+      .catch((err) => {
+        // 401 already redirected to Frappe login. A 403 means the Frappe user
+        // is authenticated but not an ADMS admin (e.g. Administrator) — show a
+        // terminal access-denied screen instead of looping back to /login.
+        if (err instanceof AdmsForbiddenError) setForbidden(err.message)
       })
       .finally(() => setLoading(false))
     return unsubscribe
   }, [])
+
+  if (forbidden) {
+    return (
+      <div className="flex h-screen items-center justify-center p-6">
+        <div className="max-w-sm space-y-4 text-center">
+          <h1 className="text-2xl font-bold">Access denied</h1>
+          <p className="text-muted-foreground">{forbidden}</p>
+          <p className="text-sm text-muted-foreground">
+            You&apos;re signed in to Frappe, but this account isn&apos;t an ADMS admin.
+            Sign in with an admin account.
+          </p>
+          <button
+            onClick={async () => {
+              try {
+                await fetch('/api/method/logout', { credentials: 'same-origin' })
+              } finally {
+                window.location.href = '/login?redirect-to=' + encodeURIComponent('/adms')
+              }
+            }}
+            className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Sign out &amp; switch account
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   // Minimal User shim — consumers only read `email` (and identity-ish fields).
   const user = tokenState
