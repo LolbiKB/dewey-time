@@ -166,7 +166,7 @@ export function DeviceAttlogOverviewTab({
         <AttlogHealthMetric
           label="Time drift"
           value={meta?.attlog_time_drift_suspected ? 'Suspected' : 'OK'}
-          hint="Checked after each LOG upload: if the newest punch is more than 48h from server time, the device clock is suspect and recent days are automatically re-verified. Can flag falsely after multi-day quiet periods (no punches) — it clears on the next punch."
+          hint="Checked after each LOG upload: flags only when the newest punch is ahead of server time by >10 min (device clock running fast — impossible with a correct clock). Recent days are then automatically re-verified. Idle devices are never flagged; clocks re-sync to server GMT on each reconnect."
           highlight={!!meta?.attlog_time_drift_suspected}
           icon={
             meta?.attlog_time_drift_suspected ? (
