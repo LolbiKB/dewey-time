@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { getAuthHeaders } from '@/lib/auth-token'
+import { isBetaDirectReads, betaEmployeeRead } from '@/lib/beta-direct'
 
 // Custom error for user operation locks (423 Locked)
 export class UserOperationLockedError extends Error {
@@ -517,6 +518,15 @@ export class UserService {
   }
 
   static async getFrappeEmployees(filters: UserFilters = {}): Promise<UsersResponse> {
+    // Tier-2 beta (embedded mode, opt-in flag): read Frappe + Supabase direct
+    // and shadow-compare against the bridge. Default off → pure bridge path.
+    if (isBetaDirectReads()) {
+      return betaEmployeeRead(filters, () => this.getFrappeEmployeesViaBridge(filters))
+    }
+    return this.getFrappeEmployeesViaBridge(filters)
+  }
+
+  private static async getFrappeEmployeesViaBridge(filters: UserFilters = {}): Promise<UsersResponse> {
     const params = new URLSearchParams()
     if (filters.page) params.append('page', String(filters.page))
     if (filters.limit) params.append('limit', String(filters.limit))

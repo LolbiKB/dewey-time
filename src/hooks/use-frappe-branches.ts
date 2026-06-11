@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { getAuthHeaders } from '@/lib/auth-token'
+import { isBetaDirectReads } from '@/lib/beta-direct'
+import { fetchFrappeBranchesDirect } from '@/services/frappe-direct'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -16,6 +18,8 @@ export function useFrappeBranches() {
   return useQuery({
     queryKey: frappeBranchKeys.all,
     queryFn: async (): Promise<BranchOption[]> => {
+      // Tier-1 beta: pure proxy, so read direct under the session (no shadow needed).
+      if (isBetaDirectReads()) return fetchFrappeBranchesDirect()
       const response = await fetch(`${API_URL}/admin/frappe-branches`, {
         headers: await getAuthHeaders(),
       })
