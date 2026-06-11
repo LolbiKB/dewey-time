@@ -138,7 +138,7 @@ export function ChangeStatusDialog({ user, open, onOpenChange }: ChangeStatusDia
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter variant="bar">
           <Button
             onClick={handleSave}
             disabled={deviceAdminLocked || !hasChanged || updateStatusMutation.isPending}

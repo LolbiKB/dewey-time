@@ -3,6 +3,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -250,7 +251,7 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
           </div>
         )}
 
-        <div className="flex justify-end gap-2">
+        <DialogFooter variant="bar">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
@@ -261,7 +262,7 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
               <><RefreshCw className="h-4 w-4 mr-2" /> Request Info</>
             )}
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

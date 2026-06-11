@@ -2,6 +2,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -141,8 +142,11 @@ export function SequentialProgressModal({
             </Alert>
           )}
 
-          {/* Actions */}
-          <div className="flex justify-end gap-2">
+        </div>
+
+        {/* Actions — pinned bottom bar (only when an action is available) */}
+        {((isProcessing && canCancel) || allCompleted) && (
+          <DialogFooter variant="bar">
             {isProcessing && canCancel && (
               <Button
                 variant="outline"
@@ -157,8 +161,8 @@ export function SequentialProgressModal({
                 Close
               </Button>
             )}
-          </div>
-        </div>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   )

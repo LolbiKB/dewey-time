@@ -283,7 +283,7 @@ export function PhotoRefreshDialog({ user, open, onOpenChange, onSuccess }: Phot
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter variant="bar">
           {status === 'success' && (
             <Button variant="outline" onClick={handleClose}>
               Done

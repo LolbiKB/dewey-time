@@ -3,6 +3,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -277,7 +278,7 @@ export function EditDeviceDialog({
             )}
           </div>
 
-          <div className="flex justify-end">
+          <DialogFooter variant="bar">
             <Button
               onClick={() => {
                 if (!hasChanges) { onOpenChange(false); return }
@@ -288,7 +289,7 @@ export function EditDeviceDialog({
               {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {hasChanges ? 'Review Changes' : 'Save'}
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
