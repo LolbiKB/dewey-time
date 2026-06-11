@@ -65,14 +65,18 @@ export async function fetchFrappeEmployees(): Promise<FrappeEmployee[]> {
 
 ## Deployment
 
-Can be deployed to:
-- Cloudflare Pages (free)
-- Vercel (free)
-- Netlify (free)
-- Any static hosting service
+Served embedded in the Frappe site at `/adms`. Build + publish into the
+`zkteco_hr` app with:
 
-Build command: `bun run build`
-Output directory: `dist`
+```bash
+ADMS_BRIDGE_URL=https://<cloud-run-bridge-host> node scripts/build-frappe.mjs
+```
+
+That writes `public/adms/` + `www/adms.html` in the `zkteco_hr` repo; commit
+there and run `bench migrate`. (The bridge API itself deploys separately to
+Cloud Run.)
+
+Build command: `npm run build` · Output directory: `dist`
 
 import reactDom from 'eslint-plugin-react-dom'
 
