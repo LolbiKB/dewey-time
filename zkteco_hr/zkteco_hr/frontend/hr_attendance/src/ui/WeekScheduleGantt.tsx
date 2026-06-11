@@ -159,7 +159,7 @@ function VerticalShiftTrack(props: {
       ) : null}
 
       <div className="relative h-[4.5rem] w-3 overflow-hidden rounded-full bg-muted/40">
-        <div className="absolute inset-0 rounded-full bg-gradient-to-b from-amber-400/90 to-amber-600 shadow-inner ring-1 ring-amber-700/25" />
+        <div className="absolute inset-0 rounded-full bg-amber-500/90 ring-1 ring-amber-700/25" />
         {lunchTop != null && lunchHeight != null ? (
           <div
             className="absolute inset-x-0 rounded-sm bg-background ring-1 ring-border/40"
