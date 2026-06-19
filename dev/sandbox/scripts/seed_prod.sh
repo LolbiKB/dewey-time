@@ -9,7 +9,7 @@ if [ -z "$DB_GZ" ]; then
   echo "ERROR: no *-database.sql.gz found in $BACKUP_DIR" >&2
   exit 1
 fi
-PUB="$(ls "$BACKUP_DIR"/*-files.tar 2>/dev/null | head -1 || true)"
+PUB="$(ls "$BACKUP_DIR"/*-files.tar 2>/dev/null | grep -v -- '-private-files.tar' | head -1 || true)"
 PRIV="$(ls "$BACKUP_DIR"/*-private-files.tar 2>/dev/null | head -1 || true)"
 
 if [ ! -d "sites/$SANDBOX_SITE" ]; then

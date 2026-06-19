@@ -1,2 +1,7 @@
 # local scratch
 *.local
+
+# real prod backups for seed --prod — never commit
+_backup/
+*.sql.gz
+*-files.tar
