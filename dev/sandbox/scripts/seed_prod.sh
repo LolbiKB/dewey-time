@@ -3,7 +3,11 @@ set -euo pipefail
 : "${APP:?}" "${SANDBOX_SITE:?}" "${BACKUP_DIR:?}" "${BENCH_DIR:?}"
 cd "/home/frappe/$BENCH_DIR"
 
-DB_GZ="$(ls "$BACKUP_DIR"/*-database.sql.gz | head -1)"
+DB_GZ="$(ls "$BACKUP_DIR"/*-database.sql.gz 2>/dev/null | head -1 || true)"
+if [ -z "$DB_GZ" ]; then
+  echo "ERROR: no *-database.sql.gz found in $BACKUP_DIR" >&2
+  exit 1
+fi
 PUB="$(ls "$BACKUP_DIR"/*-files.tar 2>/dev/null | head -1 || true)"
 PRIV="$(ls "$BACKUP_DIR"/*-private-files.tar 2>/dev/null | head -1 || true)"
 
