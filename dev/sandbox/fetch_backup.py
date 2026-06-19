@@ -5,7 +5,7 @@ No dashboard needed. Writes the 3 files into <dest> with names that
 `frappe-sandbox seed --prod <dest>` understands:
     <name>-database.sql.gz, <name>-files.tar, <name>-private-files.tar
 
-Credentials (env) — generate once at frappecloud.com -> account User -> Settings
+Credentials (env) — generate once at cloud.frappe.io -> account User -> Settings
 -> API Access -> Generate Keys (the secret is shown only once):
     FC_API_KEY, FC_API_SECRET, FC_TEAM (your team email/slug), FC_SITE (e.g. dewey.frappehr.com)
 
@@ -30,7 +30,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-BASE = "https://frappecloud.com/api/method"
+# Frappe Cloud moved hosts: frappecloud.com now 308-redirects here. We target the
+# canonical host directly — urllib strips the Authorization header on cross-origin
+# redirects, so following the 308 would silently drop auth and fail.
+BASE = "https://cloud.frappe.io/api/method"
 
 
 def _env(key: str) -> str:
@@ -71,11 +74,17 @@ def main() -> int:
     print(f"fetch_backup: auth ok (team={team}, site={site})")
 
     backups = _api("press.api.site.backups", {"name": site}, key=key, secret=secret, team=team) or []
-    pick = next((b for b in backups
-                 if b.get("offsite") and b.get("with_files")
-                 and b.get("files_availability") == "Available"), None)
+    # Pick the newest successful offsite backup that has files. NB: the list endpoint
+    # leaves files_availability null for every row, so we only EXCLUDE backups
+    # explicitly marked Unavailable (offsite files garbage-collected), not null ones.
+    candidates = [b for b in backups
+                  if b.get("offsite") and b.get("with_files")
+                  and b.get("status") == "Success"
+                  and b.get("files_availability") != "Unavailable"]
+    candidates.sort(key=lambda b: b.get("creation") or "", reverse=True)
+    pick = candidates[0] if candidates else None
     if not pick:
-        sys.exit("fetch_backup: no offsite backup with files available for this site.\n"
+        sys.exit("fetch_backup: no offsite backup with files for this site.\n"
                  "  Offsite backups are a paid Frappe Cloud feature; enable it (and take a\n"
                  "  backup with files) or download manually from the dashboard.")
     name = pick["name"]
