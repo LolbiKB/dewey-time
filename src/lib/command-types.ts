@@ -8,6 +8,7 @@ export const SYNC_COMMAND_TYPES = [
   'enroll_fingerprint',
   'enroll_fingerprint_confirm',
   'enroll_face',
+  'enroll_face_confirm',
   'upload_photo',
   'delete_user',
   'delete_fingerprint',
@@ -27,7 +28,7 @@ export const COMPONENT_COMMAND_TYPES: Record<SyncComponentKey, readonly string[]
     'enroll_fingerprint_confirm',
     'query_fingerprint',
   ],
-  face: ['enroll_face', 'query_face'],
+  face: ['enroll_face', 'enroll_face_confirm', 'query_face'],
   photo: ['upload_photo'],
 }
 
@@ -109,6 +110,7 @@ export const COMMAND_LABELS: Record<string, string> = {
   enroll_fingerprint: 'Fingerprint',
   enroll_fingerprint_confirm: 'Fingerprint (push)',
   enroll_face: 'Face',
+  enroll_face_confirm: 'Face (push)',
   upload_photo: 'Photo',
   delete_user: 'Delete User',
   delete_fingerprint: 'Remove fingerprint',
