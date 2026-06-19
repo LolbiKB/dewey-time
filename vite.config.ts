@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import path from "path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
@@ -33,6 +34,11 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  // Unit tests live under src/. Confine vitest there so it does not try to
+  // collect the Playwright E2E specs in e2e/ (which use @playwright/test).
+  test: {
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
   server: {
     proxy: {
