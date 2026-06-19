@@ -77,7 +77,7 @@ def main(argv=None) -> int:
     e.add_argument("--employee", required=True)
     e.add_argument("--start", required=True)
     e.add_argument("--end", required=True)
-    e.add_argument("--mode", default="both")
+    e.add_argument("--mode", default="both", choices=["intraday", "closeout", "both"])
     sub.add_parser("verify")
     sub.add_parser("doctor")
 

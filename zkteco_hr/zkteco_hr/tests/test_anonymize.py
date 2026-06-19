@@ -16,6 +16,8 @@ class TestAnonymizeStatements(unittest.TestCase):
         self.assertIn("employee_name", blob)
         self.assertIn("personal_email", blob)
         self.assertIn("update `tabemployee checkin`", blob)
+        # device_id and serial are deterministically masked (not nulled)
+        self.assertIn("md5(device_id)", blob)
         # engine-relevant fields NEVER appear in a SET clause
         for protected in (" time =", " log_type =", " shift =", " employee =",
                           "custom_supabase_log_id ="):
@@ -24,6 +26,11 @@ class TestAnonymizeStatements(unittest.TestCase):
     def test_is_prod_site_guard(self):
         self.assertTrue(anonymize.is_prod_site("dewey.frappehr.com"))
         self.assertFalse(anonymize.is_prod_site("sandbox"))
+
+    def test_run_refuses_on_prod_site(self):
+        anonymize.frappe.local.site = "dewey.frappehr.com"
+        with self.assertRaises(RuntimeError):
+            anonymize.run()
 
 
 if __name__ == "__main__":

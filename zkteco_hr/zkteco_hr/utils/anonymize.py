@@ -2,6 +2,11 @@
 
 Run via: bench --site sandbox execute zkteco_hr.utils.anonymize.run
 Refuses to run on a site whose name looks like production.
+
+Notes:
+- device_id and custom_device_serial_number are deterministically masked (not nulled)
+  so device-closeout correlation (closeout.py filters Employee Checkin by device_id)
+  is preserved while still de-identifying the raw hardware identifiers.
 """
 from __future__ import annotations
 
@@ -29,7 +34,8 @@ def _scrub_statements() -> list[tuple[str, dict]]:
          "date_of_birth = NULL", {}),
         ("UPDATE `tabEmployee Checkin` SET "
          "employee_name = CONCAT('Employee ', employee), "
-         "device_id = NULL, custom_device_serial_number = NULL, "
+         "device_id = CASE WHEN device_id IS NULL THEN NULL ELSE CONCAT('DEV-', LEFT(MD5(device_id), 8)) END, "
+         "custom_device_serial_number = CASE WHEN custom_device_serial_number IS NULL THEN NULL ELSE CONCAT('SN-', LEFT(MD5(custom_device_serial_number), 8)) END, "
          "latitude = NULL, longitude = NULL", {}),
         ("UPDATE `tabAttendance Flag` SET "
          "employee_name = CONCAT('Employee ', employee)", {}),
@@ -37,7 +43,8 @@ def _scrub_statements() -> list[tuple[str, dict]]:
          "full_name = CONCAT('User ', name), first_name = CONCAT('User ', name), "
          "last_name = '' WHERE name NOT IN ('Administrator', 'Guest')", {}),
         ("UPDATE `tabContact` SET first_name = CONCAT('Contact ', name), "
-         "last_name = '', email_id = CONCAT(name, '@example.test')", {}),
+         "last_name = '', email_id = CONCAT(name, '@example.test'), "
+         "phone = NULL, mobile_no = NULL", {}),
         ("UPDATE `tabAddress` SET address_line1 = 'redacted', "
          "address_line2 = NULL, phone = NULL", {}),
     ]

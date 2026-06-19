@@ -39,6 +39,15 @@ class TestCliDryRun(unittest.TestCase):
         from frappe_sandbox.cli import main
         self.assertEqual(main(["--config", CONFIG, "test"]), 2)
 
+    def test_shim_runs_from_repo_root(self):
+        import subprocess
+        shim = str(Path(__file__).resolve().parents[1] / "frappe-sandbox")
+        repo_root = str(Path(__file__).resolve().parents[3])
+        r = subprocess.run([shim, "--dry-run", "up"], cwd=repo_root,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("docker compose", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
