@@ -1,37 +1,18 @@
-"""Sandbox bootstrap: create the custom fields zkteco_hr's engine reads.
+"""Sandbox bootstrap: ensure zkteco_hr's custom fields on a sandbox/test bench.
 
 Run via: bench --site <site> execute zkteco_hr.utils.sandbox_bootstrap.run
 
-These custom fields exist on the production site (added outside the app) but the
-app does NOT ship them as fixtures, so a vanilla `install-app zkteco_hr` (or a
-schema-light backup) lacks them and the engine fails on the missing columns.
-This recreates them for a sandbox/test bench. Idempotent.
-
-This is also the reference example for the frappe-sandbox `bootstrap_method` hook:
-any custom Frappe app can provide its own such module to set up the custom fields,
-masters, or config its sandbox needs.
+Reuses the app's canonical custom-field setup (zkteco_hr.setup.custom_fields), so a
+schema-light restore gets the same fields a real install/migrate creates. The app now
+creates these on after_install/after_migrate too, so this is mostly a safety net for
+restores that predate that — and the reference for the frappe-sandbox `bootstrap_method`
+hook: any app can point bootstrap_method at its own such setup.
 """
 from __future__ import annotations
 
-import frappe
-from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
-
-_CUSTOM_FIELDS = {
-    "Employee Checkin": [
-        {"fieldname": "custom_device_branch", "label": "Device Branch", "fieldtype": "Data"},
-        {"fieldname": "custom_device_serial_number", "label": "Device Serial Number", "fieldtype": "Data"},
-        {"fieldname": "custom_supabase_log_id", "label": "Supabase Log ID", "fieldtype": "Data"},
-    ],
-    "Shift Type": [
-        {"fieldname": "custom_grace_minutes", "label": "Grace Minutes", "fieldtype": "Int"},
-        {"fieldname": "custom_lunch_start", "label": "Lunch Start", "fieldtype": "Time"},
-        {"fieldname": "custom_lunch_end", "label": "Lunch End", "fieldtype": "Time"},
-    ],
-}
+from zkteco_hr.setup.custom_fields import make_custom_fields
 
 
 def run() -> str:
-    create_custom_fields(_CUSTOM_FIELDS, ignore_validate=True)
-    frappe.db.commit()
-    n = sum(len(v) for v in _CUSTOM_FIELDS.values())
-    return f"BOOTSTRAP_OK custom_fields={n}"
+    make_custom_fields()
+    return "BOOTSTRAP_OK"

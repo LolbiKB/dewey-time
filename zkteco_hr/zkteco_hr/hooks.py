@@ -36,8 +36,12 @@ website_route_rules = [
     {"from_route": "/hr-schedule", "to_route": "hr-schedule"},
 ]
 
-# Keep SPA assets available under sites/assets after every migrate.
+# Ensure zkteco_hr's custom fields exist on install (and after every upgrade).
+after_install = "zkteco_hr.setup.custom_fields.make_custom_fields"
+
+# Keep SPA assets available under sites/assets after every migrate (+ ensure fields).
 after_migrate = [
+    "zkteco_hr.setup.custom_fields.make_custom_fields",
     "zkteco_hr.utils.sync_hr_attendance_assets.sync_hr_attendance_assets",
     "zkteco_hr.utils.sync_adms_assets.sync_adms_assets",
     "zkteco_hr.attendance_engine.dashboard_auth.ensure_adms_roles",
