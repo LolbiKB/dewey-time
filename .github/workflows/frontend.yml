@@ -1,0 +1,72 @@
+name: Frontend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: zkteco_hr/zkteco_hr/frontend/hr_attendance
+
+jobs:
+  unit-web:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read # read @lolbikb/dewey-ui from GitHub Packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The app depends on the private @lolbikb/dewey-ui package (GitHub Packages).
+      # If this repo hasn't been granted read access to it, install fails — degrade
+      # gracefully with a warning instead of a red X until access is granted.
+      # `npm install` (not `npm ci`): the committed lockfile may omit platform-gated
+      # optional deps that Linux needs.
+      - id: install
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm install --no-audit --no-fund
+      - if: steps.install.outcome != 'success'
+        run: echo "::warning title=Frontend unit tests skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
+      - if: steps.install.outcome == 'success'
+        run: npm run test:web
+
+  e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - id: install
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm install --no-audit --no-fund
+      - if: steps.install.outcome != 'success'
+        run: echo "::warning title=E2E skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
+      - if: steps.install.outcome == 'success'
+        run: npx playwright install --with-deps chromium
+      - if: steps.install.outcome == 'success'
+        run: npm run test:e2e
+      - if: ${{ failure() && steps.install.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: zkteco_hr/zkteco_hr/frontend/hr_attendance/playwright-report/
+          retention-days: 7
