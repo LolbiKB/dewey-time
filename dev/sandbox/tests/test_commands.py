@@ -21,6 +21,11 @@ def _cfg(*, exercise_method="zkteco_hr.attendance_engine.dev_tools.run_engine_fo
 
 
 class TestCommands(unittest.TestCase):
+    def test_build_ready_is_up_then_provision(self):
+        cmds = c.build_ready(_cfg())
+        self.assertEqual(cmds, c.build_up(_cfg()) + c.build_provision(_cfg()))
+        self.assertIn("up", cmds[0])
+
     def test_build_bootstrap_empty_when_unset(self):
         self.assertEqual(c.build_bootstrap(_cfg()), [])
 

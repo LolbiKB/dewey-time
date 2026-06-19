@@ -28,6 +28,11 @@ def build_up(cfg: Config) -> list[list[str]]:
     return [_compose(cfg) + ["up", "-d"]]
 
 
+def build_ready(cfg: Config) -> list[list[str]]:
+    """One-shot cold start: bring the stack up, then provision (idempotent)."""
+    return build_up(cfg) + build_provision(cfg)
+
+
 def build_down(cfg: Config, *, purge: bool = False) -> list[list[str]]:
     return [_compose(cfg) + ["down"] + (["-v"] if purge else [])]
 

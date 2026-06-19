@@ -17,6 +17,11 @@ class TestCliDryRun(unittest.TestCase):
         self.assertEqual(rc, 0)
         return buf.getvalue()
 
+    def test_ready_dry_run(self):
+        out = self._run("ready")
+        self.assertIn("up -d", out)
+        self.assertIn("provision.sh", out)
+
     def test_bootstrap_dry_run(self):
         out = self._run("bootstrap")
         self.assertIn("execute zkteco_hr.utils.sandbox_bootstrap.run", out)

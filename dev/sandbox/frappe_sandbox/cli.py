@@ -129,6 +129,8 @@ def _build(args, cfg) -> list[list[str]]:
         return c.build_down(cfg, purge=args.purge)
     if args.cmd == "install-app":
         return c.build_provision(cfg)
+    if args.cmd == "ready":
+        return c.build_ready(cfg)
     if args.cmd == "seed":
         if args.clean:
             return c.build_provision(cfg)
@@ -195,6 +197,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="frappe-sandbox", parents=[pre])
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("up")
+    sub.add_parser("ready")
     d = sub.add_parser("down"); d.add_argument("--purge", action="store_true")
     sub.add_parser("install-app")
     s = sub.add_parser("seed")
