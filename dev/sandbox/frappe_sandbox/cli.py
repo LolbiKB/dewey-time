@@ -82,6 +82,12 @@ def main(argv=None) -> int:
     sub.add_parser("doctor")
 
     args = p.parse_args(argv)
+    if args.cmd == "seed" and not args.clean and not args.prod:
+        print("seed requires --clean or --prod <BACKUP_DIR>", file=sys.stderr)
+        return 2
+    if args.cmd == "test" and not args.backend and not args.frontend:
+        print("test requires --backend or --frontend", file=sys.stderr)
+        return 2
     cwd = str(Path(args.config).resolve().parent)
     try:
         if args.cmd == "doctor":

@@ -31,6 +31,14 @@ class TestCliDryRun(unittest.TestCase):
         self.assertIn("docker compose", out)
         self.assertIn("up -d", out)
 
+    def test_seed_without_clean_or_prod_errors(self):
+        from frappe_sandbox.cli import main
+        self.assertEqual(main(["--config", CONFIG, "seed"]), 2)
+
+    def test_test_without_backend_or_frontend_errors(self):
+        from frappe_sandbox.cli import main
+        self.assertEqual(main(["--config", CONFIG, "test"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,3 @@
 #!/usr/bin/env bash
-# Thin shim so `dev/sandbox/frappe-sandbox <verb>` works from anywhere.
-here="$(cd "$(dirname "$0")" && pwd)"
+# Thin shim so `dev/sandbox/frappe-sandbox <verb>` works (relies on PYTHONPATH including dev/sandbox).
 exec python3 -m frappe_sandbox.cli "$@"
