@@ -4,6 +4,8 @@ from datetime import timedelta
 import frappe
 from frappe.utils import get_datetime, getdate
 
+from zkteco_hr.attendance_engine.hr_calendar import _require_calendar_access
+
 
 @frappe.whitelist()
 def get_my_week(employee: str, start_date: str, end_date: str):
@@ -12,7 +14,12 @@ def get_my_week(employee: str, start_date: str, end_date: str):
     - checkins per day
     - computed first/last + gross minutes (simple heuristic)
     - flags per day
+
+    Access: HR staff may read any employee; everyone else may read only the
+    Employee linked to their own user (same rule as the hr_calendar read API).
     """
+    _require_calendar_access(employee)
+
     start = getdate(start_date)
     end = getdate(end_date)
     if end < start:

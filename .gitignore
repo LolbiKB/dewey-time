@@ -1,0 +1,22 @@
+# Node dependencies (the frontend lives in zkteco_hr/zkteco_hr/frontend/hr_attendance)
+node_modules/
+
+# Frontend build cache / dev output.
+# NOTE: the committed SPA bundles under zkteco_hr/zkteco_hr/public/ are
+# intentional (Frappe Cloud does not run `npm build`) and are NOT ignored.
+dist/
+.vite/
+
+# Local environment overrides
+.env.local
+.env*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# OS / editor cruft
+.DS_Store
+*.swp
