@@ -26,7 +26,7 @@ class Config:
 _REQUIRED = ("app", "app_src", "required_apps", "branch", "frontend_dir")
 
 
-def load_config(path) -> Config:
+def load_config(path: str | Path) -> Config:
     p = Path(path)
     if not p.is_file():
         raise ConfigError(f"config not found: {p}")
@@ -38,11 +38,14 @@ def load_config(path) -> Config:
     missing = [k for k in _REQUIRED if k not in data]
     if missing:
         raise ConfigError(f"missing keys: {', '.join(missing)}")
-    if not isinstance(data["required_apps"], list) or not data["required_apps"]:
-        raise ConfigError("required_apps must be a non-empty list")
+    if not isinstance(data["required_apps"], list) or not data["required_apps"] or not all(isinstance(x, str) for x in data["required_apps"]):
+        raise ConfigError("required_apps must be a non-empty list of strings")
 
     base = p.parent
-    resolve = lambda rel: str((base / rel).resolve())
+
+    def resolve(rel: str) -> str:
+        return str((base / rel).resolve())
+
     return Config(
         app=data["app"],
         app_src=resolve(data["app_src"]),

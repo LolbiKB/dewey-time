@@ -47,6 +47,26 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(p)
 
+    def test_non_string_required_apps_raises(self):
+        with TemporaryDirectory() as d:
+            p = self._write(d, {
+                "app": "x", "app_src": ".", "required_apps": ["erpnext", 42],
+                "branch": "version-15", "frontend_dir": ".",
+            })
+            with self.assertRaises(ConfigError):
+                load_config(p)
+
+    def test_invalid_json_raises(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "frappe-sandbox.json"
+            p.write_text("{invalid json}")
+            with self.assertRaises(ConfigError):
+                load_config(p)
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(ConfigError):
+            load_config("/nonexistent/path/frappe-sandbox.json")
+
 
 if __name__ == "__main__":
     unittest.main()
