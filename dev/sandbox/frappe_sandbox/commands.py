@@ -41,6 +41,7 @@ def build_provision(cfg: Config) -> list[list[str]]:
         "TEST_SITE": cfg.test_site,
         "REGISTER_APPS_TXT": "1" if cfg.register_app_in_apps_txt else "0",
         "BENCH_DIR": cfg.bench_dir,
+        "BOOTSTRAP_METHOD": cfg.bootstrap_method,
     }
     return [docker_exec(cfg, "bash /workspace/repo/dev/sandbox/scripts/provision.sh", env=env)]
 
@@ -69,6 +70,7 @@ def build_seed_prod(cfg: Config, backup_dir: str) -> list[list[str]]:
         "BACKUP_DIR": backup_dir,
         "BENCH_DIR": cfg.bench_dir,
         "ANONYMIZE_METHOD": cfg.anonymize_method,
+        "BOOTSTRAP_METHOD": cfg.bootstrap_method,
     }
     return [docker_exec(cfg, "bash /workspace/repo/dev/sandbox/scripts/seed_prod.sh", env=env)]
 
@@ -84,6 +86,15 @@ def build_exercise(cfg: Config, kwargs: dict) -> list[list[str]]:
 def build_verify(cfg: Config) -> list[list[str]]:
     args = f"execute {cfg.verify_method}"
     return [docker_exec(cfg, _bench(cfg, args, site=cfg.sandbox_site))]
+
+
+def build_bootstrap(cfg: Config, *, site: str | None = None) -> list[list[str]]:
+    """App-provided post-provision setup (custom fields, masters, config).
+    No-op (empty command list) when the app declares no bootstrap_method."""
+    if not cfg.bootstrap_method:
+        return []
+    args = f"execute {cfg.bootstrap_method}"
+    return [docker_exec(cfg, _bench(cfg, args, site=site or cfg.sandbox_site))]
 
 
 def build_frontend(cfg: Config, *, mode: str) -> list[list[str]]:

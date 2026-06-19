@@ -106,16 +106,28 @@ npx playwright install chromium
 
 ## Implementation notes
 
-**`get-app` symlink vs. copy** (resolved empirically in Task 4): `bench get-app` with a
-local path creates a symlink on Linux/macOS inside the Docker container. The
-`provision.sh` script therefore mounts the repo at `/workspace/repo` and sets
-`APP_SRC=/workspace/repo` so the app is always available live (no copy needed).
+**`get-app` copies, not symlinks** (resolved empirically during Docker-runtime
+verification): `bench get-app <path>` COPIES the app into `apps/<app>`, so host edits
+would not reach the bench. `provision.sh` therefore replaces the copy with a **symlink**
+to the bind-mounted source (`apps/<app> -> /workspace/repo`) and re-installs it editable,
+so host edits to the app's Python are immediately live.
 
-**HR-role gate** (resolved in Task 8): the Frappe sandbox site must have the
-`HR Manager` role assigned to the test user before `run_engine_for_employee` will
-accept API calls. `provision.sh` grants this during initial install. If running
-`exercise` against a freshly restored `seed --prod` site, confirm the sandbox user
-has `HR Manager` set (`bench --site sandbox execute frappe.utils.set_user_permission ...`).
+**HR-role gate** — not an issue: `bench execute` runs as `Administrator`, which passes
+`run_engine_for_employee`'s `_require_hr_role()` check; no role grant is needed for
+`exercise`.
+
+**Python compatibility** — `frappe/bench:latest` may default to a Python too new for the
+pinned Frappe branch (e.g. 3.14 vs v15). `provision.sh` resolves a compatible **pyenv
+3.12/3.11** interpreter (which ship dev headers, unlike the bare system python3.11);
+override with `PYTHON_BIN`.
+
+**Custom fields / app setup (`bootstrap`)** — apps often need custom fields or seed
+masters that `install-app` doesn't create. Declare `bootstrap_method` in
+`frappe-sandbox.json` (e.g. `zkteco_hr.utils.sandbox_bootstrap.run`); the harness runs it
+after provisioning (`test_site`) and after `seed --prod` (`sandbox`). `zkteco_hr` uses it
+to create its `custom_device_branch` / `custom_lunch_*` / `custom_grace_minutes` fields,
+which the app does not ship as fixtures. Run manually with `./frappe-sandbox bootstrap
+[--test-site]`.
 
 **`migrate` verb** — a `migrate` subparser exists in the CLI but there is no dedicated
 `build_migrate` builder yet (no acceptance bar in Phase 1a). Run migrate directly:

@@ -13,6 +13,15 @@ class TestLoadConfig(unittest.TestCase):
         p.write_text(json.dumps(data))
         return p
 
+    def test_bootstrap_method_parsed_and_defaults_empty(self):
+        with TemporaryDirectory() as d:
+            base = {"app": "x", "app_src": ".", "required_apps": ["frappe"],
+                    "branch": "version-15", "frontend_dir": "."}
+            self.assertEqual(load_config(self._write(d, base)).bootstrap_method, "")
+            withbm = dict(base, bootstrap_method="x.utils.sandbox_bootstrap.run")
+            self.assertEqual(load_config(self._write(d, withbm)).bootstrap_method,
+                             "x.utils.sandbox_bootstrap.run")
+
     def test_loads_and_resolves_paths(self):
         with TemporaryDirectory() as d:
             p = self._write(d, {

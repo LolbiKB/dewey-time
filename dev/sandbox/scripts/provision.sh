@@ -31,6 +31,15 @@ for app in $REQUIRED_APPS; do
 done
 [ -d "apps/$APP" ] || bench get-app "$APP" "$APP_SRC" --skip-assets
 
+# Live-edit: get-app COPIES the app, so host edits would not reach the bench.
+# Replace the copy with a symlink to the bind-mounted source and re-install it
+# editable, so changes to the app on the host are immediately live in the bench.
+if [ -d "apps/$APP" ] && [ ! -L "apps/$APP" ]; then
+  rm -rf "apps/$APP"
+  ln -sfn "$APP_SRC" "apps/$APP"
+  env/bin/pip install -q -e "apps/$APP" >/dev/null 2>&1 || true
+fi
+
 if [ "${REGISTER_APPS_TXT:-1}" = "1" ]; then
   [ -s sites/apps.txt ] && [ -n "$(tail -c1 sites/apps.txt)" ] && echo >> sites/apps.txt
   grep -qxF "$APP" sites/apps.txt 2>/dev/null || echo "$APP" >> sites/apps.txt
@@ -42,4 +51,9 @@ if [ ! -d "sites/$TEST_SITE" ]; then
   bench --site "$TEST_SITE" install-app $REQUIRED_APPS "$APP"
 fi
 bench --site "$TEST_SITE" set-config allow_tests true
+
+# App-provided post-provision setup (custom fields, masters, config), if declared.
+if [ -n "${BOOTSTRAP_METHOD:-}" ]; then
+  bench --site "$TEST_SITE" execute "$BOOTSTRAP_METHOD"
+fi
 echo "PROVISION_OK site=$TEST_SITE apps=$REQUIRED_APPS $APP"

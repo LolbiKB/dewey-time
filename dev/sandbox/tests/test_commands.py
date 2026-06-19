@@ -7,7 +7,8 @@ from frappe_sandbox import commands as c
 
 def _cfg(*, exercise_method="zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
          verify_method="zkteco_hr.utils.sandbox_verify.run",
-         anonymize_method="zkteco_hr.utils.anonymize.run") -> Config:
+         anonymize_method="zkteco_hr.utils.anonymize.run",
+         bootstrap_method="") -> Config:
     return Config(
         app="zkteco_hr", app_src="/repo", required_apps=("erpnext", "hrms"),
         branch="version-15", frontend_dir="/repo/fe",
@@ -15,10 +16,24 @@ def _cfg(*, exercise_method="zkteco_hr.attendance_engine.dev_tools.run_engine_fo
         exercise_method=exercise_method,
         exercise_args=(ExerciseArg("employee", "employee", required=True),),
         anonymize_method=anonymize_method, verify_method=verify_method,
+        bootstrap_method=bootstrap_method,
     )
 
 
 class TestCommands(unittest.TestCase):
+    def test_build_bootstrap_empty_when_unset(self):
+        self.assertEqual(c.build_bootstrap(_cfg()), [])
+
+    def test_build_bootstrap_runs_method_on_site(self):
+        joined = " ".join(c.build_bootstrap(_cfg(bootstrap_method="myapp.b.run"),
+                                            site="test_site")[0])
+        self.assertIn("--site test_site execute myapp.b.run", joined)
+
+    def test_provision_passes_bootstrap_method(self):
+        joined = " ".join(" ".join(x) for x in
+                          c.build_provision(_cfg(bootstrap_method="myapp.b.run")))
+        self.assertIn("BOOTSTRAP_METHOD=myapp.b.run", joined)
+
     def test_up(self):
         self.assertEqual(
             c.build_up(_cfg()),

@@ -5,6 +5,7 @@
   "branch": "version-15",
   "frontend_dir": "../../zkteco_hr/zkteco_hr/frontend/hr_attendance",
   "register_app_in_apps_txt": true,
+  "bootstrap_method": "zkteco_hr.utils.sandbox_bootstrap.run",
   "exercise": {
     "method": "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
     "args": [

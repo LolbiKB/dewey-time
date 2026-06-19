@@ -26,6 +26,12 @@ bench --site "$SANDBOX_SITE" list-apps | grep -qx "$APP" || \
   bench --site "$SANDBOX_SITE" install-app "$APP"
 bench --site "$SANDBOX_SITE" migrate
 
+# App-provided setup (custom fields, masters, config) BEFORE anonymize, so a
+# schema-light backup gets the app's custom fields the engine/anonymize expect.
+if [ -n "${BOOTSTRAP_METHOD:-}" ]; then
+  bench --site "$SANDBOX_SITE" execute "$BOOTSTRAP_METHOD"
+fi
+
 # Non-skippable anonymization
 bench --site "$SANDBOX_SITE" execute "$ANONYMIZE_METHOD"
 echo "SEED_PROD_OK site=$SANDBOX_SITE"

@@ -15,6 +15,8 @@ DEFAULT_CONFIG = str(Path(__file__).resolve().parents[1] / "frappe-sandbox.json"
 
 _ANON_STUB = '''"""Anonymization for the sandbox site. Non-skippable; refuses on prod.
 Run via: bench --site sandbox execute {app}.utils.anonymize.run
+
+Column-tolerant: only scrubs columns that exist on the restored schema.
 """
 from __future__ import annotations
 
@@ -28,9 +30,9 @@ def is_prod_site(site_name: str) -> bool:
     return any(m in name for m in _PROD_MARKERS)
 
 
-def _scrub_statements() -> list[tuple[str, dict]]:
-    # TODO: enumerate this app\'s PII columns as (sql, params) UPDATE pairs.
-    # Keep engine-relevant fields OUT of any SET clause.
+def _scrub_specs() -> list[tuple[str, dict, str]]:
+    # TODO: (doctype, {column: sql_value_expr}, where_clause). Use \'\' / 0 to blank
+    # (respect NOT NULL); keep engine-relevant fields OUT of the column keys.
     return []
 
 
@@ -38,10 +40,39 @@ def run() -> str:
     site = frappe.local.site
     if is_prod_site(site):
         raise RuntimeError(f"refusing to anonymize a prod-looking site: {site}")
-    for sql, params in _scrub_statements():
-        frappe.db.sql(sql, params)
+    for doctype, set_map, where in _scrub_specs():
+        try:
+            existing = set(frappe.db.get_table_columns(doctype))
+        except Exception:
+            continue
+        cols = {col: expr for col, expr in set_map.items() if col in existing}
+        if not cols:
+            continue
+        set_clause = ", ".join(f"`{col}` = {expr}" for col, expr in cols.items())
+        frappe.db.sql(f"UPDATE `tab{doctype}` SET {set_clause} {where}".strip())
     frappe.db.commit()
     return f"ANONYMIZE_OK site={site}"
+'''
+
+_BOOTSTRAP_STUB = '''"""Sandbox bootstrap: set up this app\'s custom fields / masters / config so a
+fresh bench (or a schema-light restore) has the schema the app expects. Idempotent.
+Run via: bench --site <site> execute {app}.utils.sandbox_bootstrap.run
+"""
+from __future__ import annotations
+
+import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+# TODO: declare this app\'s custom fields by doctype, e.g.
+# _CUSTOM_FIELDS = {"Some Doctype": [{"fieldname": "custom_x", "label": "X", "fieldtype": "Data"}]}
+_CUSTOM_FIELDS = {}
+
+
+def run() -> str:
+    if _CUSTOM_FIELDS:
+        create_custom_fields(_CUSTOM_FIELDS, ignore_validate=True)
+    frappe.db.commit()
+    return "BOOTSTRAP_OK"
 '''
 
 _VERIFY_STUB = '''"""Sandbox verify stub (seam for the oracle layer).
@@ -64,19 +95,21 @@ def _init(config_path, *, app, app_src, frontend_dir) -> int:
     cfg_path = Path(config_path)
     base = cfg_path.parent
     utils_dir = (base / app_src / app / "utils").resolve()
-    targets = [cfg_path, utils_dir / "anonymize.py", utils_dir / "sandbox_verify.py"]
+    targets = [cfg_path, utils_dir / "anonymize.py", utils_dir / "sandbox_verify.py",
+               utils_dir / "sandbox_bootstrap.py"]
     existing = [t for t in targets if t.exists()]
     if existing:
         print(f"init: refusing to overwrite existing files: "
               f"{', '.join(str(t) for t in existing)}", file=sys.stderr)
         return 1
     scaffold = {
-        "_TODO": "Fill required_apps, exercise.method/args, and the anonymize/sandbox_verify stubs.",
+        "_TODO": "Fill required_apps, exercise.method/args, and the anonymize/sandbox_verify/sandbox_bootstrap stubs.",
         "app": app,
         "app_src": app_src,
         "required_apps": ["frappe"],
         "branch": "version-15",
         "frontend_dir": frontend_dir,
+        "bootstrap_method": f"{app}.utils.sandbox_bootstrap.run",
         "exercise": {"method": "CHANGEME.module.function", "args": []},
     }
     cfg_path.write_text(json.dumps(scaffold, indent=2) + "\n")
@@ -84,7 +117,8 @@ def _init(config_path, *, app, app_src, frontend_dir) -> int:
     (utils_dir / "__init__.py").touch()
     (utils_dir / "anonymize.py").write_text(_ANON_STUB.replace("{app}", app))
     (utils_dir / "sandbox_verify.py").write_text(_VERIFY_STUB.replace("{app}", app))
-    print(f"init: scaffolded {cfg_path} + {utils_dir}/{{anonymize,sandbox_verify}}.py")
+    (utils_dir / "sandbox_bootstrap.py").write_text(_BOOTSTRAP_STUB.replace("{app}", app))
+    print(f"init: scaffolded {cfg_path} + {utils_dir}/{{anonymize,sandbox_verify,sandbox_bootstrap}}.py")
     return 0
 
 
@@ -113,6 +147,9 @@ def _build(args, cfg) -> list[list[str]]:
         return c.build_exercise(cfg, kwargs)
     if args.cmd == "verify":
         return c.build_verify(cfg)
+    if args.cmd == "bootstrap":
+        site = cfg.test_site if args.test_site else cfg.sandbox_site
+        return c.build_bootstrap(cfg, site=site)
     raise SystemExit(f"unknown command: {args.cmd}")
 
 
@@ -179,6 +216,9 @@ def main(argv=None) -> int:
             kw["choices"] = list(a.choices)
         ex.add_argument(f"--{a.flag}", **kw)
     sub.add_parser("verify")
+    b = sub.add_parser("bootstrap")
+    b.add_argument("--test-site", action="store_true",
+                   help="run bootstrap on test_site instead of the sandbox site")
     sub.add_parser("doctor")
 
     args = p.parse_args(argv)

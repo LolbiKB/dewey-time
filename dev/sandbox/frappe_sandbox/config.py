@@ -34,6 +34,7 @@ class Config:
     exercise_args: tuple[ExerciseArg, ...] = ()
     anonymize_method: str = ""
     verify_method: str = ""
+    bootstrap_method: str = ""  # optional: app-provided post-provision setup (custom fields, masters, config)
 
 
 _REQUIRED = ("app", "app_src", "required_apps", "branch", "frontend_dir")
@@ -95,4 +96,5 @@ def load_config(path: str | Path) -> Config:
         exercise_args=exercise_args,
         anonymize_method=data.get("anonymize_method", f"{data['app']}.utils.anonymize.run"),
         verify_method=data.get("verify_method", f"{data['app']}.utils.sandbox_verify.run"),
+        bootstrap_method=data.get("bootstrap_method", ""),
     )
