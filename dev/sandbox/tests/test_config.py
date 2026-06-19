@@ -111,6 +111,16 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(p)
 
+    def test_empty_exercise_method_raises(self):
+        with TemporaryDirectory() as d:
+            p = self._write(d, {
+                "app": "x", "app_src": ".", "required_apps": ["frappe"],
+                "branch": "version-15", "frontend_dir": ".",
+                "exercise": {"method": "", "args": []},
+            })
+            with self.assertRaises(ConfigError):
+                load_config(p)
+
 
 if __name__ == "__main__":
     unittest.main()

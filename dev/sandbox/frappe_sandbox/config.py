@@ -61,6 +61,8 @@ def load_config(path: str | Path) -> Config:
         if not isinstance(exercise, dict) or "method" not in exercise:
             raise ConfigError("exercise must be an object with a 'method'")
         exercise_method = exercise["method"]
+        if not isinstance(exercise_method, str) or not exercise_method.strip():
+            raise ConfigError("exercise.method must be a non-empty string")
         parsed = []
         for a in exercise.get("args", []):
             if not isinstance(a, dict) or "flag" not in a or "kwarg" not in a:

@@ -33,6 +33,20 @@ class TestInit(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertEqual(cfg_path.read_text(), "{}")  # untouched
 
+    def test_init_via_main(self):
+        from frappe_sandbox.cli import main
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "dev" / "sandbox").mkdir(parents=True)
+            (root / "myapp").mkdir()
+            cfg = root / "dev" / "sandbox" / "frappe-sandbox.json"
+            rc = main(["--config", str(cfg), "init", "--app", "myapp", "--app-src", "../.."])
+            self.assertEqual(rc, 0)
+            self.assertTrue(cfg.is_file())
+            load_config(cfg)  # scaffold is valid
+            self.assertTrue((root / "myapp" / "utils" / "anonymize.py").is_file())
+            self.assertTrue((root / "myapp" / "utils" / "sandbox_verify.py").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

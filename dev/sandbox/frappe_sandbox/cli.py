@@ -145,7 +145,7 @@ def main(argv=None) -> int:
         init_p.add_argument("--app", required=True)
         init_p.add_argument("--app-src", default="../..")
         init_p.add_argument("--frontend-dir", default="../..")
-        init_args = init_p.parse_args(remaining)
+        init_args = init_p.parse_args(remaining[1:])
         return _init(known.config, app=init_args.app, app_src=init_args.app_src,
                      frontend_dir=init_args.frontend_dir)
 
@@ -180,10 +180,6 @@ def main(argv=None) -> int:
         ex.add_argument(f"--{a.flag}", **kw)
     sub.add_parser("verify")
     sub.add_parser("doctor")
-    i = sub.add_parser("init")
-    i.add_argument("--app", required=True)
-    i.add_argument("--app-src", default="../..")
-    i.add_argument("--frontend-dir", default="../..")
 
     args = p.parse_args(argv)
     if args.cmd == "seed" and not args.clean and not args.prod:
@@ -194,9 +190,6 @@ def main(argv=None) -> int:
         return 2
     cwd = str(Path(args.config).resolve().parent)
     try:
-        if args.cmd == "init":
-            return _init(args.config, app=args.app, app_src=args.app_src,
-                         frontend_dir=args.frontend_dir)
         if args.cmd == "doctor":
             return _doctor(args)
         return run_all(_build(args, cfg), cwd=cwd, dry_run=args.dry_run)
