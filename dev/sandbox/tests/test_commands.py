@@ -1,15 +1,20 @@
 from __future__ import annotations
 import unittest
 
-from frappe_sandbox.config import Config
+from frappe_sandbox.config import Config, ExerciseArg
 from frappe_sandbox import commands as c
 
 
-def _cfg() -> Config:
+def _cfg(*, exercise_method="zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
+         verify_method="zkteco_hr.utils.sandbox_verify.run",
+         anonymize_method="zkteco_hr.utils.anonymize.run") -> Config:
     return Config(
         app="zkteco_hr", app_src="/repo", required_apps=("erpnext", "hrms"),
         branch="version-15", frontend_dir="/repo/fe",
         compose_file="/repo/dev/sandbox/docker-compose.yml",
+        exercise_method=exercise_method,
+        exercise_args=(ExerciseArg("employee", "employee", required=True),),
+        anonymize_method=anonymize_method, verify_method=verify_method,
     )
 
 
@@ -56,12 +61,26 @@ class TestCommands(unittest.TestCase):
         self.assertIn("seed_prod.sh", joined)
         self.assertIn("BACKUP_DIR=/backups/x", joined)
 
-    def test_engine_run(self):
-        joined = " ".join(c.build_engine_run(_cfg(), employee="HR-EMP-1",
-                                             start="2026-06-01", end="2026-06-07")[0])
+    def test_build_exercise(self):
+        cfg = _cfg()
+        cmd = c.build_exercise(cfg, {"employee": "HR-EMP-1", "start_date": "2026-06-01"})[0]
+        joined = " ".join(cmd)
         self.assertIn("--site sandbox execute", joined)
-        self.assertIn("run_engine_for_employee", joined)
+        self.assertIn("zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee", joined)
         self.assertIn("HR-EMP-1", joined)
+
+    def test_build_exercise_no_method_raises(self):
+        cfg = _cfg(exercise_method=None)
+        with self.assertRaises(ValueError):
+            c.build_exercise(cfg, {})
+
+    def test_verify_uses_config_method(self):
+        joined = " ".join(c.build_verify(_cfg(verify_method="myapp.v.run"))[0])
+        self.assertIn("execute myapp.v.run", joined)
+
+    def test_seed_prod_passes_anonymize_method(self):
+        joined = " ".join(" ".join(x) for x in c.build_seed_prod(_cfg(anonymize_method="myapp.a.run"), "/b"))
+        self.assertIn("ANONYMIZE_METHOD=myapp.a.run", joined)
 
     def test_frontend_unit(self):
         joined = " ".join(c.build_frontend(_cfg(), mode="unit")[0])

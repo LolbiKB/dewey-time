@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${APP:?}" "${SANDBOX_SITE:?}" "${BACKUP_DIR:?}" "${BENCH_DIR:?}"
+ANONYMIZE_METHOD="${ANONYMIZE_METHOD:-$APP.utils.anonymize.run}"
 cd "/home/frappe/$BENCH_DIR"
 
 DB_GZ="$(ls "$BACKUP_DIR"/*-database.sql.gz 2>/dev/null | head -1 || true)"
@@ -26,5 +27,5 @@ bench --site "$SANDBOX_SITE" list-apps | grep -qx "$APP" || \
 bench --site "$SANDBOX_SITE" migrate
 
 # Non-skippable anonymization
-bench --site "$SANDBOX_SITE" execute "$APP.utils.anonymize.run"
+bench --site "$SANDBOX_SITE" execute "$ANONYMIZE_METHOD"
 echo "SEED_PROD_OK site=$SANDBOX_SITE"
