@@ -15,9 +15,10 @@ def validate_bridge_request():
 
 
 def _validate_api_key_auth():
-    if frappe.session.user and frappe.session.user != "Guest":
-        return
-
+    # Always validate the Bridge API key. These are allow_guest=True machine
+    # webhooks, so an ambient browser session must NOT satisfy auth — otherwise
+    # any logged-in user could drive device closeout/sync. The Bridge always
+    # sends the token header, so requiring it here does not affect it.
     authorization = (frappe.get_request_header("Authorization") or "").strip()
     if not authorization.lower().startswith("token "):
         frappe.throw(_("Authorization header token api_key:api_secret is required"), frappe.AuthenticationError)
