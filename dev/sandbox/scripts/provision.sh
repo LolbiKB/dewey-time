@@ -5,11 +5,19 @@ set -euo pipefail
 # REGISTER_APPS_TXT, BENCH_DIR
 : "${APP:?}" "${APP_SRC:?}" "${REQUIRED_APPS:?}" "${BRANCH:?}" "${TEST_SITE:?}" "${BENCH_DIR:?}"
 
+# Frappe v15 needs Python <=3.12; the frappe/bench image's default `python` (pyenv)
+# may be 3.14 (too new), and the system python3.11 lacks dev headers so C-extension
+# builds (psutil) fail. Prefer a pyenv 3.12/3.11 (those ship headers). Override via PYTHON_BIN.
+if [ -z "${PYTHON_BIN:-}" ]; then
+  PYTHON_BIN="$(ls -d "$HOME"/.pyenv/versions/3.12.*/bin/python "$HOME"/.pyenv/versions/3.11.*/bin/python 2>/dev/null | head -1 || true)"
+  PYTHON_BIN="${PYTHON_BIN:-$(command -v python3.12 || command -v python3.11 || command -v python3)}"
+fi
+
 cd /home/frappe
 
 if [ ! -d "$BENCH_DIR" ]; then
   bench init --skip-redis-config-generation --skip-assets \
-    --frappe-branch "$BRANCH" --python "$(which python)" "$BENCH_DIR"
+    --frappe-branch "$BRANCH" --python "$PYTHON_BIN" "$BENCH_DIR"
 fi
 cd "$BENCH_DIR"
 
