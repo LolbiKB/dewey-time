@@ -1,0 +1,8 @@
+{
+  "app": "zkteco_hr",
+  "app_src": "../..",
+  "required_apps": ["erpnext", "hrms"],
+  "branch": "version-15",
+  "frontend_dir": "../../zkteco_hr/zkteco_hr/frontend/hr_attendance",
+  "register_app_in_apps_txt": true
+}
