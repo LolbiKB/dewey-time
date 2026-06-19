@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -11,6 +12,80 @@ from .config import ConfigError, load_config
 from .runner import run_all
 
 DEFAULT_CONFIG = str(Path(__file__).resolve().parents[1] / "frappe-sandbox.json")
+
+_ANON_STUB = '''"""Anonymization for the sandbox site. Non-skippable; refuses on prod.
+Run via: bench --site sandbox execute {app}.utils.anonymize.run
+"""
+from __future__ import annotations
+
+import frappe
+
+_PROD_MARKERS = ("prod", "frappehr.com")
+
+
+def is_prod_site(site_name: str) -> bool:
+    name = (site_name or "").lower()
+    return any(m in name for m in _PROD_MARKERS)
+
+
+def _scrub_statements() -> list[tuple[str, dict]]:
+    # TODO: enumerate this app\'s PII columns as (sql, params) UPDATE pairs.
+    # Keep engine-relevant fields OUT of any SET clause.
+    return []
+
+
+def run() -> str:
+    site = frappe.local.site
+    if is_prod_site(site):
+        raise RuntimeError(f"refusing to anonymize a prod-looking site: {site}")
+    for sql, params in _scrub_statements():
+        frappe.db.sql(sql, params)
+    frappe.db.commit()
+    return f"ANONYMIZE_OK site={site}"
+'''
+
+_VERIFY_STUB = '''"""Sandbox verify stub (seam for the oracle layer).
+Run via: bench --site sandbox execute {app}.utils.sandbox_verify.run
+"""
+from __future__ import annotations
+
+import json
+
+
+def run() -> str:
+    # TODO: add invariants over this app\'s generated data.
+    findings = {"oracle": "stub", "scanned": 0, "violations": []}
+    print(json.dumps(findings))
+    return "VERIFY_OK violations=0"
+'''
+
+
+def _init(config_path, *, app, app_src, frontend_dir) -> int:
+    cfg_path = Path(config_path)
+    base = cfg_path.parent
+    utils_dir = (base / app_src / app / "utils").resolve()
+    targets = [cfg_path, utils_dir / "anonymize.py", utils_dir / "sandbox_verify.py"]
+    existing = [t for t in targets if t.exists()]
+    if existing:
+        print(f"init: refusing to overwrite existing files: "
+              f"{', '.join(str(t) for t in existing)}", file=sys.stderr)
+        return 1
+    scaffold = {
+        "_TODO": "Fill required_apps, exercise.method/args, and the anonymize/sandbox_verify stubs.",
+        "app": app,
+        "app_src": app_src,
+        "required_apps": ["frappe"],
+        "branch": "version-15",
+        "frontend_dir": frontend_dir,
+        "exercise": {"method": "CHANGEME.module.function", "args": []},
+    }
+    cfg_path.write_text(json.dumps(scaffold, indent=2) + "\n")
+    utils_dir.mkdir(parents=True, exist_ok=True)
+    (utils_dir / "__init__.py").touch()
+    (utils_dir / "anonymize.py").write_text(_ANON_STUB.replace("{app}", app))
+    (utils_dir / "sandbox_verify.py").write_text(_VERIFY_STUB.replace("{app}", app))
+    print(f"init: scaffolded {cfg_path} + {utils_dir}/{{anonymize,sandbox_verify}}.py")
+    return 0
 
 
 def _build(args, cfg) -> list[list[str]]:
@@ -61,7 +136,18 @@ def main(argv=None) -> int:
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=DEFAULT_CONFIG)
     pre.add_argument("--dry-run", action="store_true")
-    known, _ = pre.parse_known_args(argv)
+    known, remaining = pre.parse_known_args(argv)
+
+    # init runs before config exists — dispatch it immediately.
+    if remaining and remaining[0] == "init":
+        init_p = argparse.ArgumentParser(prog="frappe-sandbox init")
+        init_p.add_argument("--config", default=known.config)
+        init_p.add_argument("--app", required=True)
+        init_p.add_argument("--app-src", default="../..")
+        init_p.add_argument("--frontend-dir", default="../..")
+        init_args = init_p.parse_args(remaining)
+        return _init(known.config, app=init_args.app, app_src=init_args.app_src,
+                     frontend_dir=init_args.frontend_dir)
 
     try:
         cfg = load_config(known.config)
@@ -94,6 +180,10 @@ def main(argv=None) -> int:
         ex.add_argument(f"--{a.flag}", **kw)
     sub.add_parser("verify")
     sub.add_parser("doctor")
+    i = sub.add_parser("init")
+    i.add_argument("--app", required=True)
+    i.add_argument("--app-src", default="../..")
+    i.add_argument("--frontend-dir", default="../..")
 
     args = p.parse_args(argv)
     if args.cmd == "seed" and not args.clean and not args.prod:
@@ -104,6 +194,9 @@ def main(argv=None) -> int:
         return 2
     cwd = str(Path(args.config).resolve().parent)
     try:
+        if args.cmd == "init":
+            return _init(args.config, app=args.app, app_src=args.app_src,
+                         frontend_dir=args.frontend_dir)
         if args.cmd == "doctor":
             return _doctor(args)
         return run_all(_build(args, cfg), cwd=cwd, dry_run=args.dry_run)
