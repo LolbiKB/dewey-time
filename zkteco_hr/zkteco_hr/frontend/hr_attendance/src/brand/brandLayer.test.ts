@@ -21,3 +21,10 @@ test("brand layer is imported after dewey-ui and its files exist", () => {
   assert.ok(existsSync(resolve(PKG, "src/brand/tokens.css")), "tokens.css file exists");
   assert.ok(existsSync(resolve(PKG, "src/brand/base.css")), "base.css file exists");
 });
+
+test("brand tokens define the ring + accent signals and wire --ring", () => {
+  const css = readFileSync(resolve(PKG, "src/brand/tokens.css"), "utf8");
+  assert.match(css, /--brand-ring:\s*oklch/, "defines --brand-ring (focus halo green)");
+  assert.match(css, /--brand-accent:\s*#c2410c/i, "defines --brand-accent (International orange)");
+  assert.match(css, /--ring:\s*var\(--brand-ring\)/, "wires dewey-ui --ring to --brand-ring");
+});
