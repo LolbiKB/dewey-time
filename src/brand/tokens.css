@@ -1,0 +1,42 @@
+/* ===========================================================================
+   Dewey brand layer — the ONE place the brand color lives.
+
+   Imported AFTER tailwindcss + @lolbikb/dewey-ui/theme.css (see index.css) so it
+   overrides dewey-ui's neutral graphite primary. dewey-ui supplies the rest
+   (Geist + Kantumruy fonts, the neutral OKLCH substrate, the radius scale, and
+   the red --destructive).
+
+   Retune the green by editing --brand-primary ONLY — it cascades everywhere.
+   The app is light-only (forcedTheme="light" in App.tsx) — it mirrors paper,
+   so these tokens need no .dark variants.
+   =========================================================================== */
+:root {
+  /* ── the brand knob (change this one line to move the green everywhere) ── */
+  --brand-primary: oklch(0.43 0.108 153);   /* Forest · ~#066031 · white text 7.7:1 (WCAG AA). Provisional. */
+  --brand-ring:    oklch(0.55 0.1 153);     /* a lighter green, for focus halos */
+  --brand-accent:  #c2410c;                 /* International orange — the urgent / attention signal */
+
+  /* ── wire the brand into dewey-ui's primary + focus (surgical scope) ── */
+  --primary: var(--brand-primary);
+  --primary-foreground: oklch(0.985 0 0);   /* white labels */
+  --ring: var(--brand-ring);
+
+  /* ── signal tokens — apply by MEANING, never as decoration ──
+       success  → --primary        (green: synced / online / approved)   [reuses dewey-ui --primary]
+       attention→ --signal-attention(orange: pending / warning / needs action)
+       danger   → --destructive     (red: failed / rejected / error)      [reuses dewey-ui --destructive]
+       progress → --signal-progress (blue: syncing / in-progress)         [sanctioned extension]
+       idle     → --muted-foreground(neutral) */
+  --signal-attention: var(--brand-accent);
+  --signal-progress:  oklch(0.55 0.18 256);
+}
+
+/* Expose the two NEW signal hues as Tailwind v4 utilities (text-attention,
+   bg-attention, border-progress, …). success/danger already ship from dewey-ui
+   as the `primary` / `destructive` utilities, so they need no entry here. */
+@theme inline {
+  --color-attention: var(--signal-attention);
+  --color-attention-foreground: oklch(0.985 0 0);
+  --color-progress: var(--signal-progress);
+  --color-progress-foreground: oklch(0.985 0 0);
+}

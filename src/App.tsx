@@ -10,9 +10,10 @@ import { LoginPage } from './pages/Login'
 import { AuthProvider, useAuth } from '@/contexts/auth-context'
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
-import { Loader2, LogOut, CalendarCheck, Users as UsersIcon, Fingerprint } from 'lucide-react'
+import { Loader2, LogOut, CalendarCheck, Users as UsersIcon, HardDrive } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 import { AppShell, type ShellNavMode } from '@lolbikb/dewey-ui'
+import { Brandmark } from '@/brand/Brandmark'
 import { HeaderConnection } from '@/components/header-connection'
 import { HeaderDeviceStatus } from '@/components/header-device-status'
 import { useRealtimeDevices } from '@/hooks/use-core-data'
@@ -99,43 +100,26 @@ function AppContent() {
   }
 
   const navMode: ShellNavMode = {
-    type: 'sidebar',
-    label: 'Platform',
-    groups: [
+    type: 'tabs',
+    'aria-label': 'Primary',
+    tabs: [
+      { label: 'Users', href: '/users', icon: UsersIcon, active: location.pathname === '/users' },
+      { label: 'Devices', href: '/devices', icon: HardDrive, active: location.pathname === '/devices' },
       {
-        title: 'Management',
-        icon: UsersIcon,
-        items: [
-          { title: 'User Management', href: '/users', active: location.pathname === '/users' },
-          { title: 'Device Management', href: '/devices', active: location.pathname === '/devices' },
-        ],
-      },
-      {
-        title: 'Attendance',
+        label: 'Attendance Logs',
+        shortLabel: 'Attendance',
+        href: '/attendance-logs',
         icon: CalendarCheck,
-        items: [
-          {
-            title: 'Attendance Logs',
-            href: '/attendance-logs',
-            active: location.pathname === '/attendance-logs',
-          },
-        ],
+        active: location.pathname === '/attendance-logs',
       },
     ],
-    footer: (
-      <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
-        <span className="group-data-[collapsible=icon]:hidden">v1.0.0</span>
-      </div>
-    ),
   }
 
   return (
     <div className="h-full">
       <AppShell
         navMode={navMode}
-        logo={<Fingerprint className="size-4" />}
-        title="ZKTeco ADMS"
-        subtitle="Bridge System"
+        logo={<Brandmark />}
         homeHref="/users"
         linkComponent={RouterLink}
         breadcrumbs={[
@@ -170,7 +154,7 @@ const Router = isFrappeMode ? HashRouter : BrowserRouter
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+      <ThemeProvider attribute="class" forcedTheme="light" disableTransitionOnChange>
         <AuthProvider>
           <Router>
             <AppContent />
