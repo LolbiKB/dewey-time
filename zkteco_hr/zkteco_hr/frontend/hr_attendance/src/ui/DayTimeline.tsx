@@ -42,7 +42,7 @@ type Checkin = NonNullable<Day["checkins"]>[number];
 
 /** Expected shift window (today: from current hour; future days: full shift). Hover for label. */
 const scheduledBandClass =
-  "border-2 border-dashed border-muted-foreground/80 bg-muted/50 dark:border-muted-foreground/65 dark:bg-muted/40";
+  "border-2 border-dashed border-muted-foreground/80 bg-muted/50";
 
 const punchHelpers = {
   parseTime: parseDateTimeLocal,
@@ -143,8 +143,8 @@ function HolidayBoard(props: { description: string; weeklyOff: boolean }) {
 
   // Show as multiple vertical “lines” using columns; keep it stable and non-wrapping in height.
   return (
-    <div className="relative h-full rounded-xl border border-amber-500/20 bg-amber-500/5 p-2 shadow-sm">
-      <div className="text-[15px] leading-snug text-amber-950/80 dark:text-amber-100/80 whitespace-normal break-words line-clamp-6">
+    <div className="relative h-full rounded-xl border border-border bg-muted/25 p-2 shadow-sm">
+      <div className="text-[15px] leading-snug text-muted-foreground whitespace-normal break-words line-clamp-6">
         {text}
       </div>
     </div>
@@ -164,12 +164,12 @@ function DayDayTrack(props: {
   windowEndMin?: number;
 }) {
   const onShift = props.shift?.shift_assigned === true;
-  const color = onShift ? "bg-emerald-600" : "bg-amber-600/80";
+  const color = onShift ? "bg-primary" : "bg-brand-accent/80";
   const offShiftSegmentClass = onShift
     ? cn(color, "shadow-sm ring-1 ring-foreground/10")
-    : "border border-dashed border-amber-600/50 bg-amber-500/25 shadow-sm ring-1 ring-amber-600/20";
+    : "border border-dashed border-brand-accent/50 bg-brand-accent/25 shadow-sm ring-1 ring-brand-accent/20";
   const openSessionUncertainClass =
-    "border border-dashed border-amber-500/50 bg-amber-500/20 dark:bg-amber-500/15";
+    "border border-dashed border-brand-accent/50 bg-muted/30";
 
   const span = computeDaySpan(props.firstIn, props.lastOut);
   const segments = deriveSegments(props.checkins);
@@ -375,7 +375,7 @@ function DayDayTrack(props: {
               content={`Off-shift punch · ${format(parseDateTimeLocal(row.checkin.time), "h:mm a")}`}
             >
               <div
-                className="absolute inset-x-2 h-1 rounded-full border border-amber-600/60 bg-amber-500/40 shadow-sm"
+                className="absolute inset-x-2 h-1 rounded-full border border-brand-accent/60 bg-brand-accent/40 shadow-sm"
                 style={{ top: `calc(${topPct}% - 2px)` }}
               />
             </AppTooltip>
@@ -430,7 +430,7 @@ function DayDayTrack(props: {
           <div
             className={cn(
               "absolute left-1/2 w-[12px] -translate-x-1/2 rounded-sm",
-              onShift ? color : "border border-dashed border-amber-600/50 bg-amber-500/25"
+              onShift ? color : "border border-dashed border-brand-accent/50 bg-brand-accent/25"
             )}
             style={{
               top: `calc(${span.topPct}% + 8px)`,
@@ -473,9 +473,9 @@ function DayDayTrack(props: {
                 className={cn(
                   "absolute inset-x-2 rounded-sm border",
                   isObservedLunch
-                    ? "border-sky-500/40 bg-sky-500/15"
+                    ? "border-muted-foreground/40 bg-muted/40"
                     : isScheduledLunch
-                      ? "border-muted-foreground/45 bg-muted/35 dark:bg-muted/30"
+                      ? "border-muted-foreground/45 bg-muted/35"
                       : "border-destructive/40 bg-destructive/15"
                 )}
                 style={{
