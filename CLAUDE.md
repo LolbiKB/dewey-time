@@ -119,7 +119,7 @@ ADMS dashboard (prebuilt bundle in public/adms/ — no source in repo)
 
 - **Scheduler**: `daily` → `closeout.run_company_fallback_closeout`; `*/30 * * * *` → `intraday.run_intraday_scheduler`
 - **Doc events**: `Employee Checkin.after_insert` **and** `.on_update` → `intraday.on_employee_checkin_after_insert` / `on_employee_checkin_on_update` (both fire the intraday engine)
-- **After migrate** (three handlers): `utils.sync_hr_attendance_assets.sync_hr_attendance_assets` (HR SPA → `sites/assets/`), `utils.sync_adms_assets.sync_adms_assets` (ADMS bundle), and `attendance_engine.dashboard_auth.ensure_adms_roles` (creates the `ADMS Admin` / `ADMS Super Admin` roles)
+- **After migrate** (asset publish runs **first**, then DB handlers): `utils.publish_assets.publish_assets_after_migrate` resiliently republishes the HR SPA bundle + branding (`sync_hr_attendance_assets`) and the ADMS bundle (`sync_adms_assets`) into `sites/assets/`, guarded so one step failing can't starve the others; then `setup.custom_fields.make_custom_fields`; then `attendance_engine.dashboard_auth.ensure_adms_roles` (creates the `ADMS Admin` / `ADMS Super Admin` roles). Assets go first so a failing DB-side handler can't leave `/assets/zkteco_hr/**` 404ing.
 - **Website routes**: `/hr-attendance/<path>` and `/hr-schedule/<path>` both rewrite to their HTML entry points for client-side routing (`/adms` is served by the `www/adms.py` page, not a route rule)
 
 ### Frontend structure (`frontend/hr_attendance/src/`)

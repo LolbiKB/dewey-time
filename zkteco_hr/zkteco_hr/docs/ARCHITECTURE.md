@@ -103,8 +103,13 @@ doc_events = {
     },
 }
 
-# Copies Vite build to sites/assets/ after every bench migrate
-after_migrate = ["zkteco_hr.utils.sync_hr_attendance_assets.sync_hr_attendance_assets"]
+# Publishes SPA/branding/ADMS bundles to sites/assets/ after every bench migrate.
+# Runs FIRST and is internally guarded so a failing DB handler can't starve assets.
+after_migrate = [
+    "zkteco_hr.utils.publish_assets.publish_assets_after_migrate",
+    "zkteco_hr.setup.custom_fields.make_custom_fields",
+    "zkteco_hr.attendance_engine.dashboard_auth.ensure_adms_roles",
+]
 ```
 
 ---

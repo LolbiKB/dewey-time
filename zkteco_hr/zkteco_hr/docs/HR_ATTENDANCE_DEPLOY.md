@@ -38,7 +38,7 @@ When that symlink exists, files are read **directly from `public/`** in the app 
 
 ## `sync_hr_attendance_assets` (migrate hook)
 
-Runs on every `bench migrate` (`hooks.py` → `after_migrate`).
+Runs on every `bench migrate`, invoked **first** via `publish_assets.publish_assets_after_migrate` (`hooks.py` → `after_migrate`). The publisher runs the asset syncs **before** the DB-side handlers (`make_custom_fields`, `ensure_adms_roles`) and guards each step, so a failure there — or in one sync — can never abort migrate and leave `/assets/zkteco_hr/**` 404ing. (June 2026 incident: `make_custom_fields` ran first in `after_migrate`; when it threw, the asset syncs never ran and the whole app asset tree 404'd.)
 
 **Purpose:** fallback when the bench symlink is missing (otherwise CSS/JS 404).
 

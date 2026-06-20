@@ -138,7 +138,7 @@ npm run build
 
 1. Let the site **deploy** finish (app code + `public/hr_attendance/assets/` from git).
 2. Run **Migrate** on the site (Dashboard → Migrate, or `bench --site <site> migrate`).
-   - `after_migrate` runs `sync_hr_attendance_assets` (copies bundle into `sites/assets/` when missing or `build-id.txt` changed).
+   - `after_migrate` runs `publish_assets_after_migrate` **first** (guarded): it republishes the SPA bundle + branding + ADMS bundle into `sites/assets/` when missing or `build-id.txt` changed, so a later/failing DB handler can't leave assets 404ing.
    - One-time repair patches (e.g. `resync_hr_attendance_assets_v9`) also run on migrate.
 3. Hard-refresh `/hr-attendance` (check `www/hr-attendance.html` has a new `?v=` on CSS/JS).
 
