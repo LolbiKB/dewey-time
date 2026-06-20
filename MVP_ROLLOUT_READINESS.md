@@ -30,6 +30,7 @@ gap is now closed by an automated pilot matrix that runs the **actual** closeout
 | Holiday + punches | `OFF_SHIFT_PUNCH` only | ✅ |
 | Punch at non-home branch | `NON_PRIMARY_SITE_PUNCH` | ✅ |
 | 45-min intra-shift gap | `MISSING_TIME` | ✅ |
+| Intraday refresh, non-home branch | provisional `NON_PRIMARY_SITE_PUNCH` (`day_closed=0`) | ✅ |
 
 Plus the **invariant oracle** (`sandbox_verify`: no duplicate flags, no
 mutually-exclusive combinations, no provisional-after-closeout) holds on every
@@ -48,7 +49,8 @@ Source: `zkteco_hr/zkteco_hr/tests/test_integration_pilot_matrix.py` (branch
 ### Not yet covered by the automated matrix (P1 / follow-up)
 - `LATE_FROM_LUNCH` (needs `custom_lunch_start/end` + observed-lunch gap) — implemented, not yet in the matrix.
 - `DELIVERY_FAILED` (bridge `undelivered[]` path) — exercised only via mocks.
-- Intraday provisional flags (`day_closed=0`) — matrix runs the closeout core only.
+- Closeout is the primary path covered; intraday is proven for the
+  `NON_PRIMARY_SITE_PUNCH` provisional case (intraday `MISSING_TIME` is the obvious next add).
 
 ---
 

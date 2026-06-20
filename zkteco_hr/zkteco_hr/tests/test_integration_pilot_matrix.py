@@ -36,6 +36,9 @@ if _HAS_REAL_BENCH:
     from frappe.utils import getdate
 
     from zkteco_hr.attendance_engine.closeout import _generate_for_employee_date
+    from zkteco_hr.attendance_engine.intraday import (
+        refresh_intraday_flags_for_employee_date,
+    )
     from zkteco_hr.utils.sandbox_verify import (
         mutual_exclusion_violations,
         no_duplicate_flags,
@@ -226,3 +229,20 @@ class TestPilotMatrix(_Base):
         self._checkin(day, "10:45:00", "IN")
         self._checkin(day, "17:00:00", "OUT")
         self.assertIn("MISSING_TIME", self._flags(day))
+
+    def test_intraday_provisional_non_primary_site(self):
+        """The live /hr-attendance display depends on intraday (day_closed=0) flags."""
+        day = "2026-03-12"
+        self._checkin(day, "09:00:00", "IN", branch=ALT_BRANCH)
+        self._checkin(day, "17:00:00", "OUT", branch=ALT_BRANCH)
+        d = getdate(day)
+        frappe.db.delete("Attendance Flag", {"employee": self.employee, "attendance_date": d})
+        refresh_intraday_flags_for_employee_date(self.employee, d)
+        rows = frappe.get_all(
+            "Attendance Flag",
+            filters={"employee": self.employee, "attendance_date": d},
+            fields=["flag_code", "day_closed"],
+        )
+        non_primary = [r for r in rows if r["flag_code"] == "NON_PRIMARY_SITE_PUNCH"]
+        self.assertTrue(non_primary, f"expected provisional NON_PRIMARY_SITE_PUNCH, got {rows}")
+        self.assertEqual(non_primary[0]["day_closed"], 0, "intraday flags must be provisional")
