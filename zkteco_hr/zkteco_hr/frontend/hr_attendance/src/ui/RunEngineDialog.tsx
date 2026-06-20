@@ -163,7 +163,7 @@ export function RunEngineDialog(props: RunEngineDialogProps) {
                 "rounded-lg border px-3 py-2 text-sm",
                 status.type === "error"
                   ? "border-destructive/30 bg-destructive/5 text-destructive"
-                  : "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+                  : "border-border bg-muted/40 text-primary"
               )}
             >
               {status.message}
