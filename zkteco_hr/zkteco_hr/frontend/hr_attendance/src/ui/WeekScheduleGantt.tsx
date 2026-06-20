@@ -106,7 +106,7 @@ function ShiftBody(props: { day: WeekDaySchedule }) {
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
           {props.day.lunchLabel ? <span>Lunch {props.day.lunchLabel}</span> : null}
           {props.day.durationMin != null && props.day.durationMin > 0 ? (
-            <span className="font-medium text-amber-800/90 dark:text-amber-200/90">
+            <span className="font-medium text-muted-foreground">
               {formatScheduleDuration(props.day.durationMin)} net
             </span>
           ) : null}
@@ -159,7 +159,7 @@ function VerticalShiftTrack(props: {
       ) : null}
 
       <div className="relative h-[4.5rem] w-3 overflow-hidden rounded-full bg-muted/40">
-        <div className="absolute inset-0 rounded-full bg-amber-500/90 ring-1 ring-amber-700/25" />
+        <div className="absolute inset-0 rounded-full bg-primary/70 ring-1 ring-primary/25" />
         {lunchTop != null && lunchHeight != null ? (
           <div
             className="absolute inset-x-0 rounded-sm bg-background ring-1 ring-border/40"
@@ -179,12 +179,12 @@ function VerticalShiftTrack(props: {
 
 function LeaveBody(props: { day: WeekDaySchedule }) {
   return (
-    <div className="flex min-h-[4.5rem] items-center gap-3 rounded-lg bg-sky-500/10 px-3 py-2 ring-1 ring-sky-500/25">
-      <PalmtreeIcon className="size-5 shrink-0 text-sky-600 dark:text-sky-300" aria-hidden />
+    <div className="flex min-h-[4.5rem] items-center gap-3 rounded-lg bg-muted/40 px-3 py-2 ring-1 ring-border/50">
+      <PalmtreeIcon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
       <div>
-        <div className="font-medium text-sky-900 dark:text-sky-50">On leave</div>
+        <div className="font-medium text-foreground">On leave</div>
         {props.day.leaveType ? (
-          <div className="text-xs text-sky-800/80 dark:text-sky-100/80">{props.day.leaveType}</div>
+          <div className="text-xs text-muted-foreground">{props.day.leaveType}</div>
         ) : null}
       </div>
     </div>

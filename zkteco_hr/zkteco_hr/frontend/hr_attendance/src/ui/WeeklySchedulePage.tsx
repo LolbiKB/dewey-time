@@ -315,7 +315,7 @@ export function WeeklySchedulePage() {
             {isBootstrapping ? (
               <WeeklyScheduleHeaderSkeleton />
             ) : (
-              <div className="animate-in fade-in slide-in-from-top-1 duration-300">
+              <div className="animate-in fade-in slide-in-from-top-1">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <h1 className="text-lg font-semibold tracking-tight">Weekly Schedule</h1>
@@ -368,16 +368,16 @@ export function WeeklySchedulePage() {
             )}
 
             {ineligibleMessage ? (
-              <Card className="border-amber-500/30 bg-amber-500/5">
-                <CardContent className="py-2.5 text-sm text-amber-950 dark:text-amber-100">
+              <Card className="border-brand-accent/30 bg-brand-accent/15">
+                <CardContent className="py-2.5 text-sm text-foreground">
                   {ineligibleMessage} Pick an eligible employee above to continue.
                 </CardContent>
               </Card>
             ) : null}
 
             {previewOnly ? (
-              <Card className="border-amber-500/30 bg-amber-500/5">
-                <CardContent className="py-2.5 text-sm text-amber-950 dark:text-amber-100">
+              <Card className="border-brand-accent/30 bg-brand-accent/15">
+                <CardContent className="py-2.5 text-sm text-foreground">
                   Active schedule assignments exist — read-only preview. Use{" "}
                   <strong>Clear schedule data</strong> above or edit in Desk to make changes.
                 </CardContent>
@@ -385,7 +385,7 @@ export function WeeklySchedulePage() {
             ) : null}
 
             {saveSuccessUrl ? (
-              <Card className="border-emerald-500/30 bg-emerald-500/5">
+              <Card className="border-primary/30 bg-primary/10">
                 <CardContent className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
                   <span>Schedule saved successfully.</span>
                   <Button asChild size="sm" variant="outline">
