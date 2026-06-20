@@ -313,7 +313,7 @@ function SegmentInspectorRow(props: { segment: AttendanceSegment }) {
   return (
     <div className="flex gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 shadow-xs">
       <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
-        <div className="h-full min-h-10 w-1 rounded-full bg-emerald-600" aria-hidden="true" />
+        <div className="h-full min-h-10 w-1 rounded-full bg-primary" aria-hidden="true" />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-start justify-between gap-3">
@@ -362,14 +362,14 @@ function LunchInspectorRow(props: {
       : formatMinuteOnDay(dateKey, item.endMin);
 
   return (
-    <div className="flex gap-3 rounded-xl border border-sky-500/30 bg-sky-500/5 px-3 py-3 shadow-xs">
+    <div className="flex gap-3 rounded-xl border border-border/60 bg-muted/25 px-3 py-3 shadow-xs">
       <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
-        <div className="h-full min-h-10 w-1 rounded-full bg-sky-500" aria-hidden="true" />
+        <div className="h-full min-h-10 w-1 rounded-full bg-muted-foreground/40" aria-hidden="true" />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold tracking-tight text-sky-950 dark:text-sky-100">
+            <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold tracking-tight">
               <span>{startLabel}</span>
               <ArrowRightIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
               <span>{endLabel}</span>
@@ -377,7 +377,7 @@ function LunchInspectorRow(props: {
           </div>
           <Badge
             variant="secondary"
-            className="shrink-0 rounded-md bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-900 dark:text-sky-100"
+            className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold"
           >
             {formatDurationMinutes(item.minutes)}
           </Badge>
@@ -385,14 +385,14 @@ function LunchInspectorRow(props: {
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge
             variant="outline"
-            className="h-5 rounded-md border-sky-500/30 bg-sky-500/10 px-1.5 text-[10px] font-semibold text-sky-900 dark:text-sky-100"
+            className="h-5 rounded-md px-1.5 text-[10px] font-semibold text-muted-foreground"
           >
             Lunch · {item.source}
           </Badge>
           {item.observed?.late_return ? (
             <Badge
               variant="outline"
-              className="h-5 rounded-md border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] font-semibold text-amber-900 dark:text-amber-100"
+              className="h-5 rounded-md border-brand-accent/40 bg-brand-accent/10 px-1.5 text-[10px] font-semibold text-brand-accent"
             >
               Late return
             </Badge>
@@ -453,14 +453,14 @@ function OpenSessionInspectorRow(props: {
       : null;
 
   return (
-    <div className="flex gap-3 rounded-xl border border-emerald-600/30 bg-emerald-600/5 px-3 py-3 shadow-xs">
+    <div className="flex gap-3 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3 shadow-xs">
       <div className="mt-0.5 flex w-8 shrink-0 flex-col items-center gap-1">
-        <div className="h-full min-h-10 w-1 rounded-full bg-emerald-600" aria-hidden="true" />
+        <div className="h-full min-h-10 w-1 rounded-full bg-primary" aria-hidden="true" />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold tracking-tight text-emerald-950 dark:text-emerald-50">
+            <div className="text-sm font-semibold tracking-tight text-foreground">
               On site
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">
@@ -470,7 +470,7 @@ function OpenSessionInspectorRow(props: {
           </div>
           <Badge
             variant="secondary"
-            className="shrink-0 rounded-md bg-emerald-600/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-900 dark:text-emerald-100"
+            className="shrink-0 rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary"
           >
             {formatDurationMinutes(duration)}
           </Badge>
@@ -478,14 +478,14 @@ function OpenSessionInspectorRow(props: {
         <div className="flex flex-wrap items-center gap-2">
           <Badge
             variant="outline"
-            className="h-5 rounded-md border-emerald-600/30 bg-emerald-600/10 px-1.5 text-[10px] font-semibold text-emerald-900 dark:text-emerald-100"
+            className="h-5 rounded-md border-primary/30 bg-primary/10 px-1.5 text-[10px] font-semibold text-primary"
           >
             Open session
           </Badge>
           {item.syncLagging ? (
             <Badge
               variant="outline"
-              className="h-5 rounded-md border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] font-semibold text-amber-900 dark:text-amber-100"
+              className="h-5 rounded-md border-brand-accent/40 bg-brand-accent/10 px-1.5 text-[10px] font-semibold text-brand-accent"
             >
               Sync pending
               {uncertainMinutes != null ? ` · ${formatDurationMinutes(uncertainMinutes)}` : null}
@@ -552,8 +552,8 @@ function PunchInspectorRow(props: { checkin: Checkin; index: number; direction: 
         className={cn(
           "flex size-9 shrink-0 items-center justify-center rounded-lg border",
           isIn
-            ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-            : "border-amber-500/20 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+            ? "border-primary/20 bg-primary/10 text-primary"
+            : "border-border bg-muted/40 text-muted-foreground"
         )}
         aria-label={direction}
       >
@@ -581,7 +581,7 @@ function FlagInspectorRow(props: { flag: Flag; onOpen: () => void }) {
     sev === "CRITICAL"
       ? "bg-destructive"
       : sev === "WARNING"
-        ? "bg-amber-500"
+        ? "bg-brand-accent"
         : "bg-muted-foreground/50";
 
   return (
@@ -610,7 +610,7 @@ function FlagInspectorRow(props: { flag: Flag; onOpen: () => void }) {
             className={cn(
               "h-5 rounded-md px-1.5 text-[10px] font-semibold",
               sev === "CRITICAL" && "border-destructive/40 text-destructive",
-              sev === "WARNING" && "border-amber-500/40 text-amber-900 dark:text-amber-100",
+              sev === "WARNING" && "border-brand-accent/40 text-brand-accent",
               sev === "INFO" && "border-border text-muted-foreground"
             )}
           >
@@ -619,7 +619,7 @@ function FlagInspectorRow(props: { flag: Flag; onOpen: () => void }) {
           {provisional ? (
             <Badge
               variant="outline"
-              className="h-5 rounded-md border-dashed border-amber-500/60 px-1.5 text-[10px] font-semibold text-amber-950 dark:text-amber-100"
+              className="h-5 rounded-md border-dashed border-brand-accent/60 px-1.5 text-[10px] font-semibold text-brand-accent"
             >
               Provisional
             </Badge>
