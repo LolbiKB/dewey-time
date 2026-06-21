@@ -1,0 +1,66 @@
+name: Frappe Asset Smoke Test
+
+# Catches the "Frappe custom-app assets 404 / served as text/html" class of bug
+# (e.g. the /assets/zkteco_hr/adms/index.css 404 from a missing bench symlink, or
+# a stable-vs-hashed filename mismatch). It is a black-box check of the LIVE site
+# — no bench access required.
+#
+# - workflow_dispatch: run on demand (e.g. right after you deploy / bench build).
+#   You can dispatch this from any branch that has the file (incl. feat):
+#     gh workflow run "Frappe Asset Smoke Test" --ref feat
+# - schedule: GitHub only runs cron from the DEFAULT branch (main), so the
+#   scheduled monitoring activates once this lands on main (via PR #4).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *" # every 6h, from the default branch only
+
+concurrency:
+  group: frappe-asset-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Assert custom-app assets serve with the correct MIME
+        env:
+          # Override per environment with a repo variable if the site changes.
+          SITE: ${{ vars.FRAPPE_SITE_URL || 'https://dewey.frappehr.com' }}
+        run: |
+          set -uo pipefail
+
+          # One entry per asset that MUST serve correctly, as "<path>|<mime-substring>".
+          # Generalize to ALL Frappe custom apps by adding lines here (or other sites
+          # via another job/matrix). The check fails if the asset is missing (non-200)
+          # or is served as the HTML 404 fallback instead of its real type.
+          ASSETS=(
+            "/assets/zkteco_hr/adms/assets/index.css|text/css"
+            "/assets/zkteco_hr/adms/assets/index.js|javascript"
+          )
+
+          fail=0
+          for entry in "${ASSETS[@]}"; do
+            path="${entry%%|*}"
+            want="${entry##*|}"
+            url="${SITE}${path}"
+            resp=$(curl -sS -L --max-time 20 -o /dev/null \
+                     -w "%{http_code} %{content_type}" "$url" 2>/dev/null || echo "000 none")
+            code="${resp%% *}"
+            ctype="${resp#* }"
+            if [ "$code" != "200" ]; then
+              echo "::error title=Asset down::${url} → HTTP ${code} (expected 200)"
+              fail=1
+            elif [[ "$ctype" == *"text/html"* ]] || [[ "$ctype" != *"$want"* ]]; then
+              echo "::error title=Wrong MIME::${url} served as '${ctype}' (expected *${want}*) — looks like a 404 HTML fallback"
+              fail=1
+            else
+              echo "OK  ${url} → ${code} ${ctype}"
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::One or more Frappe custom-app assets are not serving correctly (see above)."
+            exit 1
+          fi
+          echo "All checked assets serve with the expected MIME type."

@@ -1,0 +1,1476 @@
+"use client"
+
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from '@/components/animate-ui/components/radix/accordion'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { ConfirmationDialog } from '@/components/ui/base-modal'
+import { useUserPhoto } from '@/hooks/use-user-photo'
+import { PhotoCacheAvatarIndicator } from '@/components/ui/table-components'
+import {
+  getPhotoCacheAvatarIndicator,
+  type PhotoCacheStatus,
+} from '@/lib/photo-cache-status'
+import {
+  RefreshCw,
+  Loader2,
+  Fingerprint,
+  ScanFace,
+  Image,
+  Wifi,
+  WifiOff,
+  CheckCircle2,
+  AlertCircle,
+  RotateCcw,
+  X,
+  Users,
+  UserPlus,
+  Sparkles,
+  Copy,
+} from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { signalText, signalDot, signalBorder, signalAlert } from '@/lib/signal'
+import {
+  buildComponentSyncOptions,
+  getComponentSyncStatus,
+  isDeviceAllComponentsSynced,
+  syncComponentTileClass,
+  type SyncComponent,
+} from '@/lib/sync-component-status'
+import {
+  useDevicePresenceMap,
+  useRequireDeviceOnline,
+  enrichSyncStatusWithPresence,
+} from '@/hooks/use-device-presence'
+import { notifyError, notifyInfo, notifySuccess, notifyWarning } from '@/lib/toast'
+import {
+  useSyncStatus,
+  useSyncUser,
+  useCommandQueue,
+  useRetryUserSync,
+  useForceUserSync,
+  useReconcileUserSync,
+  useUserBiometrics,
+  useDeleteBiometric,
+  useStartEnrollment,
+  useEnrollmentCommandStatus,
+  useEnrollmentStatus,
+  useCancelEnrollment,
+  userKeys,
+} from '@/hooks/use-users'
+import { UserService, type UserEntry, type SyncStatusEntry } from '@/services/user-service'
+import { deriveEnrollPhase, type EnrollPhase } from '@/lib/enrollment-phase'
+import { SyncToolbarActions } from '@/components/users/sync-toolbar-actions'
+import { UserPhotoTab } from '@/components/users/user-photo-tab'
+import { useUserSyncAggregate } from '@/hooks/use-user-sync-aggregate'
+import {
+  ZK_PROTOCOL_FINGER_ORDER,
+  ZK_PROTOCOL_FINGER_GRID_LETTERS,
+  protocolFingerLabel,
+  parseZkEnrollFpError,
+} from '@/lib/zk-finger-fid'
+
+interface UserDetailModalProps {
+  user: UserEntry | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onRefreshList?: () => void
+}
+
+const COMMAND_FRESHNESS_MS = 2 * 60 * 1000
+
+function isFreshActiveCommand(c: { status: string; created_at: string }) {
+  const age = Date.now() - new Date(c.created_at).getTime()
+  return age < COMMAND_FRESHNESS_MS && (c.status === 'pending' || c.status === 'sent')
+}
+
+function isStaleCommand(c: { status: string; created_at: string }) {
+  const age = Date.now() - new Date(c.created_at).getTime()
+  return age >= COMMAND_FRESHNESS_MS && (c.status === 'pending' || c.status === 'sent')
+}
+
+/** Orphan QUERY rows after a newer recovery succeeded should not show "Retrying". */
+function isFingerprintTemplatePush(cmd: string | undefined): boolean {
+  if (!cmd) return false
+  const body = cmd.replace(/^C:\d+:/, '')
+  return body.includes('DATA UPDATE') && (body.includes('FINGERTMP') || body.includes('FACE'))
+}
+
+function isStaleCommandForDisplay(
+  c: {
+    id: number
+    status: string
+    created_at: string
+    command_type?: string
+    command?: string
+    device_sn: string
+  },
+  deviceCommands: Array<{
+    id: number
+    status: string
+    command_type?: string
+    command?: string
+    device_sn: string
+  }>,
+  enrollmentSession?: { phase?: string; recovery_command_id?: number | null } | null
+) {
+  if (!isStaleCommand(c)) return false
+
+  if (
+    (c.command_type === 'enroll_fingerprint' ||
+      c.command_type === 'enroll_fingerprint_confirm' ||
+      c.command_type === 'enroll_face') &&
+    isFingerprintTemplatePush(c.command)
+  ) {
+    return false
+  }
+
+  const isRecoveryQuery =
+    c.command_type === 'query_fingerprint' || c.command_type === 'query_face'
+
+  if (isRecoveryQuery) {
+    const newerSuccess = deviceCommands.some(
+      (other) =>
+        other.id > c.id &&
+        other.command_type === c.command_type &&
+        other.device_sn === c.device_sn &&
+        other.status === 'success'
+    )
+    if (newerSuccess) return false
+
+    const recoveryId = enrollmentSession?.recovery_command_id
+    if (recoveryId && c.id < recoveryId) return false
+  }
+
+  const terminalPhases = ['timed_out', 'completed', 'cancelled', 'failed']
+  if (
+    enrollmentSession?.phase &&
+    terminalPhases.includes(enrollmentSession.phase) &&
+    isRecoveryQuery
+  ) {
+    return false
+  }
+
+  return true
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/)
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+interface DeviceCardProps {
+  enrollmentSession?: {
+    phase?: string
+    recovery_command_id?: number | null
+    device_sn?: string
+  } | null
+  enrollmentCleanup?: {
+    cleanupPending?: boolean
+    rogueRisk?: boolean
+    deviceSn?: string
+  } | null
+  onForceEnrollmentCleanup?: () => void
+  status: any
+  device: any
+  commands: any[]
+  onSync: (sn: string) => void
+  isSyncing: boolean
+  hasFace?: boolean
+  fingerprints?: any[]  // BULLETPROOF: FP data for mask calculation
+}
+
+function SyncComponentTile({
+  component,
+  status,
+  icon: Icon,
+  label,
+  options,
+}: {
+  component: SyncComponent
+  status: SyncStatusEntry
+  icon: typeof Users
+  label: string
+  options: Parameters<typeof getComponentSyncStatus>[2]
+}) {
+  const { state, label: statusLabel } = getComponentSyncStatus(component, status, options)
+  return (
+    <div className={cn('p-2 rounded-lg', syncComponentTileClass(state))}>
+      <div className="flex items-center gap-1 mb-1">
+        <Icon className="h-3 w-3" />
+        <span className="font-medium">{label}</span>
+      </div>
+      <div className="text-muted-foreground">{statusLabel}</div>
+    </div>
+  )
+}
+
+function DeviceCard({
+  status,
+  device,
+  commands,
+  onSync,
+  isSyncing,
+  hasFace,
+  fingerprints = [],
+  enrollmentSession,
+  enrollmentCleanup,
+  onForceEnrollmentCleanup,
+}: DeviceCardProps) {
+  const isOnline = status.is_online
+  const deviceCommands = commands.filter((c: any) => c.device_sn === status.device_sn)
+  const hasActiveCommands = deviceCommands.some(isFreshActiveCommand)
+  const staleCommands = deviceCommands.filter((c) =>
+    isStaleCommandForDisplay(c, deviceCommands, enrollmentSession)
+  )
+
+  const syncOptions = buildComponentSyncOptions(deviceCommands, {
+    fingerprints,
+    hasFaceInDb: hasFace,
+    hasPhotoInDb: status.has_photo_in_db,
+  })
+
+  const allSynced = isDeviceAllComponentsSynced(status, syncOptions)
+
+  return (
+    <Accordion type="single" collapsible className="border rounded-lg overflow-hidden">
+      <AccordionItem value={status.id} className="border-0">
+        <AccordionTrigger className="px-3 py-2 hover:bg-muted/30 hover:no-underline rounded-lg [&>svg]:h-4 [&>svg]:w-4" showArrow>
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isOnline ? signalDot.success : "bg-muted-foreground/40")} />
+            {allSynced && <CheckCircle2 className={cn("h-4 w-4 shrink-0", signalText.success)} />}
+            <span className="text-sm font-medium truncate">{device?.name || status.device_sn}</span>
+            {hasActiveCommands && <Loader2 className={cn("h-3 w-3 animate-spin shrink-0", signalText.progress)} />}
+            {!hasActiveCommands && staleCommands.length > 0 && (
+              <Badge variant="outline" className={cn("text-[10px] shrink-0", signalText.attention)}>Retrying</Badge>
+            )}
+          </div>
+        </AccordionTrigger>
+        <AccordionContent className="px-4 pb-3 pt-2">
+          {enrollmentCleanup?.cleanupPending && enrollmentCleanup.deviceSn === status.device_sn && (
+            <div className={cn("mb-2 rounded-md border px-2.5 py-2 text-[11px]", signalAlert.progress)}>
+              <p className="font-medium">Enrollment cleanup in progress</p>
+              <p className="mt-0.5">
+                A cancelled enrollment may still have a fingerprint on this device. Sync will not remove it — wait for
+                cleanup or use retry below.
+              </p>
+              {onForceEnrollmentCleanup && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 h-7 text-xs"
+                  onClick={onForceEnrollmentCleanup}
+                >
+                  Retry remove from device
+                </Button>
+              )}
+            </div>
+          )}
+          {enrollmentCleanup?.rogueRisk &&
+            !enrollmentCleanup?.cleanupPending &&
+            enrollmentCleanup.deviceSn === status.device_sn && (
+              <p className={cn("mb-2 text-[11px]", signalText.attention)}>
+                Possible fingerprint on device without cloud record — enrollment cleanup may be needed.
+              </p>
+            )}
+          {staleCommands.length > 0 && (
+            <p className={cn("text-[11px] mb-2", signalText.attention)}>
+              {staleCommands[0].command_type} #{staleCommands[0].id}:{' '}
+              {staleCommands[0].error_message ||
+                (isFingerprintTemplatePush(staleCommands[0].command)
+                  ? 'pushing template to device'
+                  : 'waiting for device ACK')}
+            </p>
+          )}
+          <div className="grid grid-cols-4 gap-2 text-xs">
+            <SyncComponentTile component="user" status={status} icon={Users} label="User" options={syncOptions} />
+            <SyncComponentTile component="fingerprint" status={status} icon={Fingerprint} label="FP" options={syncOptions} />
+            <SyncComponentTile component="face" status={status} icon={ScanFace} label="Face" options={syncOptions} />
+            <SyncComponentTile component="photo" status={status} icon={Image} label="Photo" options={syncOptions} />
+          </div>
+          <div className="flex justify-end mt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSync(status.device_sn)}
+              disabled={!isOnline || isSyncing || hasActiveCommands}
+              title={!isOnline ? 'Device is offline' : undefined}
+              className="h-7 gap-1.5"
+            >
+              {hasActiveCommands ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              {hasActiveCommands ? 'Syncing...' : 'Sync'}
+            </Button>
+          </div>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
+  )
+}
+
+/** Minimum time on Process so Capture → Done does not skip a visible step */
+const ENROLL_PROCESS_MIN_MS = 2500
+
+const ENROLL_ACTIVE_PHASES: EnrollPhase[] = ['queued', 'enrolling', 'accepted']
+
+const ENROLL_CANCEL_CONFIRM = {
+  title: 'Cancel enrollment?',
+  message:
+    'This stops the device session. If a fingerprint was captured on the device, we will queue removal from the registrar.',
+  confirmLabel: 'Cancel enrollment',
+  cancelLabel: 'Keep enrolling',
+} as const
+
+function isActiveEnrollPhase(phase: EnrollPhase): boolean {
+  return ENROLL_ACTIVE_PHASES.includes(phase)
+}
+
+/** Hold Process step briefly before Done when cloud template arrives quickly */
+function applyProcessMinDisplay(
+  rawPhase: EnrollPhase,
+  hasTemplate: boolean,
+  processMinUntil: number | null
+): EnrollPhase {
+  if (rawPhase === 'success' && hasTemplate && processMinUntil !== null && Date.now() < processMinUntil) {
+    return 'accepted'
+  }
+  return rawPhase
+}
+
+const parseEnrollError = parseZkEnrollFpError
+
+interface EnrollContentProps {
+  user: UserEntry
+  onSuccess: () => void
+  onClose: () => void
+  open: boolean
+  onPhaseChange?: (phase: EnrollPhase) => void
+}
+
+function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: EnrollContentProps) {
+  const { data: bioData, refetch: refetchBiometrics } = useUserBiometrics(user.id || '')
+  const { data: syncData } = useSyncStatus(user.id || '')
+  const startEnrollment = useStartEnrollment()
+  const cancelEnrollment = useCancelEnrollment()
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false)
+
+  const [biometricType, setBiometricType] = useState<'fingerprint' | 'face'>('fingerprint')
+  const [fingerId, setFingerId] = useState<number>(5)
+  const [deviceSn, setDeviceSn] = useState<string>('')
+  const [activeCommandId, setActiveCommandId] = useState<number | null>(null)
+  const [showTimeout, setShowTimeout] = useState(false)
+  const [recoveryPending, setRecoveryPending] = useState(false)
+  const autoRecoveryTriggeredRef = useRef(false)
+  const processMinUntilRef = useRef<number | null>(null)
+  const [processMinTick, setProcessMinTick] = useState(0)
+
+  const enrollmentPolling = !!user?.id && activeCommandId !== null
+  const { data: enrollmentStatusData } = useEnrollmentStatus(user.id || '', {
+    enabled: enrollmentPolling,
+    refetchInterval: 3000,
+  })
+
+  const { data: commandData } = useEnrollmentCommandStatus(activeCommandId, user?.id || '')
+
+  useEffect(() => {
+    setActiveCommandId(null)
+    setDeviceSn('')
+    startEnrollment.reset()
+  }, [])
+
+  const { map: presenceMap } = useDevicePresenceMap({ enabled: !!user?.id })
+  const syncStatus = useMemo(
+    () => enrichSyncStatusWithPresence(syncData?.data || [], presenceMap),
+    [syncData, presenceMap]
+  )
+  const biometricsList = useMemo(() => bioData?.data || [], [bioData])
+  const registrarDevices = useMemo(
+    () => syncStatus.filter((s) => s.is_online && s.devices?.is_registrar),
+    [syncStatus]
+  )
+  const enrollmentPresence = useRequireDeviceOnline(deviceSn || undefined, 'live')
+  const selectedDevice = useMemo(() => registrarDevices.find(d => d.device_sn === deviceSn), [registrarDevices, deviceSn])
+  const capabilities = selectedDevice?.devices?.registrar_capabilities || []
+  const enrolledFingers = useMemo(() => new Set(biometricsList.filter(b => b.type === 'fingerprint' && b.finger_id !== null).map(b => b.finger_id!)), [biometricsList])
+  const hasTemplateForType = useMemo(() => biometricType === 'fingerprint' ? biometricsList.some(b => b.type === 'fingerprint' && b.finger_id === fingerId) : biometricsList.some(b => b.type === 'face'), [biometricsList, biometricType, fingerId])
+
+  const sessionPhase = enrollmentStatusData?.data?.session?.phase
+  const recoveryQueuedAt = enrollmentStatusData?.data?.session?.recovery_queued_at
+  const cleanupPending = enrollmentStatusData?.data?.cleanupPending ?? false
+  const cleanupComplete = enrollmentStatusData?.data?.cleanupComplete ?? false
+  const commandStatus =
+    enrollmentStatusData?.data?.command?.status ?? commandData?.status
+  const hasTemplate =
+    enrollmentStatusData?.data?.hasTemplateInDb ?? hasTemplateForType
+  const isPullingTemplate = !!recoveryQueuedAt || recoveryPending
+
+  const rawPhase = useMemo(
+    () =>
+      deriveEnrollPhase(
+        sessionPhase,
+        commandStatus,
+        !!hasTemplate,
+        isPullingTemplate,
+        cleanupPending,
+        cleanupComplete
+      ),
+    [sessionPhase, commandStatus, hasTemplate, isPullingTemplate, cleanupPending, cleanupComplete]
+  )
+
+  useEffect(() => {
+    if (rawPhase === 'accepted') {
+      if (processMinUntilRef.current === null) {
+        processMinUntilRef.current = Date.now() + ENROLL_PROCESS_MIN_MS
+      }
+    } else if (rawPhase === 'success' && hasTemplate) {
+      if (processMinUntilRef.current === null) {
+        processMinUntilRef.current = Date.now() + ENROLL_PROCESS_MIN_MS
+      }
+    } else if (rawPhase === 'enrolling' || rawPhase === 'queued' || rawPhase === 'idle') {
+      processMinUntilRef.current = null
+    } else if (rawPhase === 'failed') {
+      processMinUntilRef.current = null
+    }
+  }, [rawPhase, hasTemplate])
+
+  useEffect(() => {
+    const until = processMinUntilRef.current
+    if (until === null || Date.now() >= until) return
+    const delay = until - Date.now()
+    const t = setTimeout(() => setProcessMinTick((n) => n + 1), delay)
+    return () => clearTimeout(t)
+  }, [rawPhase, hasTemplate, processMinTick])
+
+  const phase = useMemo(
+    () => applyProcessMinDisplay(rawPhase, !!hasTemplate, processMinUntilRef.current),
+    [rawPhase, hasTemplate, processMinTick]
+  )
+
+  const errorInfo = phase === 'failed'
+    ? parseEnrollError(
+        enrollmentStatusData?.data?.session?.error_message ??
+          commandData?.error_message
+      )
+    : null
+
+  useEffect(() => {
+    if (phase !== 'idle' && phase !== 'success' && phase !== 'failed') {
+      const timer = setTimeout(() => setShowTimeout(true), 30000)
+      return () => clearTimeout(timer)
+    }
+    setShowTimeout(false)
+  }, [phase])
+
+  useEffect(() => {
+    // QUERY recovery when device finished but cloud row not received yet (command success, no template)
+    if (
+      rawPhase !== 'accepted' ||
+      hasTemplate ||
+      !user?.id ||
+      recoveryQueuedAt ||
+      autoRecoveryTriggeredRef.current
+    ) {
+      return
+    }
+    const timer = setTimeout(async () => {
+      if (autoRecoveryTriggeredRef.current) return
+      autoRecoveryTriggeredRef.current = true
+      setRecoveryPending(true)
+      try {
+        const result = await UserService.triggerEnrollmentRecovery(user.id!)
+        notifyInfo('Pulling template', result.message || 'Request sent to the registrar device.')
+      } catch (e: any) {
+        autoRecoveryTriggeredRef.current = false
+        notifyError('Auto-recovery failed', e.message)
+      } finally {
+        setRecoveryPending(false)
+      }
+    }, 45000)
+    return () => clearTimeout(timer)
+  }, [rawPhase, hasTemplate, user?.id, recoveryQueuedAt])
+
+  useEffect(() => {
+    if (phase === 'idle' || phase === 'success' || phase === 'failed') {
+      autoRecoveryTriggeredRef.current = false
+    }
+    if (phase === 'idle' || phase === 'failed') {
+      processMinUntilRef.current = null
+    }
+    if (phase === 'success') {
+      processMinUntilRef.current = null
+    }
+  }, [phase])
+
+  useEffect(() => {
+    if (phase === 'accepted' || phase === 'enrolling') {
+      const interval = setInterval(() => refetchBiometrics(), 2000)
+      return () => clearInterval(interval)
+    }
+  }, [phase, refetchBiometrics])
+
+  useEffect(() => {
+    if (phase === 'success') {
+      setActiveCommandId(null)
+      refetchBiometrics()
+      onSuccess()
+    }
+  }, [phase, refetchBiometrics, onSuccess])
+
+  useEffect(() => {
+    onPhaseChange?.(phase)
+  }, [phase, onPhaseChange])
+
+  useEffect(() => {
+    if (phase !== 'idle') return
+    if (registrarDevices.length === 1 && !deviceSn) {
+      setDeviceSn(registrarDevices[0].device_sn)
+    }
+  }, [phase, registrarDevices, deviceSn])
+
+  useEffect(() => {
+    if (phase !== 'idle' || biometricType !== 'fingerprint') return
+    const firstFree = ZK_PROTOCOL_FINGER_ORDER.find((id) => !enrolledFingers.has(id))
+    if (firstFree !== undefined && enrolledFingers.has(fingerId)) {
+      setFingerId(firstFree)
+    }
+  }, [phase, enrolledFingers, biometricType, fingerId])
+
+  useEffect(() => {
+    if (deviceSn && !capabilities.includes('fingerprint') && capabilities.includes('face')) setBiometricType('face')
+  }, [deviceSn, capabilities])
+
+  const deviceDisplayName = selectedDevice?.devices?.name || deviceSn
+  const flowContextLabel = useMemo(() => {
+    const bioLabel = biometricType === 'fingerprint' ? protocolFingerLabel(fingerId) : 'Face'
+    return deviceDisplayName ? `${deviceDisplayName} · ${bioLabel}` : bioLabel
+  }, [deviceDisplayName, biometricType, fingerId])
+
+  const phaseAnnouncement = useMemo(() => {
+    switch (phase) {
+      case 'queued':
+        return 'Command sent, waiting for device'
+      case 'enrolling':
+        return biometricType === 'fingerprint' ? 'Place finger on sensor' : 'Look at camera'
+      case 'accepted':
+        return isPullingTemplate ? 'Pulling template from device' : 'Saving template to cloud'
+      case 'success':
+        return biometricType === 'fingerprint' ? `${protocolFingerLabel(fingerId)} enrolled` : 'Face enrolled'
+      case 'failed':
+        return errorInfo ? `${errorInfo.label}. ${errorInfo.description}` : 'Enrollment failed'
+      case 'cleaning_up':
+        return 'Enrollment ended — removing fingerprint from device'
+      default:
+        return ''
+    }
+  }, [phase, biometricType, fingerId, isPullingTemplate, errorInfo])
+
+  const failedStepIdx =
+    phase === 'failed' ? (commandStatus === 'sent' ? 2 : 1) : -1
+
+  const handleStart = () => {
+    if (!user?.id || !deviceSn) return
+    if (!enrollmentPresence.canRunLiveDeviceAction) {
+      notifyError('Cannot enroll', enrollmentPresence.blockReason ?? 'Device is offline')
+      return
+    }
+    setActiveCommandId(null)
+    startEnrollment.mutate(
+      { userId: user.id, deviceSn, biometricType, fingerId: biometricType === 'fingerprint' ? fingerId : undefined },
+      { onSuccess: (result: any) => setActiveCommandId(result.commandId) }
+    )
+  }
+
+  const handleReset = () => {
+    setActiveCommandId(null)
+    setShowTimeout(false)
+    processMinUntilRef.current = null
+    startEnrollment.reset()
+  }
+
+  const handleDone = () => {
+    handleReset()
+    onClose()
+  }
+
+  useEffect(() => {
+    if (!open) {
+      handleReset()
+    }
+  }, [open])
+
+  const handleConfirmCancel = () => {
+    if (!user?.id) return
+    setCancelConfirmOpen(false)
+    cancelEnrollment.mutate(user.id, {
+      onSuccess: () => handleReset(),
+    })
+  }
+
+  const handleRecovery = async () => {
+    if (!user?.id) return
+    setRecoveryPending(true)
+    try {
+      const result = await UserService.triggerEnrollmentRecovery(user.id)
+      notifySuccess(result.message)
+    } catch (e: any) {
+      notifyError('Recovery failed', e.message)
+    } finally {
+      setRecoveryPending(false)
+    }
+  }
+
+  const handleForceCleanup = async () => {
+    if (!user?.id) return
+    try {
+      const result = await UserService.forceEnrollmentCleanup(
+        user.id,
+        deviceSn || enrollmentStatusData?.data?.session?.device_sn
+      )
+      notifySuccess(result.message)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Force cleanup failed'
+      notifyError('Force cleanup failed', msg)
+    }
+  }
+
+  const showForm = phase === 'idle'
+
+  return (
+    <div className="space-y-4">
+      {/* Current Biometrics */}
+      <div className="flex items-center justify-center gap-6 p-3 bg-muted/30 rounded-lg">
+        <div className="flex items-center gap-1.5">
+          <Fingerprint className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-bold">{biometricsList.filter(b => b.type === 'fingerprint').length}</span>
+          <span className="text-xs text-muted-foreground">FP</span>
+        </div>
+        <div className="w-px h-4 bg-border" />
+        <div className="flex items-center gap-1.5">
+          <ScanFace className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-bold">{biometricsList.some(b => b.type === 'face') ? 1 : 0}</span>
+          <span className="text-xs text-muted-foreground">Face</span>
+        </div>
+      </div>
+
+      {showForm ? (
+        <div className="space-y-4">
+          {/* Type Selection */}
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => setBiometricType('fingerprint')} disabled={!capabilities.includes('fingerprint')} className={cn("flex items-center gap-2 p-3 rounded-lg border-2 transition-all", biometricType === 'fingerprint' ? "border-primary ring-2 ring-primary bg-card" : "border-border hover:border-muted-foreground/30", !capabilities.includes('fingerprint') && "opacity-50")}>
+              <Fingerprint className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="text-sm font-semibold">Fingerprint</div>
+                <div className="text-[10px] text-muted-foreground">{capabilities.includes('fingerprint') ? 'Select' : 'N/A'}</div>
+              </div>
+            </button>
+            <button type="button" onClick={() => setBiometricType('face')} disabled={!capabilities.includes('face')} className={cn("flex items-center gap-2 p-3 rounded-lg border-2 transition-all", biometricType === 'face' ? "border-primary ring-2 ring-primary bg-card" : "border-border hover:border-muted-foreground/30", !capabilities.includes('face') && "opacity-50")}>
+              <ScanFace className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="text-sm font-semibold">Face</div>
+                <div className="text-[10px] text-muted-foreground">{capabilities.includes('face') ? 'Select' : 'N/A'}</div>
+              </div>
+            </button>
+          </div>
+
+          {/* Finger Selection */}
+          {biometricType === 'fingerprint' && (
+            <div className="space-y-2">
+              <div className="text-xs text-muted-foreground font-medium">Select Finger</div>
+              <div className="space-y-1.5">
+                <div className="text-[9px] text-muted-foreground font-medium">Left hand (FID 0–4)</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[0, 1, 2, 3, 4].map((id) => {
+                    const enrolled = enrolledFingers.has(id)
+                    const isSelected = fingerId === id
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        title={protocolFingerLabel(id)}
+                        onClick={() => !enrolled && setFingerId(id)}
+                        disabled={enrolled}
+                        className={cn(
+                          'relative aspect-square rounded-lg border-2 flex items-center justify-center transition-all',
+                          isSelected && 'border-primary ring-2 ring-primary bg-card',
+                          !isSelected && enrolled && cn('bg-card opacity-50 cursor-not-allowed', signalBorder.attention, signalText.attention),
+                          !isSelected && !enrolled && 'border-dashed border-border text-muted-foreground/70 hover:border-muted-foreground/40'
+                        )}
+                      >
+                        <span className="text-xs font-bold">{ZK_PROTOCOL_FINGER_GRID_LETTERS[id]}</span>
+                        {enrolled && <span className="absolute text-[6px] top-0.5 right-0.5">X</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="text-[9px] text-muted-foreground font-medium">Right hand (FID 5–9)</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {[5, 6, 7, 8, 9].map((id) => {
+                    const enrolled = enrolledFingers.has(id)
+                    const isSelected = fingerId === id
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        title={protocolFingerLabel(id)}
+                        onClick={() => !enrolled && setFingerId(id)}
+                        disabled={enrolled}
+                        className={cn(
+                          'relative aspect-square rounded-lg border-2 flex items-center justify-center transition-all',
+                          isSelected && 'border-primary ring-2 ring-primary bg-card',
+                          !isSelected && enrolled && cn('bg-card opacity-50 cursor-not-allowed', signalBorder.attention, signalText.attention),
+                          !isSelected && !enrolled && 'border-dashed border-border text-muted-foreground/70 hover:border-muted-foreground/40'
+                        )}
+                      >
+                        <span className="text-xs font-bold">{ZK_PROTOCOL_FINGER_GRID_LETTERS[id]}</span>
+                        {enrolled && <span className="absolute text-[6px] top-0.5 right-0.5">X</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="text-center text-[9px] text-muted-foreground">
+                <span className={cn(enrolledFingers.has(fingerId) && signalText.attention)}>
+                  {protocolFingerLabel(fingerId)}
+                  {enrolledFingers.has(fingerId) && ' (in use)'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Device Selection */}
+          <div className="space-y-2">
+            <div className="text-xs text-muted-foreground font-medium">Device</div>
+            {registrarDevices.length === 0 ? (
+              <div className={cn("flex items-center gap-2 p-3 rounded-lg border", signalAlert.attention)}>
+                <WifiOff className="h-4 w-4" />
+                <div className="text-xs font-medium">No registrar devices online</div>
+              </div>
+            ) : (
+              <Select value={deviceSn} onValueChange={setDeviceSn}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a device" />
+                </SelectTrigger>
+                <SelectContent>
+                  {registrarDevices.map(s => {
+                    const caps = s.devices?.registrar_capabilities || []
+                    return (
+                      <SelectItem key={s.device_sn} value={s.device_sn}>
+                        <div className="flex items-center gap-2">
+                          <Wifi className={cn("h-3 w-3", signalText.success)} />
+                          <span>{s.devices?.name || s.device_sn}</span>
+                          <span className="text-xs text-muted-foreground ml-1">
+                            {caps.includes('fingerprint') && 'FP'}
+                            {caps.includes('fingerprint') && caps.includes('face') && ' / '}
+                            {caps.includes('face') && 'Face'}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          <Button
+            onClick={handleStart}
+            disabled={
+              !deviceSn ||
+              !enrollmentPresence.canRunLiveDeviceAction ||
+              !capabilities.includes(biometricType) ||
+              (biometricType === 'fingerprint' && enrolledFingers.has(fingerId)) ||
+              startEnrollment.isPending
+            }
+            title={enrollmentPresence.blockReason}
+            className="w-full gap-2"
+          >
+            {startEnrollment.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : biometricType === 'fingerprint' ? <Fingerprint className="h-4 w-4" /> : <ScanFace className="h-4 w-4" />}
+            {biometricType === 'fingerprint' ? 'Start Fingerprint' : 'Start Face'}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Phase indicator */}
+          <div className="flex items-center justify-center gap-1 py-3">
+            {['queued', 'enrolling', 'accepted', 'success'].map((p, idx) => {
+              const phaseOrder: EnrollPhase[] = ['queued', 'enrolling', 'accepted', 'success']
+              const effectiveIdx =
+                phase === 'success' ? phaseOrder.length : phaseOrder.indexOf(phase)
+              const isCompleted = effectiveIdx > idx
+              const isFailedStep = phase === 'failed' && idx === failedStepIdx
+              const isCurrent =
+                phase === p && phase !== 'success' && !isFailedStep
+              const isFailed = isFailedStep
+              return (
+                <div key={p} className="flex items-center">
+                  <div className="flex flex-col items-center gap-0.5">
+                    <div className={cn("w-7 h-7 rounded-full flex items-center justify-center border-2 text-xs font-bold bg-card", isCompleted && cn(signalBorder.success, signalText.success), isCurrent && !isFailed && cn(signalBorder.progress, signalText.progress), isFailed && cn(signalBorder.danger, signalText.danger), !isCompleted && !isCurrent && !isFailed && "border-border bg-muted text-muted-foreground")}>
+                      {isCompleted ? <CheckCircle2 className="h-4 w-4" /> : isCurrent && !isFailed ? <Loader2 className="h-4 w-4 animate-spin" /> : isFailed ? <AlertCircle className="h-4 w-4" /> : idx + 1}
+                    </div>
+                    <span className="text-[9px] font-medium">{p === 'queued' ? 'Queued' : p === 'enrolling' ? 'Capture' : p === 'accepted' ? 'Process' : 'Done'}</span>
+                  </div>
+                  {idx < 3 && <div className={cn("h-0.5 w-5 mx-0.5", isCompleted ? signalDot.success : "bg-border")} />}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Phase content */}
+          <div className="rounded-lg border p-4 text-center">
+            <div role="status" aria-live="polite" className="sr-only">
+              {phaseAnnouncement}
+            </div>
+            {phase === 'queued' && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><RefreshCw className={cn("h-5 w-5", signalText.progress)} /></div><div className="font-medium text-sm">Command Sent</div><div className="text-xs text-muted-foreground">Waiting for device...</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div></div>}
+            {phase === 'enrolling' && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><Loader2 className={cn("h-5 w-5 animate-spin", signalText.progress)} /></div><div className="font-medium text-sm">{biometricType === 'fingerprint' ? 'Place finger on sensor' : 'Look at camera'}</div><div className="text-xs text-muted-foreground">{commandStatus === 'sent' ? 'Device is ready — follow prompts on the device screen' : 'Waiting for device to start enrollment…'}</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div></div>}
+            {phase === 'accepted' && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><Loader2 className={cn("h-5 w-5 animate-spin", signalText.attention)} /></div><div className="font-medium text-sm">Saving to cloud</div><div className="text-xs text-muted-foreground">{isPullingTemplate ? 'Requesting template from device…' : 'Waiting for template upload…'}</div><div className="text-[10px] text-muted-foreground mt-2 font-medium">{flowContextLabel}</div><div className="h-1 mt-2 w-full rounded-full bg-muted overflow-hidden"><div className={cn("h-full w-1/3 animate-pulse rounded-full", signalDot.attention)} /></div></div>}
+            {phase === 'success' && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><CheckCircle2 className={cn("h-5 w-5", signalText.success)} /></div><div className={cn("font-medium text-sm", signalText.success)}>Success</div><div className="text-xs text-muted-foreground">{biometricType === 'fingerprint' ? `${protocolFingerLabel(fingerId)} enrolled` : 'Face enrolled'}</div></div>}
+            {phase === 'failed' && errorInfo && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><AlertCircle className={cn("h-5 w-5", signalText.danger)} /></div><div className={cn("font-medium text-sm", signalText.danger)}>{errorInfo.label}</div><div className="text-xs text-muted-foreground">{errorInfo.description}</div>{errorInfo.action && <div className={cn("text-xs mt-1 font-medium", signalText.attention)}>{errorInfo.action}</div>}{cleanupPending && <div className={cn("text-xs mt-2 font-medium", signalText.progress)}>Removing fingerprint from device…</div>}</div>}
+            {phase === 'cleaning_up' && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><Loader2 className={cn("h-5 w-5 animate-spin", signalText.progress)} /></div><div className="font-medium text-sm">Removing from device</div><div className="text-xs text-muted-foreground">Enrollment did not complete — cleaning up registrar</div></div>}
+          </div>
+
+          {showTimeout && (phase === 'enrolling' || phase === 'accepted') && (
+            <div className="space-y-2">
+              <div className={cn("flex items-center gap-2 p-2 rounded-lg border text-xs", signalAlert.attention)}>
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {phase === 'accepted'
+                    ? 'Upload is taking longer than expected. You can close this dialog — enrollment continues in the background.'
+                    : 'Taking longer than expected...'}
+                </span>
+              </div>
+              {phase === 'accepted' && (
+                <>
+                  <p className="text-[10px] text-muted-foreground">
+                    Cloud backup runs automatically; use below if stuck.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={handleRecovery}
+                    disabled={isPullingTemplate}
+                  >
+                    {isPullingTemplate ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+                    ) : (
+                      <RotateCcw className="h-3.5 w-3.5 mr-2" />
+                    )}
+                    {isPullingTemplate ? 'Pulling template…' : 'Request template from device'}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {(phase === 'enrolling' || phase === 'queued' || phase === 'accepted') && (
+              <Button variant="outline" onClick={() => setCancelConfirmOpen(true)} className="flex-1">
+                Cancel
+              </Button>
+            )}
+            {phase === 'success' && (
+              <>
+                <Button variant="outline" onClick={handleReset} className="flex-1 gap-1.5">
+                  <Fingerprint className="h-3.5 w-3.5" /> More
+                </Button>
+                <Button onClick={handleDone} className="flex-1">Done</Button>
+              </>
+            )}
+            {phase === 'failed' && (
+              <>
+                {cleanupPending && (
+                  <Button variant="secondary" onClick={handleForceCleanup} className="w-full mb-2">
+                    Retry remove from device
+                  </Button>
+                )}
+                <Button onClick={handleReset} className="flex-1">Try Again</Button>
+                <Button variant="outline" onClick={handleDone} className="flex-1">Close</Button>
+              </>
+            )}
+            {phase === 'cleaning_up' && (
+              <>
+                <Button variant="secondary" onClick={handleForceCleanup} className="w-full mb-2">
+                  Retry remove from device
+                </Button>
+                <Button variant="outline" onClick={handleDone} className="w-full">Close</Button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <ConfirmationDialog
+        isOpen={cancelConfirmOpen}
+        title={ENROLL_CANCEL_CONFIRM.title}
+        message={ENROLL_CANCEL_CONFIRM.message}
+        confirmLabel={ENROLL_CANCEL_CONFIRM.confirmLabel}
+        cancelLabel={ENROLL_CANCEL_CONFIRM.cancelLabel}
+        variant="destructive"
+        isProcessing={cancelEnrollment.isPending}
+        onConfirm={handleConfirmCancel}
+        onCancel={() => setCancelConfirmOpen(false)}
+      />
+    </div>
+  )
+}
+
+export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: UserDetailModalProps) {
+  const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState('sync')
+  const [enrollOpen, setEnrollOpen] = useState(false)
+  const [enrollCancelConfirmOpen, setEnrollCancelConfirmOpen] = useState(false)
+  const cancelEnrollment = useCancelEnrollment()
+  const [copiedPin, setCopiedPin] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; bioId?: string; type?: 'fingerprint' | 'face'; fingerId?: number }>({ open: false })
+  const lastEnrollmentPhaseRef = useRef<string | null>(null)
+  const enrollPhaseRef = useRef<EnrollPhase>('idle')
+
+  const userId = user?.id || ''
+  const refetchInterval = open ? 3000 : undefined
+
+  const { data: backgroundEnrollment } = useEnrollmentStatus(userId, {
+    enabled: open && !!userId,
+    refetchInterval: 3000,
+  })
+
+  const { data: syncData, isLoading: syncLoading } = useSyncStatus(userId, { refetchInterval })
+  const { data: commandData } = useCommandQueue(userId, 50, { refetchInterval })
+  const { data: biometricsData, refetch: refetchBiometrics } = useUserBiometrics(userId)
+
+  useEffect(() => {
+    const phase = backgroundEnrollment?.data?.session?.phase
+    if (!phase || phase === lastEnrollmentPhaseRef.current) return
+
+    if (lastEnrollmentPhaseRef.current && phase === 'completed') {
+      if (!enrollOpen) {
+        notifySuccess('Biometric enrollment completed')
+      }
+      refetchBiometrics()
+      onRefreshList?.()
+    } else if (
+      lastEnrollmentPhaseRef.current &&
+      (phase === 'failed' || phase === 'timed_out' || phase === 'cancelled')
+    ) {
+      const cleanupPending = backgroundEnrollment?.data?.cleanupPending
+      if (cleanupPending) {
+        notifyInfo(
+          'Enrollment ended',
+          'Removing fingerprint from the registrar device…'
+        )
+      } else {
+        notifyError(
+          'Enrollment did not complete',
+          backgroundEnrollment?.data?.session?.error_message ||
+            'Template was not received from the device.'
+        )
+      }
+    }
+    lastEnrollmentPhaseRef.current = phase
+  }, [
+    backgroundEnrollment?.data?.session?.phase,
+    backgroundEnrollment?.data?.session?.error_message,
+    backgroundEnrollment?.data?.cleanupPending,
+    refetchBiometrics,
+    onRefreshList,
+    enrollOpen,
+  ])
+
+  useEffect(() => {
+    if (!open) {
+      lastEnrollmentPhaseRef.current = null
+    }
+  }, [open, userId])
+
+  const syncUser = useSyncUser()
+  const retryUserSync = useRetryUserSync()
+  const forceUserSync = useForceUserSync()
+  const reconcileUserSync = useReconcileUserSync()
+  const deleteBiometric = useDeleteBiometric()
+
+  useEffect(() => {
+    if (!open && user) {
+      setActiveTab('sync')
+      setEnrollOpen(false)
+    }
+  }, [open, user])
+
+  const commands = commandData?.data || []
+  const { map: presenceMap } = useDevicePresenceMap({ enabled: open && !!userId })
+  const syncStatus = useMemo(
+    () => enrichSyncStatusWithPresence(syncData?.data || [], presenceMap),
+    [syncData, presenceMap]
+  )
+  const biometrics = biometricsData?.data || []
+
+  const fingerprints = useMemo(() => biometrics.filter(b => b.type === 'fingerprint'), [biometrics])
+  const faces = useMemo(() => biometrics.filter(b => b.type === 'face'), [biometrics])
+
+  const { aggregate: syncAggregate, isSyncing: aggregateIsSyncing } = useUserSyncAggregate(userId, {
+    enabled: open && !!userId,
+    refetchInterval: 3000,
+    includeEnrollmentHints: true,
+  })
+
+  const stats = useMemo(() => {
+    if (!syncAggregate) {
+      return {
+        total: syncStatus.length,
+        synced: 0,
+        syncing: 0,
+        notSynced: syncStatus.length,
+        cleaning: 0,
+        staleCount: 0,
+        hasFailedCommands: false,
+        hasFailedDevices: false,
+      }
+    }
+    return {
+      total: syncAggregate.total,
+      synced: syncAggregate.synced,
+      syncing: syncAggregate.syncing,
+      notSynced: syncAggregate.not_synced,
+      cleaning: syncAggregate.cleaning,
+      staleCount: syncAggregate.stale_count,
+      hasFailedCommands: syncAggregate.has_failed_commands,
+      hasFailedDevices: syncAggregate.has_failed_devices,
+    }
+  }, [syncAggregate, syncStatus.length])
+
+  const deviceSns = useMemo(() => syncStatus.map((s) => s.device_sn), [syncStatus])
+  const onlineDeviceSns = useMemo(
+    () => syncStatus.filter((s) => s.is_online).map((s) => s.device_sn),
+    [syncStatus]
+  )
+
+  const enrollmentStatusPayload = backgroundEnrollment?.data
+
+  const handleCopyPin = async () => {
+    if (user?.pin) {
+      await navigator.clipboard.writeText(user.pin)
+      setCopiedPin(true)
+      notifySuccess('PIN copied')
+      setTimeout(() => setCopiedPin(false), 2000)
+    }
+  }
+
+  const handleSyncToDevice = (deviceSn: string) => {
+    if (!user?.id) return
+    syncUser.mutate({ userId: user.id, deviceSns: [deviceSn] })
+  }
+
+  const handleSyncAllDevices = () => {
+    if (!user?.id || deviceSns.length === 0) return
+    const targets = onlineDeviceSns.length > 0 ? onlineDeviceSns : deviceSns
+    if (onlineDeviceSns.length === 0 && deviceSns.length > 0) {
+      notifyWarning(
+        'Devices offline',
+        'Sync queued for configured devices anyway.'
+      )
+    }
+    syncUser.mutate({ userId: user.id, deviceSns: targets })
+  }
+
+  const confirmCloseEnrollDialog = async () => {
+    setEnrollCancelConfirmOpen(false)
+    if (!user?.id) {
+      setEnrollOpen(false)
+      return
+    }
+    try {
+      const status = await UserService.getEnrollmentStatus(user.id)
+      const sessionPhase = status.data?.session?.phase
+      const isActive =
+        sessionPhase === 'queued' ||
+        sessionPhase === 'awaiting_upload' ||
+        status.data?.isActive
+      if (isActive) {
+        await cancelEnrollment.mutateAsync(user.id)
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Cancel failed'
+      notifyError('Could not cancel enrollment', msg)
+      return
+    }
+    setEnrollOpen(false)
+  }
+
+  const handleForceEnrollmentCleanupForDevice = async (deviceSn: string) => {
+    if (!user?.id) return
+    try {
+      const result = await UserService.forceEnrollmentCleanup(user.id, deviceSn)
+      notifySuccess(result.message)
+    } catch (err: unknown) {
+      notifyError('Cleanup failed', err instanceof Error ? err.message : undefined)
+    }
+  }
+
+  const handleDeleteBiometric = (bioId: string, type: 'fingerprint' | 'face', fingerId?: number) => {
+    setDeleteConfirm({ open: true, bioId, type, fingerId })
+  }
+
+  const confirmDeleteBiometric = async () => {
+    if (!user?.id || !deleteConfirm.bioId) return
+    try {
+      await deleteBiometric.mutateAsync({ userId: user.id, type: deleteConfirm.type!, fingerId: deleteConfirm.fingerId })
+      refetchBiometrics()
+      onRefreshList?.()
+    } catch {
+      // mutation's onError already handles the toast
+    }
+    setDeleteConfirm({ open: false })
+  }
+
+  const isSyncing = aggregateIsSyncing || syncUser.isPending
+
+  const { photoUrl: displayPhotoUrl } = useUserPhoto({
+    photoUrl: user?.photo_url,
+    hasCachedPhoto: !!user?.photo_storage_path,
+    userId: user?.id || undefined,
+    frappeEmployeeId: user?.frappe_employee_id,
+    enabled: true,
+  })
+
+  if (!user) return null
+
+  const isRegistered = user.is_registered
+  const photoIndicator =
+    getPhotoCacheAvatarIndicator(user.photo_cache_status as PhotoCacheStatus | undefined) ??
+    (user.photo_url && !user.photo_storage_path
+      ? getPhotoCacheAvatarIndicator('missing_cache')
+      : null)
+
+  return (
+    <>
+      <Dialog open={open && !enrollOpen} onOpenChange={onOpenChange}>
+        <DialogContent size="panel" className="flex flex-col overflow-hidden">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Avatar className="h-10 w-10">
+                  <AvatarImage key={displayPhotoUrl || 'no-photo'} src={displayPhotoUrl || undefined} alt={user.name} className="object-cover" />
+                  <AvatarFallback className="bg-primary/10 text-primary font-medium">{getInitials(user.name)}</AvatarFallback>
+                </Avatar>
+                {photoIndicator && (
+                  <PhotoCacheAvatarIndicator
+                    kind={photoIndicator.kind}
+                    title={photoIndicator.title}
+                  />
+                )}
+              </div>
+              <div>
+                <DialogTitle>{user.name || 'Unknown'}</DialogTitle>
+                <DialogDescription className="flex items-center gap-2 text-xs">
+                  {user.frappe_employee_id && <span>{user.frappe_employee_id}</span>}
+                  {user.pin && (
+                    <button onClick={handleCopyPin} className="flex items-center gap-1 font-mono bg-muted px-1.5 py-0.5 rounded hover:bg-muted/80">
+                      {copiedPin ? <CheckCircle2 className={cn("h-3 w-3", signalText.success)} /> : <Copy className="h-3 w-3" />}
+                      PIN {user.pin}
+                    </button>
+                  )}
+                  {user.status && isRegistered && (
+                    <Badge variant="secondary" className="text-[10px]">{user.status}</Badge>
+                  )}
+                  {!isRegistered && <Badge variant="outline" className="text-[10px]">Unregistered</Badge>}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="sync" className="flex items-center gap-2 text-xs">
+                <Users className="h-4 w-4" />
+                Sync ({stats.total})
+              </TabsTrigger>
+              <TabsTrigger value="biometrics" className="flex items-center gap-2 text-xs">
+                <Fingerprint className="h-4 w-4" />
+                Bio ({fingerprints.length + faces.length})
+              </TabsTrigger>
+              <TabsTrigger value="photo" className="flex items-center gap-2 text-xs">
+                <Image className="h-4 w-4" />
+                Photo
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="sync" className="flex-1 flex flex-col min-h-0 mt-4">
+              {!isRegistered && (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center text-muted-foreground">
+                    <UserPlus className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">Register to enable sync</p>
+                  </div>
+                </div>
+              )}
+              {isRegistered && (
+                <div className="flex flex-1 min-h-0 flex-col">
+                  <div className="mb-4 flex shrink-0 flex-wrap items-center gap-4 text-sm">
+                      {stats.synced > 0 && (
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className={cn("h-4 w-4", signalText.success)} />
+                          <span>{stats.synced} synced</span>
+                        </div>
+                      )}
+                      {stats.syncing > 0 && (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className={cn("h-4 w-4 animate-spin", signalText.progress)} />
+                          <span>{stats.syncing} syncing</span>
+                        </div>
+                      )}
+                      {stats.staleCount > 0 && stats.syncing === 0 && (
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className={cn("h-4 w-4", signalText.attention)} />
+                          <span>{stats.staleCount} retrying</span>
+                        </div>
+                      )}
+                      {stats.cleaning > 0 && (
+                        <div className="flex items-center gap-2">
+                          <Sparkles className={cn("h-4 w-4", signalText.progress)} />
+                          <span>{stats.cleaning} cleaning</span>
+                        </div>
+                      )}
+                      {stats.notSynced > 0 && (
+                        <div className="flex items-center gap-2">
+                          <div className="h-4 w-4 rounded-full border-2 border-dashed border-muted-foreground/40" />
+                          <span>{stats.notSynced} pending</span>
+                        </div>
+                      )}
+                  </div>
+
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    {syncLoading ? (
+                      <div className="flex items-center justify-center h-32"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                    ) : syncStatus.length === 0 ? (
+                      <div className="flex items-center justify-center h-32 text-muted-foreground">No devices configured</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {syncStatus.map((status) => (
+                          <DeviceCard
+                            key={status.id}
+                            status={status}
+                            device={status.devices}
+                            commands={commands}
+                            onSync={handleSyncToDevice}
+                            isSyncing={syncUser.isPending}
+                            hasFace={faces.length > 0}
+                            fingerprints={fingerprints}
+                            enrollmentSession={
+                              enrollmentStatusPayload?.session?.device_sn === status.device_sn
+                                ? enrollmentStatusPayload.session
+                                : null
+                            }
+                            enrollmentCleanup={
+                              enrollmentStatusPayload?.session?.device_sn === status.device_sn
+                                ? {
+                                    cleanupPending: enrollmentStatusPayload.cleanupPending,
+                                    rogueRisk: enrollmentStatusPayload.rogueRisk,
+                                    deviceSn: status.device_sn,
+                                  }
+                                : null
+                            }
+                            onForceEnrollmentCleanup={() =>
+                              handleForceEnrollmentCleanupForDevice(status.device_sn)
+                            }
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <DialogFooter variant="bar">
+                    <SyncToolbarActions
+                      deviceSns={deviceSns}
+                      onlineDeviceSns={onlineDeviceSns}
+                      isSyncing={isSyncing}
+                      showResetFailed={stats.hasFailedCommands || stats.hasFailedDevices}
+                      showClearStuck={stats.staleCount > 0 || stats.syncing > 0}
+                      onSyncAll={handleSyncAllDevices}
+                      onResetFailed={() =>
+                        retryUserSync.mutate({ userId: user.id!, deviceSns: deviceSns })
+                      }
+                      onForceSync={() =>
+                        forceUserSync.mutate({ userId: user.id!, deviceSns: deviceSns })
+                      }
+                      onClearStuck={() => reconcileUserSync.mutate(user.id!)}
+                      resetPending={retryUserSync.isPending}
+                      forcePending={forceUserSync.isPending}
+                      clearPending={reconcileUserSync.isPending}
+                    />
+                  </DialogFooter>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="photo" className="flex-1 flex flex-col min-h-0 mt-4">
+              {!isRegistered ? (
+                <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+                  Register first to manage HR photo cache
+                </div>
+              ) : user ? (
+                <UserPhotoTab
+                  user={user}
+                  syncStatus={syncStatus}
+                  onProcessed={() => {
+                    onRefreshList?.()
+                    queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
+                    queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
+                  }}
+                />
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="biometrics" className="flex-1 flex flex-col min-h-0 mt-4">
+              {!isRegistered ? (
+                <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Register first to manage biometrics</div>
+              ) : (
+                <div className="flex flex-1 min-h-0 flex-col">
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-4 text-xs">
+                        <div className="flex items-center gap-1.5">
+                          <Fingerprint className="h-4 w-4 text-muted-foreground" />
+                          <span>{fingerprints.length} fingerprints</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <ScanFace className="h-4 w-4 text-muted-foreground" />
+                          <span>{faces.length > 0 ? 'Face enrolled' : 'No face'}</span>
+                        </div>
+                    </div>
+
+                    {/* Fingerprints list */}
+                    {fingerprints.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-xs text-muted-foreground font-medium">Fingerprints</div>
+                        {fingerprints.map(bio => (
+                          <div key={bio.id} className="flex items-center justify-between text-sm rounded-lg border px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <Fingerprint className="h-4 w-4 text-muted-foreground" />
+                              <span className="font-mono text-xs">{protocolFingerLabel(bio.finger_id ?? 0)}</span>
+                            </div>
+                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteBiometric(bio.id, 'fingerprint', bio.finger_id ?? undefined)}>
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Face */}
+                    <div className="rounded-lg border p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <ScanFace className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-sm font-medium">Face</span>
+                        </div>
+                        {faces.length > 0 ? (
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteBiometric(faces[0].id, 'face')}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">Not enrolled</Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                  <DialogFooter variant="bar">
+                    <Button size="sm" onClick={() => setEnrollOpen(true)} className="h-8 gap-1.5 text-xs">
+                      <Fingerprint className="h-3.5 w-3.5" /> Enroll
+                    </Button>
+                  </DialogFooter>
+                </div>
+              )}
+            </TabsContent>
+
+            </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      {/* Enroll Dialog */}
+      <Dialog
+        open={enrollOpen}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen) {
+            setEnrollOpen(true)
+            return
+          }
+          if (isActiveEnrollPhase(enrollPhaseRef.current)) {
+            setEnrollCancelConfirmOpen(true)
+            return
+          }
+          setEnrollOpen(false)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                <Fingerprint className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <div>
+                <DialogTitle>Enroll Biometric</DialogTitle>
+                <DialogDescription className="flex items-center gap-2 text-xs">
+                  <span>{user.name}</span>
+                  {user.pin && <Badge variant="outline" className="text-[10px] font-mono">{user.pin}</Badge>}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <EnrollContent
+            user={user}
+            open={enrollOpen}
+            onPhaseChange={(p) => {
+              enrollPhaseRef.current = p
+            }}
+            onSuccess={() => {
+              refetchBiometrics()
+              onRefreshList?.()
+            }}
+            onClose={() => setEnrollOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmationDialog
+        isOpen={enrollCancelConfirmOpen}
+        title={ENROLL_CANCEL_CONFIRM.title}
+        message={ENROLL_CANCEL_CONFIRM.message}
+        confirmLabel={ENROLL_CANCEL_CONFIRM.confirmLabel}
+        cancelLabel={ENROLL_CANCEL_CONFIRM.cancelLabel}
+        variant="destructive"
+        isProcessing={cancelEnrollment.isPending}
+        onConfirm={confirmCloseEnrollDialog}
+        onCancel={() => setEnrollCancelConfirmOpen(false)}
+      />
+
+      <ConfirmationDialog
+        isOpen={deleteConfirm.open}
+        title="Delete Biometric"
+        message={`Are you sure you want to delete this ${deleteConfirm.type === 'fingerprint' ? 'fingerprint' : 'face'} template? This will sync the deletion to all devices.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        isProcessing={deleteBiometric.isPending}
+        onConfirm={confirmDeleteBiometric}
+        onCancel={() => setDeleteConfirm({ open: false })}
+      />
+    </>
+  )
+}

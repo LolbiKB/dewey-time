@@ -1,0 +1,116 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Canonical design tokens (palette, Geist, radius scale, dark variant) come
+   from the shared Dewey design system — do not redeclare them here. */
+@import "@lolbikb/dewey-ui/theme.css";
+/* Dewey brand layer — green primary, orange/blue signals. Must come AFTER
+   dewey-ui's theme so it overrides the neutral graphite primary. */
+@import "./brand/tokens.css";
+/* Tailwind must scan the package for the primitives' utility classes. */
+@source "../node_modules/@lolbikb/dewey-ui/dist";
+
+/* ---- App-local styles below: layout + Radix animation helpers only ---- */
+
+/* Accordion animations */
+@keyframes accordion-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.animate-accordion-down {
+  animation: accordion-down 0.2s ease-out;
+}
+
+.animate-accordion-up {
+  animation: accordion-up 0.2s ease-out;
+}
+
+/* Collapsible animations */
+@keyframes collapsible-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.animate-collapsible-down {
+  animation: collapsible-down 0.2s ease-out;
+}
+
+.animate-collapsible-up {
+  animation: collapsible-up 0.2s ease-out;
+}
+
+/* ---- True-centered header tabs (dewey-ui AppShell, tabs mode) ----
+   dewey-ui lays the tab bar out as flex: [logo shrink-0 | nav flex-1
+   justify-center | actions shrink-0], so the tabs center within the LEFTOVER
+   space and drift off the bar's true center (the right-side actions are wider
+   than the logo). Impose the industry-standard 1fr/auto/1fr grid so the nav is
+   centered against the WHOLE bar, in normal flow (no absolute positioning).
+   Keyed on the aria-label we pass via navMode; if dewey's markup ever changes,
+   :has() simply stops matching and we fall back to dewey's default — nothing
+   breaks. Only applied at >=sm where there's room.
+   TODO: upstream this grid layout into dewey-ui's TabsShell. */
+@media (min-width: 640px) {
+  header:has(> div > nav[aria-label="Primary"]) > div {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+  }
+  header:has(> div > nav[aria-label="Primary"]) > div > :first-child {
+    justify-self: start;
+  }
+  header:has(> div > nav[aria-label="Primary"]) > div > nav[aria-label="Primary"] {
+    justify-self: center;
+  }
+  header:has(> div > nav[aria-label="Primary"]) > div > :last-child {
+    justify-self: end;
+  }
+}
+
+/* Full height layout support */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
