@@ -11,6 +11,7 @@ import { NotificationsButton } from "@/pwa/NotificationsButton";
 import { rebindPush, refreshBadgeFromPage } from "@/pwa/push";
 import { MobileTabBar, type MobileTab } from "@/ui/MobileTabBar";
 import { defaultHrAccessContext, type HrAccessOutletContext } from "@/lib/hrAccess";
+import { cn } from "@/lib/utils";
 const DESK_URL = "/desk";
 const FLAGS_INBOX_URL = "/app/attendance-flag";
 
@@ -89,7 +90,20 @@ export function HrAppShell() {
         </>
       }
     >
-      <div className={showBottomNav ? "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0" : undefined}>
+      {/* dewey-ui's content slot (`min-h-0 flex-1 overflow-hidden`) is a definite-height
+          block that hands its full height to its DIRECT child; the screens fill it with
+          an `h-full` root. This wrapper sits in between, so it must pass that height
+          through (`h-full`) — otherwise it collapses to content height and the week grid /
+          shift-blocks cards stop flexing to fill (on desktop too: the wrapper is always
+          rendered). `flex min-h-0 flex-col` makes it a proper column passthrough. The
+          bottom-nav padding is the only conditional part — it reserves room for the fixed
+          MobileTabBar on phones (md:pb-0 drops it where the top tabs are used). */}
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          showBottomNav && "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0",
+        )}
+      >
         <Outlet context={outletContext} />
       </div>
       {showBottomNav && <MobileTabBar items={tabs} />}
