@@ -12,6 +12,7 @@ const SHELL = `${VERSION}-shell`;
 const ASSETS = `${VERSION}-assets`;
 const ASSET_PREFIX = "/assets/zkteco_hr/hr_attendance/";
 const SHELL_URL = "/hr-attendance";
+const ICON = `${ASSET_PREFIX}icons/icon-192.png`;
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -70,4 +71,94 @@ self.addEventListener("fetch", (event) => {
       })(),
     );
   }
+});
+
+// Who is logged in on THIS device right now? (for the push privacy guard)
+async function currentUser() {
+  try {
+    const res = await fetch("/api/method/frappe.auth.get_logged_user", { credentials: "include" });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json && json.message ? json.message : null;
+  } catch {
+    return null;
+  }
+}
+
+// Refresh the app icon badge from the user's actionable count (runs even with no
+// open tab, via the session cookie). Guarded — unsupported browsers no-op.
+async function refreshBadge() {
+  if (!self.navigator.setAppBadge) return;
+  try {
+    const res = await fetch("/api/method/zkteco_hr.webpush.get_my_badge_count", {
+      credentials: "include",
+    });
+    if (!res.ok) return;
+    const json = await res.json();
+    const count = Number(json && json.message ? json.message : 0);
+    if (count > 0) await self.navigator.setAppBadge(count);
+    else await self.navigator.clearAppBadge();
+  } catch {
+    /* offline / logged out — leave the badge as-is */
+  }
+}
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = {};
+  }
+  const url = data.url || SHELL_URL;
+  event.waitUntil(
+    (async () => {
+      const me = await currentUser();
+      const forMe = !data.recipient || me === data.recipient;
+      if (forMe) {
+        await self.registration.showNotification(data.title || "Dewey Time", {
+          body: data.body || "",
+          icon: ICON,
+          badge: ICON,
+          data: { url },
+          tag: url,
+          renotify: true,
+        });
+      } else {
+        // Privacy guard: a different user (or logged out) on this device — say nothing specific.
+        await self.registration.showNotification("Dewey Time", {
+          body: "You have a new notification. Open the app to view.",
+          icon: ICON,
+          badge: ICON,
+          data: { url: SHELL_URL },
+          tag: "generic",
+        });
+      }
+      await refreshBadge();
+    })(),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || SHELL_URL;
+  event.waitUntil(
+    (async () => {
+      const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const client of all) {
+        if (client.url.includes(SHELL_URL)) {
+          await client.focus();
+          if ("navigate" in client) {
+            try {
+              await client.navigate(url);
+            } catch {
+              /* hash nav can reject; focus is enough */
+            }
+          }
+          return;
+        }
+      }
+      await self.clients.openWindow(url);
+    })(),
+  );
 });

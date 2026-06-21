@@ -45,6 +45,7 @@ after_migrate = [
     "zkteco_hr.utils.sync_hr_attendance_assets.sync_hr_attendance_assets",
     "zkteco_hr.utils.sync_adms_assets.sync_adms_assets",
     "zkteco_hr.attendance_engine.dashboard_auth.ensure_adms_roles",
+    "zkteco_hr.webpush.ensure_vapid_keys",
 ]
 
 # Scheduled job: company fallback UNNOTIFIED_ABSENCE (~03:00 per company timezone)
