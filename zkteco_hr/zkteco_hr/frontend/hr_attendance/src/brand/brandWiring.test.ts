@@ -6,9 +6,9 @@ import { dirname, resolve } from "node:path";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-test("HrAppShell uses the wordmark, not the old image logo/title", () => {
+test("HrAppShell uses the dial+wordmark lockup, not the old image logo/title", () => {
   const shell = readFileSync(resolve(PKG, "src/ui/HrAppShell.tsx"), "utf8");
-  assert.match(shell, /DeweyTimeWordmark/, "uses DeweyTimeWordmark");
+  assert.match(shell, /DeweyTimeLockup/, "uses the Dewey Time lockup (dial + wordmark)");
   assert.ok(!shell.includes("APP_LOGO"), "drops the APP_LOGO import/usage");
   assert.ok(!shell.includes("<img"), "no <img> logo in the header");
   assert.ok(!shell.includes('title="ZKTeco HR"'), "drops the text title");

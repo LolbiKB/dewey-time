@@ -4,7 +4,7 @@ import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { AppShell } from "@lolbikb/dewey-ui";
 
 import { useCalendarSession } from "@/hooks/useCalendarSession";
-import { DeweyTimeWordmark } from "@/brand/DeweyTimeWordmark";
+import { DeweyTimeLockup } from "@/brand/DeweyTimeLockup";
 import { defaultHrAccessContext, type HrAccessOutletContext } from "@/lib/hrAccess";
 const DESK_URL = "/desk";
 const FLAGS_INBOX_URL = "/app/attendance-flag";
@@ -61,7 +61,7 @@ export function HrAppShell() {
             : []),
         ],
       }}
-      logo={<DeweyTimeWordmark />}
+      logo={<DeweyTimeLockup />}
       homeHref={tabHref("attendance", employee)}
       linkComponent={RouterLink}
       headerEnd={
