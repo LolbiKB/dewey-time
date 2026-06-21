@@ -1,4 +1,4 @@
-import type { ComponentProps, ComponentType } from "react";
+import { useEffect, type ComponentProps, type ComponentType } from "react";
 import { CalendarDaysIcon, CalendarRangeIcon, FlagIcon, LayoutGridIcon } from "lucide-react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { AppShell } from "@lolbikb/dewey-ui";
@@ -7,6 +7,8 @@ import { useCalendarSession } from "@/hooks/useCalendarSession";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { DeweyTimeLockup } from "@/brand/DeweyTimeLockup";
 import { InstallButton } from "@/pwa/InstallButton";
+import { NotificationsButton } from "@/pwa/NotificationsButton";
+import { rebindPush, refreshBadgeFromPage } from "@/pwa/push";
 import { MobileTabBar, type MobileTab } from "@/ui/MobileTabBar";
 import { defaultHrAccessContext, type HrAccessOutletContext } from "@/lib/hrAccess";
 const DESK_URL = "/desk";
@@ -35,6 +37,14 @@ export function HrAppShell() {
   const tab = activeTab(pathname);
   const { hrStaff, isLoading: sessionLoading } = useCalendarSession();
   const isMobile = useIsMobile();
+
+  // On load (= a fresh session): silently re-bind any existing push subscription
+  // to the current user, and sync the app-icon badge. Both are best-effort no-ops
+  // when push is unsupported or not yet opted into.
+  useEffect(() => {
+    rebindPush();
+    refreshBadgeFromPage();
+  }, []);
 
   const outletContext: HrAccessOutletContext = sessionLoading
     ? defaultHrAccessContext
@@ -72,6 +82,7 @@ export function HrAppShell() {
       linkComponent={RouterLink}
       headerEnd={
         <>
+          <NotificationsButton />
           <InstallButton />
           {hrStaff ? <DeskLink href={FLAGS_INBOX_URL} label="Flags" icon={FlagIcon} /> : null}
           <DeskLink href={DESK_URL} label="Desk" icon={LayoutGridIcon} />

@@ -71,6 +71,23 @@ def send_test_push() -> dict:
     return {"ok": True}
 
 
+@frappe.whitelist()
+def get_my_badge_count() -> int:
+    """The signed-in user's own recent attendance flags — drives the app icon badge.
+    Read-only; 0 when no Employee is linked. The SW refreshes the badge from this."""
+    from frappe.utils import add_days, today
+
+    emp = frappe.db.get_value(
+        "Employee", {"user_id": frappe.session.user, "status": "Active"}, "name"
+    )
+    if not emp:
+        return 0
+    return frappe.db.count(
+        "Attendance Flag",
+        {"employee": emp, "attendance_date": [">=", add_days(today(), -14)]},
+    )
+
+
 # ---------------------------------------------------------------- send (server)
 
 def send_web_push(email: str, title: str, body: str, url: str) -> None:

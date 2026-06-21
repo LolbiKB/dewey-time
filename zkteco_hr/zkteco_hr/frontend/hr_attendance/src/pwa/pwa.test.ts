@@ -49,6 +49,16 @@ test("service worker caches by class and never the API", () => {
   assert.match(sw, /clients\.claim/);
 });
 
+test("service worker handles push with a recipient privacy guard + app badge", () => {
+  const sw = readFileSync(resolve(PKG, "../../www/hr-attendance-sw.js"), "utf8");
+  assert.match(sw, /addEventListener\("push"/, "has a push handler");
+  assert.match(sw, /data\.recipient/, "privacy-guards on the recipient");
+  assert.match(sw, /showNotification/, "shows a notification");
+  assert.match(sw, /setAppBadge/, "refreshes the app badge");
+  assert.match(sw, /get_my_badge_count/, "badge count from the backend");
+  assert.match(sw, /addEventListener\("notificationclick"/, "focus-or-open on click");
+});
+
 test("SW registration is prod-only, scoped, and non-fatal", () => {
   const main = readFileSync(resolve(PKG, "src/main.tsx"), "utf8");
   assert.match(main, /import\.meta\.env\.PROD/, "prod-only");
