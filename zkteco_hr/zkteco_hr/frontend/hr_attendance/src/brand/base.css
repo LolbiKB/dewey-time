@@ -73,6 +73,11 @@
 .dw-intro-dial line:nth-of-type(2) { animation: dw-wind-min  1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both; }
 .dw-intro-rise { animation: dw-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.9s both; }
 
+/* hovering the header brand lockup re-runs the same clock-wind on demand */
+.dw-hover-dial line { transform-box: view-box; transform-origin: 48px 48px; }
+.group:hover .dw-hover-dial line:nth-of-type(1) { animation: dw-wind-hour 1.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.group:hover .dw-hover-dial line:nth-of-type(2) { animation: dw-wind-min  1.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
 /* —— tactile press on real action buttons (exclude switches / tabs) —— */
 button:not([role='switch']):not([role='tab']) { transition: transform 0.06s ease; }
 button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform: scale(0.97); }
@@ -81,7 +86,7 @@ button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform:
 @media (prefers-reduced-motion: reduce) {
   .anim-page, .anim-rise, .anim-fade { animation: none !important; }
   [data-slot$='-content'], [data-slot$='-overlay'] { animation: none !important; }
-  .dw-intro-dial, .dw-intro-dial line, .dw-intro-rise { animation: none !important; }
+  .dw-intro-dial, .dw-intro-dial line, .dw-intro-rise, .dw-hover-dial line { animation: none !important; }
   button:active:not(:disabled) { transform: none; }
 }
 
