@@ -29,3 +29,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </FrappeProvider>
   </React.StrictMode>
 );
+
+// Register the service worker — PROD only (no SW in the Vite dev server) and
+// non-fatal (the app works without it). Scoped to /hr-attendance even though the
+// worker is served from the origin root; narrowing a scope never needs the
+// Service-Worker-Allowed header.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/hr-attendance-sw.js", { scope: "/hr-attendance", updateViaCache: "none" })
+      .catch(() => {});
+  });
+}

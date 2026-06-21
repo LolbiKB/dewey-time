@@ -91,18 +91,15 @@ button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform:
 }
 
 /* ---------------------------------------------------------------------------
-   OPTIONAL — native-app touch shell. Enable for USER-FACING apps only (skip
-   for internal/admin/dev tools). On touch, UI text isn't selectable and a
-   long-press shows no OS callout, so gestures (row actions, long-press sheets)
-   belong to the app, not the system. Re-enable selection for editable fields
-   and for content meant to be read/copied via the `.selectable` class. Desktop
-   is unaffected. Uncomment to turn on.
+   Native-app touch shell — active now that the app installs as a PWA on phones.
+   On touch, UI text isn't selectable and a long-press shows no OS callout, so
+   gestures (row actions, long-press sheets) belong to the app, not the system.
+   Selection is re-enabled for editable fields and for content meant to be
+   read/copied via the `.selectable` class. Desktop (fine pointer) is unaffected.
 --------------------------------------------------------------------------- */
-/*
 @media (pointer: coarse) {
   body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   input, textarea, select, [contenteditable], .selectable, .selectable * {
     -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
   }
 }
-*/

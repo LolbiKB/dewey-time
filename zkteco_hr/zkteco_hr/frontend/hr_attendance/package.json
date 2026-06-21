@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build --base=/assets/zkteco_hr/hr_attendance/ && node scripts/copy-html-entry.mjs",
     "preview": "vite preview",
-    "test:web": "tsx --test src/lib/*.test.ts src/brand/*.test.ts src/brand/*.test.tsx",
+    "test:web": "tsx --test src/lib/*.test.ts src/brand/*.test.ts src/brand/*.test.tsx src/pwa/*.test.ts src/pwa/*.test.tsx",
     "test:e2e": "playwright test"
   },
   "dependencies": {

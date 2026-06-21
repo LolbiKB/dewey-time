@@ -4,7 +4,10 @@ import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { AppShell } from "@lolbikb/dewey-ui";
 
 import { useCalendarSession } from "@/hooks/useCalendarSession";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { DeweyTimeLockup } from "@/brand/DeweyTimeLockup";
+import { InstallButton } from "@/pwa/InstallButton";
+import { MobileTabBar, type MobileTab } from "@/ui/MobileTabBar";
 import { defaultHrAccessContext, type HrAccessOutletContext } from "@/lib/hrAccess";
 const DESK_URL = "/desk";
 const FLAGS_INBOX_URL = "/app/attendance-flag";
@@ -31,47 +34,54 @@ export function HrAppShell() {
   const employee = searchParams.get("employee");
   const tab = activeTab(pathname);
   const { hrStaff, isLoading: sessionLoading } = useCalendarSession();
+  const isMobile = useIsMobile();
 
   const outletContext: HrAccessOutletContext = sessionLoading
     ? defaultHrAccessContext
     : { hrStaff, sessionLoading: false };
 
+  const tabs: MobileTab[] = [
+    {
+      label: hrStaff ? "Attendance" : "My calendar",
+      href: tabHref("attendance", employee),
+      active: tab === "attendance",
+      icon: CalendarDaysIcon,
+    },
+    ...(hrStaff
+      ? [
+          {
+            label: "Schedule",
+            href: tabHref("schedule", employee),
+            active: tab === "schedule",
+            icon: CalendarRangeIcon,
+          },
+        ]
+      : []),
+  ];
+
+  // Phone (< md) gets a fixed bottom tab-bar instead of the top strip — but only
+  // when there's more than one destination to switch between.
+  const showBottomNav = tabs.length >= 2;
+  const topTabs = isMobile && showBottomNav ? [] : tabs;
+
   return (
     <AppShell
-      navMode={{
-        type: "tabs",
-        "aria-label": "ZKTeco HR sections",
-        tabs: [
-          {
-            label: hrStaff ? "Attendance" : "My calendar",
-            href: tabHref("attendance", employee),
-            active: tab === "attendance",
-            icon: CalendarDaysIcon,
-          },
-          ...(hrStaff
-            ? [
-                {
-                  label: "Weekly Schedule",
-                  shortLabel: "Schedule",
-                  href: tabHref("schedule", employee),
-                  active: tab === "schedule",
-                  icon: CalendarRangeIcon,
-                },
-              ]
-            : []),
-        ],
-      }}
+      navMode={{ type: "tabs", "aria-label": "ZKTeco HR sections", tabs: topTabs }}
       logo={<DeweyTimeLockup />}
       homeHref={tabHref("attendance", employee)}
       linkComponent={RouterLink}
       headerEnd={
         <>
+          <InstallButton />
           {hrStaff ? <DeskLink href={FLAGS_INBOX_URL} label="Flags" icon={FlagIcon} /> : null}
           <DeskLink href={DESK_URL} label="Desk" icon={LayoutGridIcon} />
         </>
       }
     >
-      <Outlet context={outletContext} />
+      <div className={showBottomNav ? "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0" : undefined}>
+        <Outlet context={outletContext} />
+      </div>
+      {showBottomNav && <MobileTabBar items={tabs} />}
     </AppShell>
   );
 }
