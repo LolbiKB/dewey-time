@@ -18,7 +18,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const dashboardDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const appDir = resolve(dashboardDir, '../../zkteco_hr/zkteco_hr/zkteco_hr')
+const appDir = resolve(dashboardDir, '../..')
 
 const bridgeUrl = process.env.ADMS_BRIDGE_URL
 if (!bridgeUrl) {
