@@ -1,4 +1,4 @@
-// CANONICAL SOURCE: gcr-fastify/src/lib/frappe-merge.ts — keep identical.
+// CANONICAL SOURCE: zkteco-adms-bridg gcr-fastify/src/lib/frappe-merge.ts — keep identical (cross-repo).
 // The beta shadow-compare surfaces any drift between this and the bridge.
 /**
  * Pure Frappe-Employee ↔ bridge-user merge.

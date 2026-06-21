@@ -3,7 +3,7 @@
  * Build the dashboard in frappe auth mode and publish it into the zkteco_hr
  * Frappe app (served at https://<site>/adms).
  *
- *   ADMS_BRIDGE_URL=https://<cloud-run-host> node scripts/build-frappe.mjs
+ *   ADMS_BRIDGE_URL=https://<cloud-run-host> node scripts/build-adms.mjs
  *
  * Mirrors the zkteco_hr hr_attendance deploy contract (see that repo's
  * docs/HR_ATTENDANCE_DEPLOY.md): stable bundle names (assets/index.js|css),

@@ -1,7 +1,7 @@
 /**
  * Device presence (online/offline) — single source of truth for the dashboard.
  *
- * Derived from `devices.last_seen` (updated by device pings via gcr-fastify/iclock).
+ * Derived from `devices.last_seen` (updated by device pings via the zkteco-adms-bridg gcr-fastify /iclock route).
  * Freshness is pushed via Supabase Realtime on `devices` UPDATE → useDevices refetch.
  *
  * Do not add a separate "connected" flag in UI; tune DEVICE_ONLINE_THRESHOLD_MS if needed.
