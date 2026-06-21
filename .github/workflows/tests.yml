@@ -51,11 +51,15 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # frappe 16.23 (prod's version) pins Python >=3.14,<3.15 in its pyproject —
+          # the bench env must be 3.14, or `uv pip install -e frappe` won't resolve.
+          python-version: "3.14"
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          # frappe v16 requires Node >=24 (bench init runs `yarn install`, whose
+          # engine check rejects older Node). Keep in step with FRAPPE_BRANCH.
+          node-version: "24"
 
       - name: Install system packages
         run: |
