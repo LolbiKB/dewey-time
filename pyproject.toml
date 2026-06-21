@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 
+# Web push (PWA notifications). pip installs these with `pip install -e .`
+# during `bench get-app`, so the bench env has them for webpush.py.
+dependencies = ["pywebpush>=1.14"]
+
 [tool.setuptools]
 include-package-data = true
 
