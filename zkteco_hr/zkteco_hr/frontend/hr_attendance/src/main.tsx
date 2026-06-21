@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { App } from "./ui/App";
 import { HrAppShell } from "./ui/HrAppShell";
 import { WeeklySchedulePage } from "./ui/WeeklySchedulePage";
+import { DeweyTimeIntro } from "./brand/DeweyTimeIntro";
 import "./index.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -13,6 +14,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <FrappeProvider enableSocket={false}>
       <TooltipProvider>
+        <DeweyTimeIntro />
         <BrowserRouter>
           <Routes>
             <Route element={<HrAppShell />}>

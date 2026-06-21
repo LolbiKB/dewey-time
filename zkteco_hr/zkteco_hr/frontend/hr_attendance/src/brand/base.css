@@ -60,6 +60,19 @@
 [data-slot='sheet-content'][data-side='right'][data-state='open']  { animation: dw-sheet-right 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
 [data-slot='sheet-content'][data-side='left'][data-state='open']   { animation: dw-sheet-left 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* —— one-time brand intro: the clock winds its hands into place —— */
+@keyframes dw-wind-hour { from { transform: rotate(-810deg); } to { transform: rotate(0); } }
+@keyframes dw-wind-min  { from { transform: rotate(-1170deg); } to { transform: rotate(0); } }
+@keyframes dw-dial-pop  { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: none; } }
+
+.dw-intro-dial { animation: dw-dial-pop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* the dial's two <line> hands spin in; transform-box pins the origin to the
+   pivot (48,48 in the 96-unit viewBox) so they rotate about the clock centre */
+.dw-intro-dial line { transform-box: view-box; transform-origin: 48px 48px; }
+.dw-intro-dial line:nth-of-type(1) { animation: dw-wind-hour 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both; }
+.dw-intro-dial line:nth-of-type(2) { animation: dw-wind-min  1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both; }
+.dw-intro-rise { animation: dw-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.9s both; }
+
 /* —— tactile press on real action buttons (exclude switches / tabs) —— */
 button:not([role='switch']):not([role='tab']) { transition: transform 0.06s ease; }
 button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform: scale(0.97); }
@@ -68,6 +81,7 @@ button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform:
 @media (prefers-reduced-motion: reduce) {
   .anim-page, .anim-rise, .anim-fade { animation: none !important; }
   [data-slot$='-content'], [data-slot$='-overlay'] { animation: none !important; }
+  .dw-intro-dial, .dw-intro-dial line, .dw-intro-rise { animation: none !important; }
   button:active:not(:disabled) { transform: none; }
 }
 

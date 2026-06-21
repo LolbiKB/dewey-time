@@ -4,10 +4,13 @@
  * muted. No hover-expand animation. Color identity lives in the dial mark
  * beside it (DeweyTimeMark), so the text itself stays neutral. The visible
  * text is the accessible name (AppShell links the lockup to homeHref).
+ *
+ * `className` controls sizing only (default header size); the two-weight
+ * treatment is fixed so it reads the same everywhere it appears.
  */
-export function DeweyTimeWordmark() {
+export function DeweyTimeWordmark({ className = "text-sm" }: { className?: string } = {}) {
   return (
-    <span className="text-sm font-semibold tracking-tight select-none">
+    <span className={`font-semibold tracking-tight select-none ${className}`}>
       <span className="text-foreground">Dewey</span>{" "}
       <span className="font-normal text-muted-foreground">Time</span>
     </span>
