@@ -35,11 +35,12 @@ jobs:
         ports: ["11000:6379"]
 
     env:
-      # Match the Frappe Cloud site's major version. Bump here if the site is on a
-      # different track (e.g. version-14).
-      FRAPPE_BRANCH: version-15
-      ERPNEXT_BRANCH: version-15
-      HRMS_BRANCH: version-15
+      # Must match the Frappe Cloud site's major version (prod runs v16 —
+      # frappe/erpnext 16.x, hrms 16.x). Bump here whenever prod moves tracks;
+      # testing against a different major makes engine behaviour untrustworthy.
+      FRAPPE_BRANCH: version-16
+      ERPNEXT_BRANCH: version-16
+      HRMS_BRANCH: version-16
       DB_ROOT_PASSWORD: root
 
     steps:
