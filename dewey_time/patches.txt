@@ -13,3 +13,4 @@ dewey_time.patches.remove_dewey_time_desk_workspace
 dewey_time.patches.resync_hr_attendance_assets_v8
 dewey_time.patches.resync_hr_attendance_assets_v9
 dewey_time.patches.add_adms_admin_role
+dewey_time.patches.add_adms_bridge_desk_link
