@@ -25,7 +25,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_loads_and_resolves_paths(self):
         with TemporaryDirectory() as d:
             p = self._write(d, {
-                "app": "zkteco_hr",
+                "app": "dewey_time",
                 "app_src": "../..",
                 "required_apps": ["erpnext", "hrms"],
                 "branch": "version-15",
@@ -33,7 +33,7 @@ class TestLoadConfig(unittest.TestCase):
             })
             cfg = load_config(p)
             self.assertIsInstance(cfg, Config)
-            self.assertEqual(cfg.app, "zkteco_hr")
+            self.assertEqual(cfg.app, "dewey_time")
             self.assertEqual(cfg.required_apps, ("erpnext", "hrms"))
             self.assertEqual(cfg.branch, "version-15")
             self.assertTrue(Path(cfg.app_src).is_absolute())
@@ -79,10 +79,10 @@ class TestLoadConfig(unittest.TestCase):
     def test_exercise_block_parsed(self):
         with TemporaryDirectory() as d:
             p = self._write(d, {
-                "app": "zkteco_hr", "app_src": "../..", "required_apps": ["hrms"],
+                "app": "dewey_time", "app_src": "../..", "required_apps": ["hrms"],
                 "branch": "version-15", "frontend_dir": "../..",
                 "exercise": {
-                    "method": "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
+                    "method": "dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
                     "args": [
                         {"flag": "employee", "kwarg": "employee", "required": True},
                         {"flag": "mode", "kwarg": "mode", "default": "both", "choices": ["both", "intraday"]},
@@ -91,7 +91,7 @@ class TestLoadConfig(unittest.TestCase):
             })
             cfg = load_config(p)
             self.assertEqual(cfg.exercise_method,
-                             "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee")
+                             "dewey_time.attendance_engine.dev_tools.run_engine_for_employee")
             self.assertEqual(len(cfg.exercise_args), 2)
             self.assertEqual(cfg.exercise_args[0].flag, "employee")
             self.assertTrue(cfg.exercise_args[0].required)

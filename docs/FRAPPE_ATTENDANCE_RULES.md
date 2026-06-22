@@ -2,13 +2,13 @@
 
 **Policy source of truth** for turning raw device punches (ERPNext **Employee Checkin**) into daily outcomes (late flags, missing punches, hours, exceptions) for ZKTeco bridge employees.
 
-**Implementation:** [`zkteco_hr/zkteco_hr/attendance_engine/`](../zkteco_hr/zkteco_hr/attendance_engine/) — see [`FLAG_ENGINE_MVP.md`](../FLAG_ENGINE_MVP.md) for pilot scope and sign-off.
+**Implementation:** [`dewey_time/attendance_engine/`](../dewey_time/attendance_engine/) — see [`FLAG_ENGINE_MVP.md`](../FLAG_ENGINE_MVP.md) for pilot scope and sign-off.
 
 **Architecture plan:** [`FRAPPE_ATTENDANCE_ENGINE_PLAN.md`](../FRAPPE_ATTENDANCE_ENGINE_PLAN.md).
 
 ## Scope
 
-- **In scope:** rule definitions, required data, expected outputs, review/approval workflow, and mapping to the current zkteco_hr engine + `/hr-attendance` UI.
+- **In scope:** rule definitions, required data, expected outputs, review/approval workflow, and mapping to the current dewey_time engine + `/hr-attendance` UI.
 - **Out of scope:** payroll Present/Absent statuses, midnight shifts, automatic penalties, approve/reject actions in the React SPA (P1 — use Desk **Attendance Flag**).
 
 ## Prerequisites (must already be true)
@@ -202,7 +202,7 @@ Evidence JSON on flags includes both raw fields and effective values (`shift_gra
 
 - Inbox: `Attendance Flag` where `status = OPEN`.
 - HR approves, rejects, closes, or adds notes in Desk.
-- Open the calendar from the **ZKTeco HR** workspace shortcut or desktop app tile; use the SPA shell **Desk** link to return.
+- Open the calendar from the **Dewey Time** workspace shortcut or desktop app tile; use the SPA shell **Desk** link to return.
 
 ### HR review in `/hr-attendance` SPA (read-only MVP)
 

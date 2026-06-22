@@ -12,7 +12,7 @@ concurrency:
 
 defaults:
   run:
-    working-directory: zkteco_hr/zkteco_hr/frontend/hr_attendance
+    working-directory: dewey_time/frontend/hr_attendance
 
 jobs:
   unit-web:
@@ -68,7 +68,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: zkteco_hr/zkteco_hr/frontend/hr_attendance/playwright-report/
+          path: dewey_time/frontend/hr_attendance/playwright-report/
           retention-days: 7
 
   adms-unit:
@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: zkteco_hr/zkteco_hr/frontend/adms
+        working-directory: dewey_time/frontend/adms
     permissions:
       contents: read
       packages: read # read @lolbikb/dewey-ui from GitHub Packages
@@ -108,7 +108,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: zkteco_hr/zkteco_hr/frontend/adms
+        working-directory: dewey_time/frontend/adms
     permissions:
       contents: read
       packages: read
@@ -132,5 +132,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: adms-playwright-report
-          path: zkteco_hr/zkteco_hr/frontend/adms/playwright-report/
+          path: dewey_time/frontend/adms/playwright-report/
           retention-days: 7

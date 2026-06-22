@@ -4,7 +4,7 @@
 
 **Purpose:** Document everything the bridge must implement or preserve so HR can trust intraday attendance timelines in `/hr-attendance`, including **sync watermarks** for open sessions.
 
-**Frappe app repo:** `zkteco_hr` · Policy: [`FRAPPE_ATTENDANCE_RULES.md`](FRAPPE_ATTENDANCE_RULES.md) · Pilot: [`FLAG_ENGINE_MVP.md`](../FLAG_ENGINE_MVP.md)
+**Frappe app repo:** `dewey_time` · Policy: [`FRAPPE_ATTENDANCE_RULES.md`](FRAPPE_ATTENDANCE_RULES.md) · Pilot: [`FLAG_ENGINE_MVP.md`](../FLAG_ENGINE_MVP.md)
 
 ---
 
@@ -19,7 +19,7 @@ Bridge (your service)
        ├─→ Frappe Device Sync Status  (intraday watermark — NEW)
        └─→ Frappe Device Closeout Alert  (EOD — existing)
        ↓
-zkteco_hr flag engine + HR calendar UI
+dewey_time flag engine + HR calendar UI
 ```
 
 | Layer | Source of truth | Bridge responsibility |
@@ -60,7 +60,7 @@ POST to Frappe **Resource API** for DocType `Employee Checkin`.
 
 ### 2.2 End-of-day closeout (existing webhook)
 
-**Method:** `zkteco_hr.attendance_engine.closeout.notify_device_closeout_status`  
+**Method:** `dewey_time.attendance_engine.closeout.notify_device_closeout_status`  
 **HTTP:** `POST`  
 **Auth:** See [§4 Authentication](#4-authentication).
 
@@ -109,12 +109,12 @@ HR calendar shows a green **open session** when an employee’s last punch is an
 - **`last_device_log_at`** — newest log timestamp on the device for that date
 - **`last_delivered_at`** — newest log timestamp successfully written to Frappe for that device+date
 
-Frappe stores this in **`Device Sync Status`** (DocType in `zkteco_hr`). Bridge **POSTs** updates after each poll/delivery cycle.
+Frappe stores this in **`Device Sync Status`** (DocType in `dewey_time`). Bridge **POSTs** updates after each poll/delivery cycle.
 
 ### 3.2 Endpoint (live after `bench migrate`)
 
 ```
-POST https://<site>/api/method/zkteco_hr.attendance_engine.device_sync.notify_device_sync_status
+POST https://<site>/api/method/dewey_time.attendance_engine.device_sync.notify_device_sync_status
 ```
 
 Until migrated on a site, bridge will see 404 and should keep retrying (~5 min on poll).
@@ -153,7 +153,7 @@ Until migrated on a site, bridge will see 404 and should keep retrying (~5 min o
 **Example (curl):**
 
 ```bash
-curl -X POST "https://<site>/api/method/zkteco_hr.attendance_engine.device_sync.notify_device_sync_status" \
+curl -X POST "https://<site>/api/method/dewey_time.attendance_engine.device_sync.notify_device_sync_status" \
   -H "Authorization: token <api_key>:<api_secret>" \
   -H "X-Bridge-Secret: <secret-if-configured>" \
   -H "Content-Type: application/json" \
@@ -234,7 +234,7 @@ Same for **closeout** and **sync** webhooks.
    - Required when site `site_config.json` sets `bridge_closeout_secret`.  
    - Same secret for all bridge webhooks.
 
-Implementation reference: `zkteco_hr/attendance_engine/bridge_auth.py`.
+Implementation reference: `dewey_time/attendance_engine/bridge_auth.py`.
 
 ---
 
@@ -312,7 +312,7 @@ After Frappe implements calendar API changes:
 
 ---
 
-## 12. Frappe-side work (zkteco_hr repo — status Jun 2026)
+## 12. Frappe-side work (dewey_time repo — status Jun 2026)
 
 | Item | Status |
 |------|--------|
@@ -327,7 +327,7 @@ After Frappe implements calendar API changes:
 **One-off duplicate cleanup** (e.g. three rows for `PYA8254100003` / `2026-06-03`):
 
 ```python
-from zkteco_hr.attendance_engine.device_sync import merge_device_sync_duplicates
+from dewey_time.attendance_engine.device_sync import merge_device_sync_duplicates
 merge_device_sync_duplicates("PYA8254100003", "2026-06-03")
 ```
 
@@ -335,10 +335,10 @@ merge_device_sync_duplicates("PYA8254100003", "2026-06-03")
 
 **Related files:**
 
-- `zkteco_hr/attendance_engine/device_sync.py`
-- `zkteco_hr/zkteco_hr/doctype/device_sync_status/`
-- `zkteco_hr/attendance_engine/hr_calendar.py`
-- `zkteco_hr/attendance_engine/closeout.py` (EOD closeout — unchanged)
+- `dewey_time/attendance_engine/device_sync.py`
+- `dewey_time/doctype/device_sync_status/`
+- `dewey_time/attendance_engine/hr_calendar.py`
+- `dewey_time/attendance_engine/closeout.py` (EOD closeout — unchanged)
 
 **Not bridge work (Frappe P0, already in repo unless site is stale):**
 
@@ -352,8 +352,8 @@ merge_device_sync_duplicates("PYA8254100003", "2026-06-03")
 | Purpose | Frappe method |
 |---------|----------------|
 | Insert punch | Resource API `Employee Checkin` |
-| Intraday sync | `zkteco_hr.attendance_engine.device_sync.notify_device_sync_status` |
-| EOD closeout | `zkteco_hr.attendance_engine.closeout.notify_device_closeout_status` |
+| Intraday sync | `dewey_time.attendance_engine.device_sync.notify_device_sync_status` |
+| EOD closeout | `dewey_time.attendance_engine.closeout.notify_device_closeout_status` |
 
 **Site config:** `bridge_closeout_secret` (optional) in `site_config.json`.
 
@@ -364,7 +364,7 @@ merge_device_sync_duplicates("PYA8254100003", "2026-06-03")
 - [`FRAPPE_CUSTOM_APP_AGENT_GUIDE.md`](../FRAPPE_CUSTOM_APP_AGENT_GUIDE.md) — Frappe domain model + checkin fields
 - [`FRAPPE_ATTENDANCE_RULES.md`](FRAPPE_ATTENDANCE_RULES.md) — flag and segment policy
 - [`FLAG_ENGINE_MVP.md`](../FLAG_ENGINE_MVP.md) — pilot scope, `DELIVERY_FAILED`, closeout P0
-- [`zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md`](../zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md) — calendar API shapes (`device_sync[]` to be added)
+- [`dewey_time/docs/CALENDAR_DATA_CONTRACT.md`](../dewey_time/docs/CALENDAR_DATA_CONTRACT.md) — calendar API shapes (`device_sync[]` to be added)
 
 ---
 

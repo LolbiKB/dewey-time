@@ -13,7 +13,7 @@ agent (and humans/CI) a fast, disposable, safe environment to run tests, iterate
 unattended, and — the **north star** — **exercise the real system against real
 (anonymized) production data and surface real bugs with zero human input**, then loop on it.
 
-This starts on `zkteco_hr` but is **structured to generalize** to other Frappe custom
+This starts on `dewey_time` but is **structured to generalize** to other Frappe custom
 apps / Frappe Cloud projects.
 
 ### Why a local harness and not "an MCP into Frappe Cloud"
@@ -72,10 +72,10 @@ The coupled part **can't be a shared skill** (it's app data) — but the skill i
 it. Another agent's flow: install skill → onboard the app → fill invariants → loop.
 
 **Sequencing — prove, then package:**
-- **1a** build the engine + zkteco_hr profile in-repo under `dev/sandbox/` and hit the
+- **1a** build the engine + dewey_time profile in-repo under `dev/sandbox/` and hit the
   acceptance bars (one app, demonstrably working).
 - **1b** lift the *proven* engine into the `frappe-sandbox` skill + onboarding generator,
-  leaving zkteco_hr's profile as the reference example. Extract a skill from working usage —
+  leaving dewey_time's profile as the reference example. Extract a skill from working usage —
   never abstract first.
 
 ## 3. Roadmap
@@ -105,7 +105,7 @@ it. Another agent's flow: install skill → onboard the app → fill invariants 
 frappe-sandbox (CLI, reads dev/sandbox/frappe-sandbox.yml)
 │
 ├─ BACKEND lane → Docker: frappe/bench + mariadb:10.6(utf8mb4) + redis-cache + redis-queue
-│   ├─ test_site   (clean; bench run-tests --app zkteco_hr)   ← CI parity
+│   ├─ test_site   (clean; bench run-tests --app dewey_time)   ← CI parity
 │   └─ sandbox     (prod backup, restored + anonymized)        ← real-data triage / autonomous verify
 │
 └─ FRONTEND lane → node 20 + npm (NO bench, NO DB, NO live site)
@@ -123,14 +123,14 @@ purpose. So it needs only node + chromium + the npm token — fully decoupled fr
 
 - `mariadb:10.6` (root pw `root`), **server charset utf8mb4**, TCP / `--no-mariadb-socket`.
 - `redis:6.2-alpine` ×2 (cache + queue).
-- `frappe/bench:latest` container, `command: sleep infinity`, **named volume** for `frappe-bench/` (apps + sites persist), repo **bind-mounted** at `/workspace/zkteco_hr-src`.
+- `frappe/bench:latest` container, `command: sleep infinity`, **named volume** for `frappe-bench/` (apps + sites persist), repo **bind-mounted** at `/workspace/dewey_time-src`.
 
 ### 6.2 Required apps (install order = dependency order)
 
-`frappe` → `erpnext` → `hrms` → `zkteco_hr`, all `version-15`. `erpnext` is required because
+`frappe` → `erpnext` → `hrms` → `dewey_time`, all `version-15`. `erpnext` is required because
 **hrms depends on it**; `hrms` provides `Employee Checkin`, `Shift Assignment`, `Shift Type`,
 `Shift Schedule`, `Shift Schedule Assignment`, `Holiday List`, `Leave Application`,
-`Attendance` (used throughout `attendance_engine/`). `zkteco_hr` owns only `Attendance Flag`,
+`Attendance` (used throughout `attendance_engine/`). `dewey_time` owns only `Attendance Flag`,
 `Device Closeout Alert`, `Device Sync Status`.
 
 ### 6.3 One-time provisioning (cold path, runs once on the named volume)
@@ -146,16 +146,16 @@ bench set-config -g redis_queue    "redis://redis-queue:6379"
 bench set-config -g redis_socketio "redis://redis-queue:6379"
 bench get-app erpnext --branch "$ERPNEXT_BRANCH" --skip-assets
 bench get-app hrms    --branch "$HRMS_BRANCH"    --skip-assets
-bench get-app zkteco_hr /workspace/zkteco_hr-src --skip-assets
+bench get-app dewey_time /workspace/dewey_time-src --skip-assets
 
-# apps.txt trailing-newline guard (nested zkteco_hr/zkteco_hr/ layout can skip
-# auto-registration AND concatenate into 'hrmszkteco_hr' without a trailing newline):
+# apps.txt trailing-newline guard (nested dewey_time/ layout can skip
+# auto-registration AND concatenate into 'hrmsdewey_time' without a trailing newline):
 [ -s sites/apps.txt ] && [ -n "$(tail -c1 sites/apps.txt)" ] && echo >> sites/apps.txt
-grep -qxF zkteco_hr sites/apps.txt 2>/dev/null || echo zkteco_hr >> sites/apps.txt
+grep -qxF dewey_time sites/apps.txt 2>/dev/null || echo dewey_time >> sites/apps.txt
 
 bench new-site test_site --no-mariadb-socket --db-host mariadb \
   --mariadb-root-password root --admin-password admin
-bench --site test_site install-app erpnext hrms zkteco_hr
+bench --site test_site install-app erpnext hrms dewey_time
 bench --site test_site set-config allow_tests true   # MANDATORY — run-tests refuses without it
 ```
 
@@ -165,7 +165,7 @@ Every backend test installs a MagicMock `frappe` (`_install_frappe_mock` in
 `tests/test_closeout.py`) and never reads the DB. Therefore:
 
 - **Fast lane** — `python -m unittest` in a venv (app on `PYTHONPATH`). Sub-second, **no Docker** → the inner `/loop` TDD cycle. (148 methods / 14 files; 3 files need no frappe at all.)
-- **Parity lane** — dockerized `bench --site test_site run-tests --app zkteco_hr` → the gate matching what protects `main`. Accepts `--module …` / `--test …` to scope.
+- **Parity lane** — dockerized `bench --site test_site run-tests --app dewey_time` → the gate matching what protects `main`. Accepts `--module …` / `--test …` to scope.
 
 `run-tests` is canonical (CLAUDE.md's old `pytest` reference was wrong and is fixed).
 
@@ -205,12 +205,12 @@ bench --site sandbox --force restore <db>.sql.gz \
   --with-public-files <files>.tar \
   --with-private-files <private-files>.tar \   # omit if absent
   --mariadb-root-password root
-bench --site sandbox install-app zkteco_hr   # if not already in the restored DB
+bench --site sandbox install-app dewey_time   # if not already in the restored DB
 bench --site sandbox migrate
 # then the non-skippable anonymize pass (8.3)
 ```
 
-### 8.3 Anonymization (`zkteco_hr/zkteco_hr/utils/anonymize.py`, ON by default)
+### 8.3 Anonymization (`dewey_time/utils/anonymize.py`, ON by default)
 
 Post-restore, **non-skippable** tail of `seed --prod`. **Deterministic + id-preserving:**
 `Employee.employee_name → "Employee {id}"`; mask `first/last_name`, emails, `cell_number`,
@@ -225,11 +225,11 @@ bug to a real person **by id**. Hard guard refuses to run unless the site is cle
 Config-driven CLI at `dev/sandbox/` reading `dev/sandbox/frappe-sandbox.yml`:
 
 ```yaml
-app: zkteco_hr
+app: dewey_time
 app_src: .
 required_apps: [erpnext, hrms]   # install order = dependency order
 branch: version-15
-frontend_dir: zkteco_hr/zkteco_hr/frontend/hr_attendance
+frontend_dir: dewey_time/frontend/hr_attendance
 register_app_in_apps_txt: true   # nested-layout newline fix
 ```
 
@@ -335,7 +335,7 @@ and `--raw` seeding. The hygiene track (§13) is parallel, not Phase 1.
 
 ## 16. Open Questions / Risks (carry into implementation)
 
-1. Does `bench get-app /workspace/zkteco_hr-src` on `frappe/bench` symlink (edits live) or copy? If copy → bind-mount directly onto `frappe-bench/apps/zkteco_hr`. **Verify in the image.**
+1. Does `bench get-app /workspace/dewey_time-src` on `frappe/bench` symlink (edits live) or copy? If copy → bind-mount directly onto `frappe-bench/apps/dewey_time`. **Verify in the image.**
 2. Confirm pip-editable install resolves the **nested** package correctly inside the container.
 3. Confirm the exact FC backup variant (separate `site_config.json`? private-files always present?).
 4. Anonymization completeness: enumerate every DocType with real PII actually present (Contact, Address, custom doctypes), not a fixed list.
@@ -347,8 +347,8 @@ and `--raw` seeding. The hygiene track (§13) is parallel, not Phase 1.
 
 **1a — prove (in-repo):**
 - `dev/sandbox/` — `docker-compose.yml`, the `frappe-sandbox` CLI/scripts, `frappe-sandbox.yml`, a `verify` stub + structured engine-run output (seams for §11).
-- `dev/sandbox/sandbox_profile.py` (+ `zkteco_hr/zkteco_hr/utils/anonymize.py`) — zkteco_hr's scrub spec + exercise commands + (later) invariants.
+- `dev/sandbox/sandbox_profile.py` (+ `dewey_time/utils/anonymize.py`) — dewey_time's scrub spec + exercise commands + (later) invariants.
 - Frontend: merge the `setup-ci`-produced worktree to main.
 
 **1b — package (skill):**
-- A portable `frappe-sandbox` Claude skill bundling the proven engine + loop recipes + an onboarding generator; zkteco_hr's profile stays in-repo as the reference example. Built via the **writing-skills** skill, from working 1a usage.
+- A portable `frappe-sandbox` Claude skill bundling the proven engine + loop recipes + an onboarding generator; dewey_time's profile stays in-repo as the reference example. Built via the **writing-skills** skill, from working 1a usage.

@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-21
 **Status:** Approved (concept + execution validated via interactive preview)
-**App:** `zkteco_hr/zkteco_hr/frontend/adms` (the `/adms` device-admin SPA)
+**App:** `dewey_time/frontend/adms` (the `/adms` device-admin SPA)
 
 ## Goal
 

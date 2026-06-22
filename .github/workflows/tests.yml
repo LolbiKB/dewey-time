@@ -44,10 +44,10 @@ jobs:
       DB_ROOT_PASSWORD: root
 
     steps:
-      - name: Checkout zkteco_hr
+      - name: Checkout dewey_time
         uses: actions/checkout@v4
         with:
-          path: zkteco_hr-src
+          path: dewey_time-src
 
       - uses: actions/setup-python@v5
         with:
@@ -69,22 +69,22 @@ jobs:
       - name: Install frappe-bench
         run: pip install frappe-bench
 
-      - name: Init bench + fetch apps (frappe → erpnext → hrms → zkteco_hr)
+      - name: Init bench + fetch apps (frappe → erpnext → hrms → dewey_time)
         run: |
           bench init --skip-redis-config-generation --skip-assets \
             --frappe-branch "$FRAPPE_BRANCH" --python "$(which python)" frappe-bench
           cd frappe-bench
-          # --skip-assets: zkteco_hr ships pre-built committed assets (Frappe
+          # --skip-assets: dewey_time ships pre-built committed assets (Frappe
           # Cloud never builds them), and backend tests need no frontend build.
           bench get-app erpnext --branch "$ERPNEXT_BRANCH" --skip-assets
           bench get-app hrms --branch "$HRMS_BRANCH" --skip-assets
-          bench get-app zkteco_hr "$GITHUB_WORKSPACE/zkteco_hr-src" --skip-assets
-          # zkteco_hr's nested package layout (zkteco_hr/zkteco_hr/) can skip
-          # apps.txt auto-registration; ensure it's listed before install.
+          bench get-app dewey_time "$GITHUB_WORKSPACE/dewey_time-src" --skip-assets
+          # Canonical layout auto-registers in apps.txt; this is a harmless
+          # belt-and-suspenders that also guarantees it's listed before install.
           # Force a trailing newline first — apps.txt may lack one, else the
-          # append concatenates onto the last app (-> 'hrmszkteco_hr').
+          # append concatenates onto the last app (-> 'hrmsdewey_time').
           [ -s sites/apps.txt ] && [ -n "$(tail -c1 sites/apps.txt)" ] && echo >> sites/apps.txt
-          grep -qxF zkteco_hr sites/apps.txt 2>/dev/null || echo zkteco_hr >> sites/apps.txt
+          grep -qxF dewey_time sites/apps.txt 2>/dev/null || echo dewey_time >> sites/apps.txt
 
       - name: MariaDB charset (utf8mb4)
         run: |
@@ -103,9 +103,9 @@ jobs:
             --db-host 127.0.0.1 \
             --mariadb-root-password "$DB_ROOT_PASSWORD" \
             --admin-password admin
-          bench --site test_site install-app erpnext hrms zkteco_hr
+          bench --site test_site install-app erpnext hrms dewey_time
           bench --site test_site set-config allow_tests true
 
-      - name: Run zkteco_hr tests
+      - name: Run dewey_time tests
         working-directory: frappe-bench
-        run: bench --site test_site run-tests --app zkteco_hr
+        run: bench --site test_site run-tests --app dewey_time

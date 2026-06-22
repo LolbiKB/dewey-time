@@ -1,7 +1,7 @@
 name: Frappe Asset Smoke Test
 
 # Catches the "Frappe custom-app assets 404 / served as text/html" class of bug
-# (e.g. the /assets/zkteco_hr/adms/index.css 404 from a missing bench symlink, or
+# (e.g. the /assets/dewey_time/adms/index.css 404 from a missing bench symlink, or
 # a stable-vs-hashed filename mismatch). It is a black-box check of the LIVE site
 # — no bench access required.
 #
@@ -35,8 +35,8 @@ jobs:
           # via another job/matrix). The check fails if the asset is missing (non-200)
           # or is served as the HTML 404 fallback instead of its real type.
           ASSETS=(
-            "/assets/zkteco_hr/adms/assets/index.css|text/css"
-            "/assets/zkteco_hr/adms/assets/index.js|javascript"
+            "/assets/dewey_time/adms/assets/index.css|text/css"
+            "/assets/dewey_time/adms/assets/index.js|javascript"
           )
 
           fail=0

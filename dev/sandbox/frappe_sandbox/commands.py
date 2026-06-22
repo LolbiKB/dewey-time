@@ -54,13 +54,16 @@ def build_provision(cfg: Config) -> list[list[str]]:
 def build_run_tests(cfg: Config, *, module: str | None = None,
                     fast: bool = False) -> list[list[str]]:
     if fast:
-        py_root = f"{cfg.app_src}/{cfg.app}"
+        # Canonical (flat) layout: the `{app}` package lives at {app_src}/{app},
+        # so {app_src} must be on PYTHONPATH for `import {app}` to resolve, and
+        # the tests live at {app_src}/{app}/tests.
+        pkg_dir = f"{cfg.app_src}/{cfg.app}"
         if module:
-            inner = (f"PYTHONPATH={py_root} python3 -m unittest "
+            inner = (f"PYTHONPATH={cfg.app_src} python3 -m unittest "
                      f"{cfg.app}.tests.{module} -v")
         else:
-            inner = (f"PYTHONPATH={py_root} python3 -m unittest discover "
-                     f"-s {py_root}/{cfg.app}/tests -t {py_root} -p 'test_*.py'")
+            inner = (f"PYTHONPATH={cfg.app_src} python3 -m unittest discover "
+                     f"-s {pkg_dir}/tests -t {cfg.app_src} -p 'test_*.py'")
         return [["bash", "-lc", inner]]
     args = f"run-tests --app {cfg.app}"
     if module:

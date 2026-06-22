@@ -10,12 +10,12 @@
 
 ## Global Constraints
 
-- **App stack (install order = dep order):** `frappe` → `erpnext` → `hrms` → `zkteco_hr`, **all branch `version-15`**.
-- **Parity test command:** `bench --site test_site run-tests --app zkteco_hr`, and `bench --site test_site set-config allow_tests true` is **mandatory** first.
-- **Fast lane (proven on Py 3.9.6, 148 tests / 0.056s):** `PYTHONPATH=<repo>/zkteco_hr python3 -m unittest discover -s <repo>/zkteco_hr/zkteco_hr/tests -t <repo>/zkteco_hr -p 'test_*.py'`.
-- **Test import root:** the package `zkteco_hr` lives at `<repo>/zkteco_hr/zkteco_hr/`; the outer `<repo>/zkteco_hr/` has no `__init__.py`, so `PYTHONPATH=<repo>/zkteco_hr`.
+- **App stack (install order = dep order):** `frappe` → `erpnext` → `hrms` → `dewey_time`, **all branch `version-15`**.
+- **Parity test command:** `bench --site test_site run-tests --app dewey_time`, and `bench --site test_site set-config allow_tests true` is **mandatory** first.
+- **Fast lane (proven on Py 3.9.6, 148 tests / 0.056s):** `PYTHONPATH=<repo>/dewey_time python3 -m unittest discover -s <repo>/dewey_time/tests -t <repo>/dewey_time -p 'test_*.py'`.
+- **Test import root:** the package `dewey_time` lives at `<repo>/dewey_time/`; the outer `<repo>/dewey_time/` has no `__init__.py`, so `PYTHONPATH=<repo>/dewey_time`.
 - **Services:** MariaDB **10.6** with **utf8mb4** server charset; **two** Redis 6.2-alpine (cache + queue); TCP / `--no-mariadb-socket`.
-- **apps.txt newline guard (verbatim):** `[ -s sites/apps.txt ] && [ -n "$(tail -c1 sites/apps.txt)" ] && echo >> sites/apps.txt` then append `zkteco_hr` if absent (nested layout can skip auto-registration and concatenate into `hrmszkteco_hr`).
+- **apps.txt newline guard (verbatim):** `[ -s sites/apps.txt ] && [ -n "$(tail -c1 sites/apps.txt)" ] && echo >> sites/apps.txt` then append `dewey_time` if absent (nested layout can skip auto-registration and concatenate into `hrmsdewey_time`).
 - **Two sites, never crossed:** `test_site` (clean; `run-tests` only), `sandbox` (prod-restored + anonymized; triage only). **Never** `run-tests` against `sandbox`.
 - **Anonymization:** deterministic + id-preserving; **preserve** `Employee Checkin.time`, `log_type`, `shift`, `employee` link, `custom_supabase_log_id`; **non-skippable** in `seed --prod`; **hard-guard** against running on a prod-looking site.
 - **Host CLI:** Python **3.9+**, **stdlib only**, every module starts with `from __future__ import annotations` (so `X | Y` / `tuple[str, ...]` annotations work on 3.9). Config is **JSON** (`tomllib` needs 3.11+).
@@ -31,7 +31,7 @@
 dev/sandbox/
   README.md                      # loop recipes + usage
   docker-compose.yml             # bench + mariadb(utf8mb4) + redis-cache + redis-queue
-  frappe-sandbox.json            # zkteco_hr profile (app, required_apps, branch, frontend_dir, app_src)
+  frappe-sandbox.json            # dewey_time profile (app, required_apps, branch, frontend_dir, app_src)
   frappe-sandbox                 # executable shim → python3 -m frappe_sandbox.cli
   frappe_sandbox/
     __init__.py
@@ -46,10 +46,10 @@ dev/sandbox/
     __init__.py
     test_config.py
     test_commands.py
-zkteco_hr/zkteco_hr/utils/anonymize.py            # anonymization Frappe module
-zkteco_hr/zkteco_hr/utils/sandbox_verify.py       # verify-stub oracle (crash + no-dup invariant)
-zkteco_hr/zkteco_hr/tests/test_anonymize.py        # TDD for anonymize
-zkteco_hr/zkteco_hr/tests/test_sandbox_verify.py   # TDD for the invariant
+dewey_time/utils/anonymize.py            # anonymization Frappe module
+dewey_time/utils/sandbox_verify.py       # verify-stub oracle (crash + no-dup invariant)
+dewey_time/tests/test_anonymize.py        # TDD for anonymize
+dewey_time/tests/test_sandbox_verify.py   # TDD for the invariant
 ```
 
 Frontend lane files (Task 9) are merged from the existing worktree, not authored here.
@@ -89,7 +89,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_loads_and_resolves_paths(self):
         with TemporaryDirectory() as d:
             p = self._write(d, {
-                "app": "zkteco_hr",
+                "app": "dewey_time",
                 "app_src": "../..",
                 "required_apps": ["erpnext", "hrms"],
                 "branch": "version-15",
@@ -97,7 +97,7 @@ class TestLoadConfig(unittest.TestCase):
             })
             cfg = load_config(p)
             self.assertIsInstance(cfg, Config)
-            self.assertEqual(cfg.app, "zkteco_hr")
+            self.assertEqual(cfg.app, "dewey_time")
             self.assertEqual(cfg.required_apps, ("erpnext", "hrms"))
             self.assertEqual(cfg.branch, "version-15")
             self.assertTrue(Path(cfg.app_src).is_absolute())
@@ -198,11 +198,11 @@ def load_config(path) -> Config:
 `dev/sandbox/frappe-sandbox.json`:
 ```json
 {
-  "app": "zkteco_hr",
+  "app": "dewey_time",
   "app_src": "../..",
   "required_apps": ["erpnext", "hrms"],
   "branch": "version-15",
-  "frontend_dir": "../../zkteco_hr/zkteco_hr/frontend/hr_attendance",
+  "frontend_dir": "../../dewey_time/frontend/hr_attendance",
   "register_app_in_apps_txt": true
 }
 ```
@@ -216,7 +216,7 @@ Expected: PASS (3 tests OK)
 
 ```bash
 git add dev/sandbox/frappe_sandbox dev/sandbox/tests dev/sandbox/frappe-sandbox.json
-git commit -m "feat(sandbox): config loader + zkteco_hr profile"
+git commit -m "feat(sandbox): config loader + dewey_time profile"
 ```
 
 ---
@@ -244,7 +244,7 @@ from frappe_sandbox import commands as c
 
 def _cfg() -> Config:
     return Config(
-        app="zkteco_hr", app_src="/repo", required_apps=("erpnext", "hrms"),
+        app="dewey_time", app_src="/repo", required_apps=("erpnext", "hrms"),
         branch="version-15", frontend_dir="/repo/fe",
         compose_file="/repo/dev/sandbox/docker-compose.yml",
     )
@@ -265,19 +265,19 @@ class TestCommands(unittest.TestCase):
         cmd = c.build_run_tests(_cfg())[0]
         joined = " ".join(cmd)
         self.assertIn("exec", joined)
-        self.assertIn("bench --site test_site run-tests --app zkteco_hr", joined)
+        self.assertIn("bench --site test_site run-tests --app dewey_time", joined)
 
     def test_run_tests_parity_module(self):
         joined = " ".join(c.build_run_tests(_cfg(), module="test_closeout")[0])
-        self.assertIn("--module zkteco_hr.tests.test_closeout", joined)
+        self.assertIn("--module dewey_time.tests.test_closeout", joined)
 
     def test_run_tests_fast_is_host_unittest(self):
         cmd = c.build_run_tests(_cfg(), fast=True)[0]
         joined = " ".join(cmd)
         self.assertNotIn("docker", joined)
-        self.assertIn("PYTHONPATH=/repo/zkteco_hr", joined)
+        self.assertIn("PYTHONPATH=/repo/dewey_time", joined)
         self.assertIn("python3 -m unittest discover", joined)
-        self.assertIn("/repo/zkteco_hr/zkteco_hr/tests", joined)
+        self.assertIn("/repo/dewey_time/tests", joined)
 
     def test_provision_passes_env(self):
         cmd = c.build_provision(_cfg())[0]
@@ -467,7 +467,7 @@ class TestCliDryRun(unittest.TestCase):
 
     def test_test_backend_dry_run(self):
         out = self._run("test", "--backend")
-        self.assertIn("run-tests --app zkteco_hr", out)
+        self.assertIn("run-tests --app dewey_time", out)
 
     def test_test_fast_dry_run(self):
         out = self._run("test", "--backend", "--fast")
@@ -649,7 +649,7 @@ git commit -m "feat(sandbox): runner + argparse CLI with --dry-run and doctor"
 
 **Interfaces:**
 - Consumes: `build_up`, `build_provision` (Task 2).
-- Produces: a running bench container with `frappe`+`erpnext`+`hrms`+`zkteco_hr` installed on `test_site`, `allow_tests=true`.
+- Produces: a running bench container with `frappe`+`erpnext`+`hrms`+`dewey_time` installed on `test_site`, `allow_tests=true`.
 
 - [ ] **Step 1: Write `docker-compose.yml`**
 
@@ -752,13 +752,13 @@ Expected: `docker compose ... up -d` creates `mariadb`, `redis-cache`, `redis-qu
 - [ ] **Step 4: Verify `get-app` editability (open question #1)**
 
 Run: `cd dev/sandbox && docker compose exec -T bench bash -lc 'ls -la /home/frappe/frappe-bench/apps 2>/dev/null || echo no-bench-yet'`
-Then after provisioning (Step 5), run: `docker compose exec -T bench bash -lc 'readlink -f frappe-bench/apps/zkteco_hr; head -1 frappe-bench/apps/zkteco_hr/pyproject.toml'`
-Expected: if `apps/zkteco_hr` is a symlink into `/workspace/repo`, warm edits are live. **If it is a real copy** (not a symlink), add a bind mount `../../:/workspace/repo` is already present — add a second mount in `docker-compose.yml` under `bench.volumes`: `- ../../:/home/frappe/frappe-bench/apps/zkteco_hr` is NOT correct (that mounts the repo root, not the package). Instead bind the app package dir: add `- ../../zkteco_hr:/home/frappe/frappe-bench/apps/zkteco_hr` only if the package import still resolves; otherwise keep the copy and re-run `get-app` on change. Record the finding in `dev/sandbox/README.md`.
+Then after provisioning (Step 5), run: `docker compose exec -T bench bash -lc 'readlink -f frappe-bench/apps/dewey_time; head -1 frappe-bench/apps/dewey_time/pyproject.toml'`
+Expected: if `apps/dewey_time` is a symlink into `/workspace/repo`, warm edits are live. **If it is a real copy** (not a symlink), add a bind mount `../../:/workspace/repo` is already present — add a second mount in `docker-compose.yml` under `bench.volumes`: `- ../../:/home/frappe/frappe-bench/apps/dewey_time` is NOT correct (that mounts the repo root, not the package). Instead bind the app package dir: add `- ../../dewey_time:/home/frappe/frappe-bench/apps/dewey_time` only if the package import still resolves; otherwise keep the copy and re-run `get-app` on change. Record the finding in `dev/sandbox/README.md`.
 
 - [ ] **Step 5: Provision the bench (slow: installs erpnext+hrms, minutes)**
 
 Run: `cd dev/sandbox && ./frappe-sandbox install-app`
-Expected (tail): `PROVISION_OK site=test_site apps=erpnext hrms zkteco_hr`. Re-running is idempotent (skips existing apps/site).
+Expected (tail): `PROVISION_OK site=test_site apps=erpnext hrms dewey_time`. Re-running is idempotent (skips existing apps/site).
 
 - [ ] **Step 6: Commit**
 
@@ -785,7 +785,7 @@ Expected: `Ran 148 tests in 0.0XXs` / `OK` (proven: 0.056s on Py 3.9.6). **This 
 - [ ] **Step 2: Run the parity lane (dockerized bench)**
 
 Run: `cd dev/sandbox && ./frappe-sandbox test --backend`
-Expected: `docker compose ... exec ... bench --site test_site run-tests --app zkteco_hr` → the same 148 tests, `OK`. **This is acceptance bar #1.**
+Expected: `docker compose ... exec ... bench --site test_site run-tests --app dewey_time` → the same 148 tests, `OK`. **This is acceptance bar #1.**
 
 - [ ] **Step 3: Scope to one module both ways (sanity)**
 
@@ -811,23 +811,23 @@ git commit -m "test(sandbox): backend fast + parity lanes green; TDD loop verifi
 ## Task 6: Anonymization module (in-app, TDD)
 
 **Files:**
-- Create: `zkteco_hr/zkteco_hr/utils/anonymize.py`
-- Test: `zkteco_hr/zkteco_hr/tests/test_anonymize.py`
+- Create: `dewey_time/utils/anonymize.py`
+- Test: `dewey_time/tests/test_anonymize.py`
 
 **Interfaces:**
 - Produces: `run()` (the non-skippable scrub; raises `RuntimeError` if site looks like prod), `_scrub_statements() -> list[tuple[str, dict]]` (pure: returns `(sql, params)` pairs, unit-testable without a DB), `is_prod_site(site_name: str) -> bool`.
 
 - [ ] **Step 1: Write the failing test**
 
-`zkteco_hr/zkteco_hr/tests/test_anonymize.py`:
+`dewey_time/tests/test_anonymize.py`:
 ```python
 import unittest
 
-from zkteco_hr.tests.test_closeout import _install_frappe_mock
+from dewey_time.tests.test_closeout import _install_frappe_mock
 
 _install_frappe_mock()
 
-from zkteco_hr.utils import anonymize  # noqa: E402
+from dewey_time.utils import anonymize  # noqa: E402
 
 
 class TestAnonymizeStatements(unittest.TestCase):
@@ -855,16 +855,16 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `PYTHONPATH="$PWD/zkteco_hr" python3 -m unittest zkteco_hr.tests.test_anonymize -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'zkteco_hr.utils.anonymize'`
+Run: `PYTHONPATH="$PWD/dewey_time" python3 -m unittest dewey_time.tests.test_anonymize -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'dewey_time.utils.anonymize'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-`zkteco_hr/zkteco_hr/utils/anonymize.py`:
+`dewey_time/utils/anonymize.py`:
 ```python
 """Deterministic, id-preserving PII scrub for the sandbox site. Non-skippable.
 
-Run via: bench --site sandbox execute zkteco_hr.utils.anonymize.run
+Run via: bench --site sandbox execute dewey_time.utils.anonymize.run
 Refuses to run on a site whose name looks like production.
 """
 from __future__ import annotations
@@ -917,11 +917,11 @@ def run() -> str:
     return f"ANONYMIZE_OK site={site}"
 ```
 
-Also create `zkteco_hr/zkteco_hr/utils/__init__.py` if missing (check first; `utils/` already exists with modules, so `__init__.py` likely present — verify with `ls zkteco_hr/zkteco_hr/utils/__init__.py`).
+Also create `dewey_time/utils/__init__.py` if missing (check first; `utils/` already exists with modules, so `__init__.py` likely present — verify with `ls dewey_time/utils/__init__.py`).
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `PYTHONPATH="$PWD/zkteco_hr" python3 -m unittest zkteco_hr.tests.test_anonymize -v`
+Run: `PYTHONPATH="$PWD/dewey_time" python3 -m unittest dewey_time.tests.test_anonymize -v`
 Expected: PASS (2 tests OK)
 
 - [ ] **Step 5: Confirm the full backend suite still green**
@@ -932,7 +932,7 @@ Expected: `Ran 150 tests ... OK` (148 + 2 new).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add zkteco_hr/zkteco_hr/utils/anonymize.py zkteco_hr/zkteco_hr/tests/test_anonymize.py
+git add dewey_time/utils/anonymize.py dewey_time/tests/test_anonymize.py
 git commit -m "feat(sandbox): deterministic id-preserving anonymization module"
 ```
 
@@ -1024,8 +1024,8 @@ git commit -m "feat(sandbox): seed --prod restore + non-skippable anonymize pipe
 ## Task 8: `engine-run` + `verify` stub (acceptance bar #3 + §11 seam)
 
 **Files:**
-- Create: `zkteco_hr/zkteco_hr/utils/sandbox_verify.py`
-- Test: `zkteco_hr/zkteco_hr/tests/test_sandbox_verify.py`
+- Create: `dewey_time/utils/sandbox_verify.py`
+- Test: `dewey_time/tests/test_sandbox_verify.py`
 
 **Interfaces:**
 - Consumes: `build_engine_run`, `build_verify` (Task 2); `dev_tools.run_engine_for_employee(employee, start_date, end_date, mode="both")`.
@@ -1033,15 +1033,15 @@ git commit -m "feat(sandbox): seed --prod restore + non-skippable anonymize pipe
 
 - [ ] **Step 1: Write the failing test (pure invariant)**
 
-`zkteco_hr/zkteco_hr/tests/test_sandbox_verify.py`:
+`dewey_time/tests/test_sandbox_verify.py`:
 ```python
 import unittest
 
-from zkteco_hr.tests.test_closeout import _install_frappe_mock
+from dewey_time.tests.test_closeout import _install_frappe_mock
 
 _install_frappe_mock()
 
-from zkteco_hr.utils import sandbox_verify as sv  # noqa: E402
+from dewey_time.utils import sandbox_verify as sv  # noqa: E402
 
 
 class TestNoDuplicateFlags(unittest.TestCase):
@@ -1069,18 +1069,18 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `PYTHONPATH="$PWD/zkteco_hr" python3 -m unittest zkteco_hr.tests.test_sandbox_verify -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'zkteco_hr.utils.sandbox_verify'`
+Run: `PYTHONPATH="$PWD/dewey_time" python3 -m unittest dewey_time.tests.test_sandbox_verify -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'dewey_time.utils.sandbox_verify'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-`zkteco_hr/zkteco_hr/utils/sandbox_verify.py`:
+`dewey_time/utils/sandbox_verify.py`:
 ```python
 """Phase-1 verify STUB: the seam for the Phase-2 oracle layer.
 
 Implements the crash oracle (this runs the engine output query; any exception
 surfaces) and ONE invariant (no duplicate flags). Emits findings as JSON.
-Run via: bench --site sandbox execute zkteco_hr.utils.sandbox_verify.run
+Run via: bench --site sandbox execute dewey_time.utils.sandbox_verify.run
 """
 from __future__ import annotations
 
@@ -1119,7 +1119,7 @@ def run() -> str:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `PYTHONPATH="$PWD/zkteco_hr" python3 -m unittest zkteco_hr.tests.test_sandbox_verify -v`
+Run: `PYTHONPATH="$PWD/dewey_time" python3 -m unittest dewey_time.tests.test_sandbox_verify -v`
 Expected: PASS (2 tests OK)
 
 - [ ] **Step 5: Real-data engine run (acceptance bar #3)**
@@ -1146,7 +1146,7 @@ Expected: `Ran 152 tests ... OK`.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add zkteco_hr/zkteco_hr/utils/sandbox_verify.py zkteco_hr/zkteco_hr/tests/test_sandbox_verify.py
+git add dewey_time/utils/sandbox_verify.py dewey_time/tests/test_sandbox_verify.py
 git commit -m "feat(sandbox): engine-run + verify stub (crash + no-duplicate-flags invariant)"
 ```
 
@@ -1156,9 +1156,9 @@ git commit -m "feat(sandbox): engine-run + verify stub (crash + no-duplicate-fla
 
 **Files:**
 - Merge from worktree `ci+frontend-e2e-and-unit` into the live tree:
-  - Modify: `zkteco_hr/zkteco_hr/frontend/hr_attendance/package.json` (add `test:web`, `test:e2e` scripts; devDeps `@playwright/test@^1.61.0`, `tsx@^4.22.4`)
-  - Create: `zkteco_hr/zkteco_hr/frontend/hr_attendance/playwright.config.ts`
-  - Create: `zkteco_hr/zkteco_hr/frontend/hr_attendance/e2e/fixtures.ts`, `e2e/attendance.spec.ts`, `e2e/schedule.spec.ts`
+  - Modify: `dewey_time/frontend/hr_attendance/package.json` (add `test:web`, `test:e2e` scripts; devDeps `@playwright/test@^1.61.0`, `tsx@^4.22.4`)
+  - Create: `dewey_time/frontend/hr_attendance/playwright.config.ts`
+  - Create: `dewey_time/frontend/hr_attendance/e2e/fixtures.ts`, `e2e/attendance.spec.ts`, `e2e/schedule.spec.ts`
   - Create: `.github/workflows/frontend.yml`
 - Create: `dev/sandbox/README.md`
 
@@ -1170,7 +1170,7 @@ git commit -m "feat(sandbox): engine-run + verify stub (crash + no-duplicate-fla
 Run (copy the proven files from the worktree into the live tree):
 ```bash
 WT=.claude/worktrees/ci+frontend-e2e-and-unit
-FE=zkteco_hr/zkteco_hr/frontend/hr_attendance
+FE=dewey_time/frontend/hr_attendance
 cp "$WT/$FE/playwright.config.ts" "$FE/playwright.config.ts"
 mkdir -p "$FE/e2e" && cp "$WT/$FE/e2e/"*.ts "$FE/e2e/"
 cp "$WT/.github/workflows/frontend.yml" .github/workflows/frontend.yml
@@ -1181,7 +1181,7 @@ Then hand-merge `package.json`: add to `scripts` — `"test:web": "tsx --test sr
 
 Run:
 ```bash
-cd zkteco_hr/zkteco_hr/frontend/hr_attendance
+cd dewey_time/frontend/hr_attendance
 NODE_AUTH_TOKEN="${NODE_AUTH_TOKEN:?set a GitHub PAT with read:packages}" npm install --no-audit --no-fund
 npm run test:web
 ```
@@ -1191,7 +1191,7 @@ Expected: `tsx --test` runs the 6 `src/lib/*.test.ts` → all pass. (If `NODE_AU
 
 Run:
 ```bash
-cd zkteco_hr/zkteco_hr/frontend/hr_attendance
+cd dewey_time/frontend/hr_attendance
 npx playwright install --with-deps chromium
 npm run test:e2e
 ```
@@ -1231,7 +1231,7 @@ Expected: doctor PASS; both backend lanes `OK`; verify emits findings JSON.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add dev/sandbox/README.md zkteco_hr/zkteco_hr/frontend/hr_attendance/package.json zkteco_hr/zkteco_hr/frontend/hr_attendance/playwright.config.ts zkteco_hr/zkteco_hr/frontend/hr_attendance/e2e .github/workflows/frontend.yml
+git add dev/sandbox/README.md dewey_time/frontend/hr_attendance/package.json dewey_time/frontend/hr_attendance/playwright.config.ts dewey_time/frontend/hr_attendance/e2e .github/workflows/frontend.yml
 git commit -m "feat(sandbox): frontend lane (merge setup-ci worktree) + README + doctor; Phase 1a complete"
 ```
 

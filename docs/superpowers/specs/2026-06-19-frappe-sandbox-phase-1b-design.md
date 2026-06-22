@@ -9,7 +9,7 @@
 
 Make the harness's app-specific seams **config-driven**, then package the proven engine
 as a portable **`frappe-sandbox` Claude skill** with an **onboarding generator**, so any
-Frappe custom app adopts it via *install → init → fill → loop*. zkteco_hr stays the first
+Frappe custom app adopts it via *install → init → fill → loop*. dewey_time stays the first
 instance and reference profile.
 
 ## 2. Confirmed decisions
@@ -32,7 +32,7 @@ From the shipped code:
 ```json
 {
   "exercise": {
-    "method": "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
+    "method": "dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
     "args": [
       {"flag": "employee", "kwarg": "employee", "required": true},
       {"flag": "start",    "kwarg": "start_date", "required": true},
@@ -40,8 +40,8 @@ From the shipped code:
       {"flag": "mode",     "kwarg": "mode", "default": "both", "choices": ["intraday","closeout","both"]}
     ]
   },
-  "anonymize_method": "zkteco_hr.utils.anonymize.run",
-  "verify_method": "zkteco_hr.utils.sandbox_verify.run"
+  "anonymize_method": "dewey_time.utils.anonymize.run",
+  "verify_method": "dewey_time.utils.sandbox_verify.run"
 }
 ```
 

@@ -3,7 +3,7 @@
 .superpowers/
 
 # Frontend deps are never committed (Frappe Cloud ships pre-built public/ bundles)
-zkteco_hr/zkteco_hr/frontend/*/node_modules/
+dewey_time/frontend/*/node_modules/
 **/__pycache__/
 *.egg-info/
 .DS_Store

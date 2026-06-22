@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/assets/dewey_time/images/dewey-time.svg"
+    />
+
+    <!-- PWA: installable Dewey Time app (white theme — color stays a signal in the SPA) -->
+    <link rel="manifest" href="/assets/dewey_time/hr_attendance/manifest.json" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Dewey Time" />
+    <link rel="apple-touch-icon" href="/assets/dewey_time/hr_attendance/icons/apple-touch-icon.png" />
+
+    <title>HR Attendance</title>
+    <script>
+      window.csrf_token = "{{ frappe.session.csrf_token }}";
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,13 +1,13 @@
 {
-  "app": "zkteco_hr",
+  "app": "dewey_time",
   "app_src": "../..",
   "required_apps": ["erpnext", "hrms"],
   "branch": "version-16",
-  "frontend_dir": "../../zkteco_hr/zkteco_hr/frontend/hr_attendance",
+  "frontend_dir": "../../dewey_time/frontend/hr_attendance",
   "register_app_in_apps_txt": true,
-  "bootstrap_method": "zkteco_hr.utils.sandbox_bootstrap.run",
+  "bootstrap_method": "dewey_time.utils.sandbox_bootstrap.run",
   "exercise": {
-    "method": "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
+    "method": "dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
     "args": [
       {"flag": "employee", "kwarg": "employee", "required": true},
       {"flag": "start", "kwarg": "start_date", "required": true},

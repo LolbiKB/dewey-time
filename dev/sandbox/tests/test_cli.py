@@ -24,7 +24,7 @@ class TestCliDryRun(unittest.TestCase):
 
     def test_bootstrap_dry_run(self):
         out = self._run("bootstrap")
-        self.assertIn("execute zkteco_hr.utils.sandbox_bootstrap.run", out)
+        self.assertIn("execute dewey_time.utils.sandbox_bootstrap.run", out)
         self.assertIn("--site sandbox", out)
 
     def test_bootstrap_test_site_dry_run(self):
@@ -33,7 +33,7 @@ class TestCliDryRun(unittest.TestCase):
 
     def test_test_backend_dry_run(self):
         out = self._run("test", "--backend")
-        self.assertIn("run-tests --app zkteco_hr", out)
+        self.assertIn("run-tests --app dewey_time", out)
 
     def test_test_fast_dry_run(self):
         out = self._run("test", "--backend", "--fast")

@@ -23,8 +23,8 @@ class TestParseMajor(unittest.TestCase):
 
 class TestForeignApps(unittest.TestCase):
     def test_detects_apps_absent_from_bench(self):
-        db = ["frappe", "erpnext", "hrms", "education", "zkteco_hr", "doppio"]
-        present = {"frappe", "erpnext", "hrms", "zkteco_hr"}
+        db = ["frappe", "erpnext", "hrms", "education", "dewey_time", "doppio"]
+        present = {"frappe", "erpnext", "hrms", "dewey_time"}
         self.assertEqual(foreign_apps(db, present), ["education", "doppio"])
 
     def test_order_preserved_and_deduped(self):
@@ -32,17 +32,17 @@ class TestForeignApps(unittest.TestCase):
         self.assertEqual(foreign_apps(db, {"frappe"}), ["education", "doppio"])
 
     def test_none_foreign_when_all_present(self):
-        db = ["frappe", "zkteco_hr"]
-        self.assertEqual(foreign_apps(db, {"frappe", "zkteco_hr"}), [])
+        db = ["frappe", "dewey_time"]
+        self.assertEqual(foreign_apps(db, {"frappe", "dewey_time"}), [])
 
 
 class TestFilteredInstalledApps(unittest.TestCase):
     def test_keeps_present_in_order(self):
-        installed = ["frappe", "erpnext", "hrms", "education", "zkteco_hr", "doppio"]
-        present = {"frappe", "erpnext", "hrms", "zkteco_hr"}
+        installed = ["frappe", "erpnext", "hrms", "education", "dewey_time", "doppio"]
+        present = {"frappe", "erpnext", "hrms", "dewey_time"}
         self.assertEqual(
             filtered_installed_apps(installed, present),
-            ["frappe", "erpnext", "hrms", "zkteco_hr"],
+            ["frappe", "erpnext", "hrms", "dewey_time"],
         )
 
     def test_empty_when_none_present(self):

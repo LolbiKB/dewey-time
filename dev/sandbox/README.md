@@ -1,6 +1,6 @@
 # frappe-sandbox
 
-A local development harness for the `zkteco_hr` Frappe custom app. Provides a CLI
+A local development harness for the `dewey_time` Frappe custom app. Provides a CLI
 (`dev/sandbox/frappe-sandbox`) that orchestrates Docker-based backend tests and
 Docker-free frontend tests.
 
@@ -35,7 +35,7 @@ Run all commands from the repo root or the `dev/sandbox/` directory.
 ```
 ./frappe-sandbox up                            # start the Docker compose stack
 ./frappe-sandbox down [--purge]                # stop (--purge removes volumes)
-./frappe-sandbox install-app                   # provision a clean test_site + install zkteco_hr
+./frappe-sandbox install-app                   # provision a clean test_site + install dewey_time
 ./frappe-sandbox seed --clean                  # alias for install-app (fresh provision)
 ./frappe-sandbox seed --prod <BACKUP_DIR>      # restore a Frappe Cloud backup into sandbox site
 ./frappe-sandbox test --backend [--fast] [--module <name>]   # run Python test suite
@@ -60,7 +60,7 @@ TDD iterations on pure-Python modules (e.g. `intraday.py`, `closeout.py`, `sched
 ## Frontend lane
 
 `test --frontend` runs inside the frontend directory
-(`zkteco_hr/zkteco_hr/frontend/hr_attendance`) — no Docker needed.
+(`dewey_time/frontend/hr_attendance`) — no Docker needed.
 
 - `--unit` → `npm run test:web` (tsx + node:test, runs 6 `src/lib/*.test.ts` files; ~1 s)
 - `--e2e` → `npm run test:e2e` (Playwright + Chromium; stubs the Frappe network layer)
@@ -68,7 +68,7 @@ TDD iterations on pure-Python modules (e.g. `intraday.py`, `closeout.py`, `sched
 
 **First-time E2E setup** — install the Chromium browser once:
 ```bash
-cd zkteco_hr/zkteco_hr/frontend/hr_attendance
+cd dewey_time/frontend/hr_attendance
 npx playwright install chromium
 ```
 
@@ -123,8 +123,8 @@ override with `PYTHON_BIN`.
 
 **Custom fields / app setup (`bootstrap`)** — apps often need custom fields or seed
 masters that `install-app` doesn't create. Declare `bootstrap_method` in
-`frappe-sandbox.json` (e.g. `zkteco_hr.utils.sandbox_bootstrap.run`); the harness runs it
-after provisioning (`test_site`) and after `seed --prod` (`sandbox`). `zkteco_hr` uses it
+`frappe-sandbox.json` (e.g. `dewey_time.utils.sandbox_bootstrap.run`); the harness runs it
+after provisioning (`test_site`) and after `seed --prod` (`sandbox`). `dewey_time` uses it
 to create its `custom_device_branch` / `custom_lunch_*` / `custom_grace_minutes` fields,
 which the app does not ship as fixtures. Run manually with `./frappe-sandbox bootstrap
 [--test-site]`.

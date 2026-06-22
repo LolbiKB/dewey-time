@@ -5,12 +5,12 @@ from frappe_sandbox.config import Config, ExerciseArg
 from frappe_sandbox import commands as c
 
 
-def _cfg(*, exercise_method="zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
-         verify_method="zkteco_hr.utils.sandbox_verify.run",
-         anonymize_method="zkteco_hr.utils.anonymize.run",
+def _cfg(*, exercise_method="dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
+         verify_method="dewey_time.utils.sandbox_verify.run",
+         anonymize_method="dewey_time.utils.anonymize.run",
          bootstrap_method="") -> Config:
     return Config(
-        app="zkteco_hr", app_src="/repo", required_apps=("erpnext", "hrms"),
+        app="dewey_time", app_src="/repo", required_apps=("erpnext", "hrms"),
         branch="version-15", frontend_dir="/repo/fe",
         compose_file="/repo/dev/sandbox/docker-compose.yml",
         exercise_method=exercise_method,
@@ -53,19 +53,19 @@ class TestCommands(unittest.TestCase):
         cmd = c.build_run_tests(_cfg())[0]
         joined = " ".join(cmd)
         self.assertIn("exec", joined)
-        self.assertIn("bench --site test_site run-tests --app zkteco_hr", joined)
+        self.assertIn("bench --site test_site run-tests --app dewey_time", joined)
 
     def test_run_tests_parity_module(self):
         joined = " ".join(c.build_run_tests(_cfg(), module="test_closeout")[0])
-        self.assertIn("--module zkteco_hr.tests.test_closeout", joined)
+        self.assertIn("--module dewey_time.tests.test_closeout", joined)
 
     def test_run_tests_fast_is_host_unittest(self):
         cmd = c.build_run_tests(_cfg(), fast=True)[0]
         joined = " ".join(cmd)
         self.assertNotIn("docker", joined)
-        self.assertIn("PYTHONPATH=/repo/zkteco_hr", joined)
+        self.assertIn("PYTHONPATH=/repo python3", joined)
         self.assertIn("python3 -m unittest discover", joined)
-        self.assertIn("/repo/zkteco_hr/zkteco_hr/tests", joined)
+        self.assertIn("-s /repo/dewey_time/tests", joined)
 
     def test_provision_passes_env(self):
         cmd = c.build_provision(_cfg())[0]
@@ -86,7 +86,7 @@ class TestCommands(unittest.TestCase):
         cmd = c.build_exercise(cfg, {"employee": "HR-EMP-1", "start_date": "2026-06-01"})[0]
         joined = " ".join(cmd)
         self.assertIn("--site sandbox execute", joined)
-        self.assertIn("zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee", joined)
+        self.assertIn("dewey_time.attendance_engine.dev_tools.run_engine_for_employee", joined)
         self.assertIn("HR-EMP-1", joined)
 
     def test_build_exercise_no_method_raises(self):
@@ -109,7 +109,7 @@ class TestCommands(unittest.TestCase):
     def test_run_tests_fast_module(self):
         joined = " ".join(c.build_run_tests(_cfg(), fast=True, module="test_closeout")[0])
         self.assertNotIn("docker", joined)
-        self.assertIn("zkteco_hr.tests.test_closeout", joined)
+        self.assertIn("dewey_time.tests.test_closeout", joined)
 
     def test_frontend_unknown_mode_raises(self):
         with self.assertRaises(ValueError):

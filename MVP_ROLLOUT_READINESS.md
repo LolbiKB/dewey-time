@@ -43,7 +43,7 @@ Reproduce (from `dev/sandbox/`, Docker running):
 ./frappe-sandbox test --backend --module test_integration_pilot_matrix
 ```
 
-Source: `zkteco_hr/zkteco_hr/tests/test_integration_pilot_matrix.py` (branch
+Source: `dewey_time/tests/test_integration_pilot_matrix.py` (branch
 `mvp/real-db-pilot-matrix`).
 
 ### Not yet covered by the automated matrix (P1 / follow-up)
@@ -59,7 +59,7 @@ Source: `zkteco_hr/zkteco_hr/tests/test_integration_pilot_matrix.py` (branch
 14 of 18 test modules call `_install_frappe_mock()` **at import time**, which does
 `sys.modules["frappe"] = MagicMock()` — process-wide. Consequences:
 
-- **`bench run-tests --app zkteco_hr` is not real-DB "CI parity."** Once a mock
+- **`bench run-tests --app dewey_time` is not real-DB "CI parity."** Once a mock
   module is imported, the rest of the suite (and HRMS's `before_tests` bootstrap)
   runs against the MagicMock. The "169 tests in 0.1s" under bench is the same mock
   run as the no-Docker fast lane, not DB-backed execution.

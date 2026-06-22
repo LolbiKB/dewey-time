@@ -1,4 +1,4 @@
-recursive-include zkteco_hr *.json *.js *.css *.html *.md *.png *.jpg *.svg *.txt *.csv
-recursive-include zkteco_hr *.py
+recursive-include dewey_time *.json *.js *.css *.html *.md *.png *.jpg *.svg *.txt *.csv
+recursive-include dewey_time *.py
 include README.md
 include LICENSE

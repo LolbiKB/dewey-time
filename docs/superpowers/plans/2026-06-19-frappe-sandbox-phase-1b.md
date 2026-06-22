@@ -41,10 +41,10 @@ Add to `dev/sandbox/tests/test_config.py`:
     def test_exercise_block_parsed(self):
         with TemporaryDirectory() as d:
             p = self._write(d, {
-                "app": "zkteco_hr", "app_src": "../..", "required_apps": ["hrms"],
+                "app": "dewey_time", "app_src": "../..", "required_apps": ["hrms"],
                 "branch": "version-15", "frontend_dir": "../..",
                 "exercise": {
-                    "method": "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
+                    "method": "dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
                     "args": [
                         {"flag": "employee", "kwarg": "employee", "required": True},
                         {"flag": "mode", "kwarg": "mode", "default": "both", "choices": ["both", "intraday"]},
@@ -53,7 +53,7 @@ Add to `dev/sandbox/tests/test_config.py`:
             })
             cfg = load_config(p)
             self.assertEqual(cfg.exercise_method,
-                             "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee")
+                             "dewey_time.attendance_engine.dev_tools.run_engine_for_employee")
             self.assertEqual(len(cfg.exercise_args), 2)
             self.assertEqual(cfg.exercise_args[0].flag, "employee")
             self.assertTrue(cfg.exercise_args[0].required)
@@ -139,7 +139,7 @@ Then extend the returned `Config(...)` with (keep all existing fields):
 Update `dev/sandbox/frappe-sandbox.json` to add (after `"register_app_in_apps_txt": true`):
 ```json
   "exercise": {
-    "method": "zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
+    "method": "dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
     "args": [
       {"flag": "employee", "kwarg": "employee", "required": true},
       {"flag": "start", "kwarg": "start_date", "required": true},
@@ -182,7 +182,7 @@ In `dev/sandbox/tests/test_commands.py`: replace the existing `test_engine_run` 
         cmd = c.build_exercise(cfg, {"employee": "HR-EMP-1", "start_date": "2026-06-01"})[0]
         joined = " ".join(cmd)
         self.assertIn("--site sandbox execute", joined)
-        self.assertIn("zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee", joined)
+        self.assertIn("dewey_time.attendance_engine.dev_tools.run_engine_for_employee", joined)
         self.assertIn("HR-EMP-1", joined)
 
     def test_build_exercise_no_method_raises(self):
@@ -202,11 +202,11 @@ Update the `_cfg()` helper to build a `Config` with the new fields (add params w
 ```python
 from frappe_sandbox.config import Config, ExerciseArg
 
-def _cfg(*, exercise_method="zkteco_hr.attendance_engine.dev_tools.run_engine_for_employee",
-         verify_method="zkteco_hr.utils.sandbox_verify.run",
-         anonymize_method="zkteco_hr.utils.anonymize.run") -> Config:
+def _cfg(*, exercise_method="dewey_time.attendance_engine.dev_tools.run_engine_for_employee",
+         verify_method="dewey_time.utils.sandbox_verify.run",
+         anonymize_method="dewey_time.utils.anonymize.run") -> Config:
     return Config(
-        app="zkteco_hr", app_src="/repo", required_apps=("erpnext", "hrms"),
+        app="dewey_time", app_src="/repo", required_apps=("erpnext", "hrms"),
         branch="version-15", frontend_dir="/repo/fe",
         compose_file="/repo/dev/sandbox/docker-compose.yml",
         exercise_method=exercise_method,

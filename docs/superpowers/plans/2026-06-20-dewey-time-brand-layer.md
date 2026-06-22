@@ -18,7 +18,7 @@
 - **One knob:** the green is provisional and lives only in `--brand-primary` (`src/brand/tokens.css`).
 - **App-scoped favicon:** the dial is the app-switcher tile + the favicon for `hr-attendance` / `hr-schedule` / `hr-personal`. `DI-logo.svg` stays for `app_logo_url` (Desk), `website_context` (favicon/splash), and `www/adms.html`.
 - **Commit trailer:** every commit message ends with `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-- **All paths below are relative to the SPA package dir** `zkteco_hr/zkteco_hr/frontend/hr_attendance/` unless they start with `../../` (which reaches the Python package root `zkteco_hr/zkteco_hr/`). Run all `npm`/`npx` commands from the SPA package dir.
+- **All paths below are relative to the SPA package dir** `dewey_time/frontend/hr_attendance/` unless they start with `../../` (which reaches the Python package root `dewey_time/`). Run all `npm`/`npx` commands from the SPA package dir.
 
 ## File Structure
 
@@ -251,14 +251,14 @@ test("HrAppShell uses the wordmark, not the old image logo/title", () => {
   assert.match(shell, /DeweyTimeWordmark/, "uses DeweyTimeWordmark");
   assert.ok(!shell.includes("APP_LOGO"), "drops the APP_LOGO import/usage");
   assert.ok(!shell.includes("<img"), "no <img> logo in the header");
-  assert.ok(!shell.includes('title="ZKTeco HR"'), "drops the text title");
+  assert.ok(!shell.includes('title="Dewey Time"'), "drops the text title");
 });
 ```
 
 - [ ] **Step 2: Run the test — verify it fails**
 
 Run: `npm run test:web`
-Expected: FAIL — `uses DeweyTimeWordmark` (HrAppShell still imports `APP_LOGO` and renders `<img>` + `title="ZKTeco HR"`).
+Expected: FAIL — `uses DeweyTimeWordmark` (HrAppShell still imports `APP_LOGO` and renders `<img>` + `title="Dewey Time"`).
 
 - [ ] **Step 3: Edit `src/ui/HrAppShell.tsx`.** Replace the brand import (line 7):
 
@@ -276,7 +276,7 @@ Then replace the `logo`/`title` props (the current block is):
       logo={
         <img src={APP_LOGO} alt="" className="size-6 shrink-0 rounded-sm" width={24} height={24} />
       }
-      title="ZKTeco HR"
+      title="Dewey Time"
 ```
 with:
 ```tsx
@@ -300,7 +300,7 @@ git add src/ui/HrAppShell.tsx src/brand/brandWiring.test.ts
 git commit -m "feat(brand): replace header icon+title with the Dewey Time wordmark
 
 The AppShell logo slot now renders <DeweyTimeWordmark/> (type-as-mark, no
-chrome icon per the Dewey language); the 'ZKTeco HR' text title is dropped.
+chrome icon per the Dewey language); the 'Dewey Time' text title is dropped.
 Guard test asserts the swap.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
@@ -315,7 +315,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Test: extend `src/brand/brandWiring.test.ts`
 
 **Interfaces:**
-- Produces: `public/images/dewey-time.svg` — published at `/assets/zkteco_hr/images/dewey-time.svg` by the existing branding sync.
+- Produces: `public/images/dewey-time.svg` — published at `/assets/dewey_time/images/dewey-time.svg` by the existing branding sync.
 
 - [ ] **Step 1: Add the failing asset guard** — append to `src/brand/brandWiring.test.ts`:
 
@@ -430,25 +430,25 @@ Expected: FAIL — `brand.ts → dial` (constants/HTML still reference DI-logo /
 - [ ] **Step 3: Edit `src/lib/brand.ts`** — repoint the app logo (leave `SITE_FAVICON` = DI-logo):
 
 ```ts
-export const HR_APP_LOGO = "/assets/zkteco_hr/images/dewey-time.svg";
+export const HR_APP_LOGO = "/assets/dewey_time/images/dewey-time.svg";
 ```
 
 - [ ] **Step 4: Edit `index.html`** — change the favicon `href` (keep `rel="icon" type="image/svg+xml"`):
 
 ```html
-      href="/assets/zkteco_hr/images/dewey-time.svg"
+      href="/assets/dewey_time/images/dewey-time.svg"
 ```
 
 - [ ] **Step 5: Edit `../../www/hr-personal.html`** — change its favicon `href` the same way:
 
 ```html
-      href="/assets/zkteco_hr/images/dewey-time.svg"
+      href="/assets/dewey_time/images/dewey-time.svg"
 ```
 
 - [ ] **Step 6: Edit `../../utils/sync_hr_attendance_assets.py`** — repoint the app logo and the synced-files list:
 
 ```python
-HR_APP_LOGO = "/assets/zkteco_hr/images/dewey-time.svg"
+HR_APP_LOGO = "/assets/dewey_time/images/dewey-time.svg"
 ```
 and
 ```python

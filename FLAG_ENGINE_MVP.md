@@ -1,6 +1,6 @@
 # Flag engine MVP — scope and sign-off
 
-Single source of truth for **what the zkteco_hr flag engine must do for a pilot** vs what is deferred. Policy definitions: [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md). Implementation: **https://github.com/LolbiKB/zkteco_hr**.
+Single source of truth for **what the dewey_time flag engine must do for a pilot** vs what is deferred. Policy definitions: [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md). Implementation: **https://github.com/LolbiKB/dewey-time**.
 
 **MVP bar:** trustworthy for **5 employees × 20 days** with manual spot-checks — not every rule in the policy doc.
 
@@ -15,7 +15,7 @@ Shift Assignment (submitted, active, date range)
        +
 Company Holiday List (holiday wins at flag time)
        ↓
-zkteco_hr: intraday (day_closed=0) + closeout (day_closed=1) + 03:00 fallback
+dewey_time: intraday (day_closed=0) + closeout (day_closed=1) + 03:00 fallback
        ↓
 Attendance Flag rows + /hr-attendance calendar display
 ```
@@ -46,8 +46,8 @@ Engine and HR calendar UI code for MVP scope is **in the repository**. Remaining
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
-| 1 | **Range-aware Shift Assignment lookup** | zkteco_hr | **Done in repo** |
-| 2 | Bridge **device closeout** → `notify_device_closeout_status` | bridge + zkteco_hr | Code done; verify on Cloud + bridge env |
+| 1 | **Range-aware Shift Assignment lookup** | dewey_time | **Done in repo** |
+| 2 | Bridge **device closeout** → `notify_device_closeout_status` | bridge + dewey_time | Code done; verify on Cloud + bridge env |
 | 3 | **Frappe scheduler** on Cloud | ops | In `hooks.py`; enable on site |
 | 4 | **Shift setup** per pilot employee | HR | Data — submitted **Active** assignments covering pilot dates |
 | 5 | **Pilot matrix** 5 × 20 | HR + eng | Process — expected vs actual `flag_code` spreadsheet |
@@ -56,7 +56,7 @@ Items 2–5 are **ops/process** — not blocked on further engine code in repo.
 
 ### P0 #1 — Shift assignment lookup
 
-**Module:** `zkteco_hr/zkteco_hr/attendance_engine/shift_assignment.py` — `get_shift_assignment(employee, attendance_date)`.
+**Module:** `dewey_time/attendance_engine/shift_assignment.py` — `get_shift_assignment(employee, attendance_date)`.
 
 Callers: `hr_calendar.py`, `intraday.py`, `closeout.py`.
 
@@ -173,6 +173,6 @@ Route: **`/hr-attendance`** (React SPA). Desk: **HR Attendance Calendar** / `/ap
 | [`docs/FRAPPE_ATTENDANCE_RULES.md`](docs/FRAPPE_ATTENDANCE_RULES.md) | Policy source of truth |
 | [`FRAPPE_ATTENDANCE_ENGINE_PLAN.md`](FRAPPE_ATTENDANCE_ENGINE_PLAN.md) | Architecture |
 | [`FRAPPE_CUSTOM_APP_AGENT_GUIDE.md`](FRAPPE_CUSTOM_APP_AGENT_GUIDE.md) | Agent constraints |
-| [`zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md`](zkteco_hr/zkteco_hr/docs/CALENDAR_DATA_CONTRACT.md) | Calendar API contract |
+| [`dewey_time/docs/CALENDAR_DATA_CONTRACT.md`](dewey_time/docs/CALENDAR_DATA_CONTRACT.md) | Calendar API contract |
 
-**Frappe app repo:** https://github.com/LolbiKB/zkteco_hr
+**Frappe app repo:** https://github.com/LolbiKB/dewey-time
