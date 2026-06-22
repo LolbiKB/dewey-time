@@ -13,12 +13,13 @@ function alreadyPlayed(): boolean {
 }
 
 /**
- * One-time launch intro — a clock-themed take on the GAR brand intro. The dial
- * pops in and winds its hands clockwise into the 10:10 rest position, then the
- * "Dewey Time" wordtext rises beneath it; the overlay then crossfades away to
+ * One-time launch intro — the clock draws itself. On a blank canvas the orange
+ * long hand sweeps a single clockwise turn and dash-draws the green ring under
+ * it (the hand is the pen), settling at 10:10 as the hour hand fades in; then
+ * the "Dewey Time" wordtext rises beneath and the overlay crossfades away to
  * reveal the app. Plays once per browser session, is skippable on click, and is
- * fully disabled under prefers-reduced-motion (the wind keyframes no-op; only a
- * brief crossfade remains). Mounted once at the app root.
+ * fully disabled under prefers-reduced-motion (the draw no-ops; only a brief
+ * crossfade remains). Mounted once at the app root.
  */
 export function DeweyTimeIntro() {
   const [phase, setPhase] = useState<"play" | "closing" | "done">(() =>
@@ -33,7 +34,7 @@ export function DeweyTimeIntro() {
         /* sessionStorage unavailable (private mode) — still play, just don't persist */
       }
       const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const holdMs = reduce ? 900 : 2600;
+      const holdMs = reduce ? 900 : 2000; // draw (1.05s) + wordmark rise + a beat
       const timer = window.setTimeout(() => setPhase("closing"), holdMs);
       return () => window.clearTimeout(timer);
     }

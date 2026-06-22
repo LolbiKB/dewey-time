@@ -60,23 +60,41 @@
 [data-slot='sheet-content'][data-side='right'][data-state='open']  { animation: dw-sheet-right 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
 [data-slot='sheet-content'][data-side='left'][data-state='open']   { animation: dw-sheet-left 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-/* —— one-time brand intro: the clock winds its hands into place —— */
-@keyframes dw-wind-hour { from { transform: rotate(-810deg); } to { transform: rotate(0); } }
-@keyframes dw-wind-min  { from { transform: rotate(-1170deg); } to { transform: rotate(0); } }
-@keyframes dw-dial-pop  { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: none; } }
+/* —— one-time brand intro: the long hand sweeps once and DRAWS its own dial ——
+   On a blank canvas the orange minute hand makes a single clockwise revolution;
+   in lockstep the green ring dash-draws under it (the hand is the pen) and an
+   orange pen-tip races the leading edge, then it settles at 10:10 as the hour
+   hand fades in. One shared easing curve keeps ring + pen + hand in sync. (An
+   echo of the ADMS Bridge self-drawing mark — see frontend/adms brand-motion.css.)
 
-.dw-intro-dial { animation: dw-dial-pop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
-/* the dial's two <line> hands spin in; transform-box pins the origin to the
-   pivot (48,48 in the 96-unit viewBox) so they rotate about the clock centre */
-.dw-intro-dial line { transform-box: view-box; transform-origin: 48px 48px; }
-.dw-intro-dial line:nth-of-type(1) { animation: dw-wind-hour 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both; }
-.dw-intro-dial line:nth-of-type(2) { animation: dw-wind-min  1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both; }
-.dw-intro-rise { animation: dw-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.9s both; }
+   Dash math: pathLength=201.06 (set on both <path>s in DeweyTimeMark) is the
+   ring circumference (2π·32). The ring uses dasharray 201.06 (one full dash);
+   the pen uses 7 + (201.06−7) so a single 7-long dash rides the path with its
+   tail welded to the ring's leading edge. Both sweep stroke-dashoffset 201.06→0. */
+:root { --dw-draw-dur: 1.05s; --dw-ease-draw: cubic-bezier(0.65, 0, 0.35, 1); }
 
-/* hovering the header brand lockup re-runs the same clock-wind on demand */
-.dw-hover-dial line { transform-box: view-box; transform-origin: 48px 48px; }
-.group:hover .dw-hover-dial line:nth-of-type(1) { animation: dw-wind-hour 1.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
-.group:hover .dw-hover-dial line:nth-of-type(2) { animation: dw-wind-min  1.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes dw-draw-ring { from { stroke-dashoffset: 201.06; } to { stroke-dashoffset: 0; } }
+@keyframes dw-sweep-min { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes dw-fade-hour { 0%, 35% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes dw-pen-fade  { 0% { opacity: 0; } 10% { opacity: 1; } 86% { opacity: 1; } 100% { opacity: 0; } }
+
+/* enable the dash on an animated dial; hands rotate about the pivot (48,48) */
+.dw-intro-dial .dw-ring, .dw-hover-dial .dw-ring { stroke-dasharray: 201.06; }
+.dw-intro-dial .dw-pen,  .dw-hover-dial .dw-pen  { stroke-dasharray: 7 194.06; }
+.dw-intro-dial line, .dw-hover-dial line { transform-box: view-box; transform-origin: 48px 48px; }
+
+/* intro: plays once on mount */
+.dw-intro-dial .dw-ring            { animation: dw-draw-ring var(--dw-draw-dur) var(--dw-ease-draw) both; }
+.dw-intro-dial line:nth-of-type(2) { animation: dw-sweep-min var(--dw-draw-dur) var(--dw-ease-draw) both; }
+.dw-intro-dial line:nth-of-type(1) { animation: dw-fade-hour var(--dw-draw-dur) linear both; }
+.dw-intro-dial .dw-pen             { animation: dw-draw-ring var(--dw-draw-dur) var(--dw-ease-draw) both, dw-pen-fade var(--dw-draw-dur) linear both; }
+.dw-intro-rise { animation: dw-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) calc(var(--dw-draw-dur) + 0.12s) both; }
+
+/* hovering the header brand lockup re-runs the same self-draw on demand */
+.group:hover .dw-hover-dial .dw-ring            { animation: dw-draw-ring var(--dw-draw-dur) var(--dw-ease-draw) both; }
+.group:hover .dw-hover-dial line:nth-of-type(2) { animation: dw-sweep-min var(--dw-draw-dur) var(--dw-ease-draw) both; }
+.group:hover .dw-hover-dial line:nth-of-type(1) { animation: dw-fade-hour var(--dw-draw-dur) linear both; }
+.group:hover .dw-hover-dial .dw-pen             { animation: dw-draw-ring var(--dw-draw-dur) var(--dw-ease-draw) both, dw-pen-fade var(--dw-draw-dur) linear both; }
 
 /* —— tactile press on real action buttons (exclude switches / tabs) —— */
 button:not([role='switch']):not([role='tab']) { transition: transform 0.06s ease; }
@@ -86,7 +104,12 @@ button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform:
 @media (prefers-reduced-motion: reduce) {
   .anim-page, .anim-rise, .anim-fade { animation: none !important; }
   [data-slot$='-content'], [data-slot$='-overlay'] { animation: none !important; }
-  .dw-intro-dial, .dw-intro-dial line, .dw-intro-rise, .dw-hover-dial line { animation: none !important; }
+  /* the dial sits finished — full ring, hour hand shown, pen hidden; no draw */
+  .dw-intro-dial .dw-ring, .dw-hover-dial .dw-ring,
+  .dw-intro-dial .dw-pen, .dw-hover-dial .dw-pen,
+  .dw-intro-dial line, .dw-hover-dial line, .dw-intro-rise { animation: none !important; }
+  .dw-intro-dial .dw-ring, .dw-hover-dial .dw-ring { stroke-dashoffset: 0 !important; }
+  .dw-intro-dial .dw-pen, .dw-hover-dial .dw-pen { opacity: 0 !important; }
   button:active:not(:disabled) { transform: none; }
 }
 
