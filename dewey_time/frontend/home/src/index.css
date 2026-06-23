@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@lolbikb/dewey-ui/theme.css";
+@import "../../hr_attendance/src/brand/tokens.css";
+@source "../node_modules/@lolbikb/dewey-ui/dist";
