@@ -1,5 +1,14 @@
-import { useFrappeGetCall } from "frappe-react-sdk";
-import { Card } from "@lolbikb/dewey-ui";
+import { useState } from "react";
+import { useFrappeGetCall, useFrappeAuth } from "frappe-react-sdk";
+import {
+  Card,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@lolbikb/dewey-ui";
 import type { LauncherData } from "./types";
 
 const METHOD = "dewey_time.attendance_engine.launcher.get_launcher";
@@ -60,7 +69,38 @@ export function Launcher() {
   );
 }
 
+function UserAvatar({ user }: { user: LauncherData["user"] }) {
+  const [imgError, setImgError] = useState(false);
+
+  const initials = (
+    <div className="flex size-8 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
+      {user.initials}
+    </div>
+  );
+
+  if (!user.image_url || imgError) return initials;
+
+  return (
+    <img
+      src={user.image_url}
+      alt=""
+      className="size-8 rounded-full object-cover"
+      onError={() => setImgError(true)}
+    />
+  );
+}
+
 function Shell({ children, user }: { children: React.ReactNode; user?: LauncherData["user"] }) {
+  const { logout } = useFrappeAuth();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      window.location.href = "/login";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="flex items-center justify-between border-b border-border px-5 py-3.5">
@@ -69,9 +109,29 @@ function Shell({ children, user }: { children: React.ReactNode; user?: LauncherD
           <span className="text-base font-semibold tracking-tight">Dewey<span className="text-primary">·</span>Time</span>
         </div>
         {user && (
-          <div className="flex size-8 items-center justify-center rounded-full border border-border bg-muted text-[11px] font-semibold text-muted-foreground">
-            {user.initials}
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                aria-label="User menu"
+              >
+                <UserAvatar user={user} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel className="font-normal">
+                <span className="block text-sm font-semibold text-foreground">{user.full_name}</span>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => { window.location.href = "/app/user-profile"; }}>
+                Profile / account
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleLogout}>
+                Log out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </header>
       <main className="mx-auto max-w-3xl px-5 py-7">

@@ -65,6 +65,19 @@ def _initials(full_name: str) -> str:
     return ("".join(p[0] for p in parts[:2]).upper()) or "?"
 
 
+def _user_image() -> str | None:
+    try:
+        emp = _employee_linked_to_user()
+        if emp:
+            img = frappe.db.get_value("Employee", emp, "image")
+            if img:
+                return img
+        return frappe.db.get_value("User", frappe.session.user, "user_image") or None
+    except Exception:
+        frappe.log_error(title="launcher user image lookup failed")
+        return None
+
+
 @frappe.whitelist()
 def get_launcher():
     """Return the current user's launcher tiles + greeting."""
@@ -72,7 +85,7 @@ def get_launcher():
         frappe.throw(_("Login required"), frappe.AuthenticationError)
 
     full_name = frappe.utils.get_fullname(frappe.session.user) or frappe.session.user
-    user = {"full_name": full_name, "initials": _initials(full_name)}
+    user = {"full_name": full_name, "initials": _initials(full_name), "image_url": _user_image()}
 
     apps = []
     try:

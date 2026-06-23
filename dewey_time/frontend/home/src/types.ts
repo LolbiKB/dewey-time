@@ -6,6 +6,6 @@ export interface LauncherApp {
   admin: boolean;
 }
 export interface LauncherData {
-  user: { full_name: string; initials: string };
+  user: { full_name: string; initials: string; image_url?: string | null };
   apps: LauncherApp[];
 }

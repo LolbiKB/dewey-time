@@ -92,7 +92,36 @@ class GetLauncherTests(unittest.TestCase):
         self.assertEqual(_names(_run()), [])
 
     def test_greeting_initials(self):
-        self.assertEqual(_run(employee="EMP-001")["user"], {"full_name": "Maria Rossi", "initials": "MR"})
+        self.assertEqual(
+            _run(employee="EMP-001")["user"],
+            {"full_name": "Maria Rossi", "initials": "MR", "image_url": None},
+        )
+
+    def test_user_image_employee_photo_takes_precedence(self):
+        """Employee photo wins over User image; User image fallback works; None when both absent."""
+        # Employee has a photo → use it.
+        with patch.object(mod, "_employee_linked_to_user", return_value="EMP-001"), \
+             patch.object(mod.frappe.db, "get_value", side_effect=lambda dt, name, field: (
+                 "/files/emp.jpg" if dt == "Employee" else "/files/user.jpg"
+             )):
+            self.assertEqual(mod._user_image(), "/files/emp.jpg")
+
+        # Employee exists but no photo → fall back to User image.
+        with patch.object(mod, "_employee_linked_to_user", return_value="EMP-001"), \
+             patch.object(mod.frappe.db, "get_value", side_effect=lambda dt, name, field: (
+                 None if dt == "Employee" else "/files/user.jpg"
+             )):
+            self.assertEqual(mod._user_image(), "/files/user.jpg")
+
+        # No employee at all → User image.
+        with patch.object(mod, "_employee_linked_to_user", return_value=None), \
+             patch.object(mod.frappe.db, "get_value", return_value="/files/user.jpg"):
+            self.assertEqual(mod._user_image(), "/files/user.jpg")
+
+        # No employee, no User image → None.
+        with patch.object(mod, "_employee_linked_to_user", return_value=None), \
+             patch.object(mod.frappe.db, "get_value", return_value=None):
+            self.assertIsNone(mod._user_image())
 
     def test_broad_gate_error_fails_open(self):
         # Cannot use _run() here: its patches for _is_hr_staff/_employee_linked_to_user
