@@ -9,3 +9,8 @@ dewey_time/frontend/*/node_modules/
 .DS_Store
 .claude/
 .playwright-mcp/
+
+# Employee schedule data + conversion outputs (PII — never commit)
+dewey_schedule_*.csv
+dewey_schedule_*.md
+*.xlsx - *.csv
