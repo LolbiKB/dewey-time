@@ -81,15 +81,12 @@ function UserAvatar({ user }: { user: LauncherData["user"] }) {
   if (!user.image_url || imgError) return initials;
 
   return (
-    <div className="relative size-8">
-      <img
-        src={user.image_url}
-        alt=""
-        className="size-8 rounded-full object-cover"
-        onError={() => setImgError(true)}
-      />
-      {imgError && initials}
-    </div>
+    <img
+      src={user.image_url}
+      alt=""
+      className="size-8 rounded-full object-cover"
+      onError={() => setImgError(true)}
+    />
   );
 }
 
