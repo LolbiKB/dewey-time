@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="Dewey Time">
+  <style>
+    .ring   { stroke: #066031; stroke-dasharray: 201.06; animation: draw 1.05s cubic-bezier(0.65,0,0.35,1) both; }
+    .hand-h { stroke: #066031; animation: fadeh 1.05s linear both; }
+    .hand-m { stroke: #C2410C; transform-box: view-box; transform-origin: 48px 48px; animation: sweep 1.05s cubic-bezier(0.65,0,0.35,1) both; }
+    .pivot  { fill: #066031; }
+    @keyframes draw  { from { stroke-dashoffset: 201.06; } to { stroke-dashoffset: 0; } }
+    @keyframes sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes fadeh { 0%,35% { opacity: 0; } 100% { opacity: 1; } }
+    @media (prefers-color-scheme: dark) {
+      .ring, .hand-h { stroke: #3f9168; } .pivot { fill: #3f9168; } .hand-m { stroke: #F4A24B; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ring, .hand-h, .hand-m { animation: none; } .ring { stroke-dashoffset: 0; } .hand-h { opacity: 1; }
+    }
+  </style>
+  <circle class="ring"   cx="48" cy="48" r="32" fill="none" stroke-width="8"/>
+  <line   class="hand-h" x1="48" y1="48" x2="35" y2="41" stroke-width="8" stroke-linecap="round"/>
+  <line   class="hand-m" x1="48" y1="48" x2="66" y2="38" stroke-width="8" stroke-linecap="round"/>
+  <circle class="pivot"  cx="48" cy="48" r="4.5"/>
+</svg>
