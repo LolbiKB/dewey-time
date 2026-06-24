@@ -1047,10 +1047,23 @@ def parse_schedule_upload(file_b64: str, filename: str = "upload.csv") -> dict:
 
     data_start = _find_data_start(raw_rows)
     if data_start >= len(raw_rows):
+        seen_col0 = []
+        for r in raw_rows:
+            value = _cell(r[0]) if r else ""
+            if value and value not in seen_col0:
+                seen_col0.append(value)
+            if len(seen_col0) >= 3:
+                break
+        hint = (
+            f" The first column instead contained: {', '.join(repr(v) for v in seen_col0)}."
+            if seen_col0
+            else ""
+        )
         frappe.throw(
-            "No employee rows found. "
-            "First column must be an employee ID (e.g. DI-0159). "
-            "Use the Haiku prompt to normalise your spreadsheet first."
+            "No employee rows found. The first column must be an employee ID "
+            "like DI-0159 (or a header named 'employee_id')." + hint + " Did you "
+            "upload the raw sheet instead of the normalised CSV? Run it through "
+            "the schedule-import normaliser first."
         )
 
     parsed_rows: list[ParsedScheduleRow] = []

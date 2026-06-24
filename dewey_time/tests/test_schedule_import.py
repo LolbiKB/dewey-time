@@ -268,6 +268,22 @@ class TestScheduleImportExtendedFormat(unittest.TestCase):
         self.assertEqual(days["Monday"]["start_time"], "09:00")
         self.assertFalse(days["Sunday"]["works"])
 
+    def test_no_employee_rows_error_echoes_first_column(self):
+        # Raw export shape: campus in column 0, badge IDs in column 1 — neither a
+        # canonical header token nor a badge in col0, so the importer rejects it.
+        # The error must name what column 0 actually held so the mistake (wrong
+        # file uploaded) is self-evident.
+        csv = (
+            "Campus,ID,Name,am,,,\n"
+            "DK-Ochar,DI-0110,Norn,07:30,11:30,13:00,17:00\n"
+            "ACES,DI-0878,Lloyd,08:00,12:00,14:00,19:00\n"
+        )
+        with self.assertRaises(Exception) as ctx:
+            _parse(csv)
+        msg = str(ctx.exception)
+        self.assertIn("DK-Ochar", msg)
+        self.assertIn("normalised", msg.lower())
+
     def test_legacy_seven_columns_unaffected(self):
         result = _parse(
             HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:30,12:00,13:00,17:00,Sunday\n",

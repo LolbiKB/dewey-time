@@ -13,7 +13,6 @@ from dewey_time.attendance_engine.hr_calendar import (
     _employee_linked_to_user,
     _is_hr_staff,
 )
-from dewey_time.utils.sync_hr_attendance_assets import SITE_FAVICON_LOGO
 
 _BROAD = "broad"
 _ADMIN = "admin"
@@ -45,11 +44,36 @@ def _has_desk_access(roles=None) -> bool:
     )
 
 
-# Gate + fail-policy per curated app (keyed by add_to_apps_screen `name`).
-_APP_GATES = {
-    "dewey_time": {"gate": _can_see_hr, "policy": _BROAD},
-    "adms": {"gate": _can_see_adms, "policy": _ADMIN},
+# Built-in gate predicates, keyed by the Launcher Tile `gate` Select value.
+# These are looked up at call time (not closure-captured) so unit-test patches
+# on mod._can_see_hr / mod._has_desk_access are honoured.
+def _gate_hr():
+    return _can_see_hr()
+
+
+def _gate_adms():
+    return _can_see_adms()
+
+
+def _gate_desk():
+    return _has_desk_access()
+
+
+_GATE_FUNCS = {
+    "hr_or_employee": _gate_hr,
+    "adms": _gate_adms,
+    "desk": _gate_desk,
 }
+
+
+def _can_see_by_roles(tile_name: str) -> bool:
+    wanted = {
+        r["role"]
+        for r in frappe.get_all(
+            "Launcher Tile Role", filters={"parent": tile_name}, fields=["role"]
+        )
+    }
+    return bool(wanted & set(frappe.get_roles()))
 
 
 def _visible(gate, policy: str) -> bool:
@@ -85,32 +109,38 @@ def get_launcher():
         frappe.throw(_("Login required"), frappe.AuthenticationError)
 
     full_name = frappe.utils.get_fullname(frappe.session.user) or frappe.session.user
-    user = {"full_name": full_name, "initials": _initials(full_name), "image_url": _user_image()}
+    user = {
+        "full_name": full_name,
+        "initials": _initials(full_name),
+        "image_url": _user_image(),
+        "can_manage_tiles": "System Manager" in set(frappe.get_roles()),
+    }
 
     apps = []
     try:
-        entries = frappe.get_hooks("add_to_apps_screen", app_name="dewey_time") or []
-        for entry in entries:
-            cfg = _APP_GATES.get(entry.get("name"))
-            if not cfg:
-                continue  # curated: skip apps without a known gate
-            if _visible(cfg["gate"], cfg["policy"]):
+        tiles = frappe.get_all(
+            "Launcher Tile",
+            filters={"enabled": 1},
+            fields=["name", "app_name", "title", "route", "icon", "is_admin", "gate"],
+            order_by="tile_order asc",
+        )
+        for t in tiles:
+            policy = _ADMIN if t.get("is_admin") else _BROAD
+            gate = t.get("gate")
+            if gate == "roles":
+                predicate = (lambda name: lambda: _can_see_by_roles(name))(t["name"])
+            else:
+                predicate = _GATE_FUNCS.get(gate)
+                if predicate is None:
+                    continue  # unknown gate → skip (curated safety)
+            if _visible(predicate, policy):
                 apps.append({
-                    "name": entry["name"],
-                    "title": entry["title"],
-                    "route": entry["route"],
-                    "logo": entry["logo"],
-                    "admin": cfg["policy"] == _ADMIN,
+                    "name": t["app_name"],
+                    "title": t["title"],
+                    "route": t["route"],
+                    "logo": t.get("icon") or "",
+                    "admin": bool(t.get("is_admin")),
                 })
-        # Synthesized Desk tile (not a dewey_time app entry).
-        if _visible(_has_desk_access, _ADMIN):
-            apps.append({
-                "name": "desk",
-                "title": "Frappe Desk",
-                "route": "/desk",
-                "logo": SITE_FAVICON_LOGO,
-                "admin": True,
-            })
     except Exception:
         frappe.log_error(title="get_launcher failed")  # never 500 the front door
 

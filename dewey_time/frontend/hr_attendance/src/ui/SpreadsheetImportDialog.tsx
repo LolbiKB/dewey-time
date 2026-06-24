@@ -26,6 +26,7 @@ import {
   buildImportPatternBuckets,
   useImportSchedulePlanSummary,
 } from "@/hooks/useImportSchedulePlanSummary";
+import { extractFrappeError } from "@/lib/frappeError";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { cn } from "@/lib/utils";
 import { ImportSchedulePlanSummary } from "@/ui/ImportSchedulePlanSummary";
@@ -573,11 +574,7 @@ export function SpreadsheetImportDialog(props: {
         setRowFilter(parsed.summary.importable < parsed.summary.total_rows ? "importable" : "all");
         setStep("preview");
       } catch (err: unknown) {
-        const msg =
-          err && typeof err === "object" && "message" in err
-            ? String((err as { message: unknown }).message)
-            : String(err);
-        setParseError(msg);
+        setParseError(extractFrappeError(err));
         setStep("idle");
       }
     },
@@ -633,11 +630,10 @@ export function SpreadsheetImportDialog(props: {
         setApplyStatuses((prev) => ({ ...prev, [idx]: { type: "ok" } }));
         anyOk = true;
       } catch (err: unknown) {
-        const msg =
-          err && typeof err === "object" && "message" in err
-            ? String((err as { message: unknown }).message)
-            : "Failed";
-        setApplyStatuses((prev) => ({ ...prev, [idx]: { type: "error", message: msg } }));
+        setApplyStatuses((prev) => ({
+          ...prev,
+          [idx]: { type: "error", message: extractFrappeError(err, "Failed") },
+        }));
       }
     }
 
