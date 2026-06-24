@@ -27,6 +27,7 @@ import {
   useImportSchedulePlanSummary,
 } from "@/hooks/useImportSchedulePlanSummary";
 import { extractFrappeError } from "@/lib/frappeError";
+import { buildProblemRows, problemsToCsv, type ProblemRow } from "@/lib/importProblems";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { cn } from "@/lib/utils";
 import { ImportSchedulePlanSummary } from "@/ui/ImportSchedulePlanSummary";
@@ -214,25 +215,8 @@ function rowMatchesFilter(row: ParsedRow, filter: RowFilter): boolean {
   }
 }
 
-function downloadFeedbackCsv(feedback: FeedbackRow[], filename: string) {
-  const header = "row_number,employee_id,email,employee_name,field,code,severity,message,suggestion";
-  const escape = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
-  const lines = feedback.map((r) =>
-    [
-      r.row_number,
-      r.employee_id,
-      r.email,
-      r.employee_name ?? "",
-      r.field,
-      r.code,
-      r.severity,
-      r.message,
-      r.suggestion,
-    ]
-      .map(escape)
-      .join(",")
-  );
-  const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+function downloadCsv(csv: string, filename: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -430,10 +414,8 @@ function SummaryBar(props: {
   filter: RowFilter;
   onFilterChange: (f: RowFilter) => void;
   visibleCount: number;
-  feedbackCount: number;
-  feedbackFilename: string;
-  feedbackRows: FeedbackRow[];
-  showFeedbackDownload: boolean;
+  problemRows: ProblemRow[];
+  problemFilename: string;
 }) {
   const { summary, filter, onFilterChange, visibleCount } = props;
 
@@ -461,16 +443,17 @@ function SummaryBar(props: {
           </p>
         </div>
 
-        {props.showFeedbackDownload ? (
+        {props.problemRows.length > 0 ? (
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="h-8 shrink-0 gap-1.5 text-xs"
-            onClick={() => downloadFeedbackCsv(props.feedbackRows, props.feedbackFilename)}
+            onClick={() => downloadCsv(problemsToCsv(props.problemRows), props.problemFilename)}
+            title="Download every not-found, error, warning, and apply-failure row as CSV"
           >
             <DownloadIcon className="size-3.5" />
-            AI feedback ({props.feedbackCount})
+            Problems ({props.problemRows.length})
           </Button>
         ) : null}
       </div>
@@ -647,6 +630,11 @@ export function SpreadsheetImportDialog(props: {
   const isApplying = step === "applying";
   const isDone = step === "done";
 
+  const problemRows = useMemo(
+    () => buildProblemRows(feedbackRows, rows, applyStatuses),
+    [feedbackRows, rows, applyStatuses]
+  );
+
   const importPatternBuckets = useMemo(
     () => buildImportPatternBuckets(rows, selected),
     [rows, selected]
@@ -657,7 +645,7 @@ export function SpreadsheetImportDialog(props: {
     step === "preview" && effectiveFrom ? effectiveFrom : null
   );
 
-  const feedbackFilename = `schedule-import-feedback-${currentFile?.name?.replace(/\.[^.]+$/, "") ?? "upload"}.csv`;
+  const problemFilename = `schedule-import-problems-${currentFile?.name?.replace(/\.[^.]+$/, "") ?? "upload"}.csv`;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -705,10 +693,8 @@ export function SpreadsheetImportDialog(props: {
               filter={rowFilter}
               onFilterChange={setRowFilter}
               visibleCount={visibleRows.length}
-              feedbackCount={feedbackRows.length}
-              feedbackFilename={feedbackFilename}
-              feedbackRows={feedbackRows}
-              showFeedbackDownload={feedbackRows.length > 0 && !isDone}
+              problemRows={problemRows}
+              problemFilename={problemFilename}
             />
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
