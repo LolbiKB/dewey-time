@@ -54,7 +54,7 @@ export function LandingControl() {
       {error && <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div>}
       {state?.note && <p className="mb-3 text-xs text-muted-foreground">{state.note}</p>}
       {maskWarnings.length > 0 && (
-        <div className="mb-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <div className="mb-3 rounded-md border border-brand-accent/30 bg-brand-accent/10 px-3 py-2 text-xs text-brand-accent">
           Heads up — these settings can override the landing page for some users: {maskWarnings.join("; ")}.
         </div>
       )}
