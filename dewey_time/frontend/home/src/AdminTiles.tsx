@@ -30,6 +30,7 @@ import {
 import { LayoutGrid } from "lucide-react";
 import type { LauncherTile } from "./tileTypes";
 import { GATE_OPTIONS } from "./tileTypes";
+import { AdminNav } from "./AdminNav";
 
 const DT = "Launcher Tile";
 const FIELDS: (keyof LauncherTile)[] = [
@@ -94,6 +95,7 @@ export function AdminTiles() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-7">
+      <AdminNav active="/home/admin" />
       <div className="mb-5 flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Manage app tiles</h1>
@@ -107,12 +109,6 @@ export function AdminTiles() {
             className="rounded-md border border-border px-3 py-1.5 text-sm"
           >
             Back
-          </a>
-          <a
-            href="/home/admin/landing"
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            Landing
           </a>
           <Button
             onClick={() =>
