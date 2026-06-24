@@ -105,6 +105,12 @@ export function AdminTiles() {
           >
             Back
           </a>
+          <a
+            href="/home/admin/landing"
+            className="rounded-md border border-border px-3 py-1.5 text-sm"
+          >
+            Landing
+          </a>
           <Button
             onClick={() =>
               setEditing({

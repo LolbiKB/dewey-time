@@ -14,7 +14,8 @@
     "enable_web_push",
     "vapid_subject",
     "vapid_public_key",
-    "vapid_private_key"
+    "vapid_private_key",
+    "landing_workspace_snapshot"
   ],
   "fields": [
     {
@@ -41,6 +42,13 @@
       "fieldtype": "Password",
       "label": "VAPID Private Key",
       "read_only": 1
+    },
+    {
+      "fieldname": "landing_workspace_snapshot",
+      "fieldtype": "Long Text",
+      "label": "Landing Workspace Snapshot",
+      "hidden": 1,
+      "description": "JSON {user: original default_workspace} saved when role-based landing is enabled; used to restore on disable. Managed by attendance_engine.landing."
     }
   ],
   "index_web_pages_for_search": 0,
