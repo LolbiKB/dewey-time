@@ -4,10 +4,13 @@ import {
   useFrappeCreateDoc,
   useFrappeUpdateDoc,
   useFrappeDeleteDoc,
+  useFrappeGetCall,
+  useFrappePostCall,
 } from "frappe-react-sdk";
 import {
   Card,
   Button,
+  Checkbox,
   Input,
   Switch,
   Label,
@@ -27,6 +30,7 @@ import {
 import { LayoutGrid } from "lucide-react";
 import type { LauncherTile } from "./tileTypes";
 import { GATE_OPTIONS } from "./tileTypes";
+import { AdminNav } from "./AdminNav";
 
 const DT = "Launcher Tile";
 const FIELDS: (keyof LauncherTile)[] = [
@@ -91,6 +95,7 @@ export function AdminTiles() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-7">
+      <AdminNav active="/home/admin" />
       <div className="mb-5 flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Manage app tiles</h1>
@@ -99,18 +104,6 @@ export function AdminTiles() {
           </p>
         </div>
         <div className="flex gap-2">
-          <a
-            href="/home"
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            Back
-          </a>
-          <a
-            href="/home/admin/landing"
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            Landing
-          </a>
           <Button
             onClick={() =>
               setEditing({
@@ -228,6 +221,22 @@ function TileDialog({
   const set = (k: keyof LauncherTile, v: unknown) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  const ASSIGNABLE = "dewey_time.attendance_engine.access.get_assignable_roles";
+  const GET_ROLES = "dewey_time.attendance_engine.access.get_tile_roles";
+  const SET_ROLES = "dewey_time.attendance_engine.access.set_tile_roles";
+
+  const { data: rolesData } = useFrappeGetCall<{ message: string[] }>(ASSIGNABLE, undefined, ASSIGNABLE);
+  const allRoles = rolesData?.message ?? [];
+  const { data: tileRolesData } = useFrappeGetCall<{ message: string[] }>(
+    GET_ROLES, isNew ? undefined : { tile: tile.name }, isNew ? null : `${GET_ROLES}:${tile.name}`
+  );
+  const { call: callSetRoles } = useFrappePostCall<{ message: unknown }>(SET_ROLES);
+  const [selectedRoles, setSelectedRoles] = useState<string[] | null>(null);
+  // Initialize selection once existing rows load (edit), or [] for new tiles.
+  const roles = selectedRoles ?? (isNew ? [] : tileRolesData?.message ?? []);
+  const toggleRole = (r: string) =>
+    setSelectedRoles(roles.includes(r) ? roles.filter((x) => x !== r) : [...roles, r]);
+
   async function save() {
     setDialogError(null);
     try {
@@ -237,6 +246,10 @@ function TileDialog({
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { app_name: _ignore, ...rest } = form;
         await updateDoc(DT, tile.name!, rest);
+      }
+      const tileName = isNew ? form.app_name! : tile.name!;
+      if (form.gate === "roles") {
+        await callSetRoles({ tile: tileName, roles });
       }
       onSaved();
     } catch (e) {
@@ -301,6 +314,22 @@ function TileDialog({
               </SelectContent>
             </Select>
           </Field>
+          {form.gate === "roles" && (
+            <Field label="Visible to roles">
+              <div className="max-h-40 space-y-1.5 overflow-auto rounded-md border border-border p-2.5">
+                {allRoles.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Loading roles…</p>
+                ) : (
+                  allRoles.map((r) => (
+                    <label key={r} className="flex items-center gap-2 text-sm">
+                      <Checkbox checked={roles.includes(r)} onCheckedChange={() => toggleRole(r)} />
+                      {r}
+                    </label>
+                  ))
+                )}
+              </div>
+            </Field>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <Switch
               checked={!!form.is_admin}

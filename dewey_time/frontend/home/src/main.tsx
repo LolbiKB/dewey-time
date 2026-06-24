@@ -6,6 +6,7 @@ import { Skeleton } from "@lolbikb/dewey-ui";
 import { Launcher } from "./Launcher";
 import { AdminTiles } from "./AdminTiles";
 import { LandingControl } from "./LandingControl";
+import { AccessOverview } from "./AccessOverview";
 import type { LauncherData } from "./types";
 import "./index.css";
 
@@ -36,6 +37,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/home" element={<Launcher />} />
           <Route path="/home/admin" element={<AdminGuard><AdminTiles /></AdminGuard>} />
           <Route path="/home/admin/landing" element={<AdminGuard><LandingControl /></AdminGuard>} />
+          <Route path="/home/admin/access" element={<AdminGuard><AccessOverview /></AdminGuard>} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </BrowserRouter>

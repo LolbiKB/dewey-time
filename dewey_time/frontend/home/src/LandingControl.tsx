@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useFrappeGetCall, useFrappePostCall } from "frappe-react-sdk";
 import { Card, Switch, Skeleton, EmptyState } from "@lolbikb/dewey-ui";
 import { Compass } from "lucide-react";
+import { AdminNav } from "./AdminNav";
 
 const GET = "dewey_time.attendance_engine.landing.get_landing_state";
 const SET = "dewey_time.attendance_engine.landing.set_role_landing";
@@ -43,12 +44,10 @@ export function LandingControl() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-7">
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Landing control</h1>
-          <p className="text-sm text-muted-foreground">Choose which roles land on /home after login.</p>
-        </div>
-        <a href="/home/admin" className="rounded-md border border-border px-3 py-1.5 text-sm">App tiles</a>
+      <AdminNav active="/home/admin/landing" />
+      <div className="mb-5">
+        <h1 className="text-lg font-semibold tracking-tight">Landing control</h1>
+        <p className="text-sm text-muted-foreground">Choose which roles land on /home after login.</p>
       </div>
 
       {error && <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div>}
