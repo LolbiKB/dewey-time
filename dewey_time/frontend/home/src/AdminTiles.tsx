@@ -50,27 +50,43 @@ export function AdminTiles() {
   const { updateDoc } = useFrappeUpdateDoc<LauncherTile>();
   const { deleteDoc } = useFrappeDeleteDoc();
   const [editing, setEditing] = useState<Partial<LauncherTile> | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const tiles = useMemo(() => data ?? [], [data]);
 
   async function toggle(t: LauncherTile) {
-    await updateDoc(DT, t.name, { enabled: t.enabled ? 0 : 1 });
-    mutate();
+    setError(null);
+    try {
+      await updateDoc(DT, t.name, { enabled: t.enabled ? 0 : 1 });
+      mutate();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   async function move(t: LauncherTile, dir: -1 | 1) {
+    setError(null);
     const idx = tiles.findIndex((x) => x.name === t.name);
     const swap = tiles[idx + dir];
     if (!swap) return;
-    await updateDoc(DT, t.name, { tile_order: swap.tile_order });
-    await updateDoc(DT, swap.name, { tile_order: t.tile_order });
-    mutate();
+    try {
+      await updateDoc(DT, t.name, { tile_order: swap.tile_order });
+      await updateDoc(DT, swap.name, { tile_order: t.tile_order });
+      mutate();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   async function remove(t: LauncherTile) {
     if (!confirm(`Delete tile "${t.title}"?`)) return;
-    await deleteDoc(DT, t.name);
-    mutate();
+    setError(null);
+    try {
+      await deleteDoc(DT, t.name);
+      mutate();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -92,7 +108,7 @@ export function AdminTiles() {
           <Button
             onClick={() =>
               setEditing({
-                gate: "roles",
+                gate: "hr_or_employee",
                 enabled: 1,
                 is_admin: 0,
                 tile_order: (tiles.at(-1)?.tile_order ?? 0) + 10,
@@ -103,6 +119,12 @@ export function AdminTiles() {
           </Button>
         </div>
       </div>
+
+      {error && (
+        <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       {isLoading ? (
         <div className="space-y-2">
@@ -196,18 +218,24 @@ function TileDialog({
   const { createDoc } = useFrappeCreateDoc<Partial<LauncherTile>>();
   const { updateDoc } = useFrappeUpdateDoc<LauncherTile>();
   const [form, setForm] = useState<Partial<LauncherTile>>(tile);
+  const [dialogError, setDialogError] = useState<string | null>(null);
   const set = (k: keyof LauncherTile, v: unknown) =>
     setForm((f) => ({ ...f, [k]: v }));
 
   async function save() {
-    if (isNew) {
-      await createDoc(DT, form);
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { app_name: _ignore, ...rest } = form;
-      await updateDoc(DT, tile.name!, rest);
+    setDialogError(null);
+    try {
+      if (isNew) {
+        await createDoc(DT, form);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { app_name: _ignore, ...rest } = form;
+        await updateDoc(DT, tile.name!, rest);
+      }
+      onSaved();
+    } catch (e) {
+      setDialogError(e instanceof Error ? e.message : String(e));
     }
-    onSaved();
   }
 
   return (
@@ -216,6 +244,11 @@ function TileDialog({
         <DialogHeader>
           <DialogTitle>{isNew ? "New tile" : "Edit tile"}</DialogTitle>
         </DialogHeader>
+        {dialogError && (
+          <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {dialogError}
+          </p>
+        )}
         <div className="space-y-3">
           {isNew && (
             <Field label="App name (id)">
