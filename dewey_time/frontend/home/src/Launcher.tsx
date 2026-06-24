@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useFrappeGetCall, useFrappeAuth } from "frappe-react-sdk";
 import {
-  Card,
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
@@ -41,30 +40,30 @@ export function Launcher() {
   const apps = launcher?.apps ?? [];
   return (
     <Shell user={launcher?.user} canManageTiles={launcher?.user?.can_manage_tiles ?? false}>
-      <p className="mb-3 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">Your apps</p>
-      {apps.length === 0 ? (
-        <p className="py-12 text-center text-sm text-muted-foreground">
-          No apps assigned yet — contact your administrator.
-        </p>
-      ) : (
-        <div className="grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(186px,1fr))" }}>
-          {apps.map((a) => (
-            <a key={a.name} href={a.route} className="block">
-              <Card className="relative flex flex-col items-center gap-3 p-6 text-center transition-colors hover:bg-muted/40">
-                {a.admin && (
-                  <span className="absolute right-3 top-3 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                    Admins
+      <div className="rounded-2xl bg-muted/40 p-5">
+        <p className="mb-4 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">Your apps</p>
+        {apps.length === 0 ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            No apps assigned yet — contact your administrator.
+          </p>
+        ) : (
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, 124px)" }}>
+            {apps.map((a) => (
+              <a key={a.name} href={a.route} className="group block">
+                <div className="relative flex aspect-square w-full flex-col items-center justify-center gap-2.5 rounded-[18px] bg-card shadow-sm transition duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5 hover:shadow-lg">
+                  {a.admin && (
+                    <span className="absolute right-2.5 top-2.5 size-1.5 rounded-full bg-brand-accent" aria-label="Admin app" />
+                  )}
+                  <span className="flex size-11 items-center justify-center rounded-xl bg-muted">
+                    <img src={a.logo} alt="" className="size-6" />
                   </span>
-                )}
-                <div className="flex size-[62px] items-center justify-center rounded-2xl border border-border bg-muted">
-                  <img src={a.logo} alt="" className="size-9" />
+                  <span className="px-1.5 text-center text-xs font-semibold leading-tight tracking-tight">{a.title}</span>
                 </div>
-                <p className="text-[15px] font-semibold tracking-tight">{a.title}</p>
-              </Card>
-            </a>
-          ))}
-        </div>
-      )}
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
     </Shell>
   );
 }
