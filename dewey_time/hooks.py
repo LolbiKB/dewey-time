@@ -20,7 +20,9 @@ website_context = {
 
 # Branded /login reskin. Loads on every web page, but every rule is scoped to
 # Frappe's `.for-login` wrapper, so only the login page is restyled.
-web_include_css = ["/assets/dewey_time/css/login_brand.css"]
+# `?v=` busts Frappe Cloud's 1-year immutable asset cache (login_brand.css has a
+# stable, un-hashed filename) — bump it whenever login_brand.css changes.
+web_include_css = ["/assets/dewey_time/css/login_brand.css?v=2"]
 
 # Frappe v16 Desktop / Sidebar integration
 add_to_apps_screen = [
