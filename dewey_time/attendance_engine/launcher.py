@@ -2,36 +2,27 @@
 
 Assembles the per-user app-tile list for the /home launcher SPA. Gating here is
 COSMETIC — each app's own route enforces real auth — so the policy is:
-broad apps fail-open, admin apps fail-closed (see _visible).
+broad tiles fail-open, admin tiles fail-closed (see _visible).
+
+Tiles are registered by apps via the `dewey_launcher_tiles` hook and reconciled
+into the Launcher Tile DocType (see launcher_sync.py). A tile's `gate` is either
+a built-in name (desk, roles) or a dotted path to a `() -> bool` callable owned
+by the registering app — so this resolver knows no product internals for gating.
 """
 
 import frappe
 from frappe import _
 
-from dewey_time.attendance_engine.dashboard_auth import ALLOWED_ROLES as ADMS_ROLES
-from dewey_time.attendance_engine.hr_calendar import (
-    _employee_linked_to_user,
-    _is_hr_staff,
-)
+# Sole remaining product dependency: the employee-photo avatar lookup. Cleaned up
+# in Phase 2 when the resolver relocates to dewey_portal.
+from dewey_time.attendance_engine.hr_calendar import _employee_linked_to_user
 
 _BROAD = "broad"
 _ADMIN = "admin"
 
 
-def _can_see_hr() -> bool:
-    return bool(_is_hr_staff() or _employee_linked_to_user())
-
-
-def _can_see_adms() -> bool:
-    return bool(set(frappe.get_roles()) & ADMS_ROLES)
-
-
 def _has_desk_access(roles=None) -> bool:
-    """True if any of the user's roles enables Desk access (Role.desk_access=1).
-
-    Role-field based (matches how this app reasons about desk-less roles). The
-    framework alternative is `frappe.get_user().has_desk_access()`.
-    """
+    """True if any of the user's roles enables Desk access (Role.desk_access=1)."""
     roles = roles if roles is not None else frappe.get_roles()
     if not roles:
         return False
@@ -44,28 +35,6 @@ def _has_desk_access(roles=None) -> bool:
     )
 
 
-# Built-in gate predicates, keyed by the Launcher Tile `gate` Select value.
-# These are looked up at call time (not closure-captured) so unit-test patches
-# on mod._can_see_hr / mod._has_desk_access are honoured.
-def _gate_hr():
-    return _can_see_hr()
-
-
-def _gate_adms():
-    return _can_see_adms()
-
-
-def _gate_desk():
-    return _has_desk_access()
-
-
-_GATE_FUNCS = {
-    "hr_or_employee": _gate_hr,
-    "adms": _gate_adms,
-    "desk": _gate_desk,
-}
-
-
 def _can_see_by_roles(tile_name: str) -> bool:
     wanted = {
         r["role"]
@@ -76,9 +45,25 @@ def _can_see_by_roles(tile_name: str) -> bool:
     return bool(wanted & set(frappe.get_roles()))
 
 
-def _visible(gate, policy: str) -> bool:
+def _predicate(gate: str, tile_name: str):
+    """Resolve a tile's `gate` to a zero-arg bool predicate, or None to skip.
+
+    - built-in `desk`/`roles` → the generic predicates here
+    - dotted path (contains '.') → frappe.get_attr(path), an app-owned callable
+    - anything else → None (unknown gate → tile skipped, curated safety)
+    """
+    if gate == "desk":
+        return _has_desk_access
+    if gate == "roles":
+        return lambda: _can_see_by_roles(tile_name)
+    if gate and "." in gate:
+        return lambda: bool(frappe.get_attr(gate)())
+    return None
+
+
+def _visible(predicate, policy: str) -> bool:
     try:
-        return bool(gate())
+        return bool(predicate())
     except Exception:
         frappe.log_error(title="launcher gate error")
         return policy == _BROAD  # fail-open for broad, fail-closed for admin
@@ -126,13 +111,9 @@ def get_launcher():
         )
         for t in tiles:
             policy = _ADMIN if t.get("is_admin") else _BROAD
-            gate = t.get("gate")
-            if gate == "roles":
-                predicate = (lambda name: lambda: _can_see_by_roles(name))(t["name"])
-            else:
-                predicate = _GATE_FUNCS.get(gate)
-                if predicate is None:
-                    continue  # unknown gate → skip (curated safety)
+            predicate = _predicate(t.get("gate"), t["name"])
+            if predicate is None:
+                continue  # unknown gate → skip (curated safety)
             if _visible(predicate, policy):
                 apps.append({
                     "name": t["app_name"],

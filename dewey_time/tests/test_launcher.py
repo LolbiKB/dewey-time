@@ -22,30 +22,25 @@ if "requests" not in sys.modules:
 
 from dewey_time.attendance_engine import launcher as mod  # noqa: E402
 
-# Make the mock's exception classes real so `raises`/policy checks behave.
 mod.frappe.AuthenticationError = type("AuthenticationError", (Exception,), {})
 mod.frappe.PermissionError = PermissionError
 
-
-# ---------------------------------------------------------------------------
-# _patched_throw: mirrors the helper from test_dashboard_auth so that
-# frappe.throw actually raises instead of being a no-op MagicMock.
-# ---------------------------------------------------------------------------
 
 def _throw(msg, exc=None, *args, **kwargs):
     raise (exc or Exception)(msg)
 
 
 def _patched_throw():
-    """Own our throw behaviour — the shared frappe mock's throw gets
-    reassigned by other test modules, so never rely on it."""
     return patch.object(mod.frappe, "throw", side_effect=_throw)
 
 
+_GATE_ATT = "dewey_time.attendance_engine.launcher_gates.can_see_attendance"
+_GATE_ADMS = "dewey_time.attendance_engine.launcher_gates.can_see_adms"
+
 # The three curated tiles, as they appear in the Launcher Tile DocType.
 _TILES = [
-    {"name": "dewey_time", "app_name": "dewey_time", "title": "HR Attendance", "route": "/hr-attendance", "icon": "/x/d.svg", "is_admin": 0, "gate": "hr_or_employee"},
-    {"name": "adms", "app_name": "adms", "title": "ADMS Bridge", "route": "/adms", "icon": "/x/a.svg", "is_admin": 1, "gate": "adms"},
+    {"name": "dewey_time", "app_name": "dewey_time", "title": "Dewey Time", "route": "/hr-attendance", "icon": "/x/d.svg", "is_admin": 0, "gate": _GATE_ATT},
+    {"name": "adms", "app_name": "adms", "title": "ADMS", "route": "/adms", "icon": "/x/a.svg", "is_admin": 1, "gate": _GATE_ADMS},
     {"name": "desk", "app_name": "desk", "title": "Frappe Desk", "route": "/desk", "icon": "/x/k.svg", "is_admin": 1, "gate": "desk"},
 ]
 
@@ -62,15 +57,27 @@ def _get_all(tiles=None, tile_roles=None):
     return _impl
 
 
+def _attr_for(*, hr, employee, adms):
+    """Stub frappe.get_attr: map a dotted gate path to a persona-aware predicate."""
+    def _impl(path):
+        if path.endswith("can_see_attendance"):
+            return lambda: bool(hr or employee)
+        if path.endswith("can_see_adms"):
+            return lambda: bool(adms)
+        raise ImportError(path)
+    return _impl
+
+
 def _run(*, user="u@x.com", roles=None, hr=False, employee=None, desk=False, tiles=None, tile_roles=None):
     """Invoke get_launcher() with a fully mocked persona."""
     roles = roles or []
+    adms = bool(set(roles) & {"ADMS Admin", "ADMS Super Admin"})
     with patch.object(mod.frappe, "session", SimpleNamespace(user=user)), \
          patch.object(mod.frappe, "get_roles", return_value=roles), \
          patch.object(mod.frappe, "get_all", side_effect=_get_all(tiles, tile_roles)), \
-         patch.object(mod, "_is_hr_staff", return_value=hr), \
-         patch.object(mod, "_employee_linked_to_user", return_value=employee), \
+         patch.object(mod.frappe, "get_attr", side_effect=_attr_for(hr=hr, employee=employee, adms=adms)), \
          patch.object(mod, "_has_desk_access", return_value=desk), \
+         patch.object(mod, "_employee_linked_to_user", return_value=employee), \
          patch.object(mod.frappe.utils, "get_fullname", return_value="Maria Rossi"):
         return mod.get_launcher()
 
@@ -85,17 +92,16 @@ class GetLauncherTests(unittest.TestCase):
             with self.assertRaises(mod.frappe.AuthenticationError):
                 mod.get_launcher()
 
-    def test_linked_employee_sees_only_hr(self):
+    def test_linked_employee_sees_only_attendance(self):
         self.assertEqual(_names(_run(employee="EMP-001")), ["dewey_time"])
 
     def test_adms_admin_sees_only_adms(self):
         self.assertEqual(_names(_run(roles=["ADMS Admin"])), ["adms"])
 
-    def test_hr_user_sees_hr_and_desk(self):
+    def test_hr_user_sees_attendance_and_desk(self):
         self.assertEqual(_names(_run(hr=True, desk=True)), ["dewey_time", "desk"])
 
     def test_disabled_tiles_excluded_via_filter(self):
-        # get_launcher must pass filters={"enabled": 1}; assert the call.
         captured = {}
         def _impl(doctype, *a, **kw):
             if doctype == "Launcher Tile":
@@ -106,9 +112,9 @@ class GetLauncherTests(unittest.TestCase):
         with _patched_throw(), patch.object(mod.frappe, "session", SimpleNamespace(user="u@x.com")), \
              patch.object(mod.frappe, "get_roles", return_value=[]), \
              patch.object(mod.frappe, "get_all", side_effect=_impl), \
-             patch.object(mod, "_is_hr_staff", return_value=False), \
-             patch.object(mod, "_employee_linked_to_user", return_value=None), \
+             patch.object(mod.frappe, "get_attr", side_effect=_attr_for(hr=False, employee=None, adms=False)), \
              patch.object(mod, "_has_desk_access", return_value=False), \
+             patch.object(mod, "_employee_linked_to_user", return_value=None), \
              patch.object(mod.frappe.utils, "get_fullname", return_value="X"):
             mod.get_launcher()
         self.assertEqual(captured["filters"], {"enabled": 1})
@@ -150,49 +156,52 @@ class GetLauncherTests(unittest.TestCase):
         self.assertIn("can_manage_tiles", out)
 
     def test_broad_gate_error_fails_open(self):
-        # Must call mod.get_launcher() directly — _run() patches override side_effect.
+        def _attr(path):
+            if path.endswith("can_see_attendance"):
+                def _boom():
+                    raise RuntimeError("boom")
+                return _boom
+            return lambda: False
         with patch.object(mod.frappe, "session", SimpleNamespace(user="u@x.com")), \
              patch.object(mod.frappe, "get_roles", return_value=[]), \
              patch.object(mod.frappe, "get_all", side_effect=_get_all()), \
-             patch.object(mod, "_is_hr_staff", side_effect=RuntimeError("boom")), \
-             patch.object(mod, "_employee_linked_to_user", side_effect=RuntimeError("boom")), \
+             patch.object(mod.frappe, "get_attr", side_effect=_attr), \
              patch.object(mod, "_has_desk_access", return_value=False), \
+             patch.object(mod, "_employee_linked_to_user", return_value=None), \
              patch.object(mod.frappe.utils, "get_fullname", return_value="Maria Rossi"):
             self.assertIn("dewey_time", _names(mod.get_launcher()))
 
     def test_admin_gate_error_fails_closed(self):
-        # Must call mod.get_launcher() directly — _run() patches override side_effect.
+        def _attr(path):
+            if path.endswith("can_see_attendance"):
+                return lambda: True
+            return lambda: False
         with patch.object(mod.frappe, "session", SimpleNamespace(user="u@x.com")), \
              patch.object(mod.frappe, "get_roles", return_value=[]), \
              patch.object(mod.frappe, "get_all", side_effect=_get_all()), \
-             patch.object(mod, "_is_hr_staff", return_value=True), \
-             patch.object(mod, "_employee_linked_to_user", return_value=None), \
+             patch.object(mod.frappe, "get_attr", side_effect=_attr), \
              patch.object(mod, "_has_desk_access", side_effect=RuntimeError("boom")), \
+             patch.object(mod, "_employee_linked_to_user", return_value=None), \
              patch.object(mod.frappe.utils, "get_fullname", return_value="Maria Rossi"):
             self.assertNotIn("desk", _names(mod.get_launcher()))
 
     def test_user_image_employee_photo_takes_precedence(self):
-        """Employee photo wins over User image; User image fallback works; None when both absent."""
-        # Employee has a photo → use it.
         with patch.object(mod, "_employee_linked_to_user", return_value="EMP-001"), \
              patch.object(mod.frappe.db, "get_value", side_effect=lambda dt, name, field: (
                  "/files/emp.jpg" if dt == "Employee" else "/files/user.jpg"
              )):
             self.assertEqual(mod._user_image(), "/files/emp.jpg")
 
-        # Employee exists but no photo → fall back to User image.
         with patch.object(mod, "_employee_linked_to_user", return_value="EMP-001"), \
              patch.object(mod.frappe.db, "get_value", side_effect=lambda dt, name, field: (
                  None if dt == "Employee" else "/files/user.jpg"
              )):
             self.assertEqual(mod._user_image(), "/files/user.jpg")
 
-        # No employee at all → User image.
         with patch.object(mod, "_employee_linked_to_user", return_value=None), \
              patch.object(mod.frappe.db, "get_value", return_value="/files/user.jpg"):
             self.assertEqual(mod._user_image(), "/files/user.jpg")
 
-        # No employee, no User image → None.
         with patch.object(mod, "_employee_linked_to_user", return_value=None), \
              patch.object(mod.frappe.db, "get_value", return_value=None):
             self.assertIsNone(mod._user_image())
