@@ -64,6 +64,17 @@ class HookShapeTests(unittest.TestCase):
             self.assertIsInstance(g["roles"], (list, tuple))
             self.assertTrue(g["roles"])
 
+    def test_access_roles_match_source_constants(self):
+        # The hook's role names are INLINED in hooks.py (importing the source
+        # constants there would poison the module cache for mock tests). Import
+        # them here — under the mock installed at module top — to guard drift.
+        from dewey_time.attendance_engine.dashboard_auth import ALLOWED_ROLES
+        from dewey_time.attendance_engine.hr_calendar import HR_STAFF_ROLES
+
+        by_label = {g["label"]: set(g["roles"]) for g in hooks.dewey_portal_access_roles}
+        self.assertEqual(by_label["HR"], set(HR_STAFF_ROLES))
+        self.assertEqual(by_label["ADMS"], set(ALLOWED_ROLES))
+
 
 if __name__ == "__main__":
     unittest.main()
