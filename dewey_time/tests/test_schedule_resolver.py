@@ -384,6 +384,8 @@ class TestWeeklyScheduleEligibility(unittest.TestCase):
 
         self.assertTrue(is_weekly_schedule_eligible("Full-time"))
         self.assertTrue(is_weekly_schedule_eligible("part-time fixed"))
+        self.assertTrue(is_weekly_schedule_eligible("Intern"))
+        self.assertFalse(is_weekly_schedule_eligible("Probation"))
         self.assertFalse(is_weekly_schedule_eligible("Part-time Flexible"))
         self.assertFalse(is_weekly_schedule_eligible(None))
         self.assertFalse(is_weekly_schedule_eligible(""))

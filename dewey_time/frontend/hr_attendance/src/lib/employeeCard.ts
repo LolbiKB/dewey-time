@@ -49,7 +49,6 @@ export function formatEmploymentType(value: string | null | undefined): string {
 export const WEEKLY_SCHEDULE_EMPLOYMENT_TYPES = [
   "Full-time",
   "Part-time Fixed",
-  "Probation",
   "Intern",
 ] as const;
 
@@ -82,10 +81,10 @@ export function weeklyScheduleIneligibleMessage(
   const typeLabel = scheduleEmployeeSubtitle(employee);
 
   if (typeLabel === "Employment type not set") {
-    return `${name} has no employment type set. Weekly Schedule supports Full-time, Part-time Fixed, Probation, and Intern only.`;
+    return `${name} has no employment type set. Weekly Schedule supports Full-time, Part-time Fixed, and Intern only.`;
   }
 
-  return `${name} (${typeLabel}) is not eligible for Weekly Schedule. Choose Full-time, Part-time Fixed, Probation, or Intern.`;
+  return `${name} (${typeLabel}) is not eligible for Weekly Schedule. Choose Full-time, Part-time Fixed, or Intern.`;
 }
 
 export function roleLine(employee: CalendarEmployee | null | undefined): string {

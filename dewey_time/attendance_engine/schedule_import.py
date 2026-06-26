@@ -31,6 +31,10 @@ from typing import Literal
 
 import frappe
 
+from dewey_time.attendance_engine.employment_type import (
+    derive_employment_type,
+    weekly_scheduled_minutes,
+)
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 from dewey_time.attendance_engine.schedule_resolver import (
     WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
@@ -88,6 +92,7 @@ ISSUE_CODES = {
     "NAME_AMBIGUOUS": "error",
     "INVALID_DAY_SPEC": "error",
     "INELIGIBLE_EMPLOYMENT_TYPE": "error",
+    "EMPLOYMENT_TYPE_DERIVED": "warning",
     "ACTIVE_SSA_EXISTS": "error",
     "INVALID_WEEK_PATTERN": "error",
 }
@@ -122,8 +127,9 @@ AI_SUGGESTIONS: dict[str, str] = {
         'Per-day cells must be "HH:MM-HH:MM", "HH:MM-HH:MM+HH:MM-HH:MM", or "off".'
     ),
     "INELIGIBLE_EMPLOYMENT_TYPE": (
-        "Employment type must be Full-time, Part-time Fixed, Probation, or Intern — "
-        "same as Weekly Schedule wizard."
+        "Employment type must be "
+        + ", ".join(WEEKLY_SCHEDULE_EMPLOYMENT_TYPES[:-1])
+        + f", or {WEEKLY_SCHEDULE_EMPLOYMENT_TYPES[-1]} — same as Weekly Schedule wizard."
     ),
     "ACTIVE_SSA_EXISTS": (
         "Employee already has an active Shift Schedule Assignment. "
@@ -169,6 +175,7 @@ class ParsedScheduleRow:
     schedule_shape: ScheduleShape = "invalid"
     issues: list[ImportIssue] = field(default_factory=list)
     importable: bool = False
+    derived_employment_type: str | None = None
 
     @property
     def warnings(self) -> list[str]:
@@ -193,6 +200,7 @@ class ParsedScheduleRow:
             "schedule_shape": self.schedule_shape,
             "issues": [i.to_dict() for i in self.issues],
             "importable": self.importable,
+            "derived_employment_type": self.derived_employment_type,
             "warnings": self.warnings,
         }
 
@@ -955,6 +963,28 @@ def _parse_row(raw: list, row_number: int) -> ParsedScheduleRow:
         ))
 
     has_error = any(i.severity == "error" for i in issues)
+
+    # Employment-type derivation: when the row is otherwise valid and the ONLY
+    # blocker is our employment-type restriction, derive the type from the
+    # scheduled weekly hours (>= 40h -> Full-time, else Part-time Fixed) and
+    # downgrade the error to a warning instead of blocking the import. The
+    # derived type is written to the Employee record at apply time.
+    error_codes = {i.code for i in issues if i.severity == "error"}
+    if row.matched and week_pattern and error_codes == {"INELIGIBLE_EMPLOYMENT_TYPE"}:
+        minutes = weekly_scheduled_minutes(week_pattern)
+        derived = derive_employment_type(minutes)
+        row.derived_employment_type = derived
+        for issue in issues:
+            if issue.code == "INELIGIBLE_EMPLOYMENT_TYPE":
+                issue.code = "EMPLOYMENT_TYPE_DERIVED"
+                issue.severity = "warning"
+                issue.field = "employment_type"
+                issue.message = (
+                    f"Will set employment type to {derived} "
+                    f"(scheduled {minutes // 60}h {minutes % 60:02d}m/week)."
+                )
+        has_error = any(i.severity == "error" for i in issues)
+
     row.importable = bool(row.matched and week_pattern and not has_error)
     return row
 

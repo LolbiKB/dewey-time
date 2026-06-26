@@ -147,6 +147,7 @@ const ISSUE_CODE_LABELS: Record<string, string> = {
   CONTINUOUS_SHIFT: "Continuous",
   AM_ONLY: "AM only",
   INELIGIBLE_EMPLOYMENT_TYPE: "Employment type",
+  EMPLOYMENT_TYPE_DERIVED: "Type derived",
   ACTIVE_SSA_EXISTS: "Active SSA",
   INVALID_WEEK_PATTERN: "Pattern invalid",
   PER_DAY: "Per-day",
@@ -609,6 +610,7 @@ export function SpreadsheetImportDialog(props: {
           create_shifts_after: effectiveFrom,
           generate_through: "",
           confirm_create: 1,
+          derive_employment_type: 1,
         });
         setApplyStatuses((prev) => ({ ...prev, [idx]: { type: "ok" } }));
         anyOk = true;

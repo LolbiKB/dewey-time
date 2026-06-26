@@ -143,15 +143,55 @@ class TestScheduleImportValidation(unittest.TestCase):
         self.assertIn("suggestion", fb)
         self.assertIn("code", fb)
 
-    def test_ineligible_employment_type_blocks_import(self):
+    def test_ineligible_employment_type_derives_full_time(self):
+        # 8.5h/day x 6 days = 51h/week (>= 40) -> Full-time. Sole blocker -> derive, not block.
         result = _parse(
             HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:30,12:00,13:00,17:00,Sunday\n",
             match_employee="EMP-1",
             employment_type="Part-time Flexible",
         )
         row = result["rows"][0]
+        self.assertTrue(row["importable"])
+        self.assertEqual(row["derived_employment_type"], "Full-time")
+        codes = {i["code"]: i["severity"] for i in row["issues"]}
+        self.assertNotIn("INELIGIBLE_EMPLOYMENT_TYPE", codes)
+        self.assertEqual(codes.get("EMPLOYMENT_TYPE_DERIVED"), "warning")
+
+    def test_blank_employment_type_derives_part_time(self):
+        # 4h/day x 5 days = 20h/week (< 40) -> Part-time Fixed.
+        result = _parse(
+            HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:00,11:00,off,off,Saturday|Sunday\n",
+            match_employee="EMP-1",
+            employment_type="",
+        )
+        row = result["rows"][0]
+        self.assertTrue(row["importable"])
+        self.assertEqual(row["derived_employment_type"], "Part-time Fixed")
+        derived = next(i for i in row["issues"] if i["code"] == "EMPLOYMENT_TYPE_DERIVED")
+        # Exact h/m — never a rounded hour that could sit on the wrong side of 40h.
+        self.assertIn("20h 00m", derived["message"])
+
+    def test_ineligible_suggestion_omits_probation(self):
+        # Probation is no longer an eligible target type; the advisory text must
+        # not tell HR / the AI normaliser to set it.
+        suggestion = mod.AI_SUGGESTIONS["INELIGIBLE_EMPLOYMENT_TYPE"]
+        self.assertNotIn("Probation", suggestion)
+        self.assertIn("Intern", suggestion)
+
+    def test_ineligible_with_other_error_still_blocks(self):
+        # Ineligible type AND an active SSA -> not a sole blocker -> no derivation.
+        result = _parse(
+            HEADER + "DI-0159,boeurnraksmey@diu.edu.kh,07:30,12:00,13:00,17:00,Sunday\n",
+            match_employee="EMP-1",
+            employment_type="Part-time Flexible",
+            has_ssa=True,
+        )
+        row = result["rows"][0]
         self.assertFalse(row["importable"])
-        self.assertTrue(any(i["code"] == "INELIGIBLE_EMPLOYMENT_TYPE" for i in row["issues"]))
+        self.assertIsNone(row["derived_employment_type"])
+        codes = [i["code"] for i in row["issues"]]
+        self.assertIn("INELIGIBLE_EMPLOYMENT_TYPE", codes)
+        self.assertIn("ACTIVE_SSA_EXISTS", codes)
 
     def test_active_ssa_blocks_import(self):
         result = _parse(

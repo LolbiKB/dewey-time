@@ -13,6 +13,7 @@ def _default_effective_from() -> str:
         return str(july_first)
     return str(add_days(today, 1))
 
+from dewey_time.attendance_engine.employment_type import resolve_apply_employment_type
 from dewey_time.attendance_engine.hr_calendar import (
     _require_hr_role,
     shift_assignment_bounds_by_employee,
@@ -22,7 +23,6 @@ from dewey_time.attendance_engine.schedule_resolver import (
     create_shift_schedule,
     create_shift_type,
     employee_has_enabled_ssas,
-    is_weekly_schedule_eligible,
     validate_week_pattern,
     DEFAULT_SHIFT_GENERATION_DAYS,
     generate_shifts_for_ssa,
@@ -314,6 +314,7 @@ def apply_weekly_schedule(
     create_shifts_after=None,
     generate_through=None,
     confirm_create=None,
+    derive_employment_type=None,
 ):
     _require_hr_role()
     if not employee:
@@ -325,20 +326,6 @@ def apply_weekly_schedule(
     employee_info = _employee_header(employee)
 
     employment_type = employee_info.get("employment_type")
-    if frappe.db.has_column("Employee", "employment_type") and not is_weekly_schedule_eligible(
-        employment_type
-    ):
-        if not (employment_type or "").strip():
-            frappe.throw(
-                "This employee has no employment type set. "
-                "Weekly Schedule supports Full-time, Part-time Fixed, Probation, and Intern only.",
-                exc=frappe.ValidationError,
-            )
-        frappe.throw(
-            f"This employee ({employment_type}) is not eligible for Weekly Schedule. "
-            "Choose Full-time, Part-time Fixed, Probation, or Intern.",
-            exc=frappe.ValidationError,
-        )
 
     pattern_issues = validate_week_pattern(pattern)
     if pattern_issues:
@@ -347,6 +334,27 @@ def apply_weekly_schedule(
             f"{first.get('weekday')}: {first.get('message')}",
             exc=frappe.ValidationError,
         )
+
+    # Employment-type gate. The manual wizard blocks ineligible employees; the
+    # schedule importer opts into `derive_employment_type`, which derives the
+    # type from the (already-validated) pattern and writes it just before the
+    # schedule is created (further down) instead of blocking.
+    derive_flag = derive_employment_type
+    if derive_flag is None:
+        derive_flag = frappe.form_dict.get("derive_employment_type")
+    if isinstance(derive_flag, str):
+        derive_flag = derive_flag.strip().lower() in ("1", "true", "yes")
+    derive_flag = bool(derive_flag)
+
+    employment_to_set = None
+    if frappe.db.has_column("Employee", "employment_type"):
+        action, derived_value = resolve_apply_employment_type(
+            employment_type, pattern, derive=derive_flag
+        )
+        if action == "block":
+            frappe.throw(derived_value, exc=frappe.ValidationError)
+        elif action == "set":
+            employment_to_set = derived_value
 
     if employee_has_enabled_ssas(employee):
         frappe.throw(
@@ -375,6 +383,12 @@ def apply_weekly_schedule(
     plan = build_resolve_plan(employee=employee, week_pattern=pattern)
     if plan.get("needs_create") and not confirm:
         return {"needs_confirm": True, "plan": plan}
+
+    # Persist the derived employment type only now that the row is committed to
+    # apply — never mutate the Employee record for a schedule that won't be created.
+    if employment_to_set:
+        frappe.db.set_value("Employee", employee, "employment_type", employment_to_set)
+        employee_info["employment_type"] = employment_to_set
 
     created_shift_types: list[str] = []
     created_shift_schedules: list[str] = []

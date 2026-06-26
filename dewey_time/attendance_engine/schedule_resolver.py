@@ -29,21 +29,13 @@ WEEKDAY_SHORT: dict[str, str] = {
 
 WEEKDAY_TO_INDEX = {day: idx for idx, day in enumerate(WEEKDAYS)}
 
-# Mirror frontend WEEKLY_SCHEDULE_EMPLOYMENT_TYPES (employeeCard.ts).
-WEEKLY_SCHEDULE_EMPLOYMENT_TYPES: tuple[str, ...] = (
-    "Full-time",
-    "Part-time Fixed",
-    "Probation",
-    "Intern",
+# Employment-type policy lives in the frappe-free employment_type module.
+# Re-exported here so existing importers keep their import paths.
+# Mirrors frontend WEEKLY_SCHEDULE_EMPLOYMENT_TYPES (employeeCard.ts).
+from dewey_time.attendance_engine.employment_type import (  # noqa: E402,F401
+    WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
+    is_weekly_schedule_eligible,
 )
-
-
-def is_weekly_schedule_eligible(employment_type: str | None) -> bool:
-    normalized = (employment_type or "").strip().lower()
-    if not normalized:
-        return False
-    allowed = {value.lower() for value in WEEKLY_SCHEDULE_EMPLOYMENT_TYPES}
-    return normalized in allowed
 
 
 def normalize_time(value) -> str | None:

@@ -146,7 +146,8 @@ import if the employee matches Frappe.
 | `END_BEFORE_START` | error | End time ≤ start | Check am_to / pm_from / pm_to order |
 | `NO_WORKING_DAYS` | error | All weekdays in days_off | Employee would never work |
 | `GARBAGE_ROW` | error | Row looks like failed normalisation | Drop or re-normalise source row |
-| `INELIGIBLE_EMPLOYMENT_TYPE` | error | Not Full-time / Part-time Fixed / Probation / Intern | Same gate as Weekly Schedule wizard — fix in Employee master or exclude row |
+| `INELIGIBLE_EMPLOYMENT_TYPE` | error | Not Full-time / Part-time Fixed / Intern, and not the sole blocker | Only surfaces when the ineligible type is *not* the only problem; fix the other error(s) in the row and the type will be derived automatically, or fix in Employee master / exclude row |
+| `EMPLOYMENT_TYPE_DERIVED` | warning | Ineligible/blank type was the sole blocker on an otherwise-valid row | Import will set the employee's type from scheduled hours (≥40h/week → Full-time, else Part-time Fixed). No action needed unless wrong |
 | `ACTIVE_SSA_EXISTS` | error | Employee already has active SSA | Clear schedule (dev) or disable SSAs in Desk first |
 | `INVALID_WEEK_PATTERN` | error | Shift/lunch times invalid on a weekday | Fix times to match Weekly Schedule validation |
 | `MIDNIGHT_AS_NOON` | warning | `00:00` in am_to or pm_from | Use `12:00` for noon lunch end |
