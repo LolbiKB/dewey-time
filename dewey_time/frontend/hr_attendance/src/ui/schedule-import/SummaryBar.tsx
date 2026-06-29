@@ -16,9 +16,15 @@ export function SummaryBar(props: {
 }) {
   const { summary, filter, onFilterChange, visibleCount } = props;
 
+  const derivedCount = summary.by_code?.["EMPLOYMENT_TYPE_DERIVED"] ?? 0;
+
   const chips: { key: RowFilter; label: string; count: number; tone?: string }[] = [
     { key: "all", label: "All", count: summary.total_rows },
     { key: "importable", label: "Ready", count: summary.importable },
+    // Only surfaced when the import actually derived any types, to avoid clutter.
+    ...(derivedCount > 0
+      ? [{ key: "derived" as const, label: "Derived", count: derivedCount, tone: "text-brand-accent" }]
+      : []),
     { key: "errors", label: "Errors", count: summary.errors, tone: "text-destructive" },
     { key: "warnings", label: "Warnings", count: summary.warnings, tone: "text-brand-accent" },
     { key: "not_found", label: "Not found", count: summary.unmatched, tone: "text-destructive" },

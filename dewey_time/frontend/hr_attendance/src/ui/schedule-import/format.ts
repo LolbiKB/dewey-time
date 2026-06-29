@@ -34,6 +34,8 @@ export function rowMatchesFilter(row: ParsedRow, filter: RowFilter): boolean {
   switch (filter) {
     case "importable":
       return row.importable;
+    case "derived":
+      return Boolean(row.derived_employment_type);
     case "errors":
       return row.issues.some((i) => i.severity === "error");
     case "warnings":

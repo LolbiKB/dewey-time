@@ -109,7 +109,11 @@ export function PreviewRow(props: {
           {issues.length > 0 ? (
             <div className="flex flex-wrap gap-1">
               {issues.map((i) => (
-                <IssueBadge key={`${i.code}-${i.field ?? ""}`} issue={i} />
+                <IssueBadge
+                  key={`${i.code}-${i.field ?? ""}`}
+                  issue={i}
+                  derivedType={row.derived_employment_type}
+                />
               ))}
             </div>
           ) : null}
