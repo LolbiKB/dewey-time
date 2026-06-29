@@ -3,8 +3,18 @@ import { cn } from "@/lib/utils";
 import type { ImportIssue } from "@/types/scheduleImport";
 import { ISSUE_CODE_LABELS } from "@/ui/schedule-import/constants";
 
-export function IssueBadge({ issue }: { issue: ImportIssue }) {
-  const label = ISSUE_CODE_LABELS[issue.code] ?? issue.code;
+export function IssueBadge({
+  issue,
+  derivedType,
+}: {
+  issue: ImportIssue;
+  /** When the type was derived, show the actual value (e.g. "→ Full-time"). */
+  derivedType?: string | null;
+}) {
+  const label =
+    issue.code === "EMPLOYMENT_TYPE_DERIVED" && derivedType
+      ? `→ ${derivedType}`
+      : (ISSUE_CODE_LABELS[issue.code] ?? issue.code);
   return (
     <Badge
       variant="outline"

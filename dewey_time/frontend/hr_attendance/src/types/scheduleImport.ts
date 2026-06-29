@@ -20,6 +20,8 @@ export type ParsedRow = {
   employee: string | null;
   employee_name: string | null;
   employment_type?: string | null;
+  /** Set by the backend when an ineligible/blank type is derived from the schedule. */
+  derived_employment_type?: string | null;
   matched: boolean;
   am_from: string | null;
   am_to: string | null;
@@ -68,4 +70,10 @@ export type RowApplyStatus =
   | { type: "ok"; message?: string }
   | { type: "error"; message: string };
 
-export type RowFilter = "all" | "importable" | "errors" | "warnings" | "not_found";
+export type RowFilter =
+  | "all"
+  | "importable"
+  | "derived"
+  | "errors"
+  | "warnings"
+  | "not_found";
