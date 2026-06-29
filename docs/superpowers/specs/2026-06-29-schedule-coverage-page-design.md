@@ -99,8 +99,9 @@ the assembled payload in `frappe.cache()` (~120 s TTL). Flagged as the one real 
 - **Python unittest** (`tests/test_coverage_api.py`): mock `frappe`, patch the employee-rows
   helper + `week_pattern_from_ssas`; assert `get_schedule_coverage` splits assigned vs
   unassigned correctly, attaches `weekly_minutes`, and returns stable `counts`.
-- **Frontend node:test** (`src/lib/scheduleCoverage.test.ts`): rounding edges (e.g. 2415→2400,
-  2430→2430, 2445→2460), bucket grouping/sorting, the 0-minute bucket, empty input.
+- **Frontend node:test** (`src/lib/scheduleCoverage.test.ts`): rounding edges (2410→2400,
+  2420→2430, exact-half 2415→2430 round-up), bucket grouping/sorting desc, the trailing
+  0-minute "No resolved hours" bucket, empty input.
 - All gated by the existing CI jobs (`tests`, `unit-web`).
 
 ## Risks / edge cases
