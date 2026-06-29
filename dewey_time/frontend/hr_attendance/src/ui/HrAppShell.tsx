@@ -1,5 +1,11 @@
 import { useEffect, type ComponentProps, type ComponentType } from "react";
-import { CalendarDaysIcon, CalendarRangeIcon, FlagIcon, LayoutGridIcon } from "lucide-react";
+import {
+  CalendarDaysIcon,
+  CalendarRangeIcon,
+  FlagIcon,
+  LayoutGridIcon,
+  UserCheckIcon,
+} from "lucide-react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { AppShell } from "@lolbikb/dewey-ui";
 
@@ -15,14 +21,22 @@ import { cn } from "@/lib/utils";
 const DESK_URL = "/desk";
 const FLAGS_INBOX_URL = "/app/attendance-flag";
 
-type AppTab = "attendance" | "schedule";
+type AppTab = "attendance" | "schedule" | "coverage";
 
 function activeTab(pathname: string): AppTab {
-  return pathname.startsWith("/hr-schedule") ? "schedule" : "attendance";
+  // Check the more specific /hr-schedule/coverage before the /hr-schedule prefix.
+  if (pathname.startsWith("/hr-schedule/coverage")) return "coverage";
+  if (pathname.startsWith("/hr-schedule")) return "schedule";
+  return "attendance";
 }
 
 function tabHref(tab: AppTab, employee: string | null): string {
-  const base = tab === "schedule" ? "/hr-schedule" : "/hr-attendance";
+  const base =
+    tab === "coverage"
+      ? "/hr-schedule/coverage"
+      : tab === "schedule"
+        ? "/hr-schedule"
+        : "/hr-attendance";
   return employee ? `${base}?employee=${encodeURIComponent(employee)}` : base;
 }
 
@@ -65,6 +79,12 @@ export function HrAppShell() {
             href: tabHref("schedule", employee),
             active: tab === "schedule",
             icon: CalendarRangeIcon,
+          },
+          {
+            label: "Coverage",
+            href: tabHref("coverage", employee),
+            active: tab === "coverage",
+            icon: UserCheckIcon,
           },
         ]
       : []),

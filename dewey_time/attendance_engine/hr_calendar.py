@@ -327,7 +327,7 @@ def list_calendar_employees(include_without_shifts=True):
     }
 
 
-def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all: bool):
+def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all: bool, limit: int = 500):
     fields = ["name", "employee_name", "designation", "department", "company", "image"]
     if frappe.db.has_column("Employee", "employment_type"):
         fields.append("employment_type")
@@ -342,7 +342,7 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
             filters=filters,
             fields=fields,
             order_by="employee_name asc",
-            limit_page_length=500,
+            limit_page_length=limit,
         )
         or []
     )

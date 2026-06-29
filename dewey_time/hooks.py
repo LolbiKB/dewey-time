@@ -118,4 +118,11 @@ doc_events = {
         "after_insert": "dewey_time.attendance_engine.intraday.on_employee_checkin_after_insert",
         "on_update": "dewey_time.attendance_engine.intraday.on_employee_checkin_on_update",
     },
+    # Keep the Schedule Coverage page fresh: clear its cached payload whenever a
+    # shift schedule assignment is created, changed, or removed.
+    "Shift Schedule Assignment": {
+        "after_insert": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+        "on_update": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+        "on_trash": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+    },
 }

@@ -79,7 +79,39 @@ const EMPLOYEE = {
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// Schedule-coverage payload: a few employees with no shift assignment, plus assigned
+// employees spread across weekly-hours buckets (incl. one unresolvable 0-minute row).
+const COVERAGE = {
+  unassigned: [
+    { id: "EMP-104", employee_name: "Marco Diaz", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null },
+    { id: "EMP-118", employee_name: "Priya Nair", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null },
+    { id: "EMP-131", employee_name: "Tom O'Brien", department: "Retail", employment_type: "", title: "Sales Associate", image: null },
+  ],
+  assigned: [
+    { id: "EMP-001", employee_name: "Jane Doe", department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
+    { id: "EMP-002", employee_name: "Aaron Wells", department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
+    { id: "EMP-003", employee_name: "Bianca Cruz", department: "Warehouse", employment_type: "Full-time", title: "Lead", image: null, weekly_minutes: 2400 },
+    { id: "EMP-005", employee_name: "Derek Hale", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 2400 },
+    { id: "EMP-007", employee_name: "Elena Park", department: "Retail", employment_type: "Full-time", title: "Supervisor", image: null, weekly_minutes: 2250 },
+    { id: "EMP-009", employee_name: "Farid Khan", department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2250 },
+    { id: "EMP-011", employee_name: "Grace Lin", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null, weekly_minutes: 1200 },
+    { id: "EMP-013", employee_name: "Hugo Mendes", department: "Warehouse", employment_type: "Part-time Fixed", title: "Picker", image: null, weekly_minutes: 1200 },
+    { id: "EMP-015", employee_name: "Ivy Chen", department: "Retail", employment_type: "Intern", title: "Trainee", image: null, weekly_minutes: 1200 },
+    { id: "EMP-017", employee_name: "Jonas Berg", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 0 },
+  ],
+  counts: { active: 13, unassigned: 3, assigned: 10, truncated: false },
+};
+
 export async function stubFrappe(page: Page): Promise<void> {
+  // Skip the one-shot brand intro overlay so it never covers content under test.
+  await page.addInitScript(() => {
+    try {
+      window.sessionStorage.setItem("dewey-time-intro-played", "1");
+    } catch {
+      /* private mode — intro will just play */
+    }
+  });
+
   await page.context().addCookies([
     { name: "user_id", value: "hr@example.com", domain: "localhost", path: "/" },
     { name: "full_name", value: "HR User", domain: "localhost", path: "/" },
@@ -110,6 +142,8 @@ export async function stubFrappe(page: Page): Promise<void> {
         schedule_max_date: "2026-12-31",
         has_shift_assignment: true,
       };
+    } else if (p.includes("get_schedule_coverage")) {
+      message = COVERAGE;
     } else if (p.includes("list_weekly_schedule_templates")) {
       message = { templates: [] };
     } else if (p.includes("get_employee_schedule_context")) {
