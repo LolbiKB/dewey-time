@@ -201,5 +201,49 @@ class TestBuildReconcilePreview(unittest.TestCase):
         self.assertEqual(out["unchanged_identities"], [same])
 
 
+class TestReconcileOrphanSsas(unittest.TestCase):
+    def test_disables_trims_inactivates_never_cancels(self):
+        import frappe
+        from dewey_time.attendance_engine import schedule_resolver
+
+        preview = {
+            "effective_from": "2026-07-01",
+            "disable_ssas": [{"name": "SSA-B", "shift_schedule": "PAT_B", "shift_type": "FT"}],
+            "add_identities": [],
+            "unchanged_identities": [],
+            "add_labels": [],
+            "leaving_labels": ["FRI"],
+            "affected_assignments": [
+                {"name": "SA-STRADDLE", "action": "end_before", "proposed_end_date": "2026-06-30"},
+                {"name": "SA-FUTURE", "action": "inactivate", "proposed_end_date": None},
+            ],
+        }
+        frappe.db.has_column.return_value = True
+
+        docs = {"SA-STRADDLE": type("D", (), {"end_date": None})(), "SA-FUTURE": type("D", (), {"status": "Active"})()}
+        for d in docs.values():
+            d.save = lambda **kw: None
+        cancel_called = {"n": 0}
+
+        def fake_get_doc(doctype, name):
+            doc = docs[name]
+            doc.cancel = lambda: cancel_called.__setitem__("n", cancel_called["n"] + 1)
+            return doc
+
+        with patch.object(schedule_resolver, "build_reconcile_preview", return_value=preview), patch.object(
+            schedule_resolver, "_disable_ssa"
+        ) as disable, patch.object(schedule_resolver.frappe, "get_doc", side_effect=fake_get_doc):
+            out = schedule_resolver.reconcile_orphan_ssas(
+                employee="EMP-1", plan={"groups": []}, effective_from=date(2026, 7, 1)
+            )
+
+        disable.assert_called_once_with("SSA-B")
+        self.assertEqual(out["disabled_ssas"], ["SSA-B"])
+        self.assertEqual(out["trimmed_assignments"], ["SA-STRADDLE"])
+        self.assertEqual(out["inactivated_assignments"], ["SA-FUTURE"])
+        self.assertEqual(docs["SA-FUTURE"].status, "Inactive")
+        self.assertEqual(cancel_called["n"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

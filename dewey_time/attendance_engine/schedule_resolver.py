@@ -630,26 +630,21 @@ def _future_assignments_for_ssa(*, ssa_name, effective_from):
     return out
 
 
-def reconcile_orphan_ssas(*, employee: str, plan: dict, effective_from) -> dict:
+def reconcile_orphan_ssas(*, employee, plan, effective_from):
     preview = build_reconcile_preview(employee=employee, plan=plan, effective_from=effective_from)
-    effective_from = getdate(effective_from)
 
-    disabled: list[str] = []
-    trimmed: list[str] = []
-    inactivated: list[str] = []
+    disabled = []
+    trimmed = []
+    inactivated = []
 
     for ssa_info in preview.get("disable_ssas") or []:
         ssa_name = ssa_info.get("name")
         if not ssa_name:
             continue
-        doc = frappe.get_doc("Shift Schedule Assignment", ssa_name)
-        if frappe.db.has_column("Shift Schedule Assignment", "enabled"):
-            doc.enabled = 0
-        if frappe.db.has_column("Shift Schedule Assignment", "shift_status"):
-            doc.shift_status = "Inactive"
-        doc.save(ignore_permissions=True)
+        _disable_ssa(ssa_name)
         disabled.append(ssa_name)
 
+    has_status = frappe.db.has_column("Shift Assignment", "status")
     for item in preview.get("affected_assignments") or []:
         name = item.get("name")
         if not name:
@@ -660,7 +655,7 @@ def reconcile_orphan_ssas(*, employee: str, plan: dict, effective_from) -> dict:
             doc.save(ignore_permissions=True)
             trimmed.append(name)
         elif item.get("action") == "inactivate":
-            if frappe.db.has_column("Shift Assignment", "status"):
+            if has_status:
                 doc.status = "Inactive"
                 doc.save(ignore_permissions=True)
             inactivated.append(name)
