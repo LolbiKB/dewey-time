@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import frappe
@@ -127,6 +128,28 @@ def profile_key(profile: dict) -> tuple:
         normalize_time(profile.get("lunch_end")),
         int(profile.get("grace_minutes") or 0),
     )
+
+
+def _group_identity(days, profile):
+    """Structural identity of a schedule group: ordered weekday names + full time profile.
+    Compared instead of PAT name strings, because PAT/Shift Type names drop grace_minutes and
+    may be non-canonical for the same structure."""
+    ordered = tuple(
+        sorted(
+            (d for d in (days or []) if d in WEEKDAY_TO_INDEX),
+            key=lambda d: WEEKDAY_TO_INDEX[d],
+        )
+    )
+    return (ordered, profile_key(profile or {}))
+
+
+def _identity_key(identity) -> str:
+    days, pkey = identity
+    return json.dumps([list(days), list(pkey)], separators=(",", ":"))
+
+
+def group_identity_key(group) -> str:
+    return _identity_key(_group_identity(group.get("days") or [], group.get("profile") or {}))
 
 
 def group_week_pattern(days: list[dict]) -> list[dict]:
