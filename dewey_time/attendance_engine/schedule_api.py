@@ -20,6 +20,9 @@ from dewey_time.attendance_engine.hr_calendar import (
 )
 from dewey_time.attendance_engine.schedule_resolver import (
     build_resolve_plan,
+    build_reconcile_preview,
+    reconcile_orphan_ssas,
+    group_identity_key,
     create_shift_schedule,
     create_shift_type,
     employee_has_enabled_ssas,
@@ -356,17 +359,17 @@ def apply_weekly_schedule(
         elif action == "set":
             employment_to_set = derived_value
 
-    if employee_has_enabled_ssas(employee):
-        frappe.throw(
-            "This employee already has an active Shift Schedule Assignment. "
-            "Disable existing SSAs and adjust Shift Assignments in Desk, then return here "
-            "only when setting up a fresh schedule.",
-            exc=frappe.ValidationError,
-        )
+    is_edit = employee_has_enabled_ssas(employee)
 
     effective = getdate(
         create_shifts_after or frappe.form_dict.get("create_shifts_after") or add_days(nowdate(), 1)
     )
+    if is_edit and effective <= getdate(nowdate()):
+        frappe.throw(
+            "Editing a schedule requires an effective date in the future.",
+            exc=frappe.ValidationError,
+        )
+
     through_raw = (
         generate_through
         if generate_through is not None
@@ -381,8 +384,14 @@ def apply_weekly_schedule(
     confirm = bool(confirm)
 
     plan = build_resolve_plan(employee=employee, week_pattern=pattern)
-    if plan.get("needs_create") and not confirm:
-        return {"needs_confirm": True, "plan": plan}
+    reconcile = build_reconcile_preview(employee=employee, plan=plan, effective_from=effective)
+    edit_changes = bool(
+        reconcile.get("disable_ssas")
+        or reconcile.get("add_identities")
+        or reconcile.get("affected_assignments")
+    )
+    if (plan.get("needs_create") or (is_edit and edit_changes)) and not confirm:
+        return {"needs_confirm": True, "plan": plan, "reconcile": reconcile}
 
     # Persist the derived employment type only now that the row is committed to
     # apply — never mutate the Employee record for a schedule that won't be created.
@@ -393,9 +402,17 @@ def apply_weekly_schedule(
     created_shift_types: list[str] = []
     created_shift_schedules: list[str] = []
     ssas_out: list[dict] = []
+    unchanged = set(reconcile.get("unchanged_identities") or [])
+    generated_any = False
 
     try:
+        # Retire leaving schedules + their future assignments FIRST (overlap-safe).
+        reconciled = reconcile_orphan_ssas(employee=employee, plan=plan, effective_from=effective)
+
         for group in plan.get("groups") or []:
+            if group_identity_key(group) in unchanged:
+                continue  # employee already on this schedule — do not regenerate
+
             profile = group.get("profile") or {}
             shift_type_info = group.get("shift_type") or {}
             shift_schedule_info = group.get("shift_schedule") or {}
@@ -426,11 +443,24 @@ def apply_weekly_schedule(
                 company=employee_info.get("company"),
             )
             generate_shifts_for_ssa(ssa_name, effective, generation_end)
+            generated_any = True
             ssas_out.append({"name": ssa_name, "shift_schedule": pat_name})
 
         frappe.db.commit()
-    except frappe.ValidationError:
+    except frappe.ValidationError as exc:
         frappe.db.rollback()
+        message = str(exc)
+        lowered = message.lower()
+        if "overlap" in lowered or "multiple shift" in lowered:
+            frappe.throw(
+                "This schedule change overlaps existing future shifts. Re-open Review and pick "
+                f"a later effective date. ({message})"
+            )
+        if "validate_existing_shift_assignments" in lowered:
+            frappe.throw(
+                "Cannot move the effective date earlier while later assignments exist. "
+                "Pick a later effective date or adjust assignments in Desk."
+            )
         raise
     except Exception as exc:
         frappe.db.rollback()
@@ -438,11 +468,6 @@ def apply_weekly_schedule(
         if "duplicate" in message.lower() or "already exists" in message.lower():
             frappe.throw(
                 f"Pattern may already exist on site. Re-run Preview and use the existing PAT. ({message})"
-            )
-        if "validate_existing_shift_assignments" in message.lower():
-            frappe.throw(
-                "Cannot move create_shifts_after earlier while later assignments exist. "
-                "Pick a later effective date or adjust assignments in Desk."
             )
         raise
 
@@ -454,7 +479,8 @@ def apply_weekly_schedule(
             "shift_types": created_shift_types,
             "shift_schedules": created_shift_schedules,
         },
-        "assignments_generated_through": str(generation_end),
-        "assignments_open_ended": through is None,
+        "reconciled": reconciled,
+        "assignments_generated_through": str(generation_end) if generated_any else None,
+        "assignments_open_ended": (through is None) if generated_any else None,
         "attendance_url": f"/hr-attendance?employee={employee}",
     }

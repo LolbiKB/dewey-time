@@ -440,24 +440,62 @@ class TestScheduleApi(unittest.TestCase):
                 create_shifts_after="2026-06-02",
             )
 
-    @patch("dewey_time.attendance_engine.schedule_api.frappe.db.has_column", return_value=True)
-    @patch("dewey_time.attendance_engine.schedule_api.employee_has_enabled_ssas")
-    @patch("dewey_time.attendance_engine.schedule_api._employee_header")
-    @patch("dewey_time.attendance_engine.schedule_api._require_hr_role")
-    def test_apply_blocked_when_employee_has_enabled_ssa(self, _role, _header, has_enabled, _has_col):
+    def test_apply_edit_returns_needs_confirm_instead_of_blocking(self):
         from dewey_time.attendance_engine import schedule_api
 
-        has_enabled.return_value = True
-        _header.return_value = {"employment_type": "Full-time", "company": "Co"}
+        plan = {
+            "groups": [{"days": ["Monday"], "profile": {}, "shift_type": {}, "shift_schedule": {}}],
+            "needs_create": False,
+            "warnings": [],
+        }
+        reconcile = {
+            "effective_from": "2026-07-01",
+            "disable_ssas": [{"name": "SSA-X"}],
+            "add_identities": [],
+            "unchanged_identities": [],
+            "add_labels": [],
+            "leaving_labels": ["MON"],
+            "affected_assignments": [],
+        }
 
-        with self.assertRaises(Exception):
-            schedule_api.apply_weekly_schedule(
+        with patch("dewey_time.attendance_engine.schedule_api._require_hr_role"), patch(
+            "dewey_time.attendance_engine.schedule_api._employee_header",
+            return_value={"employee": "EMP-1", "company": "C", "employment_type": "Full-time"},
+        ), patch(
+            "dewey_time.attendance_engine.schedule_api.validate_week_pattern", return_value=[]
+        ), patch(
+            "dewey_time.attendance_engine.schedule_api.resolve_apply_employment_type",
+            return_value=("noop", None),
+        ), patch(
+            "dewey_time.attendance_engine.schedule_api.employee_has_enabled_ssas", return_value=True
+        ), patch(
+            "dewey_time.attendance_engine.schedule_api.build_resolve_plan", return_value=plan
+        ), patch(
+            "dewey_time.attendance_engine.schedule_api.build_reconcile_preview", return_value=reconcile
+        ), patch(
+            "dewey_time.attendance_engine.schedule_api.nowdate", return_value="2026-06-01"
+        ):
+            result = schedule_api.apply_weekly_schedule(
                 employee="EMP-1",
-                week_pattern=json.dumps({"frequency": "Every Week", "days": []}),
-                create_shifts_after="2026-06-02",
-                generate_through="2026-09-01",
-                confirm_create=True,
+                week_pattern=json.dumps(
+                    {
+                        "frequency": "Every Week",
+                        "days": [
+                            {
+                                "weekday": "Monday",
+                                "works": True,
+                                "start_time": "09:00:00",
+                                "end_time": "17:00:00",
+                            }
+                        ],
+                    }
+                ),
+                create_shifts_after="2026-07-01",
+                generate_through="",
+                confirm_create=False,
             )
+        self.assertTrue(result.get("needs_confirm"))
+        self.assertEqual(result.get("reconcile"), reconcile)
 
 
 class TestScheduleTemplates(unittest.TestCase):
