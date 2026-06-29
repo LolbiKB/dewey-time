@@ -510,11 +510,7 @@ def build_reconcile_preview(*, employee: str, plan: dict, effective_from) -> dic
             }
         )
         affected_assignments.extend(
-            _future_assignments_for_shift_type(
-                employee=employee,
-                shift_type=ssa.get("shift_type"),
-                effective_from=effective_from,
-            )
+            _future_assignments_for_ssa(ssa_name=ssa.get("name"), effective_from=effective_from)
         )
 
     return {
@@ -587,7 +583,7 @@ def reconcile_orphan_ssas(*, employee: str, plan: dict, effective_from) -> dict:
 
     disabled: list[str] = []
     trimmed: list[str] = []
-    cancelled: list[str] = []
+    inactivated: list[str] = []
 
     for ssa_info in preview.get("disable_ssas") or []:
         ssa_name = ssa_info.get("name")
@@ -610,15 +606,16 @@ def reconcile_orphan_ssas(*, employee: str, plan: dict, effective_from) -> dict:
             doc.end_date = getdate(item["proposed_end_date"])
             doc.save(ignore_permissions=True)
             trimmed.append(name)
-        elif item.get("action") == "cancel":
-            if doc.docstatus == 1:
-                doc.cancel()
-            cancelled.append(name)
+        elif item.get("action") == "inactivate":
+            if frappe.db.has_column("Shift Assignment", "status"):
+                doc.status = "Inactive"
+                doc.save(ignore_permissions=True)
+            inactivated.append(name)
 
     return {
         "disabled_ssas": disabled,
         "trimmed_assignments": trimmed,
-        "cancelled_assignments": cancelled,
+        "inactivated_assignments": inactivated,
     }
 
 

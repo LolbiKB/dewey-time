@@ -1,4 +1,6 @@
 import unittest
+from datetime import date
+from unittest.mock import patch
 
 from dewey_time.tests.test_closeout import _install_frappe_mock
 
@@ -54,10 +56,6 @@ class TestGroupIdentity(unittest.TestCase):
             group_identity_key(group),
             _identity_key(_group_identity(group["days"], group["profile"])),
         )
-
-
-from datetime import date
-from unittest.mock import patch
 
 
 class TestClassifyFutureAssignment(unittest.TestCase):
