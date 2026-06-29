@@ -160,7 +160,9 @@ def _identity_label(days, profile):
 
 
 def _current_schedule_identities(employee):
-    """identity_key -> {ssa, shift_schedule, shift_type, label} for each ENABLED SSA."""
+    """identity_key -> list of {ssa, shift_schedule, shift_type, label} for each ENABLED SSA.
+    A list (not a single dict) so two enabled SSAs that resolve to the SAME structural identity
+    are both retired when that identity is leaving — never silently dropped (last-writer-wins)."""
     out = {}
     for ssa in list_employee_ssas(employee):
         if not is_ssa_enabled(ssa):
@@ -184,12 +186,14 @@ def _current_schedule_identities(employee):
         }
         days = sorted(_repeat_days_set(pat_doc), key=lambda d: WEEKDAY_TO_INDEX.get(d, 99))
         key = _identity_key(_group_identity(days, profile))
-        out[key] = {
-            "ssa": ssa.get("name"),
-            "shift_schedule": pat,
-            "shift_type": shift_type_name,
-            "label": _identity_label(days, profile),
-        }
+        out.setdefault(key, []).append(
+            {
+                "ssa": ssa.get("name"),
+                "shift_schedule": pat,
+                "shift_type": shift_type_name,
+                "label": _identity_label(days, profile),
+            }
+        )
     return out
 
 
@@ -549,18 +553,19 @@ def build_reconcile_preview(*, employee, plan, effective_from):
     affected_assignments = []
     leaving_labels = []
     for key in leaving_keys:
-        info = current[key]
-        disable_ssas.append(
-            {
-                "name": info.get("ssa"),
-                "shift_schedule": info.get("shift_schedule"),
-                "shift_type": info.get("shift_type"),
-            }
-        )
-        leaving_labels.append(info.get("label") or info.get("shift_schedule") or "schedule")
-        affected_assignments.extend(
-            _future_assignments_for_ssa(ssa_name=info.get("ssa"), effective_from=effective_from)
-        )
+        infos = current[key]
+        leaving_labels.append(infos[0].get("label") or infos[0].get("shift_schedule") or "schedule")
+        for info in infos:
+            disable_ssas.append(
+                {
+                    "name": info.get("ssa"),
+                    "shift_schedule": info.get("shift_schedule"),
+                    "shift_type": info.get("shift_type"),
+                }
+            )
+            affected_assignments.extend(
+                _future_assignments_for_ssa(ssa_name=info.get("ssa"), effective_from=effective_from)
+            )
 
     return {
         "effective_from": str(effective_from),

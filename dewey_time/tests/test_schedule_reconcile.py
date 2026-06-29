@@ -168,8 +168,8 @@ class TestBuildReconcilePreview(unittest.TestCase):
         )
         old_fri = self._identity(["Friday"], _profile("09:00:00", "17:00:00"))
         current = {
-            mon_thu: {"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON-THU"},
-            old_fri: {"ssa": "SSA-B", "shift_schedule": "PAT_B", "shift_type": "FT", "label": "FRI"},
+            mon_thu: [{"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON-THU"}],
+            old_fri: [{"ssa": "SSA-B", "shift_schedule": "PAT_B", "shift_type": "FT", "label": "FRI"}],
         }
         plan = self._plan(
             [
@@ -184,7 +184,7 @@ class TestBuildReconcilePreview(unittest.TestCase):
 
     def test_grace_only_edit_is_leaving_plus_adding_not_unchanged(self):
         old = self._identity(["Monday"], _profile("09:00:00", "17:00:00", grace=10))
-        current = {old: {"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON"}}
+        current = {old: [{"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON"}]}
         plan = self._plan([self._group(["Monday"], _profile("09:00:00", "17:00:00", grace=20))])
         out = self._run(current, plan)
         self.assertEqual([d["name"] for d in out["disable_ssas"]], ["SSA-A"])
@@ -193,12 +193,27 @@ class TestBuildReconcilePreview(unittest.TestCase):
 
     def test_noop_when_target_matches_current(self):
         same = self._identity(["Monday"], _profile("09:00:00", "17:00:00"))
-        current = {same: {"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON"}}
+        current = {same: [{"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON"}]}
         plan = self._plan([self._group(["Monday"], _profile("09:00:00", "17:00:00"))])
         out = self._run(current, plan)
         self.assertEqual(out["disable_ssas"], [])
         self.assertEqual(out["add_identities"], [])
         self.assertEqual(out["unchanged_identities"], [same])
+
+    def test_identity_collision_disables_all_sharing_ssas(self):
+        # Two enabled SSAs resolve to the SAME structural identity; both are leaving.
+        # Both must land in disable_ssas — not silently dropped to the last writer.
+        shared = self._identity(["Monday"], _profile("09:00:00", "17:00:00"))
+        current = {
+            shared: [
+                {"ssa": "SSA-A", "shift_schedule": "PAT_A", "shift_type": "FT", "label": "MON"},
+                {"ssa": "SSA-B", "shift_schedule": "PAT_A_DUP", "shift_type": "FT", "label": "MON"},
+            ]
+        }
+        # Target is a different day, so the shared identity leaves entirely.
+        plan = self._plan([self._group(["Tuesday"], _profile("09:00:00", "17:00:00"))])
+        out = self._run(current, plan)
+        self.assertEqual(sorted(d["name"] for d in out["disable_ssas"]), ["SSA-A", "SSA-B"])
 
 
 class TestReconcileOrphanSsas(unittest.TestCase):
