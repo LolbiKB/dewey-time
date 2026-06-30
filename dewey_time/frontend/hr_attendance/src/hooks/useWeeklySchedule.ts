@@ -1,7 +1,7 @@
 import { useFrappeGetCall, useFrappePostCall } from "frappe-react-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
+import { extractFrappeError } from "@/lib/frappeError";
 import type {
   ApplyScheduleResult,
   HolidayPreviewItem,
@@ -167,7 +167,10 @@ export function useApplyWeeklySchedule() {
         }
 
         if (!payload?.ok) {
-          setStatus({ type: "error", message: "Save did not complete successfully." });
+          setStatus({
+            type: "error",
+            message: extractFrappeError(payload, "Save did not complete successfully."),
+          });
           return null;
         }
 
@@ -177,7 +180,10 @@ export function useApplyWeeklySchedule() {
         });
         return payload;
       } catch (error) {
-        setStatus({ type: "error", message: formatAttendanceLoadError(error) });
+        setStatus({
+          type: "error",
+          message: extractFrappeError(error, "Couldn't save the schedule. Please try again."),
+        });
         return null;
       }
     },

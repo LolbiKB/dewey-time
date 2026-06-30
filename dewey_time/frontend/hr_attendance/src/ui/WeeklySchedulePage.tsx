@@ -201,10 +201,10 @@ export function WeeklySchedulePage() {
       match === "manual" ? null : blocksFingerprint(shiftBlocks);
   }, [employee, shiftBlocks, templateOptions]);
 
-  async function handleSave(confirmCreate = false) {
-    if (!scheduleEmployeeId || !effectiveFrom) return;
-    if (limitGenerateThrough && !generateThrough) return;
-    if (validationIssues.length) return;
+  async function handleSave(confirmCreate = false): Promise<boolean> {
+    if (!scheduleEmployeeId || !effectiveFrom) return false;
+    if (limitGenerateThrough && !generateThrough) return false;
+    if (validationIssues.length) return false;
 
     clearStatus();
     const result = await apply({
@@ -215,7 +215,8 @@ export function WeeklySchedulePage() {
       confirm_create: confirmCreate,
     });
 
-    if (!result) return;
+    // apply() returns null on failure and has already set the error status.
+    if (!result) return false;
 
     if (result.needs_confirm && result.plan) {
       const creates = (result.plan.groups ?? []).flatMap((group) => {
@@ -238,7 +239,7 @@ export function WeeklySchedulePage() {
       setPendingReconcile((result as ApplyScheduleResult).reconcile ?? null);
       setConfirmText("");
       setConfirmOpen(true);
-      return;
+      return false;
     }
 
     if (result.ok) {
@@ -246,7 +247,10 @@ export function WeeklySchedulePage() {
       setSavedNonce((n) => n + 1);
       setLastReconciled(result.reconciled ?? null);
       void refreshContext();
+      return true;
     }
+
+    return false;
   }
 
   if (authLoading || sessionLoading) {
@@ -588,13 +592,17 @@ export function WeeklySchedulePage() {
       <Dialog
         open={confirmOpen}
         onOpenChange={(o) => {
+          if (applying) return; // don't let an outside-click/Escape dismiss mid-save
           setConfirmOpen(o);
-          if (!o) setConfirmText("");
+          if (!o) {
+            setConfirmText("");
+            if (status?.type === "error") clearStatus();
+          }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="break-words">
               {isEditing
                 ? `Change ${employeeLabel ?? "this employee"}'s schedule?`
                 : "Create shared shift records?"}
@@ -605,33 +613,39 @@ export function WeeklySchedulePage() {
                 : "Confirm to create shared Shift Type and Shift Schedule records on save."}
             </DialogDescription>
           </DialogHeader>
-          <ul className="space-y-2 text-sm">
-            {pendingConfirmPlan.map((item) => (
-              <li key={`${item.doctype}-${item.name}`} className="flex items-center gap-2">
-                <CheckIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate">{item.name}</span>
-                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{item.doctype}</span>
-              </li>
-            ))}
-          </ul>
+          {pendingConfirmPlan.length ? (
+            <ul className="min-w-0 space-y-2 text-sm">
+              {pendingConfirmPlan.map((item) => (
+                <li key={`${item.doctype}-${item.name}`} className="flex min-w-0 items-center gap-2">
+                  <CheckIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate" title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{item.doctype}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {(() => {
             const summary = summarizeReconcile(pendingReconcile);
             if (!summary.hasChanges) return null;
             return (
-              <div className="mt-1 space-y-1 rounded-md border border-border/60 bg-muted/30 p-3">
-                <p className="text-xs font-medium text-foreground">
+              <div className="mt-1 min-w-0 space-y-1 rounded-md border border-border/60 bg-muted/30 p-3">
+                <p className="text-xs font-medium text-foreground break-words">
                   What changes on {pendingReconcile?.effective_from}
                 </p>
                 <ul className="space-y-0.5 text-xs text-muted-foreground">
                   {summary.lines.map((line, i) => (
-                    <li key={i}>{line}</li>
+                    <li key={i} className="break-words">
+                      {line}
+                    </li>
                   ))}
                 </ul>
               </div>
             );
           })()}
           {reconcileRetiresShifts(pendingReconcile) ? (
-            <div className="mt-2 space-y-1.5">
+            <div className="mt-2 min-w-0 space-y-1.5">
               <Label htmlFor="schedule-change-confirm" className="text-xs text-muted-foreground">
                 Type{" "}
                 <span className="font-medium text-foreground">
@@ -658,15 +672,28 @@ export function WeeklySchedulePage() {
               ) : null}
             </div>
           ) : null}
+          {status?.type === "error" ? (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm break-words text-destructive"
+            >
+              {status.message}
+            </p>
+          ) : null}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={applying}
+            >
               Cancel
             </Button>
             <Button
               type="button"
-              onClick={() => {
-                setConfirmOpen(false);
-                void handleSave(true);
+              onClick={async () => {
+                const saved = await handleSave(true);
+                if (saved) setConfirmOpen(false);
               }}
               disabled={
                 applying ||
@@ -674,7 +701,16 @@ export function WeeklySchedulePage() {
                   !confirmNameMatches(confirmText, employeeLabel))
               }
             >
-              {isEditing ? "Save changes" : "Create and save"}
+              {applying ? (
+                <>
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                  Saving
+                </>
+              ) : isEditing ? (
+                "Save changes"
+              ) : (
+                "Create and save"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
