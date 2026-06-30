@@ -6,6 +6,7 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
+ "name": "Schedule Change Log",
  "field_order": [
   "employee",
   "employee_name",
