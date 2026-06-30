@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
@@ -50,7 +51,7 @@ import {
   SchedulePreviewTrigger,
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
-import { summarizeReconcile } from "@/lib/scheduleEdit";
+import { summarizeReconcile, reconcileRetiresShifts, confirmNameMatches } from "@/lib/scheduleEdit";
 import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
 import {
   isWeeklyScheduleEligible,
@@ -93,6 +94,7 @@ export function WeeklySchedulePage() {
   const [pendingReconcile, setPendingReconcile] = useState<ReconcilePreview | null>(null);
   const [savedNonce, setSavedNonce] = useState(0);
   const [lastReconciled, setLastReconciled] = useState<ApplyScheduleResult["reconciled"] | null>(null);
+  const [confirmText, setConfirmText] = useState("");
   const [templateKey, setTemplateKey] = useState<string>("manual");
   const appliedTemplateFingerprint = useRef<string | null>(null);
   const [employeeLoading, setEmployeeLoading] = useState(false);
@@ -234,6 +236,7 @@ export function WeeklySchedulePage() {
       });
       setPendingConfirmPlan(creates);
       setPendingReconcile((result as ApplyScheduleResult).reconcile ?? null);
+      setConfirmText("");
       setConfirmOpen(true);
       return;
     }
@@ -375,6 +378,18 @@ export function WeeklySchedulePage() {
               <Card className="border-brand-accent/30 bg-muted/40">
                 <CardContent className="py-2.5 text-sm text-foreground">
                   {ineligibleMessage} Pick an eligible employee above to continue.
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {isEditing && scheduleEmployeeId && !ineligibleMessage ? (
+              <Card className="border-brand-accent/40 bg-brand-accent/10">
+                <CardContent className="py-2.5 text-sm text-foreground">
+                  <span className="font-medium">
+                    Editing {employeeLabel ?? "this employee"}'s schedule.
+                  </span>{" "}
+                  Changes take effect {effectiveFrom || "the effective date"}. Existing future
+                  shifts will be replaced.
                 </CardContent>
               </Card>
             ) : null}
@@ -570,12 +585,24 @@ export function WeeklySchedulePage() {
         generateThrough={generateThrough}
       />
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Dialog
+        open={confirmOpen}
+        onOpenChange={(o) => {
+          setConfirmOpen(o);
+          if (!o) setConfirmText("");
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create shared shift records?</DialogTitle>
+            <DialogTitle>
+              {isEditing
+                ? `Change ${employeeLabel ?? "this employee"}'s schedule?`
+                : "Create shared shift records?"}
+            </DialogTitle>
             <DialogDescription>
-              Confirm to create shared Shift Type and Shift Schedule records on save.
+              {isEditing
+                ? "Review what changes and confirm to apply."
+                : "Confirm to create shared Shift Type and Shift Schedule records on save."}
             </DialogDescription>
           </DialogHeader>
           <ul className="space-y-2 text-sm">
@@ -603,6 +630,34 @@ export function WeeklySchedulePage() {
               </div>
             );
           })()}
+          {reconcileRetiresShifts(pendingReconcile) ? (
+            <div className="mt-2 space-y-1.5">
+              <Label htmlFor="schedule-change-confirm" className="text-xs text-muted-foreground">
+                Type{" "}
+                <span className="font-medium text-foreground">
+                  {employeeLabel ?? "the employee's name"}
+                </span>{" "}
+                to confirm this change
+              </Label>
+              <Input
+                id="schedule-change-confirm"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder={employeeLabel ?? "Employee name"}
+                autoComplete="off"
+                spellCheck={false}
+                className={cn(
+                  "h-9 text-sm",
+                  confirmText.length > 0 &&
+                    !confirmNameMatches(confirmText, employeeLabel) &&
+                    "border-destructive/50 focus-visible:ring-destructive/30",
+                )}
+              />
+              {confirmText.length > 0 && !confirmNameMatches(confirmText, employeeLabel) ? (
+                <p className="text-xs text-destructive">Name doesn't match.</p>
+              ) : null}
+            </div>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>
               Cancel
@@ -613,9 +668,13 @@ export function WeeklySchedulePage() {
                 setConfirmOpen(false);
                 void handleSave(true);
               }}
-              disabled={applying}
+              disabled={
+                applying ||
+                (reconcileRetiresShifts(pendingReconcile) &&
+                  !confirmNameMatches(confirmText, employeeLabel))
+              }
             >
-              Create and save
+              {isEditing ? "Save changes" : "Create and save"}
             </Button>
           </DialogFooter>
         </DialogContent>
