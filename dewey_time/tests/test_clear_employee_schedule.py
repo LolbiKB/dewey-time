@@ -9,6 +9,7 @@ import sys  # noqa: E402
 import frappe  # noqa: E402
 
 frappe.LinkExistsError = type("LinkExistsError", (Exception,), {})
+frappe.PermissionError = type("PermissionError", (Exception,), {})
 frappe.get_roles = MagicMock(return_value=["System Manager"])
 frappe.session.user = "admin@example.com"
 frappe.db.exists = MagicMock(return_value=True)
@@ -114,8 +115,12 @@ class TestClearEmployeeSchedule(unittest.TestCase):
         result = clear_employee_schedule("DI-1138")
 
         doc.cancel.assert_called_once()
-        frappe.delete_doc.assert_any_call("Shift Assignment", "SA-1", force=1)
-        frappe.delete_doc.assert_any_call("Shift Schedule Assignment", "SSA-A", force=1)
+        frappe.delete_doc.assert_any_call(
+            "Shift Assignment", "SA-1", force=1, ignore_permissions=True
+        )
+        frappe.delete_doc.assert_any_call(
+            "Shift Schedule Assignment", "SSA-A", force=1, ignore_permissions=True
+        )
         frappe.db.delete.assert_called_once_with("Attendance Flag", {"employee": "DI-1138"})
         self.assertEqual(result["cancelled_assignments"], ["SA-1"])
         self.assertEqual(result["deleted_assignments"], ["SA-1"])
@@ -138,7 +143,7 @@ class TestClearEmployeeSchedule(unittest.TestCase):
         frappe.get_all = MagicMock(return_value=[])
         frappe.db.table_exists = MagicMock(return_value=True)
 
-        def delete_side_effect(doctype, name, force=1):
+        def delete_side_effect(doctype, name, force=1, ignore_permissions=False):
             if doctype == "Shift Schedule Assignment":
                 raise frappe.LinkExistsError("linked")
 
@@ -149,6 +154,61 @@ class TestClearEmployeeSchedule(unittest.TestCase):
         disable_ssa.assert_called_once_with("SSA-B")
         self.assertEqual(result["disabled_ssas"], ["SSA-B"])
         self.assertEqual(result["deleted_ssas"], [])
+
+
+class TestClearEmployeeSchedulePermissionBypass(unittest.TestCase):
+    """Regression: the destructive cancel/delete ops must bypass per-doctype
+    permissions. The API gate (`_require_system_manager_for_clear`) is the only
+    authorization boundary; HRMS doctypes (Shift Assignment / Shift Schedule
+    Assignment) do NOT grant delete/cancel to System Manager, so without
+    ignore_permissions a System-Manager 'admin' gets a 403 PermissionError.
+    """
+
+    def setUp(self):
+        frappe.delete_doc = MagicMock()
+        frappe.get_doc = MagicMock()
+        frappe.get_all = MagicMock(return_value=[])
+        frappe.db.table_exists = MagicMock(return_value=True)
+
+    @patch("dewey_time.attendance_engine.schedule_resolver._count_attendance_flags", return_value=0)
+    @patch(
+        "dewey_time.attendance_engine.schedule_resolver._list_employee_ssa_names",
+        return_value=["SSA-A"],
+    )
+    @patch(
+        "dewey_time.attendance_engine.schedule_resolver._list_employee_shift_assignment_names",
+        return_value=["SA-1"],
+    )
+    def test_clear_bypasses_doctype_permissions(self, _sas, _ssas, _flags):
+        from dewey_time.attendance_engine.schedule_resolver import clear_employee_schedule
+
+        doc = MagicMock()
+        doc.docstatus = 1
+        doc.employee = "DI-1138"
+        doc.shift_type = "Morning"
+        doc.start_date = "2026-05-01"
+        doc.end_date = None
+        doc.flags.ignore_permissions = False
+
+        def cancel_side_effect():
+            if not getattr(doc.flags, "ignore_permissions", False):
+                raise frappe.PermissionError("No permission to cancel Shift Assignment")
+
+        doc.cancel.side_effect = cancel_side_effect
+        frappe.get_doc.return_value = doc
+
+        def delete_side_effect(doctype, name, force=1, ignore_permissions=False):
+            if not ignore_permissions:
+                raise frappe.PermissionError(f"No permission to delete {doctype}")
+
+        frappe.delete_doc.side_effect = delete_side_effect
+
+        # Must complete without raising PermissionError (the reported 403).
+        result = clear_employee_schedule("DI-1138")
+
+        self.assertEqual(result["deleted_assignments"], ["SA-1"])
+        self.assertEqual(result["cancelled_assignments"], ["SA-1"])
+        self.assertEqual(result["deleted_ssas"], ["SSA-A"])
 
 
 class TestClearEmployeeScheduleApi(unittest.TestCase):

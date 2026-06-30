@@ -98,6 +98,34 @@ class TestNaming(unittest.TestCase):
             "FT_0800_1700",
         )
 
+    def test_proposed_shift_type_name_encodes_lunch(self):
+        from dewey_time.attendance_engine.schedule_resolver import proposed_shift_type_name
+
+        # Lunch is part of a Shift Type's identity (it is stored on the record),
+        # so it must be encoded in the name — otherwise two shifts that share
+        # start/end but differ on lunch collide and silently share one lunch.
+        self.assertEqual(
+            proposed_shift_type_name(
+                {
+                    "start_time": "08:00:00",
+                    "end_time": "17:00:00",
+                    "lunch_start": "12:00:00",
+                    "lunch_end": "13:00:00",
+                }
+            ),
+            "FT_0800_1700_L1200_1300",
+        )
+
+    def test_proposed_shift_type_name_encodes_grace(self):
+        from dewey_time.attendance_engine.schedule_resolver import proposed_shift_type_name
+
+        self.assertEqual(
+            proposed_shift_type_name(
+                {"start_time": "08:00:00", "end_time": "17:00:00", "grace_minutes": 15}
+            ),
+            "FT_0800_1700_G15",
+        )
+
     def test_proposed_pat_name_mon_fri(self):
         from dewey_time.attendance_engine.schedule_resolver import proposed_pat_name
 
@@ -332,7 +360,49 @@ class TestMatchShiftType(unittest.TestCase):
             }
         )
         self.assertEqual(result["action"], "create")
-        self.assertEqual(result["proposed_name"], "FT_0800_1200")
+        # Grace is part of the identity, so it is encoded in the name.
+        self.assertEqual(result["proposed_name"], "FT_0800_1200_G10")
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.get_all")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.table_exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_lunch_change_does_not_reuse_colliding_name(
+        self, exists, has_column, table_exists, get_all
+    ):
+        """Regression: editing lunch (same start/end) must NOT silently resolve back
+        to the existing hours-only Shift Type, which carries the old lunch."""
+        from dewey_time.attendance_engine.schedule_resolver import match_shift_type
+
+        table_exists.return_value = True
+        has_column.return_value = True
+        # Existing Shift Type shares start/end but has the OLD (wrong) lunch.
+        get_all.return_value = [
+            {
+                "name": "FT_0800_1700",
+                "start_time": "08:00:00",
+                "end_time": "17:00:00",
+                "custom_lunch_start": "23:00:00",
+                "custom_lunch_end": "13:00:00",
+                "custom_grace_minutes": 0,
+            }
+        ]
+        # Only the legacy hours-only name exists in the DB.
+        exists.side_effect = lambda doctype, name: name == "FT_0800_1700"
+
+        result = match_shift_type(
+            {
+                "start_time": "08:00:00",
+                "end_time": "17:00:00",
+                "lunch_start": "12:00:00",
+                "lunch_end": "13:00:00",
+                "grace_minutes": 0,
+            }
+        )
+
+        # Must create a DISTINCT shift type for the new lunch, not reuse the old one.
+        self.assertEqual(result["action"], "create")
+        self.assertEqual(result["proposed_name"], "FT_0800_1700_L1200_1300")
 
 
 class TestShiftGenerationEndDate(unittest.TestCase):

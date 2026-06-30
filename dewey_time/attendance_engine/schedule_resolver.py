@@ -295,7 +295,24 @@ def compact_days_label(days: list[str], profile: dict) -> str:
 
 
 def proposed_shift_type_name(profile: dict) -> str:
-    return f"FT_{time_to_hhmm(profile.get('start_time'))}_{time_to_hhmm(profile.get('end_time'))}"
+    """Name a Shift Type by its full identity (start, end, lunch, grace).
+
+    The "reuse an existing Shift Type by name" shortcuts in `match_shift_type`
+    and `create_shift_type` are only sound if the name is unique per match key
+    (`_shift_type_row_matches` compares start/end/lunch/grace). Lunch and grace
+    live ON the Shift Type, so two shifts that share start/end but differ on
+    lunch MUST get different names — otherwise the second silently inherits the
+    first's lunch, and lunch-only edits resolve back to the old record.
+    """
+    base = f"FT_{time_to_hhmm(profile.get('start_time'))}_{time_to_hhmm(profile.get('end_time'))}"
+    lunch_start = normalize_time(profile.get("lunch_start"))
+    lunch_end = normalize_time(profile.get("lunch_end"))
+    if lunch_start and lunch_end:
+        base += f"_L{time_to_hhmm(lunch_start)}_{time_to_hhmm(lunch_end)}"
+    grace = int(profile.get("grace_minutes") or 0)
+    if grace:
+        base += f"_G{grace}"
+    return base
 
 
 def proposed_pat_name(days: list[str], shift_type_name: str, profile: dict) -> str:
@@ -965,6 +982,7 @@ def _clear_hrms_blockers_for_shift_assignment(doc) -> None:
         for attendance_name in attendance_names:
             attendance = frappe.get_doc("Attendance", attendance_name)
             if attendance.docstatus == 1:
+                attendance.flags.ignore_permissions = True
                 attendance.cancel()
             frappe.delete_doc("Attendance", attendance_name, force=1, ignore_permissions=True)
 
@@ -975,16 +993,17 @@ def _delete_shift_assignment(name: str) -> tuple[str | None, str]:
     _clear_hrms_blockers_for_shift_assignment(doc)
     cancelled = None
     if doc.docstatus == 1:
+        doc.flags.ignore_permissions = True
         doc.cancel()
         cancelled = name
-    frappe.delete_doc("Shift Assignment", name, force=1)
+    frappe.delete_doc("Shift Assignment", name, force=1, ignore_permissions=True)
     return cancelled, name
 
 
 def _delete_ssa(ssa_name: str) -> tuple[str | None, str | None]:
     """Returns (deleted_name, disabled_name) — at most one set."""
     try:
-        frappe.delete_doc("Shift Schedule Assignment", ssa_name, force=1)
+        frappe.delete_doc("Shift Schedule Assignment", ssa_name, force=1, ignore_permissions=True)
         return ssa_name, None
     except frappe.LinkExistsError:
         _disable_ssa(ssa_name)
@@ -1125,13 +1144,14 @@ CLEAR_SITE_PATTERNS_CONFIRM_PHRASE = "CLEAR SITE PATTERNS"
 def _delete_shift_schedule(name: str) -> str:
     doc = frappe.get_doc("Shift Schedule", name)
     if doc.docstatus == 1:
+        doc.flags.ignore_permissions = True
         doc.cancel()
-    frappe.delete_doc("Shift Schedule", name, force=1)
+    frappe.delete_doc("Shift Schedule", name, force=1, ignore_permissions=True)
     return name
 
 
 def _delete_shift_type(name: str) -> str:
-    frappe.delete_doc("Shift Type", name, force=1)
+    frappe.delete_doc("Shift Type", name, force=1, ignore_permissions=True)
     return name
 
 
