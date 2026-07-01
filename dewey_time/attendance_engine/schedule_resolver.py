@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 import frappe
@@ -768,34 +769,44 @@ def _shift_type_identity_fields() -> list[str]:
     return fields
 
 
-def _reuse_shift_type_or_conflict(profile: dict, proposed: str) -> str | None:
-    """Decide whether an existing Shift Type named ``proposed`` can back this profile.
+def _shift_type_matches_identity(existing_name: str, profile: dict) -> bool:
+    """Whether the Shift Type ``existing_name`` carries this profile's identity
+    (start/end/lunch/grace).
 
-    - Returns ``proposed`` when a record with that name exists AND its identity
-      (start/end/lunch/grace) matches — safe to reuse.
-    - Raises a clear conflict when a record holds the name with a DIFFERENT identity
-      (a legacy hours-only name whose lunch/grace differ, or a stale plan pointing at
-      the wrong name). This is the one case where reusing by name would silently
-      attach a mis-configured Shift Type, so we surface it instead.
-    - Returns ``None`` when the name is free (caller should create it).
+    Two cases resolve to "yes, reuse it":
+    - A legacy schema without the identity columns — we can't verify, so keep the
+      historical reuse-by-name behavior.
+    - The name is taken but unreadable in our transaction snapshot (a concurrent
+      commit) — that record was created by the same identity-keyed logic, so reuse it
+      rather than raise a false conflict.
     """
+    if not _has_shift_type_identity_columns():
+        return True
+    row = frappe.db.get_value(
+        "Shift Type", existing_name, _shift_type_identity_fields(), as_dict=True
+    )
+    if not row:
+        return True
+    return _shift_type_row_matches(profile, row)
+
+
+def _throw_shift_type_conflict(existing_name: str) -> None:
+    frappe.throw(
+        f"A Shift Type named {existing_name} already exists with different hours or "
+        "lunch/grace settings, and Shift Type names can't be duplicated. Reconcile "
+        f"{existing_name} in Desk (or align this shift's lunch/grace to it), then "
+        "re-open Preview."
+    )
+
+
+def _reuse_shift_type_or_conflict(profile: dict, proposed: str) -> str | None:
+    """Front guard: when ``proposed`` already names a record, reuse it if its identity
+    matches, else raise a clear conflict. Returns ``None`` when the name is free."""
     if not frappe.db.exists("Shift Type", proposed):
         return None
-    # A legacy schema without the identity columns can't be verified; preserve the
-    # historical reuse-by-name rather than raising a false conflict.
-    if not _has_shift_type_identity_columns():
+    if _shift_type_matches_identity(proposed, profile):
         return proposed
-    existing = (
-        frappe.db.get_value("Shift Type", proposed, _shift_type_identity_fields(), as_dict=True)
-        or {}
-    )
-    if _shift_type_row_matches(profile, existing):
-        return proposed
-    frappe.throw(
-        f"A Shift Type named {proposed} already exists with different hours or "
-        "lunch/grace settings. Re-open Preview so this schedule reuses the correct "
-        f"Shift Type, or rename/adjust {proposed} in Desk."
-    )
+    _throw_shift_type_conflict(proposed)
 
 
 def _is_duplicate_entry_error(exc: Exception) -> bool:
@@ -807,6 +818,31 @@ def _is_duplicate_entry_error(exc: Exception) -> bool:
         return True
     text = str(exc).lower()
     return "duplicate entry" in text or "1062" in text
+
+
+def _duplicate_entry_name(exc: Exception) -> str | None:
+    """The name of the already-existing record from a duplicate-entry error.
+
+    This is the name the doctype ACTUALLY assigned our insert — which may differ from
+    what we asked for when the doctype autonames on its own (e.g. hours-only). Frappe's
+    DuplicateEntryError carries ``args = (doctype, name, IntegrityError)``; fall back to
+    parsing the message text.
+    """
+    args = getattr(exc, "args", None)
+    if (
+        isinstance(args, (list, tuple))
+        and len(args) >= 2
+        and args[0] == "Shift Type"
+        and isinstance(args[1], str)
+        and args[1]
+    ):
+        return args[1]
+    text = str(exc)
+    for pattern in (r"Duplicate entry '([^']+)'", r"Shift Type (\S+) already exists"):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return None
 
 
 def create_shift_type(profile: dict, *, name: str | None = None) -> str:
@@ -841,26 +877,27 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
         doc.enable_auto_attendance = 0
     try:
         doc.insert(ignore_permissions=True)
+        # Return the name the DB ACTUALLY assigned — not `proposed`. When the doctype
+        # autonames on its own (e.g. hours-only, ignoring our lunch/grace suffix),
+        # doc.name is the real handle the Shift Schedule must link to.
         return doc.name
     except Exception as exc:
-        # Concurrency: bulk import applies distinct day-patterns in parallel, and the
-        # Shift Type name is keyed on identity, so two patterns with the same identity
-        # can both resolve "create" and race on insert. A stale plan can likewise carry
-        # action="create" for a name a concurrent save already took. The loser recovers
-        # instead of failing the employee — mirrors create_shift_schedule below.
+        if not _is_duplicate_entry_error(exc):
+            raise
+        # The insert collided. Either a concurrent create of the same identity, or the
+        # doctype named our new record after an EXISTING one (an hours-only autoname
+        # can't represent two lunch/grace variants distinctly). Recover to a REAL,
+        # existing record by identity — never return a name we didn't confirm exists,
+        # which would dangle the Shift Schedule's shift_type link.
+        collided = _duplicate_entry_name(exc)
+        if collided and _shift_type_matches_identity(collided, profile):
+            return collided
         rematch = match_shift_type(profile)
         if rematch.get("action") == "use" and rematch.get("name"):
             return rematch["name"]
-        # A duplicate-key failure is itself proof `proposed` is now taken. The record
-        # that holds it was committed by a concurrent writer using the same
-        # identity-keyed name, so reuse it rather than rolling the whole save back.
-        # We can't re-read to confirm identity here — MariaDB's transaction snapshot
-        # may still hide the row its own unique index just rejected — but a name clash
-        # with a *pre-existing, differently-configured* record is caught up-front by
-        # _reuse_shift_type_or_conflict, so anything reaching here is a same-identity race.
-        if _is_duplicate_entry_error(exc):
-            return proposed
-        raise
+        # The name is taken by a record with a DIFFERENT identity and the doctype won't
+        # mint a distinct one — a genuine conflict, surfaced clearly.
+        _throw_shift_type_conflict(collided or proposed)
 
 
 def create_shift_schedule(

@@ -807,6 +807,24 @@ class TestCreateShiftTypeNameConflict(unittest.TestCase):
         "grace_minutes": 0,
     }
 
+    LUNCH_PROFILE = {
+        "start_time": "07:00:00",
+        "end_time": "17:00:00",
+        "lunch_start": "12:00:00",
+        "lunch_end": "13:00:00",
+        "grace_minutes": 10,
+    }
+
+    class _AutonameCollapseDoc:
+        """Mimics a doctype whose autoname ignores our suffixed shift_type_name and
+        names the record after the hours-only FT_0700_1700, which already exists."""
+
+        def __init__(self):
+            self.name = None
+
+        def insert(self, *args, **kwargs):
+            raise Exception("Duplicate entry 'FT_0700_1700' for key 'PRIMARY'")
+
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.get_value")
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
@@ -876,6 +894,71 @@ class TestCreateShiftTypeNameConflict(unittest.TestCase):
         )
         self.assertEqual(name, "FT_0700_1700")
         new_doc.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.get_value")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_autoname_collapse_reuses_collided_when_identity_matches(
+        self, exists, has_column, get_value, new_doc
+    ):
+        """The doctype named our insert after the existing FT_0700_1700; that record
+        has THIS identity, so reuse its real name (not the suffixed one we asked for)
+        so the Shift Schedule links to a Shift Type that actually exists."""
+        from dewey_time.attendance_engine import schedule_resolver
+
+        exists.return_value = False  # suffixed name is free -> front guard passes
+        has_column.return_value = True
+        new_doc.return_value = self._AutonameCollapseDoc()
+        get_value.return_value = {
+            "start_time": "07:00:00",
+            "end_time": "17:00:00",
+            "custom_lunch_start": "12:00:00",
+            "custom_lunch_end": "13:00:00",
+            "custom_grace_minutes": 10,
+        }
+
+        name = schedule_resolver.create_shift_type(
+            self.LUNCH_PROFILE, name="FT_0700_1700_L1200_1300_G10"
+        )
+        # Real, existing name — never the fabricated suffixed one.
+        self.assertEqual(name, "FT_0700_1700")
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.get_value")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_autoname_collapse_conflicts_when_identity_differs(
+        self, exists, has_column, get_value, new_doc
+    ):
+        """The exact reported case: the doctype collapses our lunch shift onto the
+        existing FT_0700_1700, which has a DIFFERENT lunch/grace. Since the doctype
+        won't mint a distinct name, surface a clear conflict — never a dangling
+        'Could not find Shift Type' downstream."""
+        from dewey_time.attendance_engine import schedule_resolver
+
+        exists.return_value = False
+        has_column.return_value = True
+        new_doc.return_value = self._AutonameCollapseDoc()
+        # Existing FT_0700_1700 has NO lunch — differs from the lunch profile.
+        get_value.return_value = {
+            "start_time": "07:00:00",
+            "end_time": "17:00:00",
+            "custom_lunch_start": None,
+            "custom_lunch_end": None,
+            "custom_grace_minutes": 0,
+        }
+
+        with patch.object(
+            schedule_resolver,
+            "match_shift_type",
+            return_value={"action": "create", "proposed_name": "FT_0700_1700_L1200_1300_G10"},
+        ):
+            with self.assertRaises(Exception) as ctx:
+                schedule_resolver.create_shift_type(
+                    self.LUNCH_PROFILE, name="FT_0700_1700_L1200_1300_G10"
+                )
+        self.assertIn("FT_0700_1700", str(ctx.exception))
 
 
 if __name__ == "__main__":
