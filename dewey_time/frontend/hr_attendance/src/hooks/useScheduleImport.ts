@@ -25,8 +25,15 @@ import { fileToBase64 } from "@/ui/schedule-import/format";
 
 export type ImportStep = "idle" | "parsing" | "preview" | "applying" | "done";
 
-/** Lanes (distinct shared-pattern groups) applied concurrently. */
-const LANE_LIMIT = 5;
+/**
+ * Pattern groups applied concurrently. Set to 1 (serial) so the import never runs
+ * two apply transactions at once: concurrent lanes were the root of the InnoDB
+ * deadlocks and the "Could not find Shift Type / Shift Schedule" snapshot races when
+ * lanes create the same shared Shift Type / PAT. The backend recovers from those
+ * races (find-or-create + retry), but serial import removes the contention entirely —
+ * the right trade for a one-time bulk import. Raise to 2–3 only if speed demands it.
+ */
+const LANE_LIMIT = 1;
 
 function getSessionStorage(): Storage | null {
   try {
