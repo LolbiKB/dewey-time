@@ -757,7 +757,7 @@ def _has_shift_type_identity_columns() -> bool:
     """True when at least one lunch/grace column exists, so identity is verifiable.
 
     On a legacy schema without the custom columns we can only match on start/end and
-    must fall back to reuse-by-name — see `match_shift_type` and `_reuse_shift_type_or_conflict`.
+    must fall back to reuse-by-name — see `match_shift_type` and `create_shift_type`.
     """
     return any(
         frappe.db.has_column("Shift Type", col)
@@ -794,23 +794,23 @@ def _shift_type_matches_identity(existing_name: str, profile: dict) -> bool:
     return _shift_type_row_matches(profile, row)
 
 
-def _throw_shift_type_conflict(existing_name: str) -> None:
-    frappe.throw(
-        f"A Shift Type named {existing_name} already exists with different hours or "
-        "lunch/grace settings, and Shift Type names can't be duplicated. Reconcile "
-        f"{existing_name} in Desk (or align this shift's lunch/grace to it), then "
-        "re-open Preview."
-    )
+def _unique_shift_type_name(base: str) -> str:
+    """A free Shift Type name derived from ``base``.
 
-
-def _reuse_shift_type_or_conflict(profile: dict, proposed: str) -> str | None:
-    """Front guard: when ``proposed`` already names a record, reuse it if its identity
-    matches, else raise a clear conflict. Returns ``None`` when the name is free."""
-    if not frappe.db.exists("Shift Type", proposed):
-        return None
-    if _shift_type_matches_identity(proposed, profile):
-        return proposed
-    _throw_shift_type_conflict(proposed)
+    Returns ``base`` when it's free, else the smallest ``base_N`` (N≥2) that isn't
+    taken. This is what makes the identity-derived name never *block* a genuinely new
+    variant: if a different-identity record already squats on the readable name (a
+    leftover, or the lossy no-lunch/no-grace bare name), the new variant simply becomes
+    ``base_2``. Matching stays by identity fields, not by name, so variants still
+    de-duplicate correctly — a shift is never refused over a name clash.
+    """
+    if not frappe.db.exists("Shift Type", base):
+        return base
+    for n in range(2, 1000):
+        candidate = f"{base}_{n}"
+        if not frappe.db.exists("Shift Type", candidate):
+            return candidate
+    return f"{base}_{n}"  # pathological; let the unique-index race settle it
 
 
 def _is_duplicate_entry_error(exc: Exception) -> bool:
@@ -849,17 +849,12 @@ def _duplicate_entry_name(exc: Exception) -> str | None:
     return None
 
 
-def create_shift_type(profile: dict, *, name: str | None = None) -> str:
-    proposed = name or proposed_shift_type_name(profile)
-
-    reuse = _reuse_shift_type_or_conflict(profile, proposed)
-    if reuse is not None:
-        return reuse
-
+def _new_shift_type_doc(profile: dict, target_name: str):
+    """A ready-to-insert Shift Type doc for ``profile`` named ``target_name``."""
     doc = frappe.new_doc("Shift Type")
-    doc.shift_type_name = proposed
+    doc.shift_type_name = target_name
     if hasattr(doc, "name"):
-        doc.name = proposed
+        doc.name = target_name
     doc.start_time = profile.get("start_time")
     doc.end_time = profile.get("end_time")
     if frappe.db.has_column("Shift Type", "custom_lunch_start"):
@@ -879,29 +874,42 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
         doc.enable_early_exit_marking = 1
     if frappe.db.has_column("Shift Type", "enable_auto_attendance"):
         doc.enable_auto_attendance = 0
+    return doc
+
+
+def create_shift_type(profile: dict, *, name: str | None = None) -> str:
+    """Find-or-create the Shift Type for ``profile``. Naming never blocks a variant.
+
+    1. Reuse any existing Shift Type carrying this exact identity (start/end/lunch/
+       grace), whatever its name.
+    2. Otherwise create one. The identity-derived name is preferred, but if a
+       DIFFERENT-identity record already holds it, disambiguate (``name_2``) rather
+       than refuse — supporting unlimited shift variants without a naming limitation.
+    """
+    match = match_shift_type(profile)
+    if match.get("action") == "use" and match.get("name"):
+        return match["name"]
+
+    base = name or proposed_shift_type_name(profile)
+    doc = _new_shift_type_doc(profile, _unique_shift_type_name(base))
     try:
         doc.insert(ignore_permissions=True)
-        # Return the name the DB ACTUALLY assigned — not `proposed`. When the doctype
-        # autonames on its own (e.g. hours-only, ignoring our lunch/grace suffix),
-        # doc.name is the real handle the Shift Schedule must link to.
         return doc.name
     except Exception as exc:
         if not _is_duplicate_entry_error(exc):
             raise
-        # The insert collided. Either a concurrent create of the same identity, or the
-        # doctype named our new record after an EXISTING one (an hours-only autoname
-        # can't represent two lunch/grace variants distinctly). Recover to a REAL,
-        # existing record by identity — never return a name we didn't confirm exists,
-        # which would dangle the Shift Schedule's shift_type link.
+        # A concurrent lane won the race for this name. If its record carries our
+        # identity, reuse it (two lanes with the same identity derive the same name);
+        # otherwise pick the next free name and insert once more.
         collided = _duplicate_entry_name(exc)
         if collided and _shift_type_matches_identity(collided, profile):
             return collided
         rematch = match_shift_type(profile)
         if rematch.get("action") == "use" and rematch.get("name"):
             return rematch["name"]
-        # The name is taken by a record with a DIFFERENT identity and the doctype won't
-        # mint a distinct one — a genuine conflict, surfaced clearly.
-        _throw_shift_type_conflict(collided or proposed)
+        retry = _new_shift_type_doc(profile, _unique_shift_type_name(base))
+        retry.insert(ignore_permissions=True)
+        return retry.name
 
 
 def create_shift_schedule(
