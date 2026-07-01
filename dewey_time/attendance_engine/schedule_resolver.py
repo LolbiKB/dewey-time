@@ -824,11 +824,10 @@ def _is_duplicate_entry_error(exc: Exception) -> bool:
     return "duplicate entry" in text or "1062" in text
 
 
-def _duplicate_entry_name(exc: Exception) -> str | None:
+def _duplicate_entry_name(exc: Exception, doctype: str = "Shift Type") -> str | None:
     """The name of the already-existing record from a duplicate-entry error.
 
-    This is the name the doctype ACTUALLY assigned our insert — which may differ from
-    what we asked for when the doctype autonames on its own (e.g. hours-only). Frappe's
+    This is the name the doctype ACTUALLY assigned our insert. Frappe's
     DuplicateEntryError carries ``args = (doctype, name, IntegrityError)``; fall back to
     parsing the message text.
     """
@@ -836,13 +835,13 @@ def _duplicate_entry_name(exc: Exception) -> str | None:
     if (
         isinstance(args, (list, tuple))
         and len(args) >= 2
-        and args[0] == "Shift Type"
+        and args[0] == doctype
         and isinstance(args[1], str)
         and args[1]
     ):
         return args[1]
     text = str(exc)
-    for pattern in (r"Duplicate entry '([^']+)'", r"Shift Type (\S+) already exists"):
+    for pattern in (r"Duplicate entry '([^']+)'", rf"{re.escape(doctype)} (\S+) already exists"):
         match = re.search(pattern, text)
         if match:
             return match.group(1)
@@ -912,6 +911,47 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
         return retry.name
 
 
+def _unique_shift_schedule_name(base: str) -> str:
+    """A free Shift Schedule (PAT) name derived from ``base`` — the Shift-Schedule twin
+    of `_unique_shift_type_name`. A PAT name clash never blocks a distinct pattern."""
+    if not frappe.db.exists("Shift Schedule", base):
+        return base
+    for n in range(2, 1000):
+        candidate = f"{base}_{n}"
+        if not frappe.db.exists("Shift Schedule", candidate):
+            return candidate
+    return f"{base}_{n}"  # pathological; let the unique-index race settle it
+
+
+def _shift_schedule_matches_identity(
+    existing_name: str, *, day_set: set[str], shift_type: str, frequency: str
+) -> bool:
+    """Whether Shift Schedule ``existing_name`` carries this identity (days/shift/freq).
+    A snapshot-invisible row (a concurrent commit) counts as a match — the same PAT name
+    is only derivable from the same days+shift_type, so it's our identity, not a clash."""
+    if not frappe.db.exists("Shift Schedule", existing_name):
+        return True
+    doc = frappe.get_doc("Shift Schedule", existing_name)
+    return _shift_schedule_doc_matches(
+        doc,
+        day_set=day_set,
+        shift_type=shift_type,
+        frequency=frequency,
+        require_submitted=False,
+    )
+
+
+def _new_shift_schedule_doc(days: list[str], shift_type: str, frequency: str, target_name: str):
+    doc = frappe.new_doc("Shift Schedule")
+    doc.shift_type = shift_type
+    doc.frequency = frequency
+    for day in days:
+        doc.append("repeat_on_days", {"day": day})
+    if hasattr(doc, "name"):
+        doc.name = target_name
+    return doc
+
+
 def create_shift_schedule(
     *,
     days: list[str],
@@ -920,31 +960,43 @@ def create_shift_schedule(
     frequency: str = "Every Week",
     name: str | None = None,
 ) -> str:
-    proposed = name or proposed_pat_name(days, shift_type, profile)
+    """Find-or-create the Shift Schedule (PAT). Like `create_shift_type`, a name clash
+    never blocks: reuse an identity match, else create — reusing a concurrent racer's
+    record or disambiguating the name rather than surfacing a raw duplicate error."""
+    day_set = set(days)
     existing = match_shift_schedule(
         days=days, shift_type=shift_type, profile=profile, frequency=frequency
     )
     if existing.get("action") == "use":
         return existing["name"]
 
-    doc = frappe.new_doc("Shift Schedule")
-    doc.shift_type = shift_type
-    doc.frequency = frequency
-    for day in days:
-        doc.append("repeat_on_days", {"day": day})
-    if hasattr(doc, "name"):
-        doc.name = proposed
+    base = name or proposed_pat_name(days, shift_type, profile)
+    doc = _new_shift_schedule_doc(days, shift_type, frequency, _unique_shift_schedule_name(base))
     try:
         doc.insert(ignore_permissions=True)
         doc.submit()
         return doc.name
-    except Exception:
+    except Exception as exc:
         rematch = match_shift_schedule(
             days=days, shift_type=shift_type, profile=profile, frequency=frequency
         )
         if rematch.get("action") == "use":
             return rematch["name"]
-        raise
+        if not _is_duplicate_entry_error(exc):
+            raise
+        # A concurrent lane created this PAT; its row may be invisible to our snapshot.
+        # Reuse it when it carries our identity, else create the distinct pattern.
+        collided = _duplicate_entry_name(exc, "Shift Schedule")
+        if collided and _shift_schedule_matches_identity(
+            collided, day_set=day_set, shift_type=shift_type, frequency=frequency
+        ):
+            return collided
+        retry = _new_shift_schedule_doc(
+            days, shift_type, frequency, _unique_shift_schedule_name(base)
+        )
+        retry.insert(ignore_permissions=True)
+        retry.submit()
+        return retry.name
 
 
 def upsert_ssa(

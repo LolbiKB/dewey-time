@@ -26,13 +26,15 @@ def _is_transient_lock_error(exc: Exception) -> bool:
 
 
 def _is_transient_apply_conflict(exc: Exception) -> bool:
-    """A cross-lane race: another import lane created the shared Shift Type but its
-    row isn't visible in this transaction's snapshot yet, so the create-recovery
-    returns that name and linking it fails with 'Could not find Shift Type: X'.
-    Re-running the apply with a fresh snapshot (once the other lane commits) fixes it.
-    Bounded by the same retry budget, so a genuinely-missing Shift Type still surfaces.
+    """A cross-lane race: another import lane created a shared Shift Type / Shift
+    Schedule but its row isn't visible in this transaction's snapshot yet, so the
+    create-recovery returns that name and linking it fails with 'Could not find
+    Shift Type: X' / 'Could not find Shift Schedule: X'. Re-running the apply with a
+    fresh snapshot (once the other lane commits) fixes it. Bounded by the same retry
+    budget, so a genuinely-missing record still surfaces after the retries.
     """
-    return "could not find shift type" in str(exc).lower()
+    message = str(exc).lower()
+    return "could not find shift type" in message or "could not find shift schedule" in message
 
 
 def _default_effective_from() -> str:

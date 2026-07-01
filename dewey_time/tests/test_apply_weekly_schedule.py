@@ -281,6 +281,16 @@ class TestApplyDeadlockRetry(unittest.TestCase):
         self.assertEqual(gen.call_count, 2)
         sleep.assert_called_once()
 
+    def test_retries_transient_shift_schedule_race(self):
+        import frappe
+
+        race = frappe.ValidationError("Could not find Shift Schedule: PAT_SAT_FT_0700_1100")
+        result, gen, sleep = self._run([race, None])
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(gen.call_count, 2)
+        sleep.assert_called_once()
+
     def test_ordinary_validation_error_is_not_retried(self):
         import frappe
 

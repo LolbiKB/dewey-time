@@ -284,7 +284,8 @@ class TestMatchShiftSchedule(unittest.TestCase):
 class TestCreateShiftSchedule(unittest.TestCase):
     @patch("dewey_time.attendance_engine.schedule_resolver.match_shift_schedule")
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
-    def test_sets_doc_name_on_create(self, new_doc, match_schedule):
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists", return_value=False)
+    def test_sets_doc_name_on_create(self, exists, new_doc, match_schedule):
         from dewey_time.attendance_engine.schedule_resolver import create_shift_schedule
 
         match_schedule.return_value = {"action": "create", "proposed_name": "PAT_MON-FRI_FT_0800_1700"}
@@ -323,6 +324,55 @@ class TestCreateShiftSchedule(unittest.TestCase):
         )
         self.assertEqual(name, "PAT_MON-FRI_FT_0800_1700")
         self.assertEqual(match_schedule.call_count, 2)
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver.match_shift_schedule")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    def test_duplicate_entry_reuses_collided_pat_on_race(self, new_doc, match_schedule, exists):
+        """The reported case: a concurrent lane created PAT_SAT_FT_0700_1100. The insert
+        hits a real duplicate-entry and a snapshot-blind rematch can't see the winner,
+        so reuse the collided name rather than surfacing the raw IntegrityError."""
+        from dewey_time.attendance_engine.schedule_resolver import create_shift_schedule
+
+        match_schedule.return_value = {"action": "create", "proposed_name": "PAT_SAT_FT_0700_1100"}
+        exists.return_value = False  # snapshot can't see the racer
+        doc = MagicMock()
+        doc.name = None
+        doc.insert.side_effect = Exception(
+            "Duplicate entry 'PAT_SAT_FT_0700_1100' for key 'PRIMARY'"
+        )
+        new_doc.return_value = doc
+
+        name = create_shift_schedule(
+            days=["Saturday"],
+            shift_type="FT_0700_1100",
+            profile={"start_time": "07:00:00", "end_time": "11:00:00"},
+            name="PAT_SAT_FT_0700_1100",
+        )
+        self.assertEqual(name, "PAT_SAT_FT_0700_1100")
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver.match_shift_schedule")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    def test_disambiguates_pat_when_name_taken_by_leftover(self, new_doc, match_schedule, exists):
+        """No identity match, but the derived PAT name is already taken → create the
+        distinct pattern as PAT_SAT_FT_0700_1100_2 instead of blocking."""
+        from dewey_time.attendance_engine.schedule_resolver import create_shift_schedule
+
+        match_schedule.return_value = {"action": "create", "proposed_name": "PAT_SAT_FT_0700_1100"}
+        exists.side_effect = lambda _dt, nm: nm == "PAT_SAT_FT_0700_1100"  # base taken, _2 free
+        doc = MagicMock()
+        doc.name = None
+        new_doc.return_value = doc
+
+        name = create_shift_schedule(
+            days=["Saturday"],
+            shift_type="FT_0700_1100",
+            profile={"start_time": "07:00:00", "end_time": "11:00:00"},
+            name="PAT_SAT_FT_0700_1100",
+        )
+        self.assertEqual(name, "PAT_SAT_FT_0700_1100_2")
+        self.assertEqual(doc.name, "PAT_SAT_FT_0700_1100_2")
 
 
 class TestMatchShiftType(unittest.TestCase):
