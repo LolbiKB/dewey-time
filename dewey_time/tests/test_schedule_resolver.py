@@ -404,6 +404,74 @@ class TestMatchShiftType(unittest.TestCase):
         self.assertEqual(result["action"], "create")
         self.assertEqual(result["proposed_name"], "FT_0800_1700_L1200_1300")
 
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.get_all")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.table_exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.get_value")
+    def test_name_collision_with_different_identity_returns_create(
+        self, get_value, exists, has_column, table_exists, get_all
+    ):
+        """Regression: a no-lunch profile whose bare name FT_0700_1700 is already held
+        by a lunch-carrying record must NOT silently reuse it — return create so the
+        conflict is surfaced downstream, not swallowed."""
+        from dewey_time.attendance_engine.schedule_resolver import match_shift_type
+
+        table_exists.return_value = True
+        has_column.return_value = True
+        lunch_record = {
+            "start_time": "07:00:00",
+            "end_time": "17:00:00",
+            "custom_lunch_start": "12:00:00",
+            "custom_lunch_end": "13:00:00",
+            "custom_grace_minutes": 0,
+        }
+        get_all.return_value = [{"name": "FT_0700_1700", **lunch_record}]
+        exists.return_value = True
+        get_value.return_value = lunch_record
+
+        result = match_shift_type(
+            {
+                "start_time": "07:00:00",
+                "end_time": "17:00:00",
+                "lunch_start": None,
+                "lunch_end": None,
+                "grace_minutes": 0,
+            }
+        )
+        self.assertEqual(result["action"], "create")
+        self.assertEqual(result["proposed_name"], "FT_0700_1700")
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.get_all")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.table_exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_legacy_schema_without_columns_reuses_by_name(
+        self, exists, has_column, table_exists, get_all
+    ):
+        """Without the lunch/grace columns, identity can't be verified, so the
+        historical reuse-by-name behavior is preserved."""
+        from dewey_time.attendance_engine.schedule_resolver import match_shift_type
+
+        table_exists.return_value = True
+        has_column.return_value = False  # legacy schema, no custom identity columns
+        get_all.return_value = [
+            {"name": "FT_0700_1700", "start_time": "09:00:00", "end_time": "18:00:00"}
+        ]
+        exists.return_value = True
+
+        result = match_shift_type(
+            {
+                "start_time": "07:00:00",
+                "end_time": "17:00:00",
+                "lunch_start": None,
+                "lunch_end": None,
+                "grace_minutes": 0,
+            }
+        )
+        self.assertEqual(result["action"], "use")
+        self.assertEqual(result["name"], "FT_0700_1700")
+
 
 class TestShiftGenerationEndDate(unittest.TestCase):
     @patch("dewey_time.attendance_engine.schedule_resolver.add_days")
@@ -677,11 +745,14 @@ class TestCreateShiftTypeIdempotency(unittest.TestCase):
 
         self.assertEqual(name, "FT_0800_1700")
 
-    def test_insert_error_without_existing_match_reraises(self):
+    def test_duplicate_insert_without_rematch_reuses_name(self):
+        """The insert lost the race (duplicate key) and a snapshot-blind re-match
+        can't see the winner's row. The duplicate error is itself proof the name is
+        taken, so reuse it rather than rolling the whole employee back."""
         import frappe
         from dewey_time.attendance_engine import schedule_resolver
 
-        frappe.db.exists = MagicMock(return_value=False)
+        frappe.db.exists = MagicMock(return_value=False)  # snapshot can't see the racer
         frappe.db.has_column = MagicMock(return_value=False)
         frappe.new_doc = MagicMock(return_value=self._RaisingDoc())
 
@@ -690,8 +761,121 @@ class TestCreateShiftTypeIdempotency(unittest.TestCase):
             "match_shift_type",
             return_value={"action": "create", "proposed_name": "FT_0800_1700"},
         ):
-            with self.assertRaises(Exception):
+            # `name` is the (stale) plan name that collided — reuse exactly it.
+            name = schedule_resolver.create_shift_type(self.PROFILE, name="FT_0800_1700")
+
+        self.assertEqual(name, "FT_0800_1700")
+
+    def test_non_duplicate_insert_error_reraises(self):
+        """A genuine (non-duplicate) insert failure must still surface, not be
+        swallowed as a phantom race."""
+        import frappe
+        from dewey_time.attendance_engine import schedule_resolver
+
+        class _BrokenDoc:
+            def __init__(self):
+                self.name = None
+
+            def insert(self, *args, **kwargs):
+                raise Exception("Deadlock found when trying to get lock")
+
+        frappe.db.exists = MagicMock(return_value=False)
+        frappe.db.has_column = MagicMock(return_value=False)
+        frappe.new_doc = MagicMock(return_value=_BrokenDoc())
+
+        with patch.object(
+            schedule_resolver,
+            "match_shift_type",
+            return_value={"action": "create", "proposed_name": "FT_0800_1700"},
+        ):
+            with self.assertRaises(Exception) as ctx:
                 schedule_resolver.create_shift_type(self.PROFILE)
+        self.assertIn("Deadlock", str(ctx.exception))
+
+
+class TestCreateShiftTypeNameConflict(unittest.TestCase):
+    """A stale plan / legacy hours-only name can point create_shift_type at a name
+    that already belongs to a DIFFERENT shift definition. Reuse it only when its
+    identity matches; otherwise raise a clear conflict instead of silently attaching
+    the wrong lunch/grace (or bubbling a raw IntegrityError)."""
+
+    NO_LUNCH_PROFILE = {
+        "start_time": "07:00:00",
+        "end_time": "17:00:00",
+        "lunch_start": None,
+        "lunch_end": None,
+        "grace_minutes": 0,
+    }
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.get_value")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_front_guard_reuses_identity_match(self, exists, has_column, get_value, new_doc):
+        from dewey_time.attendance_engine import schedule_resolver
+
+        exists.return_value = True
+        has_column.return_value = True
+        get_value.return_value = {
+            "start_time": "07:00:00",
+            "end_time": "17:00:00",
+            "custom_lunch_start": None,
+            "custom_lunch_end": None,
+            "custom_grace_minutes": 0,
+        }
+
+        name = schedule_resolver.create_shift_type(self.NO_LUNCH_PROFILE, name="FT_0700_1700")
+
+        self.assertEqual(name, "FT_0700_1700")
+        new_doc.assert_not_called()  # reused, never inserted
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.get_value")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_front_guard_raises_on_identity_mismatch(self, exists, has_column, get_value, new_doc):
+        from dewey_time.attendance_engine import schedule_resolver
+
+        # An existing FT_0700_1700 that actually carries a lunch break — different
+        # identity from this no-lunch profile.
+        exists.return_value = True
+        has_column.return_value = True
+        get_value.return_value = {
+            "start_time": "07:00:00",
+            "end_time": "17:00:00",
+            "custom_lunch_start": "12:00:00",
+            "custom_lunch_end": "13:00:00",
+            "custom_grace_minutes": 0,
+        }
+
+        with self.assertRaises(Exception) as ctx:
+            schedule_resolver.create_shift_type(self.NO_LUNCH_PROFILE, name="FT_0700_1700")
+        self.assertIn("FT_0700_1700", str(ctx.exception))
+        new_doc.assert_not_called()  # conflict, never inserted
+
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.has_column")
+    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    def test_legacy_schema_reuses_by_name_without_conflict(self, exists, has_column, new_doc):
+        """Without identity columns we can't verify lunch/grace, so reuse the
+        same-named record rather than raising a false conflict."""
+        from dewey_time.attendance_engine import schedule_resolver
+
+        exists.return_value = True
+        has_column.return_value = False  # legacy schema
+
+        name = schedule_resolver.create_shift_type(
+            {
+                "start_time": "07:00:00",
+                "end_time": "17:00:00",
+                "lunch_start": "12:00:00",
+                "lunch_end": "13:00:00",
+                "grace_minutes": 0,
+            },
+            name="FT_0700_1700",
+        )
+        self.assertEqual(name, "FT_0700_1700")
+        new_doc.assert_not_called()
 
 
 if __name__ == "__main__":

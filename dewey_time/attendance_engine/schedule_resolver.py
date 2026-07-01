@@ -343,16 +343,28 @@ def match_shift_type(profile: dict) -> dict:
     if not frappe.db.table_exists("Shift Type"):
         return {"action": "create", "proposed_name": proposed}
 
-    fields = ["name", "start_time", "end_time"]
-    for col in ("custom_lunch_start", "custom_lunch_end", "custom_grace_minutes"):
-        if frappe.db.has_column("Shift Type", col):
-            fields.append(col)
+    fields = ["name"] + _shift_type_identity_fields()
 
     rows = frappe.get_all("Shift Type", fields=fields, limit_page_length=500) or []
     matches = [row for row in rows if _shift_type_row_matches(profile, row)]
     if not matches:
         if frappe.db.exists("Shift Type", proposed):
-            return {"action": "use", "name": proposed}
+            # A record already holds the identity-derived name. Reuse it only when we
+            # can't verify identity (legacy schema without the custom columns), or when
+            # a direct read confirms it matches — e.g. the record sits beyond the row
+            # scan's page limit. When identity IS verifiable and the named record
+            # differs, fall through to create so create_shift_type surfaces a clear
+            # name/identity conflict instead of silently reusing a mis-configured type.
+            if not _has_shift_type_identity_columns():
+                return {"action": "use", "name": proposed}
+            existing = (
+                frappe.db.get_value(
+                    "Shift Type", proposed, _shift_type_identity_fields(), as_dict=True
+                )
+                or {}
+            )
+            if _shift_type_row_matches(profile, existing):
+                return {"action": "use", "name": proposed}
         return {"action": "create", "proposed_name": proposed}
 
     preferred = next((row for row in matches if row.get("name") == proposed), None)
@@ -736,10 +748,73 @@ def week_pattern_from_ssas(employee: str) -> list[dict]:
     return rows
 
 
+def _has_shift_type_identity_columns() -> bool:
+    """True when at least one lunch/grace column exists, so identity is verifiable.
+
+    On a legacy schema without the custom columns we can only match on start/end and
+    must fall back to reuse-by-name — see `match_shift_type` and `_reuse_shift_type_or_conflict`.
+    """
+    return any(
+        frappe.db.has_column("Shift Type", col)
+        for col in ("custom_lunch_start", "custom_lunch_end", "custom_grace_minutes")
+    )
+
+
+def _shift_type_identity_fields() -> list[str]:
+    fields = ["start_time", "end_time"]
+    for col in ("custom_lunch_start", "custom_lunch_end", "custom_grace_minutes"):
+        if frappe.db.has_column("Shift Type", col):
+            fields.append(col)
+    return fields
+
+
+def _reuse_shift_type_or_conflict(profile: dict, proposed: str) -> str | None:
+    """Decide whether an existing Shift Type named ``proposed`` can back this profile.
+
+    - Returns ``proposed`` when a record with that name exists AND its identity
+      (start/end/lunch/grace) matches — safe to reuse.
+    - Raises a clear conflict when a record holds the name with a DIFFERENT identity
+      (a legacy hours-only name whose lunch/grace differ, or a stale plan pointing at
+      the wrong name). This is the one case where reusing by name would silently
+      attach a mis-configured Shift Type, so we surface it instead.
+    - Returns ``None`` when the name is free (caller should create it).
+    """
+    if not frappe.db.exists("Shift Type", proposed):
+        return None
+    # A legacy schema without the identity columns can't be verified; preserve the
+    # historical reuse-by-name rather than raising a false conflict.
+    if not _has_shift_type_identity_columns():
+        return proposed
+    existing = (
+        frappe.db.get_value("Shift Type", proposed, _shift_type_identity_fields(), as_dict=True)
+        or {}
+    )
+    if _shift_type_row_matches(profile, existing):
+        return proposed
+    frappe.throw(
+        f"A Shift Type named {proposed} already exists with different hours or "
+        "lunch/grace settings. Re-open Preview so this schedule reuses the correct "
+        f"Shift Type, or rename/adjust {proposed} in Desk."
+    )
+
+
+def _is_duplicate_entry_error(exc: Exception) -> bool:
+    # Frappe's DuplicateEntryError stringifies as ('Doctype', 'name', IntegrityError(1062, ...))
+    # and MariaDB's own error carries "Duplicate entry ... 1062", so the text match is the
+    # reliable signal. Also accept the exception class name directly (checked via __name__ so
+    # we never pass a non-type to isinstance).
+    if type(exc).__name__ in ("DuplicateEntryError", "UniqueValidationError"):
+        return True
+    text = str(exc).lower()
+    return "duplicate entry" in text or "1062" in text
+
+
 def create_shift_type(profile: dict, *, name: str | None = None) -> str:
     proposed = name or proposed_shift_type_name(profile)
-    if frappe.db.exists("Shift Type", proposed):
-        return proposed
+
+    reuse = _reuse_shift_type_or_conflict(profile, proposed)
+    if reuse is not None:
+        return reuse
 
     doc = frappe.new_doc("Shift Type")
     doc.shift_type_name = proposed
@@ -767,15 +842,24 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
     try:
         doc.insert(ignore_permissions=True)
         return doc.name
-    except Exception:
+    except Exception as exc:
         # Concurrency: bulk import applies distinct day-patterns in parallel, and the
-        # Shift Type name is keyed on clock hours only (FT_{start}_{end}), so two
-        # patterns sharing hours can both resolve "create" and race on insert. The
-        # loser re-matches and reuses the winner's record instead of failing the
-        # employee — mirrors create_shift_schedule below.
+        # Shift Type name is keyed on identity, so two patterns with the same identity
+        # can both resolve "create" and race on insert. A stale plan can likewise carry
+        # action="create" for a name a concurrent save already took. The loser recovers
+        # instead of failing the employee — mirrors create_shift_schedule below.
         rematch = match_shift_type(profile)
         if rematch.get("action") == "use" and rematch.get("name"):
             return rematch["name"]
+        # A duplicate-key failure is itself proof `proposed` is now taken. The record
+        # that holds it was committed by a concurrent writer using the same
+        # identity-keyed name, so reuse it rather than rolling the whole save back.
+        # We can't re-read to confirm identity here — MariaDB's transaction snapshot
+        # may still hide the row its own unique index just rejected — but a name clash
+        # with a *pre-existing, differently-configured* record is caught up-front by
+        # _reuse_shift_type_or_conflict, so anything reaching here is a same-identity race.
+        if _is_duplicate_entry_error(exc):
+            return proposed
         raise
 
 
