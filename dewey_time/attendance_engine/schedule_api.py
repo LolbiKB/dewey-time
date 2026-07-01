@@ -25,6 +25,16 @@ def _is_transient_lock_error(exc: Exception) -> bool:
     )
 
 
+def _is_transient_apply_conflict(exc: Exception) -> bool:
+    """A cross-lane race: another import lane created the shared Shift Type but its
+    row isn't visible in this transaction's snapshot yet, so the create-recovery
+    returns that name and linking it fails with 'Could not find Shift Type: X'.
+    Re-running the apply with a fresh snapshot (once the other lane commits) fixes it.
+    Bounded by the same retry budget, so a genuinely-missing Shift Type still surfaces.
+    """
+    return "could not find shift type" in str(exc).lower()
+
+
 def _default_effective_from() -> str:
     """July 1st of the current year when today is before it; otherwise tomorrow."""
     today = getdate(nowdate())
@@ -496,6 +506,12 @@ def apply_weekly_schedule(
             break
         except frappe.ValidationError as exc:
             frappe.db.rollback()
+            # A concurrent lane's just-created Shift Type may be invisible to us; retry
+            # with a fresh snapshot before treating it as a real validation failure.
+            if _is_transient_apply_conflict(exc) and attempt < _MAX_APPLY_LOCK_RETRIES:
+                attempt += 1
+                time.sleep(_APPLY_RETRY_BACKOFF_SECONDS * attempt)
+                continue
             message = str(exc)
             lowered = message.lower()
             if "overlap" in lowered or "multiple shift" in lowered:
@@ -511,7 +527,9 @@ def apply_weekly_schedule(
             raise
         except Exception as exc:
             frappe.db.rollback()
-            if _is_transient_lock_error(exc) and attempt < _MAX_APPLY_LOCK_RETRIES:
+            if (
+                _is_transient_lock_error(exc) or _is_transient_apply_conflict(exc)
+            ) and attempt < _MAX_APPLY_LOCK_RETRIES:
                 attempt += 1
                 time.sleep(_APPLY_RETRY_BACKOFF_SECONDS * attempt)
                 continue

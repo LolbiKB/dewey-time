@@ -270,6 +270,24 @@ class TestApplyDeadlockRetry(unittest.TestCase):
         with self.assertRaises(Exception):
             self._run([boom, None])
 
+    def test_retries_transient_shift_type_race(self):
+        import frappe
+
+        # Cross-lane race: the shared Shift Type isn't visible yet → link fails.
+        race = frappe.ValidationError("Could not find Shift Type: FT_0700_1100")
+        result, gen, sleep = self._run([race, None])
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(gen.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_ordinary_validation_error_is_not_retried(self):
+        import frappe
+
+        # A real validation failure (not the race) must surface immediately.
+        with self.assertRaises(Exception):
+            self._run([frappe.ValidationError("Start and end are required"), None])
+
 
 if __name__ == "__main__":
     unittest.main()
