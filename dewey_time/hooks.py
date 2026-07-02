@@ -95,6 +95,7 @@ after_install = "dewey_time.setup.custom_fields.make_custom_fields"
 # Keep SPA assets available under sites/assets after every migrate (+ ensure fields).
 after_migrate = [
     "dewey_time.setup.custom_fields.make_custom_fields",
+    "dewey_time.setup.shift_type_naming.ensure_shift_type_prompt_naming",
     "dewey_time.utils.sync_hr_attendance_assets.sync_hr_attendance_assets",
     "dewey_time.utils.sync_adms_assets.sync_adms_assets",
     "dewey_time.attendance_engine.dashboard_auth.ensure_adms_roles",
