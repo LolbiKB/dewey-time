@@ -59,6 +59,9 @@ export function useScheduleImport(options?: {
   const [effectiveFrom, setEffectiveFrom] = useState(defaultEffectiveFrom);
   const [groupOverrides, setGroupOverrides] = useState<Record<string, string>>({});
   const [applyStatuses, setApplyStatuses] = useState<Record<number, RowApplyStatus>>({});
+  // ISO timestamp of when THIS tab's apply run finished — stamped into the problems
+  // export so a stale tab's re-download is recognizable. Null until an apply runs.
+  const [appliedAt, setAppliedAt] = useState<string | null>(null);
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
   // Frozen at apply() start so the progress denominator can't shift if anything
   // touches the selection mid-run.
@@ -122,6 +125,7 @@ export function useScheduleImport(options?: {
     setRowFilter("all");
     setGroupOverrides({});
     setApplyStatuses({});
+    setAppliedAt(null);
     setApplyTotal(0);
     setCurrentFileName(null);
     cancelRef.current = false;
@@ -132,6 +136,7 @@ export function useScheduleImport(options?: {
       setCurrentFileName(file.name);
       setParseError(null);
       setApplyStatuses({});
+      setAppliedAt(null);
       setStep("parsing");
       try {
         const b64 = await fileToBase64(file);
@@ -238,6 +243,7 @@ export function useScheduleImport(options?: {
       },
     });
 
+    setAppliedAt(new Date().toISOString());
     setStep("done");
     if (anyOk) options?.onApplied?.();
   }, [rows, selected, effectiveFrom, groupOverrides, callApply, options]);
@@ -271,6 +277,7 @@ export function useScheduleImport(options?: {
     effectiveFrom,
     groupOverrides,
     applyStatuses,
+    appliedAt,
     currentFileName,
     eligibleCount,
     applyTotal,

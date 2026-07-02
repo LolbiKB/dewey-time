@@ -162,6 +162,7 @@ export function ReviewStep(props: {
         visibleCount={visibleRows.length}
         problemRows={problemRows}
         problemFilename={problemFilename}
+        appliedAt={c.appliedAt}
       />
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">

@@ -49,6 +49,22 @@ type ApplyStatusLike = { type: string; message?: string };
 const CSV_HEADER =
   "row_number,employee_id,email,employee_name,field,code,severity,message,suggestion";
 
+/**
+ * Provenance stamp appended to every exported row, so a problems file can never be
+ * mistaken for a different run again (three identical stale downloads once sent a
+ * whole debugging session chasing a ghost):
+ *  - generated_at — when the file was downloaded
+ *  - applied_at   — when THIS tab's apply run finished ("" = never applied here,
+ *                   i.e. the rows are parse-time only)
+ *  - app_build    — the bundle build id actually loaded in the tab (matches
+ *                   assets/build-id.txt), exposing a stale pre-deploy tab at a glance
+ */
+export type ProblemExportMeta = {
+  generated_at: string;
+  applied_at: string;
+  app_build: string;
+};
+
 export function buildProblemRows(
   feedback: FeedbackInput[],
   rows: RowRef[],
@@ -87,8 +103,10 @@ export function buildProblemRows(
   return problems.sort((a, b) => a.row_number - b.row_number);
 }
 
-export function problemsToCsv(rows: ProblemRow[]): string {
+export function problemsToCsv(rows: ProblemRow[], meta?: ProblemExportMeta): string {
   const escape = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+  const header = meta ? `${CSV_HEADER},generated_at,applied_at,app_build` : CSV_HEADER;
+  const metaCells = meta ? [meta.generated_at, meta.applied_at, meta.app_build] : [];
   const lines = rows.map((r) =>
     [
       r.row_number,
@@ -100,9 +118,10 @@ export function problemsToCsv(rows: ProblemRow[]): string {
       r.severity,
       r.message,
       r.suggestion,
+      ...metaCells,
     ]
       .map(escape)
       .join(","),
   );
-  return [CSV_HEADER, ...lines].join("\n");
+  return [header, ...lines].join("\n");
 }

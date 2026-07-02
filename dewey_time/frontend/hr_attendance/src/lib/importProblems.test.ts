@@ -135,3 +135,56 @@ test("problemsToCsv returns just the header for an empty list", () => {
     "row_number,employee_id,email,employee_name,field,code,severity,message,suggestion",
   );
 });
+
+test("problemsToCsv stamps provenance columns on every row when meta is given", () => {
+  const csv = problemsToCsv(
+    [
+      {
+        row_number: 3,
+        employee_id: "DI-0008",
+        email: "",
+        employee_name: "Yuoen",
+        field: "apply",
+        code: "APPLY_FAILED",
+        severity: "error",
+        message: "Boom.",
+        suggestion: "",
+      },
+    ],
+    {
+      generated_at: "2026-07-02T10:30:00.000Z",
+      applied_at: "2026-07-02T10:15:00.000Z",
+      app_build: "1782956841",
+    },
+  );
+  const lines = csv.split("\n");
+  assert.equal(
+    lines[0],
+    "row_number,employee_id,email,employee_name,field,code,severity,message,suggestion," +
+      "generated_at,applied_at,app_build",
+  );
+  assert.ok(
+    lines[1].endsWith('"2026-07-02T10:30:00.000Z","2026-07-02T10:15:00.000Z","1782956841"'),
+    lines[1],
+  );
+});
+
+test("problemsToCsv leaves applied_at empty for parse-only exports (never applied)", () => {
+  const csv = problemsToCsv(
+    [
+      {
+        row_number: 1,
+        employee_id: "DI-1",
+        email: "",
+        employee_name: "",
+        field: "employee_id",
+        code: "EMPLOYEE_NOT_FOUND",
+        severity: "error",
+        message: "x",
+        suggestion: "",
+      },
+    ],
+    { generated_at: "2026-07-02T10:30:00.000Z", applied_at: "", app_build: "dev" },
+  );
+  assert.ok(csv.split("\n")[1].endsWith('"2026-07-02T10:30:00.000Z","","dev"'));
+});

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { problemsToCsv, type ProblemRow } from "@/lib/importProblems";
 import type { ParseSummary, RowFilter } from "@/types/scheduleImport";
-import { downloadCsv } from "@/ui/schedule-import/format";
+import { appBuildId, downloadCsv } from "@/ui/schedule-import/format";
 
 export function SummaryBar(props: {
   summary: ParseSummary;
@@ -13,8 +13,25 @@ export function SummaryBar(props: {
   visibleCount: number;
   problemRows: ProblemRow[];
   problemFilename: string;
+  /** ISO time this tab's apply run finished; null = parse-time rows only. */
+  appliedAt: string | null;
 }) {
   const { summary, filter, onFilterChange, visibleCount } = props;
+
+  // Stamp provenance at click time (generated_at + run timestamp in the filename)
+  // so two downloads are never byte-identical files with identical names — a stale
+  // tab's export identifies itself instead of masquerading as a fresh run.
+  const downloadProblems = () => {
+    const generatedAt = new Date().toISOString();
+    const csv = problemsToCsv(props.problemRows, {
+      generated_at: generatedAt,
+      applied_at: props.appliedAt ?? "",
+      app_build: appBuildId(),
+    });
+    const stamp = generatedAt.slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+    const filename = props.problemFilename.replace(/\.csv$/, `-${stamp}.csv`);
+    downloadCsv(csv, filename);
+  };
 
   const derivedCount = summary.by_code?.["EMPLOYMENT_TYPE_DERIVED"] ?? 0;
 
@@ -52,7 +69,7 @@ export function SummaryBar(props: {
             variant="outline"
             size="sm"
             className="h-8 shrink-0 gap-1.5 text-xs"
-            onClick={() => downloadCsv(problemsToCsv(props.problemRows), props.problemFilename)}
+            onClick={downloadProblems}
             title="Download every not-found, error, warning, and apply-failure row as CSV"
           >
             <DownloadIcon className="size-3.5" />

@@ -47,6 +47,24 @@ export function rowMatchesFilter(row: ParsedRow, filter: RowFilter): boolean {
   }
 }
 
+/**
+ * The build id of the bundle THIS tab is actually running — read from the entry
+ * script's `?v=` cache-bust token (same value as assets/build-id.txt). This is the
+ * ground truth for "is this tab stale?": a tab left open across a deploy keeps
+ * serving its old bundle, and its exports will carry the old id.
+ */
+export function appBuildId(): string {
+  try {
+    const script = document.querySelector<HTMLScriptElement>(
+      'script[src*="hr_attendance/assets/index.js"]'
+    );
+    if (!script) return "dev";
+    return new URL(script.src, window.location.origin).searchParams.get("v") || "dev";
+  } catch {
+    return "dev";
+  }
+}
+
 export function downloadCsv(csv: string, filename: string) {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
