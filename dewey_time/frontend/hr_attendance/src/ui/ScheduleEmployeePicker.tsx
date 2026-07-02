@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  employeeCommandFilter,
   employeeSearchHaystack,
   employeeShortName,
   isWeeklyScheduleEligible,
@@ -81,7 +82,7 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(24rem,calc(100vw-2rem))] p-0">
-        <Command>
+        <Command filter={employeeCommandFilter}>
           <CommandInput placeholder="Search employees…" />
           <CommandList>
             <CommandEmpty>No employees found.</CommandEmpty>

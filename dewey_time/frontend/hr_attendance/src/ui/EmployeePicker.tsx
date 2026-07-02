@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  employeeCommandFilter,
   employeePickerSubtitle,
   employeeSearchHaystack,
   employeeShortName,
@@ -105,10 +106,10 @@ export function EmployeePicker(props: EmployeePickerProps) {
           className="w-[var(--radix-popover-trigger-width)] min-w-[min(100%,22rem)] p-0"
           align="start"
         >
-          <Command>
+          <Command filter={employeeCommandFilter}>
             <CommandInput placeholder="Search by name, id, or department…" className="h-10" />
             <CommandList className="max-h-[min(60vh,320px)]">
-              <CommandEmpty className="hidden py-0" />
+              <CommandEmpty>No employees match your search.</CommandEmpty>
               <CommandGroup>
                 {props.employees.map((employee) => (
                   <EmployeeOption
