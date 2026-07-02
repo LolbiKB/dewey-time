@@ -16,3 +16,4 @@ dewey_time.patches.add_adms_admin_role
 dewey_time.patches.cleanup_adms_bridge_desk_artifacts
 dewey_time.patches.cleanup_zkteco_hr_desk_artifacts
 dewey_time.patches.reset_shift_type_naming_to_prompt
+dewey_time.patches.disable_schedule_naming_server_scripts
