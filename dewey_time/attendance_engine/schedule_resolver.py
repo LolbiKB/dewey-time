@@ -794,23 +794,9 @@ def _shift_type_matches_identity(existing_name: str, profile: dict) -> bool:
     return _shift_type_row_matches(profile, row)
 
 
-def _unique_shift_type_name(base: str) -> str:
-    """A free Shift Type name derived from ``base``.
-
-    Returns ``base`` when it's free, else the smallest ``base_N`` (N≥2) that isn't
-    taken. This is what makes the identity-derived name never *block* a genuinely new
-    variant: if a different-identity record already squats on the readable name (a
-    leftover, or the lossy no-lunch/no-grace bare name), the new variant simply becomes
-    ``base_2``. Matching stays by identity fields, not by name, so variants still
-    de-duplicate correctly — a shift is never refused over a name clash.
-    """
-    if not frappe.db.exists("Shift Type", base):
-        return base
-    for n in range(2, 1000):
-        candidate = f"{base}_{n}"
-        if not frappe.db.exists("Shift Type", candidate):
-            return candidate
-    return f"{base}_{n}"  # pathological; let the unique-index race settle it
+# Name candidates tried per create (base, base_2, … base_N). Far above any real
+# variant count for one clock-time; a backstop against pathological collapse.
+_MAX_NAME_CANDIDATES = 50
 
 
 def _is_duplicate_entry_error(exc: Exception) -> bool:
@@ -881,46 +867,42 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
 
     1. Reuse any existing Shift Type carrying this exact identity (start/end/lunch/
        grace), whatever its name.
-    2. Otherwise create one. The identity-derived name is preferred, but if a
-       DIFFERENT-identity record already holds it, disambiguate (``name_2``) rather
-       than refuse — supporting unlimited shift variants without a naming limitation.
+    2. Otherwise create one, trying name candidates ``base``, ``base_2``, … with the
+       DB's unique index as the sole arbiter: a read that says a name is free can lie
+       (observed in prod — ``frappe.db.exists`` reported free while the insert
+       collided), so candidates are attempted with INSERT and only duplicate errors
+       advance to the next. On each collision the existing record is reused when it
+       carries this identity — including a snapshot-invisible record (a concurrent
+       same-identity racer necessarily derived the same name).
     """
     match = match_shift_type(profile)
     if match.get("action") == "use" and match.get("name"):
         return match["name"]
 
     base = name or proposed_shift_type_name(profile)
-    doc = _new_shift_type_doc(profile, _unique_shift_type_name(base))
-    try:
-        doc.insert(ignore_permissions=True)
-        return doc.name
-    except Exception as exc:
-        if not _is_duplicate_entry_error(exc):
-            raise
-        # A concurrent lane won the race for this name. If its record carries our
-        # identity, reuse it (two lanes with the same identity derive the same name);
-        # otherwise pick the next free name and insert once more.
-        collided = _duplicate_entry_name(exc)
-        if collided and _shift_type_matches_identity(collided, profile):
-            return collided
-        rematch = match_shift_type(profile)
-        if rematch.get("action") == "use" and rematch.get("name"):
-            return rematch["name"]
-        retry = _new_shift_type_doc(profile, _unique_shift_type_name(base))
-        retry.insert(ignore_permissions=True)
-        return retry.name
-
-
-def _unique_shift_schedule_name(base: str) -> str:
-    """A free Shift Schedule (PAT) name derived from ``base`` — the Shift-Schedule twin
-    of `_unique_shift_type_name`. A PAT name clash never blocks a distinct pattern."""
-    if not frappe.db.exists("Shift Schedule", base):
-        return base
-    for n in range(2, 1000):
-        candidate = f"{base}_{n}"
-        if not frappe.db.exists("Shift Schedule", candidate):
-            return candidate
-    return f"{base}_{n}"  # pathological; let the unique-index race settle it
+    last_exc: Exception | None = None
+    for n in range(1, _MAX_NAME_CANDIDATES + 1):
+        candidate = base if n == 1 else f"{base}_{n}"
+        doc = _new_shift_type_doc(profile, candidate)
+        try:
+            doc.insert(ignore_permissions=True)
+            return doc.name
+        except Exception as exc:
+            if not _is_duplicate_entry_error(exc):
+                raise
+            last_exc = exc
+            collided = _duplicate_entry_name(exc) or candidate
+            if _shift_type_matches_identity(collided, profile):
+                return collided
+            if collided != candidate:
+                # The doctype renamed our insert onto an existing different-identity
+                # record (autoname collapse) — suffixing can't mint a distinct name.
+                frappe.throw(
+                    f"Shift Type naming collapsed onto {collided}, which has different "
+                    "hours or lunch/grace settings. Check the Shift Type doctype's "
+                    "autoname/naming rules."
+                )
+    raise last_exc  # 50 different-identity name collisions — pathological
 
 
 def _shift_schedule_matches_identity(
@@ -970,33 +952,34 @@ def create_shift_schedule(
     if existing.get("action") == "use":
         return existing["name"]
 
+    # Same insert-arbitered candidate loop as create_shift_type — the unique index
+    # decides whether a name is taken, never a read that might lie.
     base = name or proposed_pat_name(days, shift_type, profile)
-    doc = _new_shift_schedule_doc(days, shift_type, frequency, _unique_shift_schedule_name(base))
-    try:
-        doc.insert(ignore_permissions=True)
+    last_exc: Exception | None = None
+    for n in range(1, _MAX_NAME_CANDIDATES + 1):
+        candidate = base if n == 1 else f"{base}_{n}"
+        doc = _new_shift_schedule_doc(days, shift_type, frequency, candidate)
+        try:
+            doc.insert(ignore_permissions=True)
+        except Exception as exc:
+            if not _is_duplicate_entry_error(exc):
+                raise
+            last_exc = exc
+            collided = _duplicate_entry_name(exc, "Shift Schedule") or candidate
+            if _shift_schedule_matches_identity(
+                collided, day_set=day_set, shift_type=shift_type, frequency=frequency
+            ):
+                return collided
+            if collided != candidate:
+                frappe.throw(
+                    f"Shift Schedule naming collapsed onto {collided}, which covers "
+                    "different days or shift. Check the Shift Schedule doctype's "
+                    "autoname/naming rules."
+                )
+            continue
         doc.submit()
         return doc.name
-    except Exception as exc:
-        rematch = match_shift_schedule(
-            days=days, shift_type=shift_type, profile=profile, frequency=frequency
-        )
-        if rematch.get("action") == "use":
-            return rematch["name"]
-        if not _is_duplicate_entry_error(exc):
-            raise
-        # A concurrent lane created this PAT; its row may be invisible to our snapshot.
-        # Reuse it when it carries our identity, else create the distinct pattern.
-        collided = _duplicate_entry_name(exc, "Shift Schedule")
-        if collided and _shift_schedule_matches_identity(
-            collided, day_set=day_set, shift_type=shift_type, frequency=frequency
-        ):
-            return collided
-        retry = _new_shift_schedule_doc(
-            days, shift_type, frequency, _unique_shift_schedule_name(base)
-        )
-        retry.insert(ignore_permissions=True)
-        retry.submit()
-        return retry.name
+    raise last_exc  # 50 different-identity name collisions — pathological
 
 
 def upsert_ssa(

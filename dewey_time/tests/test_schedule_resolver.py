@@ -304,17 +304,18 @@ class TestCreateShiftSchedule(unittest.TestCase):
         doc.submit.assert_called_once()
         self.assertEqual(name, doc.name)
 
+    @patch("dewey_time.attendance_engine.schedule_resolver._shift_schedule_matches_identity")
     @patch("dewey_time.attendance_engine.schedule_resolver.match_shift_schedule")
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
-    def test_insert_failure_falls_back_to_rematch(self, new_doc, match_schedule):
+    def test_duplicate_insert_reuses_same_identity_winner(self, new_doc, match_schedule, identity):
+        """A duplicate whose existing record carries our identity is reused — the
+        concurrent racer necessarily derived the same name from the same pattern."""
         from dewey_time.attendance_engine.schedule_resolver import create_shift_schedule
 
-        match_schedule.side_effect = [
-            {"action": "create", "proposed_name": "PAT_MON-FRI_FT_0800_1700"},
-            {"action": "use", "name": "PAT_MON-FRI_FT_0800_1700"},
-        ]
+        match_schedule.return_value = {"action": "create", "proposed_name": "PAT_MON-FRI_FT_0800_1700"}
+        identity.return_value = True
         doc = MagicMock()
-        doc.insert.side_effect = Exception("duplicate")
+        doc.insert.side_effect = Exception("Duplicate entry 'PAT_MON-FRI_FT_0800_1700' for key 'PRIMARY'")
         new_doc.return_value = doc
 
         name = create_shift_schedule(
@@ -323,7 +324,7 @@ class TestCreateShiftSchedule(unittest.TestCase):
             profile={"start_time": "08:00:00", "end_time": "17:00:00"},
         )
         self.assertEqual(name, "PAT_MON-FRI_FT_0800_1700")
-        self.assertEqual(match_schedule.call_count, 2)
+        doc.submit.assert_not_called()  # reused, never created
 
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
     @patch("dewey_time.attendance_engine.schedule_resolver.match_shift_schedule")
@@ -351,18 +352,23 @@ class TestCreateShiftSchedule(unittest.TestCase):
         )
         self.assertEqual(name, "PAT_SAT_FT_0700_1100")
 
-    @patch("dewey_time.attendance_engine.schedule_resolver.frappe.db.exists")
+    @patch("dewey_time.attendance_engine.schedule_resolver._shift_schedule_matches_identity")
     @patch("dewey_time.attendance_engine.schedule_resolver.match_shift_schedule")
     @patch("dewey_time.attendance_engine.schedule_resolver.frappe.new_doc")
-    def test_disambiguates_pat_when_name_taken_by_leftover(self, new_doc, match_schedule, exists):
-        """No identity match, but the derived PAT name is already taken → create the
-        distinct pattern as PAT_SAT_FT_0700_1100_2 instead of blocking."""
+    def test_disambiguates_pat_when_name_taken_by_leftover(self, new_doc, match_schedule, identity):
+        """No identity match and the derived PAT name is held by a different-identity
+        leftover → the INSERT (not a free-name read that might lie) drives the move to
+        PAT_SAT_FT_0700_1100_2."""
         from dewey_time.attendance_engine.schedule_resolver import create_shift_schedule
 
         match_schedule.return_value = {"action": "create", "proposed_name": "PAT_SAT_FT_0700_1100"}
-        exists.side_effect = lambda _dt, nm: nm == "PAT_SAT_FT_0700_1100"  # base taken, _2 free
+        identity.return_value = False  # collided record covers different days/shift
         doc = MagicMock()
         doc.name = None
+        doc.insert.side_effect = [
+            Exception("Duplicate entry 'PAT_SAT_FT_0700_1100' for key 'PRIMARY'"),
+            None,  # candidate _2 inserts cleanly
+        ]
         new_doc.return_value = doc
 
         name = create_shift_schedule(
@@ -373,6 +379,7 @@ class TestCreateShiftSchedule(unittest.TestCase):
         )
         self.assertEqual(name, "PAT_SAT_FT_0700_1100_2")
         self.assertEqual(doc.name, "PAT_SAT_FT_0700_1100_2")
+        doc.submit.assert_called_once()
 
 
 class TestMatchShiftType(unittest.TestCase):
@@ -910,27 +917,79 @@ class TestCreateShiftTypeVariants(unittest.TestCase):
         new_doc.assert_not_called()  # reused, never inserted
 
     def test_disambiguates_when_name_taken_by_different_identity(self):
-        """The exact reported case: FT_0700_1700 is taken by a different-identity
-        record. Instead of blocking, create the variant as FT_0700_1700_2."""
+        """The reported prod case: FT_0700_1700 is held by a different-identity record
+        AND free-name reads lie (frappe.db.exists said free while the insert collided).
+        The INSERT is the arbiter: bare collides → identity differs → _2 inserts."""
         from dewey_time.attendance_engine import schedule_resolver
 
+        raising = _RaisingShiftTypeDoc("FT_0700_1700")
         created = _CapturingShiftTypeDoc()
-        # No identity match anywhere → create. Base name taken, _2 is free.
         with patch.object(
             schedule_resolver,
             "match_shift_type",
             return_value={"action": "create", "proposed_name": "FT_0700_1700"},
         ), patch.object(
-            schedule_resolver.frappe.db,
-            "exists",
-            MagicMock(side_effect=lambda _dt, nm: nm == "FT_0700_1700"),
+            # The lying read of the prod incident: reports every name free.
+            schedule_resolver.frappe.db, "exists", MagicMock(return_value=False)
         ), patch.object(
             schedule_resolver.frappe.db, "has_column", MagicMock(return_value=True)
-        ), patch.object(schedule_resolver.frappe, "new_doc", MagicMock(return_value=created)):
+        ), patch.object(
+            # Identity check DOES see the collided row — and it differs (has lunch).
+            schedule_resolver.frappe.db,
+            "get_value",
+            MagicMock(return_value={
+                "start_time": "07:00:00",
+                "end_time": "17:00:00",
+                "custom_lunch_start": "12:00:00",
+                "custom_lunch_end": "13:00:00",
+                "custom_grace_minutes": 10,
+            }),
+        ), patch.object(
+            schedule_resolver.frappe, "new_doc", MagicMock(side_effect=[raising, created])
+        ):
             name = schedule_resolver.create_shift_type(self.NO_LUNCH_PROFILE, name="FT_0700_1700")
 
         self.assertEqual(name, "FT_0700_1700_2")
-        self.assertEqual(created.name, "FT_0700_1700_2")
+        self.assertEqual(raising.name, "FT_0700_1700")  # first candidate: bare
+        self.assertEqual(created.name, "FT_0700_1700_2")  # arbitered by the dup, not a read
+
+    def test_autoname_collapse_surfaces_clear_error(self):
+        """If the doctype renames the insert onto an existing different-identity record
+        (collided != candidate), suffixing can't help — fail with a clear message
+        instead of burning all candidates on the same collision."""
+        from dewey_time.attendance_engine import schedule_resolver
+
+        class _CollapsingDoc:
+            def __init__(self):
+                self.name = None
+
+            def insert(self, *args, **kwargs):
+                raise Exception("Duplicate entry 'FT_COLLAPSED' for key 'PRIMARY'")
+
+        with patch.object(
+            schedule_resolver,
+            "match_shift_type",
+            return_value={"action": "create", "proposed_name": "FT_0700_1700"},
+        ), patch.object(
+            schedule_resolver.frappe.db, "has_column", MagicMock(return_value=True)
+        ), patch.object(
+            schedule_resolver.frappe.db,
+            "get_value",
+            MagicMock(return_value={
+                "start_time": "06:00:00",
+                "end_time": "15:00:00",
+                "custom_lunch_start": None,
+                "custom_lunch_end": None,
+                "custom_grace_minutes": 0,
+            }),
+        ), patch.object(
+            schedule_resolver.frappe.db, "exists", MagicMock(return_value=True)
+        ), patch.object(
+            schedule_resolver.frappe, "new_doc", MagicMock(return_value=_CollapsingDoc())
+        ):
+            with self.assertRaises(Exception) as ctx:
+                schedule_resolver.create_shift_type(self.NO_LUNCH_PROFILE, name="FT_0700_1700")
+        self.assertIn("collapsed", str(ctx.exception))
 
     def test_reuses_collided_record_on_same_identity_race(self):
         """A concurrent lane with the SAME identity won the insert race. The duplicate
