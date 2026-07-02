@@ -119,6 +119,26 @@ export function employeeSearchHaystack(employee: CalendarEmployee): string {
   return haystack || employee.id || "employee";
 }
 
+/**
+ * cmdk `filter` for the employee command lists. cmdk's default scorer is a fuzzy
+ * *subsequence* match: over our multi-field haystack (id + name + label + title +
+ * department + company) it scores almost every row > 0, so the list never narrows
+ * — every employee (even the "ADMS Bridge" service account) stays visible no matter
+ * what you type. Match on contiguous substrings instead: each whitespace-separated
+ * token in the query must appear somewhere in the item value (+ keywords). Returns
+ * 1 to keep the row, 0 to hide it (cmdk hides anything scoring 0).
+ */
+export function employeeCommandFilter(
+  value: string,
+  search: string,
+  keywords?: string[]
+): number {
+  const query = search.trim().toLowerCase();
+  if (!query) return 1;
+  const haystack = [value, ...(keywords ?? [])].join(" ").toLowerCase();
+  return query.split(/\s+/).every((token) => haystack.includes(token)) ? 1 : 0;
+}
+
 export function formatScheduleCoverage(employee: CalendarEmployee): string | null {
   if (!employee.has_shift_assignment || !employee.schedule_min_date) return null;
   const min = format(new Date(employee.schedule_min_date), "MMM yyyy");
