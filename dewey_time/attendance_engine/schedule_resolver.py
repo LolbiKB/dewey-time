@@ -1305,66 +1305,57 @@ def preview_clear_all_employee_schedules(*, include_all_active: bool = False) ->
 
 def clear_all_employee_schedules(*, include_all_active: bool = False) -> dict:
     """
-    Dev: run clear_employee_schedule for every affected employee.
+    Dev: remove ALL Shift Assignments, SSAs, and Attendance Flags on the site.
     Does not delete Shift Type / Shift Schedule masters.
+
+    "Every affected employee" is by definition every row of the three employee
+    tables, so this rides the same bulk batch engine as the site wipe (one deletion
+    mechanism) instead of looping per employee — the per-row loop is what used to
+    time out and mis-report. Commits between batches so locks release incrementally.
+    Success is the verified end-state (tables empty), not per-row bookkeeping.
     """
     employees = _employees_for_schedule_clear(include_all_active=include_all_active)
-    totals = {
-        "cancelled_assignments": 0,
-        "deleted_assignments": 0,
-        "deleted_ssas": 0,
-        "disabled_ssas": 0,
-        "deleted_flags": 0,
-    }
-    cleared_employees: list[str] = []
-    errors: list[dict] = []
+    pre_counts = {table: _table_count(table) for table in _EMPLOYEE_WIPE_TABLES}
 
-    for employee in employees:
-        try:
-            result = clear_employee_schedule(employee)
-        except Exception as exc:
-            # clear_employee_schedule swallows per-row errors, so this only fires on
-            # a hard failure (e.g. listing rows) — count it, keep going.
-            errors.append({"employee": employee, "error": str(exc)})
-            continue
+    for table in _EMPLOYEE_WIPE_TABLES:
+        remaining = pre_counts[table]
+        previous = None
+        # Bail if a pass doesn't shrink the table (rows resisting deletion) — the
+        # verified end-state below reports the leftovers honestly instead of hanging.
+        while remaining > 0 and remaining != previous:
+            previous = remaining
+            remaining = purge_site_wipe_table_batch(table)["remaining"]
+            frappe.db.commit()
 
-        # Always bank what was actually removed, even for a partially-failed employee.
-        totals["cancelled_assignments"] += len(result.get("cancelled_assignments") or [])
-        totals["deleted_assignments"] += len(result.get("deleted_assignments") or [])
-        totals["deleted_ssas"] += len(result.get("deleted_ssas") or [])
-        totals["disabled_ssas"] += len(result.get("disabled_ssas") or [])
-        totals["deleted_flags"] += int(result.get("deleted_flags") or 0)
-
-        if result.get("ok"):
-            cleared_employees.append(employee)
-        else:
-            errors.append({"employee": employee, "errors": result.get("errors")})
+    remaining_counts = {table: _table_count(table) for table in _EMPLOYEE_WIPE_TABLES}
+    verified_empty = all(count == 0 for count in remaining_counts.values())
+    errors = (
+        []
+        if verified_empty
+        else [{"table": t, "remaining": c} for t, c in remaining_counts.items() if c > 0]
+    )
 
     return {
-        "ok": not errors,
+        "ok": verified_empty,
         "include_all_active": include_all_active,
         "employee_count": len(employees),
-        "cleared_count": len(cleared_employees),
+        "cleared_count": len(employees) if verified_empty else 0,
         "error_count": len(errors),
-        "errors": errors[:_CLEAR_SAMPLE_CAP],
-        "sample_cleared_employees": cleared_employees[:_CLEAR_SAMPLE_CAP],
-        **totals,
+        "errors": errors,
+        "sample_cleared_employees": employees[:_CLEAR_SAMPLE_CAP],
+        # Contract keys the Clear-All dialog reads; bulk deletes don't cancel docs
+        # or downgrade SSAs to disabled, so those tallies are structurally zero.
+        "cancelled_assignments": 0,
+        "deleted_assignments": pre_counts["Shift Assignment"],
+        "deleted_ssas": pre_counts["Shift Schedule Assignment"],
+        "disabled_ssas": 0,
+        "deleted_flags": pre_counts["Attendance Flag"],
+        "remaining_counts": remaining_counts,
+        "verified_empty": verified_empty,
     }
 
 
 CLEAR_SITE_PATTERNS_CONFIRM_PHRASE = "CLEAR SITE PATTERNS"
-
-
-def _delete_shift_schedule(name: str) -> str:
-    doc = frappe.get_doc("Shift Schedule", name)
-    _cancel_if_submitted(doc)
-    _force_delete("Shift Schedule", name)
-    return name
-
-
-def _delete_shift_type(name: str) -> str:
-    _force_delete("Shift Type", name)
-    return name
 
 
 # Tables the site wipe must leave empty, in dependency order (links before masters).
@@ -1378,20 +1369,16 @@ _SITE_WIPE_TABLES = (
     "Shift Type",
 )
 
+# The employee-data subset (what "Clear all schedules" removes — masters kept).
+_EMPLOYEE_WIPE_TABLES = (
+    "Attendance Flag",
+    "Shift Assignment",
+    "Shift Schedule Assignment",
+)
+
 
 def _table_count(doctype: str) -> int:
     return frappe.db.count(doctype) if frappe.db.table_exists(doctype) else 0
-
-
-def _hard_purge_residual(doctype: str) -> int:
-    """Raw-remove any rows still present after the graceful passes. Returns the
-    number of leftover rows it force-deleted (0 == graceful passes were complete)."""
-    if not frappe.db.table_exists(doctype):
-        return 0
-    remaining = frappe.get_all(doctype, pluck="name") or []
-    for name in remaining:
-        _force_delete(doctype, name)
-    return len(remaining)
 
 
 # One bounded chunk per step call — keeps each HTTP request short (no gateway timeout)
@@ -1461,42 +1448,6 @@ def clear_site_patterns_step(*, clear_employee_data: bool = True, batch: int = _
     }
 
 
-def _sweep_remaining_shift_links() -> dict:
-    """Remove any Shift Assignments / SSAs still on site after per-employee clear."""
-    deleted_assignments: list[str] = []
-    assignment_errors: list[dict] = []
-    deleted_ssas: list[str] = []
-    disabled_ssas: list[str] = []
-    ssa_errors: list[dict] = []
-
-    if frappe.db.table_exists("Shift Assignment"):
-        for name in frappe.get_all("Shift Assignment", pluck="name") or []:
-            try:
-                _cancelled, deleted = _delete_shift_assignment(name)
-                deleted_assignments.append(deleted)
-            except Exception as exc:
-                assignment_errors.append({"name": name, "error": str(exc)})
-
-    if frappe.db.table_exists("Shift Schedule Assignment"):
-        for name in frappe.get_all("Shift Schedule Assignment", pluck="name") or []:
-            try:
-                deleted, disabled = _delete_ssa(name)
-                if deleted:
-                    deleted_ssas.append(deleted)
-                if disabled:
-                    disabled_ssas.append(disabled)
-            except Exception as exc:
-                ssa_errors.append({"name": name, "error": str(exc)})
-
-    return {
-        "deleted_assignments": deleted_assignments,
-        "assignment_errors": assignment_errors,
-        "deleted_ssas": deleted_ssas,
-        "disabled_ssas": disabled_ssas,
-        "ssa_errors": ssa_errors,
-    }
-
-
 def preview_clear_site_schedule_patterns(*, clear_employee_data: bool = True) -> dict:
     """Dev: counts before wiping shared Shift Schedule (PAT) and Shift Type masters."""
     employee_preview = (
@@ -1540,59 +1491,44 @@ def preview_clear_site_schedule_patterns(*, clear_employee_data: bool = True) ->
 
 def clear_site_schedule_patterns(*, clear_employee_data: bool = True) -> dict:
     """
-    Dev: wipe site Shift Schedule + Shift Type masters after clearing employee links.
-    When clear_employee_data is True, runs clear_all_employee_schedules first.
+    Dev: one-shot site wipe — a thin driver over `clear_site_patterns_step`, kept for
+    API/back-compat callers (the UI drives the step endpoint directly for progress).
+    Same single deletion engine; commits between batches so locks release.
     """
-    employee_clear: dict | None = None
-    if clear_employee_data:
-        employee_clear = clear_all_employee_schedules()
+    tables = _site_wipe_tables(clear_employee_data)
+    pre_counts = {table: _table_count(table) for table in tables}
+    # Masters are few (dozens); record their names for the result. Never the row
+    # tables — those can be tens of thousands.
+    deleted_shift_schedules = list(frappe.get_all("Shift Schedule", pluck="name") or [])
+    deleted_shift_types = list(frappe.get_all("Shift Type", pluck="name") or [])
 
-    sweep = _sweep_remaining_shift_links()
+    step: dict = {"done": False}
+    previous_remaining = None
+    guard = 0
+    while not step["done"] and guard < 10_000:
+        step = clear_site_patterns_step(clear_employee_data=clear_employee_data)
+        frappe.db.commit()
+        guard += 1
+        # Bail if a step makes no progress (rows resisting deletion) — report the
+        # honest end-state below instead of spinning.
+        total = step.get("total_remaining")
+        if total == previous_remaining:
+            break
+        previous_remaining = total
 
-    deleted_shift_schedules: list[str] = []
-    shift_schedule_errors: list[dict] = []
-    if frappe.db.table_exists("Shift Schedule"):
-        for name in frappe.get_all("Shift Schedule", pluck="name") or []:
-            try:
-                deleted_shift_schedules.append(_delete_shift_schedule(name))
-            except Exception as exc:
-                shift_schedule_errors.append({"name": name, "error": str(exc)})
-
-    deleted_shift_types: list[str] = []
-    shift_type_errors: list[dict] = []
-    if frappe.db.table_exists("Shift Type"):
-        for name in frappe.get_all("Shift Type", pluck="name") or []:
-            try:
-                deleted_shift_types.append(_delete_shift_type(name))
-            except Exception as exc:
-                shift_type_errors.append({"name": name, "error": str(exc)})
-
-    # Backstop: raw-purge anything the graceful passes left behind, then read the
-    # real table counts. verified_empty is the single source of truth the caller
-    # can trust — not an inference from per-row bookkeeping.
-    residual_purged = {dt: _hard_purge_residual(dt) for dt in _SITE_WIPE_TABLES}
-    remaining_counts = {dt: _table_count(dt) for dt in _SITE_WIPE_TABLES}
-    verified_empty = all(count == 0 for count in remaining_counts.values())
-
-    error_count = (
-        len(sweep.get("assignment_errors") or [])
-        + len(sweep.get("ssa_errors") or [])
-        + len(shift_schedule_errors)
-        + len(shift_type_errors)
-        + int((employee_clear or {}).get("error_count") or 0)
-    )
+    remaining_counts = step.get("remaining_counts") or {
+        dt: _table_count(dt) for dt in _SITE_WIPE_TABLES
+    }
+    verified_empty = bool(step.get("verified_empty"))
 
     return {
         "ok": verified_empty,
         "clear_employee_data": clear_employee_data,
-        "employee_clear": employee_clear,
-        "sweep": sweep,
+        "pre_counts": pre_counts,
         "deleted_shift_schedules": deleted_shift_schedules,
         "deleted_shift_types": deleted_shift_types,
-        "shift_schedule_errors": shift_schedule_errors[:_CLEAR_SAMPLE_CAP],
-        "shift_type_errors": shift_type_errors[:_CLEAR_SAMPLE_CAP],
-        "error_count": error_count,
-        "residual_purged": residual_purged,
+        "steps": guard,
+        "error_count": 0 if verified_empty else sum(1 for c in remaining_counts.values() if c),
         "remaining_counts": remaining_counts,
         "verified_empty": verified_empty,
     }
