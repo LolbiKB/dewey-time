@@ -895,12 +895,19 @@ def create_shift_type(profile: dict, *, name: str | None = None) -> str:
             if _shift_type_matches_identity(collided, profile):
                 return collided
             if collided != candidate:
-                # The doctype renamed our insert onto an existing different-identity
-                # record (autoname collapse) — suffixing can't mint a distinct name.
+                # We asked to insert `candidate` but the DB reports a clash on a
+                # DIFFERENT name — the doctype regenerated the name and ignored ours
+                # (autoname collapse), so suffixing can never mint a distinct variant.
+                # Stock Shift Type is prompt-named and honors our name; a site that
+                # collapses has a naming override (a Customize-Form Property Setter on
+                # autoname/naming_rule, or a Document Naming Rule). Run
+                # ensure_shift_type_prompt_naming() (bench migrate applies it) to remove it.
                 frappe.throw(
-                    f"Shift Type naming collapsed onto {collided}, which has different "
-                    "hours or lunch/grace settings. Check the Shift Type doctype's "
-                    "autoname/naming rules."
+                    f"Shift Type naming collapsed onto {collided} (asked for {candidate}), "
+                    "which has different hours or lunch/grace settings. Shift Type is not "
+                    "using prompt naming on this site — remove the naming override "
+                    "(Customize Form → Shift Type → Naming, or a Document Naming Rule); "
+                    "`bench migrate` restores prompt naming automatically."
                 )
     raise last_exc  # 50 different-identity name collisions — pathological
 
@@ -971,10 +978,13 @@ def create_shift_schedule(
             ):
                 return collided
             if collided != candidate:
+                # Same autoname-collapse guard as create_shift_type: the doctype
+                # regenerated the name and ignored ours, so suffixing can't help.
                 frappe.throw(
-                    f"Shift Schedule naming collapsed onto {collided}, which covers "
-                    "different days or shift. Check the Shift Schedule doctype's "
-                    "autoname/naming rules."
+                    f"Shift Schedule naming collapsed onto {collided} (asked for {candidate}), "
+                    "which covers different days or shift. Shift Schedule is not using its "
+                    "shipped naming on this site — remove the naming override "
+                    "(Customize Form → Shift Schedule → Naming, or a Document Naming Rule)."
                 )
             continue
         doc.submit()
