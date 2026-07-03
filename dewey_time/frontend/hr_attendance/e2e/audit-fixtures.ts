@@ -182,7 +182,9 @@ export async function stubAuditScenario(page: Page, scenario: AuditScenario): Pr
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message }) });
 
     if (scenario === "slow-load") {
-      await new Promise((r) => setTimeout(r, 5000));
+      if (p.includes("get_employee_calendar")) {
+        await new Promise((r) => setTimeout(r, 5000));
+      }
       return route.fallback();
     }
 
@@ -255,7 +257,7 @@ export async function stubAuditScenario(page: Page, scenario: AuditScenario): Pr
       return json(
         calendarPayload(url, (day, i, date) => {
           const code = FLAG_CODES[i % FLAG_CODES.length];
-          day.flags = i % FLAG_CODES.length === 0 ? [flag(date, code), flag(date, "NON_PRIMARY_SITE_PUNCH")] : [flag(date, code)];
+          day.flags = i % FLAG_CODES.length === 0 ? [flag(date, code), flag(date, "LATE_FROM_LUNCH")] : [flag(date, code)];
         })
       );
     }
