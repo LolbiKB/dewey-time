@@ -11,25 +11,31 @@ decision, and the launch checklist (spec Phase 4) has passed once against prod.
 
 Tracks: T1 = UI walk, T2 = data trust, T3 = failure/permissions/deploy.
 
-## Status (2026-07-03)
+## Status (2026-07-04)
 
-Backup-independent audit tracks are **complete**: UI walk (T1) and
-failure-visibility + deploy/rollback tracing (T3). 15 findings recorded, triaged
-into the buckets below — **buckets are `(proposed)` pending the user's final
-triage** (spec Phase 2 gate).
+Backup-independent audit is **complete**: UI walk (T1); failure-visibility +
+deploy/rollback tracing (T3); prod `/adms` guest gate (clean); ADMS Bridge
+source root-cause (T2-1); and a **source-level permissions audit of every
+whitelisted endpoint** (Task 12 static pass). 16 tracked items — **buckets are
+`(proposed)` pending the user's final triage** (spec Phase 2 gate).
 
-**Still pending — need the anonymized prod seed** (`dev/sandbox` seeded from a
-Frappe Cloud backup): the data-trust track (flag correctness on 2 real weeks,
-ADMS Bridge listing root-cause extending T2-1, import cleanliness T2-2) and the
-live permissions probe. Those findings will be added here as follow-up commits
-on the same PR. Counts below will grow once that half runs.
+**Key permissions result:** the destructive `dev_tools` clear/wipe endpoints ARE
+backend-gated — every destructive path requires System Manager/Administrator via
+`_require_system_manager_for_clear()` (dev_tools.py:132). So T1-5 is a
+frontend-only UX / defense-in-depth issue, **not** "any HR user can wipe" — a
+regular HR user without System Manager cannot execute a wipe even with the
+buttons visible. One real hole found: `get_my_week` is ungated (T3-9).
 
-Bucket counts (proposed, backup-independent findings only): Must fix 3 ·
-Should fix 7 · Can wait 3 · Pending user/sandbox 2.
+**Still pending — need the anonymized prod seed:** the data-trust track (flag
+correctness on 2 real weeks, import cleanliness, ADMS Bridge record confirm) and
+the *runtime* permissions probe (static pass done; live non-HR probe deferred).
+See the DEFERRED entry at the bottom.
+
+Bucket counts (proposed): Must fix 2 · Should fix 9 · Can wait 3 ·
+Pending user/sandbox 2.
 
 ## Must fix _(proposed)_
 
-- [ ] **[T1-5]** Three destructive dev buttons ("Clear schedule (dev)", "Clear all (dev)", "Wipe patterns (dev)") are visible to any HR user in the schedule header with no dev-only gating — rendered unconditionally in `WeeklySchedulePage.tsx` lines 351–375, with button labels defined in `ClearEmployeeScheduleDialog.tsx:132`, `ClearAllSchedulesDialog.tsx:117`, `ClearSitePatternsDialog.tsx:122`; no `import.meta.env.DEV` check or role check exists anywhere in those files. An HR user could wipe an employee's schedule or all site shift patterns; gating decision required before rollout. _Proposed must-fix: mitigated by typed-name confirm dialogs, but "Clear all"/"Wipe patterns" are one-click-reachable in prod._ — `e2e/.audit-shots/laptop-schedule-wizard-loaded.png`, scenario `baseline`, laptop. (found 2026-07-03; PR —)
 - [ ] **[T3-3]** Missed closeout webhook → employees with checkins silently get no final flags — `run_company_fallback_closeout` (closeout.py:82) skips employees with any checkins (closeout.py:261), so LATE_START/LEFT_EARLY/MISSING_TIME are never written if the Bridge closeout never calls `notify_device_closeout_status` (closeout.py:121); no Device Closeout Alert row is created so no "!" badge in the SPA; no push, email, or desk notification fires. _Proposed must-fix: silent data-completeness loss; flags HR relies on just never appear._ (found 2026-07-03; PR —)
 - [ ] **[T1-1]** Phone 375px: 7-column week grid is unreadable — day-of-week labels clip ("Tue" renders as "ue", "Today" renders as "Bod...ay"), time sub-labels truncate to "8:11...", shift bars collapse to hairlines — `e2e/.audit-shots/phone-attendance-baseline.png`, scenario `baseline`, phone. _Proposed must-fix IF HR uses phones for daily review; downgrade to should-fix if attendance review is laptop-only._ (found 2026-07-03; PR —)
 
@@ -42,6 +48,8 @@ Should fix 7 · Can wait 3 · Pending user/sandbox 2.
 - [ ] **[T3-2]** Bridge punch stasis is invisible: no consumer checks wall-clock freshness of Device Sync Status — `device_sync.py:153` writes the watermark; `hr_calendar.py:478` reads it; `attendancePunches.ts:211` only flags lag when `pending_count > 0` or `last_device_log_at > last_delivered_at` within the frozen row, never against wall clock; no scheduler audits DSS row age; no push/email/notification fires; only signal is UNNOTIFIED_ABSENCE flags ~18 h later. (found 2026-07-03; PR —)
 - [ ] **[T3-4]** Scheduler death has no dead-man's switch in app code — `*/30` intraday (hooks.py:111) and `daily` fallback closeout (hooks.py:108) stopping produces no heartbeat failure, no email, no push, no notification; no job audits last-ran-at; Frappe Cloud infra may alert on worker death but this is outside app code and cannot be verified from code alone. (found 2026-07-03; PR —)
 - [ ] **[T3-6]** No rollback procedure is documented anywhere — `HR_ATTENDANCE_DEPLOY.md` covers 404/MIME troubleshooting only; the expected procedure for a broken prod deploy (revert merge commit → merge revert → FC deploy → `bench migrate` re-syncs old committed assets) is undocumented; add a ROLLBACK section to `HR_ATTENDANCE_DEPLOY.md`. (found 2026-07-03; PR —)
+- [ ] **[T1-5]** Three destructive dev buttons ("Clear schedule (dev)", "Clear all (dev)", "Wipe patterns (dev)") render unconditionally in the schedule header (`WeeklySchedulePage.tsx:351–375`) — visible to any HR user, no `import.meta.env.DEV` or role gate on the buttons themselves. **Revised must-fix → should-fix (Task 12 permissions audit):** the backend IS gated — every destructive path requires System Manager/Administrator via `_require_system_manager_for_clear()` (dev_tools.py:132), so a regular HR user without that role cannot actually execute a wipe even with the buttons shown; each is also behind a typed-name confirm. Real issue: confusing/dangerous-looking dev controls in the HR UI + reliance on role-gating alone. Hide them from non-dev / non-SysMgr builds — `e2e/.audit-shots/laptop-schedule-wizard-loaded.png`, scenario `baseline`, laptop. (found 2026-07-03; PR —)
+- [ ] **[T3-9]** `get_my_week` exposes any employee's checkins + attendance flags to any authenticated user — `dewey_time.attendance_engine.api.get_my_week` (api.py:8) is `@frappe.whitelist()` with no permission check and takes an arbitrary `employee` param, returning that employee's `Employee Checkin` + `Attendance Flag` rows. Any logged-in user (incl. employees, if the rollout is employee-facing) can read a colleague's attendance by calling this legacy endpoint directly, bypassing the HR gate on `get_employee_calendar`. Source-confirmed; runtime probe deferred to sandbox. Fix: add an access check as the first statement, or remove the endpoint (the SPA uses `get_employee_calendar`, not this). (found 2026-07-04; PR —)
 
 ## Can wait _(proposed)_
 
@@ -52,9 +60,7 @@ Should fix 7 · Can wait 3 · Pending user/sandbox 2.
 ## Pending — user action / sandbox tracks
 
 - [ ] **[T2-2]** Fresh prod import problems CSV not yet verified — expect only the ~4 known bad-badge `EMPLOYEE_NOT_FOUND` rows. **Blocked on user** re-running the prod import and sharing the CSV. (found 2026-07-02; PR —)
-- [ ] **[T3-8]** USER CHECK — confirm in the Frappe Cloud dashboard that scheduled offsite backups are enabled and a recent backup exists for the prod site before rollout; cannot be verified from code. (found 2026-07-03; PR —)
-- [ ] **[T3-9]** `get_my_week` exposes any employee's checkins and attendance flags to any authenticated user — `dewey_time.attendance_engine.api.get_my_week` (api.py:8) accepts an arbitrary `employee` parameter and queries `Employee Checkin` + `Attendance Flag` with no call to `_require_hr_role()`, `_require_calendar_access()`, or any session check; any logged-in user can bypass the HR gate on `get_employee_calendar` by calling this legacy endpoint directly. Fix: add `_require_calendar_access(employee)` as the first statement, or remove the endpoint if the SPA no longer calls it. (found 2026-07-04; PR —)
-- [ ] **[TRACK — DEFERRED, needs backup seed]** Sandbox-dependent tracks were **not run this session** (no anonymized prod seed available). Deferred to a future session after `fetch_backup.py` → `frappe-sandbox seed --prod`:
+- [ ] **[T3-8]** USER CHECK — confirm in the Frappe Cloud dashboard that scheduled offsite backups are enabled and a recent backup exists for the prod site before rollout; cannot be verified from code. (found 2026-07-03; PR —)- [ ] **[TRACK — DEFERRED, needs backup seed]** Sandbox-dependent tracks were **not run this session** (no anonymized prod seed available). Deferred to a future session after `fetch_backup.py` → `frappe-sandbox seed --prod`:
   - Flag correctness on 2 real weeks (spec Track 2 / plan Tasks 5, 7, 8) — the core data-trust verification; **not yet done**.
   - Import cleanliness structural checks (Task 10) — plus the T2-2 CSV (user).
   - Live permissions probe of all whitelisted endpoints (Task 12 static-source pass is DONE — 1 gap found, T3-9; runtime confirmation still needs a live non-HR probe in the sandbox).
