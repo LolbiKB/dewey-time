@@ -14,3 +14,6 @@ dewey_time/frontend/*/node_modules/
 dewey_schedule_*.csv
 dewey_schedule_*.md
 *.xlsx - *.csv
+
+# Pre-rollout audit screenshots (local artifacts, never committed)
+dewey_time/frontend/hr_attendance/e2e/.audit-shots/
