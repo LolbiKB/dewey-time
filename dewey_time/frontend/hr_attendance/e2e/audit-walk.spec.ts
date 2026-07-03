@@ -105,11 +105,27 @@ for (const vp of VIEWPORTS) {
       // walk to the apply/confirm step; locators may need adjusting at execution
       // time — the goal shots are: day editor, review step, confirm modal.
       // With isEditing=true (fixture has enabled_ssa_count=1) the button reads "Review changes".
+      // NOTE: /apply|review|continue/i was matching "Preview" (p**review**) and opening the
+      // plan-preview dialog instead of the reconcile/confirm modal.  Use exact match instead.
       const applyButton = page.getByRole("button", { name: /apply|review|continue/i }).first();
       if (await applyButton.isVisible().catch(() => false)) {
         await applyButton.click();
         await page.waitForTimeout(500);
         await page.screenshot({ path: `${SHOTS}/${vp.tag}-schedule-review-step.png`, fullPage: true });
+      }
+
+      // Capture the reconcile/confirm modal via "Review changes" exact match.
+      // The Preview dialog opened above aria-hides the rest of the page (Radix
+      // behaviour), so close it first, then click "Review changes".
+      // apply_weekly_schedule stub returns needs_confirm:true + reconcile payload,
+      // so clicking "Review changes" should open the confirm Dialog.
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+      const reviewBtn = page.getByRole("button", { name: "Review changes", exact: true }).first();
+      if (await reviewBtn.isVisible().catch(() => false)) {
+        await reviewBtn.click();
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: `${SHOTS}/${vp.tag}-schedule-confirm-modal.png`, fullPage: true });
       }
     });
   });

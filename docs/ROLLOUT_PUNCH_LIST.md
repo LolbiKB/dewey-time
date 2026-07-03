@@ -58,6 +58,7 @@ _(pending triage — see Untriaged)_
   visible height, leaving only the card title "Shift blocks" visible between the
   header and the footer. HR cannot view or edit any shift blocks on phone —
   `e2e/.audit-shots/phone-schedule-baseline.png`, scenario `baseline`, phone. (found 2026-07-03; PR —)
+- [ ] **[T1-5]** Three destructive dev buttons ("Clear schedule (dev)", "Clear all (dev)", "Wipe patterns (dev)") are visible to any HR user in the schedule header with no dev-only gating — rendered unconditionally in `WeeklySchedulePage.tsx` lines 351–375, with button labels defined in `ClearEmployeeScheduleDialog.tsx:132`, `ClearAllSchedulesDialog.tsx:117`, `ClearSitePatternsDialog.tsx:122`; no `import.meta.env.DEV` check or role check exists anywhere in those files. An HR user could wipe an employee's schedule or all site shift patterns; gating decision required before rollout — `e2e/.audit-shots/laptop-schedule-wizard-loaded.png`, scenario `baseline`, laptop. (found 2026-07-03; PR —)
 
 ## Triage decisions log
 
