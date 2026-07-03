@@ -146,3 +146,87 @@ outside app code — cannot determine from code alone; verify with infra.**
 | (c) Scheduler dies | **no** | None from app code; infra-level (Frappe Cloud) unknown |
 
 **Punch-list entries:** T3-2, T3-3, T3-4
+
+---
+
+## Permissions Audit (source-level, 2026-07-04)
+
+**Date:** 2026-07-04
+**Scope:** All `@frappe.whitelist()` endpoints in the dewey_time custom app (29 functions
+across 10 files). Special focus on `dev_tools.py` (8 endpoints, 3 site-wide destructive)
+and any endpoint callable by a non-HR authenticated user to read another employee's data
+or perform destructive mutations.
+
+**Methodology:** Static source review only. Every verdict is cited to file:line.
+Runtime probe (live bench / sandbox) is explicitly deferred — a clean static result should
+still be confirmed by a live non-HR authenticated probe before rollout sign-off.
+
+### Gating helpers referenced
+
+- `_require_hr_role()` — hr_calendar.py:38–41; allows System Manager, HR User, HR Manager,
+  Administrator.
+- `_require_calendar_access(employee)` — hr_calendar.py:44–50; HR staff or own linked
+  Employee only.
+- `_require_system_manager_for_clear()` — dev_tools.py:132–139; Administrator or System
+  Manager only; throws for anyone else.
+- `validate_bridge_request()` — bridge_auth.py:8–14; API key + optional X-Bridge-Secret.
+
+### Endpoint matrix
+
+| Endpoint | File:line | Gating | Verdict |
+|---|---|---|---|
+| `get_calendar_session` | hr_calendar.py:285 | Throws if neither HR nor linked employee (hr_calendar.py:291) | GATED |
+| `list_calendar_employees` | hr_calendar.py:301 | HR sees all; non-HR scoped to own linked employee (hr_calendar.py:313) | GATED |
+| `get_employee_calendar` | hr_calendar.py:425 | `_require_calendar_access(employee)` (hr_calendar.py:434) | GATED |
+| `list_weekly_schedule_templates` | schedule_api.py:190 | `_require_hr_role()` (schedule_api.py:197) | GATED |
+| `get_employee_schedule_context` | schedule_api.py:266 | `_require_hr_role()` (schedule_api.py:268) | GATED |
+| `resolve_weekly_schedule_plan` | schedule_api.py:301 | `_require_hr_role()` (schedule_api.py:303) | GATED |
+| `get_holiday_preview` | schedule_api.py:314 | `_require_hr_role()` (schedule_api.py:316) | GATED |
+| `apply_weekly_schedule` | schedule_api.py:346 | `_require_hr_role()` (schedule_api.py:355) | GATED |
+| `get_schedule_coverage` | coverage_api.py:82 | `_require_hr_role()` (coverage_api.py:89) | GATED |
+| **`get_my_week`** | **api.py:8** | **NONE** | **GAP — T3-9** |
+| `run_engine_for_employee` | dev_tools.py:27 | `_require_hr_role()` (dev_tools.py:30) | GATED |
+| `preview_clear_employee_schedule_api` | dev_tools.py:142 | `_require_hr_role()` (dev_tools.py:145) | GATED |
+| `clear_employee_schedule_api` | dev_tools.py:150 | `_require_hr_role()` (dev_tools.py:153) + System Manager gate on destructive path (dev_tools.py:164) | GATED |
+| `preview_clear_all_employee_schedules_api` | dev_tools.py:181 | `_require_system_manager_for_clear()` (dev_tools.py:184) | GATED |
+| `clear_all_employee_schedules_api` | dev_tools.py:191 | `_require_system_manager_for_clear()` (dev_tools.py:194) | GATED |
+| `preview_clear_site_schedule_patterns_api` | dev_tools.py:221 | `_require_system_manager_for_clear()` (dev_tools.py:224) | GATED |
+| `clear_site_schedule_patterns_api` | dev_tools.py:233 | `_require_system_manager_for_clear()` (dev_tools.py:236) | GATED |
+| `clear_site_patterns_step_api` | dev_tools.py:265 | `_require_system_manager_for_clear()` (dev_tools.py:271) | GATED |
+| `get_vapid_public_key` | webpush.py:29 | Login required; public key public by design | LOW RISK |
+| `save_push_subscription` | webpush.py:35 | Binds to `frappe.session.user` (webpush.py:44) | GATED |
+| `delete_push_subscription` | webpush.py:54 | `{"user": frappe.session.user}` filter (webpush.py:57) | GATED |
+| `send_test_push` | webpush.py:62 | Sends to `frappe.session.user` only (webpush.py:65) | GATED |
+| `get_my_badge_count` | webpush.py:74 | `frappe.session.user` only (webpush.py:79) | GATED |
+| `get_dashboard_token` | dashboard_auth.py:49 | Guest check (dashboard_auth.py:52) + ADMS role (dashboard_auth.py:56) | GATED |
+| `parse_schedule_upload` | schedule_import.py:1057 | `_require_hr_role()` (schedule_import.py:1065) | GATED |
+| `notify_device_closeout_status` | closeout.py:121 | `validate_bridge_request()` first call (closeout.py:134) | GATED |
+| `notify_device_sync_status` | device_sync.py:153 | `validate_bridge_request()` first call (device_sync.py:171) | GATED |
+| `hr-attendance.get_context_for_dev` | www/hr-attendance.py:20 | `developer_mode` check (hr-attendance.py:22); returns non-sensitive boot data | GATED |
+| `hr-schedule.get_context_for_dev` | www/hr-schedule.py:20 | Same (hr-schedule.py:22) | GATED |
+
+### dev_tools verdict
+
+All 8 endpoints are gated. The T1-5 punch-list concern ("dev buttons visible to HR in
+the UI") is a frontend-only UX gap; the backend enforces `System Manager` for every
+destructive operation regardless of UI state. No backend gate is missing.
+
+### Finding
+
+**1 real gap: `get_my_week` (api.py:8).** No call to `_require_hr_role()`,
+`_require_calendar_access()`, `frappe.only_for()`, or any session check. Any
+authenticated user can request any employee's checkins and attendance flags for any date
+range via `POST /api/method/dewey_time.attendance_engine.api.get_my_week`. Entered as T3-9.
+
+Fix: add `_require_calendar_access(employee)` as the first line of `get_my_week`, or
+remove the endpoint if it is no longer called by the SPA (the production SPA uses
+`get_employee_calendar` in hr_calendar.py instead).
+
+### Runtime confirmation still needed
+
+Static analysis finds the hole but cannot confirm exploitability on a live site.
+Before rollout sign-off, probe `get_my_week` as a non-HR authenticated user (no linked
+Employee) to confirm the path returns data and is not shadowed by a Frappe permission
+layer. Full detail in `.superpowers/sdd/task-12-report.md`.
+
+**Punch-list entry:** T3-9

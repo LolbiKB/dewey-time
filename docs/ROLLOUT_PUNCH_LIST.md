@@ -53,10 +53,11 @@ Should fix 7 · Can wait 3 · Pending user/sandbox 2.
 
 - [ ] **[T2-2]** Fresh prod import problems CSV not yet verified — expect only the ~4 known bad-badge `EMPLOYEE_NOT_FOUND` rows. **Blocked on user** re-running the prod import and sharing the CSV. (found 2026-07-02; PR —)
 - [ ] **[T3-8]** USER CHECK — confirm in the Frappe Cloud dashboard that scheduled offsite backups are enabled and a recent backup exists for the prod site before rollout; cannot be verified from code. (found 2026-07-03; PR —)
+- [ ] **[T3-9]** `get_my_week` exposes any employee's checkins and attendance flags to any authenticated user — `dewey_time.attendance_engine.api.get_my_week` (api.py:8) accepts an arbitrary `employee` parameter and queries `Employee Checkin` + `Attendance Flag` with no call to `_require_hr_role()`, `_require_calendar_access()`, or any session check; any logged-in user can bypass the HR gate on `get_employee_calendar` by calling this legacy endpoint directly. Fix: add `_require_calendar_access(employee)` as the first statement, or remove the endpoint if the SPA no longer calls it. (found 2026-07-04; PR —)
 - [ ] **[TRACK — DEFERRED, needs backup seed]** Sandbox-dependent tracks were **not run this session** (no anonymized prod seed available). Deferred to a future session after `fetch_backup.py` → `frappe-sandbox seed --prod`:
   - Flag correctness on 2 real weeks (spec Track 2 / plan Tasks 5, 7, 8) — the core data-trust verification; **not yet done**.
   - Import cleanliness structural checks (Task 10) — plus the T2-2 CSV (user).
-  - Live permissions probe of all whitelisted endpoints as a non-HR user (Task 12) — the destructive `dev_tools.clear_*` APIs are the headline targets.
+  - Live permissions probe of all whitelisted endpoints (Task 12 static-source pass is DONE — 1 gap found, T3-9; runtime confirmation still needs a live non-HR probe in the sandbox).
   - `/adms` authorized-user shell reach (Task 6 Steps 2–3). _Guest gate already verified clean on prod: `curl -I https://dewey.frappehr.com/adms` → 301 `/login`; `get_dashboard_token` as guest → 403._
   - ADMS Bridge exclusion — Task 9 **code half is done** (root cause + proposed fixes folded into T2-1 above); only the 1-look Employee-record discriminator confirmation remains.
 
