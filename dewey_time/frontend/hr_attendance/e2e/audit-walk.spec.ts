@@ -71,5 +71,46 @@ for (const vp of VIEWPORTS) {
       }
       await page.screenshot({ path: `${SHOTS}/${vp.tag}-attendance-flag-detail.png`, fullPage: true });
     });
+
+    // ── Schedule walk ──────────────────────────────────────────────────────────
+
+    for (const scenario of ["baseline", "no-schedule", "api-error", "crowded-list"] as const) {
+      test(`schedule ${scenario}`, async ({ page }) => {
+        await stubAuditScenario(page, scenario);
+        await page.goto("/hr-schedule");
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(500);
+        await page.screenshot({ path: `${SHOTS}/${vp.tag}-schedule-${scenario}.png`, fullPage: true });
+      });
+    }
+
+    test("schedule wizard flow (baseline)", async ({ page }) => {
+      await stubAuditScenario(page, "baseline");
+      await page.goto("/hr-schedule");
+      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.waitForTimeout(500);
+
+      // open the employee picker (ScheduleEmployeePicker renders a Button with role="combobox")
+      await page.getByRole("combobox").first().click();
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: `${SHOTS}/${vp.tag}-schedule-picker-open.png`, fullPage: true });
+
+      // brief uses getByText("Jane Doe").first() but when the picker is open the trigger
+      // also shows "Jane Doe" — clicking it would close the popover rather than select the
+      // option.  Use getByRole("option") to target the cmdk CommandItem specifically.
+      await page.getByRole("option", { name: /Jane Doe/ }).first().click();
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: `${SHOTS}/${vp.tag}-schedule-wizard-loaded.png`, fullPage: true });
+
+      // walk to the apply/confirm step; locators may need adjusting at execution
+      // time — the goal shots are: day editor, review step, confirm modal.
+      // With isEditing=true (fixture has enabled_ssa_count=1) the button reads "Review changes".
+      const applyButton = page.getByRole("button", { name: /apply|review|continue/i }).first();
+      if (await applyButton.isVisible().catch(() => false)) {
+        await applyButton.click();
+        await page.waitForTimeout(500);
+        await page.screenshot({ path: `${SHOTS}/${vp.tag}-schedule-review-step.png`, fullPage: true });
+      }
+    });
   });
 }

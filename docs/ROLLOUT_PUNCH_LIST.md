@@ -51,6 +51,13 @@ _(pending triage — see Untriaged)_
   onboarding a new employee cannot tell whether the view reflects a configured
   week off or a missing schedule that needs setup —
   `e2e/.audit-shots/laptop-attendance-no-schedule.png`, scenario `no-schedule`, laptop. (found 2026-07-03; PR —)
+- [ ] **[T1-4]** Phone 375px: `/hr-schedule` shift-block editor inaccessible — four
+  header action buttons (Import, Clear schedule, Clear all, Wipe patterns) stack
+  vertically at mobile width, consuming ~55% of the viewport; the
+  WeekPatternGroupEditor inside the `flex min-h-0 flex-1` card is squeezed to zero
+  visible height, leaving only the card title "Shift blocks" visible between the
+  header and the footer. HR cannot view or edit any shift blocks on phone —
+  `e2e/.audit-shots/phone-schedule-baseline.png`, scenario `baseline`, phone. (found 2026-07-03; PR —)
 
 ## Triage decisions log
 
