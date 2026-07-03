@@ -35,6 +35,22 @@ _(pending triage — see Untriaged)_
 - [ ] **[T3-1]** ~10 stray screenshot PNGs untracked at repo root (`di-home*.png`,
   `mine-final*.png`, `render-*.png`, …) — delete or gitignore; risk of an
   accidental commit. (found 2026-07-03; PR —)
+- [ ] **[T1-1]** Phone 375px: 7-column week grid is unreadable — day-of-week labels
+  clip ("Tue" renders as "ue", "Today" renders as "Bod...ay"), time sub-labels
+  truncate to "8:11...", shift bars collapse to hairlines — `e2e/.audit-shots/phone-attendance-baseline.png`,
+  scenario `baseline`, phone. (found 2026-07-03; PR —)
+- [ ] **[T1-2]** api-error state: error banner contains a redundant "There was an
+  error." secondary line that adds no information, and there is no retry button on
+  the banner itself (only the small refresh icon in the header toolbar is
+  available); additionally the calendar renders "Day off" in every column below
+  the error, which looks like stale data rather than a loading failure —
+  `e2e/.audit-shots/laptop-attendance-api-error.png`, scenario `api-error`, laptop. (found 2026-07-03; PR —)
+- [ ] **[T1-3]** `no-schedule` state (employee with `has_shift_assignment: false`)
+  renders identically to `empty-week` (scheduled employee, no work days) — both
+  show "Day off" grid with pink header and no explanatory copy; an HR user
+  onboarding a new employee cannot tell whether the view reflects a configured
+  week off or a missing schedule that needs setup —
+  `e2e/.audit-shots/laptop-attendance-no-schedule.png`, scenario `no-schedule`, laptop. (found 2026-07-03; PR —)
 
 ## Triage decisions log
 
