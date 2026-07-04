@@ -17,3 +17,8 @@ dewey_schedule_*.md
 
 # Pre-rollout audit screenshots (local artifacts, never committed)
 dewey_time/frontend/hr_attendance/e2e/.audit-shots/
+
+# Stray design/QA screenshots dropped at the repo root (local scratch, never
+# committed). Root-scoped so committed PNGs under public/, images/, etc. are
+# unaffected.
+/*.png
