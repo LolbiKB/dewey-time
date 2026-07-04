@@ -28,6 +28,24 @@ mod.frappe.PermissionError = PermissionError
 mod.frappe.AuthenticationError = Exception
 
 
+class _DashboardAuthMockTestCase(unittest.TestCase):
+    """Base that re-pins the frappe-mock exception classes before each test.
+
+    The frappe mock is a shared singleton across test modules, and other
+    modules (e.g. test_clear_employee_schedule) reassign
+    ``frappe.PermissionError`` to their own class at import time. Pinning
+    only at module import (above) is not enough: when the suite is collected
+    in a different order that clobber leaks in and ``assertRaises(
+    PermissionError)`` stops matching the raised class. Re-pinning per test
+    makes these tests order-independent — the same defense the module already
+    applies to ``throw`` via ``_patched_throw``.
+    """
+
+    def setUp(self):
+        mod.frappe.PermissionError = PermissionError
+        mod.frappe.AuthenticationError = Exception
+
+
 def _throw(msg, exc=None, *args, **kwargs):
     raise (exc or Exception)(msg)
 
@@ -63,7 +81,7 @@ def _exchange(*, user: str, roles: list[str], conf: dict | None = None, response
                             return result, post
 
 
-class TestDashboardTokenRoleGate(unittest.TestCase):
+class TestDashboardTokenRoleGate(_DashboardAuthMockTestCase):
     def test_guest_is_rejected(self):
         with _patched_throw():
             with patch.object(mod.frappe, "session", SimpleNamespace(user="Guest")):
@@ -141,7 +159,7 @@ class TestDashboardTokenRoleGate(unittest.TestCase):
             _exchange(user="ops@example.com", roles=["ADMS Admin"], conf={})
 
 
-class TestAdmsAdminRolePatch(unittest.TestCase):
+class TestAdmsAdminRolePatch(_DashboardAuthMockTestCase):
     def test_creates_role_once(self):
         from dewey_time.patches import add_adms_admin_role as patch_mod
 
