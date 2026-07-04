@@ -86,16 +86,17 @@ class TestRecordIssueReasons(unittest.TestCase):
         self.assertEqual(len(unknown), 1)
         self.assertEqual(unknown[0]["unknown_branch_checkins"], 2)
 
-    def test_missing_lunch_pair_reason_is_currently_unreachable(self):
+    def test_no_missing_lunch_pair_reason_even_with_lunch_context(self):
         """A shift WITH a lunch window and two clean punches but no observed
-        lunch pair does NOT emit missing_lunch_pair.
+        lunch pair emits NO ATTENDANCE_ISSUE.
 
-        The reason's only feed is ``evaluate_lunch_flags``, which emits
-        LATE_FROM_LUNCH or nothing — never MISSING_LUNCH — so the
-        ``if code == "MISSING_LUNCH"`` branch in record_issue_flags.py is
-        currently dead. This test pins that behavior: if a MISSING_LUNCH
-        detector is ever wired up, this assertion flips and forces a
-        deliberate revisit of the missing_lunch_pair reason. (Punch-list T2-4.)
+        evaluate_record_issue_flags accepts the shift's lunch context
+        (shift_meta + grace_minutes) but deliberately derives no
+        missing_lunch_pair reason from it. The old MISSING_LUNCH fold was dead
+        code — evaluate_lunch_flags only ever emits LATE_FROM_LUNCH, never
+        MISSING_LUNCH — and was removed. This pins that the function does not
+        manufacture a phantom missing-lunch issue; a real "never took lunch"
+        rule would be a deliberate future detector. (Punch-list T2-4.)
         """
         from dewey_time.attendance_engine.record_issue_flags import (
             evaluate_record_issue_flags,

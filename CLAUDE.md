@@ -161,7 +161,8 @@ AUTO-generated flag values (stored in `Attendance Flag.flag_code`):
 Additional codes are declared in `AUTO_FLAG_CODES` but produced outside the normal detectors:
 
 - `DELIVERY_FAILED` — punch delivery / record failure (created on the delivery path; queried during closeout)
-- `MISSING_LUNCH`, `UNKNOWN_DEVICE_BRANCH` — detected but currently folded into `ATTENDANCE_ISSUE`
+- `UNKNOWN_DEVICE_BRANCH` — detected but folded into `ATTENDANCE_ISSUE` (reason `unknown_device_branch`)
+- `MISSING_LUNCH` — *declared in `AUTO_FLAG_CODES` but not currently emitted*; there is no detector that produces it (the former `missing_lunch_pair` fold in `record_issue_flags.py` was dead code — `evaluate_lunch_flags` only emits `LATE_FROM_LUNCH` — and was removed). Reserved for a future "never took scheduled lunch" rule.
 
 Flags with `day_closed=0` are provisional (intraday); `day_closed=1` are final (closeout).
 
