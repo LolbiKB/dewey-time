@@ -259,6 +259,16 @@ def _generate_company_fallback_for_date(*, company: str, attendance_date):
 
         checkins = _get_checkins_for_day(employee=employee, attendance_date=attendance_date)
         if checkins:
+            # T3-3: no open device closeout alert for this branch means the device closeout
+            # webhook never completed for this day. Without this, a punched employee would
+            # silently never receive LATE_START/LEFT_EARLY/MISSING_TIME. Run the full closeout
+            # ourselves. Idempotent (AUTO flags are delete/recreated), so a late device webhook
+            # simply regenerates the same flags.
+            _generate_for_employee_date(
+                employee=employee,
+                attendance_date=attendance_date,
+                include_unnotified_absence=False,
+            )
             continue
         if should_skip_absence_flags(employee=employee, employee_branch=employee_branch, attendance_date=attendance_date):
             continue

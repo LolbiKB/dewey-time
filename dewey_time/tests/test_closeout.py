@@ -572,6 +572,36 @@ class TestDeviceCloseoutFlags(unittest.TestCase):
 
         insert_flag.assert_not_called()
 
+    @patch("dewey_time.attendance_engine.closeout.has_open_device_closeout_alert", return_value=False)
+    @patch("dewey_time.attendance_engine.closeout._generate_for_employee_date")
+    @patch(
+        "dewey_time.attendance_engine.closeout._get_checkins_for_day",
+        return_value=[{"time": "09:15:00", "log_type": "IN"}, {"time": "18:05:00", "log_type": "OUT"}],
+    )
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_all")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_company_fallback_closes_out_punched_employee_when_no_device_alert(
+        self, get_cached_doc, get_all, get_shift, _checkins, generate_for_employee, _open_alert
+    ):
+        """T3-3: punched employee with no open device alert must receive full closeout (not be silently skipped)."""
+        from dewey_time.attendance_engine.closeout import _generate_company_fallback_for_date
+
+        get_all.return_value = ["EMP-1"]
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+
+        _generate_company_fallback_for_date(company="Test Co", attendance_date=date(2026, 5, 27))
+
+        generate_for_employee.assert_called_once_with(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=False,
+        )
+
 
 class TestDeviceCloseoutAlertDoc(unittest.TestCase):
     def test_autoname_is_stable_per_device_and_date(self):
