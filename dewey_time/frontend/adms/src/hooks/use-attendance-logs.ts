@@ -1,4 +1,4 @@
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import {
   fetchAttendanceLogs,
@@ -28,6 +28,9 @@ export function useAttendanceLogManagement(filters: AttendanceLogFilters) {
     staleTime: 30000,
     gcTime: 1000 * 60 * 5,
     retry: 2,
+    // Keep the current page visible during background polls and while a new
+    // page/filter loads, so the table never blanks to a spinner mid-refetch.
+    placeholderData: keepPreviousData,
   })
 
   return {

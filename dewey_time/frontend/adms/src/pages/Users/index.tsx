@@ -29,7 +29,7 @@ export function Users() {
   const [selectedUser, setSelectedUser] = useState<UserEntry | null>(null)
   const [registerEmployee, setRegisterEmployee] = useState<UserEntry | null>(null)
 
-  const { data, isLoading, isFetching, refetch } = useUsersList({
+  const { data, isLoading, refetch } = useUsersList({
     page: filters.page,
     limit: filters.limit,
     search: filters.search,
@@ -93,7 +93,6 @@ export function Users() {
         data={data?.data || []}
         tableMeta={data?.meta}
         loading={isLoading}
-        isFetching={isFetching}
         filters={filters}
         onFiltersChange={setFilters}
         onRefresh={() => refetch()}

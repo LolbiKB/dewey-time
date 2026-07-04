@@ -30,7 +30,7 @@ export function Devices() {
   })
 
   // Fetch devices for table
-  const { data, isLoading, isError, error, refetch, isFetching } = useDevices(filters)
+  const { data, isLoading, isError, error, refetch } = useDevices(filters)
   const { data: yesterdayClosure } = useYesterdayAttlogClosure()
   const { data: catchUpDepth } = useAttlogCatchUpDepthMap()
 
@@ -151,7 +151,6 @@ export function Devices() {
               : undefined
           }
           loading={isLoading}
-          isFetching={isFetching}
           filters={filters}
           onFiltersChange={setFilters}
           onRefresh={refetch}

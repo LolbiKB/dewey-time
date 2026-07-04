@@ -1,7 +1,7 @@
 // Core Data Hooks - Single Source of Truth
 // All components should consume data from these hooks
 
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { queryKeys } from '@/lib/query-keys'
 import { UserService } from '@/services/user-service'
@@ -233,6 +233,9 @@ export function useUsersList(filters?: {
       }
     },
     staleTime: 1000 * 60 * 2, // 2 min
+    // Keep the current page visible during background polls and while a new
+    // page/filter loads, so the table never blanks to a spinner mid-refetch.
+    placeholderData: keepPreviousData,
     ...options,
   })
 }

@@ -19,7 +19,6 @@ interface UserDataTableProps {
   meta?: UserTableMeta
   tableMeta?: BaseTableMeta
   loading?: boolean
-  isFetching?: boolean
   filters: UserFilters
   onFiltersChange: (filters: UserFilters) => void
   onRefresh?: () => void
@@ -32,7 +31,6 @@ export function UserDataTable({
   meta,
   tableMeta,
   loading,
-  isFetching,
   filters,
   onFiltersChange,
   onRefresh,
@@ -43,7 +41,7 @@ export function UserDataTable({
       columns={columns}
       data={data}
       meta={tableMeta}
-      loading={loading || isFetching}
+      loading={loading}
       filters={filters}
       onFiltersChange={onFiltersChange}
       toolbarActions={toolbarActions}
