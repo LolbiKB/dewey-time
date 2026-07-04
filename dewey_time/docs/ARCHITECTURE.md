@@ -384,7 +384,46 @@ bench --site <site> migrate         # syncs DocTypes, runs patches
 
 ---
 
-## 14. Common Commands
+## 14. Engine Health Monitoring (T3-4)
+
+The intraday scheduler (`run_intraday_scheduler`, cron `*/30 * * * *`) writes a
+durable heartbeat to Frappe's global-default KV store after each successful run:
+
+```
+key:   dewey_time_last_intraday_run_at
+store: tabDefaultValue (parent=__global)
+write: frappe.db.set_global_default(key, iso_timestamp)
+read:  frappe.defaults.get_global_default(key)
+```
+
+An external uptime monitor polls the health endpoint to detect a dead scheduler
+(dead scheduler → heartbeat stops → endpoint reports `healthy=false`):
+
+```
+GET /api/method/dewey_time.attendance_engine.api.get_engine_health
+Authorization: token <api_key>:<api_secret>
+```
+
+Response:
+```json
+{
+  "healthy": true,
+  "last_intraday_run_at": "2026-07-02T09:30:00",
+  "minutes_since_last_run": 12.4,
+  "stale_after_minutes": 90,
+  "server_time": "2026-07-02T09:42:25"
+}
+```
+
+- `healthy=true` means intraday ran within the last **90 minutes** (3 missed cycles).
+- `healthy=false` or any non-200 response should trigger an alert.
+- The monitor must authenticate with a Frappe API key — `@frappe.whitelist()` (no
+  `allow_guest`) enforces this; guest requests are rejected before the handler runs.
+- Recommended poll interval: every 15–30 minutes.
+
+---
+
+## 15. Common Commands  <!-- was §14 before T3-4 health section was added -->
 
 ```bash
 # Run tests
