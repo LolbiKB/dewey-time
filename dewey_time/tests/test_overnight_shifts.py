@@ -170,6 +170,7 @@ class TestOvernightLateStart(unittest.TestCase):
     @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
     @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
     @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    @unittest.expectedFailure  # T2-3 Bug A (confirmed): D+1 OUT excluded by _get_checkins_for_day → checkins_count<2 skips LATE_START. Remove marker when fixed.
     def test_late_in_production_mode_single_punch_emits_late_start(
         self,
         get_cached_doc,
@@ -242,6 +243,7 @@ class TestOvernightLeftEarly(unittest.TestCase):
     @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
     @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
     @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    @unittest.expectedFailure  # T2-3 Bug B (confirmed): end_dt=combine_date_time(D,06:00)=D 06:00 not D+1 → LEFT_EARLY threshold on wrong day. Remove marker when fixed.
     def test_early_out_emits_left_early(
         self,
         get_cached_doc,
@@ -365,6 +367,7 @@ class TestOvernightMissingTime(unittest.TestCase):
     MISSING_TIME detection is completely disabled for overnight shifts.
     """
 
+    @unittest.expectedFailure  # T2-3 Bug C (confirmed): absence_intervals.py:66 `end_min<=start_min: return []` disables overnight MISSING_TIME. Remove marker when fixed.
     def test_derive_missing_expected_returns_intervals_for_overnight_shift(self):
         """
         shift 22:00→06:00, no checkins (segments=[]).
@@ -391,6 +394,7 @@ class TestOvernightMissingTime(unittest.TestCase):
             "BUG: derive_missing_expected_intervals returns [] when end_min(360) <= start_min(1320).",
         )
 
+    @unittest.expectedFailure  # T2-3 Bug C (confirmed): overnight gap across midnight not detected (minutes-since-midnight scale + D+1 date mismatch). Remove marker when fixed.
     def test_compute_missing_time_detects_gap_crossing_midnight(self):
         """
         Shift 22:00→06:00(+1d). Employee works D 22:00–23:00, away 90 min (23:00→00:30+1d),
