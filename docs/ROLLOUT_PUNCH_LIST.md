@@ -32,9 +32,9 @@ the *runtime* permissions probe (static pass done; live non-HR probe deferred).
 See the DEFERRED entry at the bottom.
 
 Bucket counts (proposed): **Must fix 0 open + 3 fixed (T2-3, T3-3, T1-1)** ·
-Should fix **0 open + 8 fixed** (T3-9, T3-6, T2-1, T1-2, T1-3, T1-4, T3-4, T3-2) · Can wait 1 open + 4 fixed (T3-1, T2-4, T3-5, T3-7) ·
-Pending user/sandbox 2. (19 findings; **15 fixed total** — **Must-fix AND Should-fix buckets both closed**).
-Remaining: Can-wait only (T3-10 test-isolation) + 2 user-side items (T2-2 import CSV, T3-8 FC backups) + the launch checklist (Phase 4).
+Should fix **0 open + 8 fixed** (T3-9, T3-6, T2-1, T1-2, T1-3, T1-4, T3-4, T3-2) · Can wait 0 open + 5 fixed (T3-1, T2-4, T3-10, T3-5, T3-7) ·
+Pending user/sandbox 2. (19 findings; **16 fixed total** — **Must-fix, Should-fix AND Can-wait buckets all closed**).
+Remaining: 2 user-side items only (T2-2 import CSV, T3-8 FC backups) + the launch checklist (Phase 4). Every agent-actionable finding is fixed.
 
 **✅ Headline find (2026-07-04) — FOUND AND FIXED:** running the synthetic suite on
 the sandbox uncovered a **confirmed correctness bug** — the flag engine had NO
@@ -99,7 +99,7 @@ gap to close: overnight shifts (T2-3).
 
 ## Can wait — test hygiene _(proposed)_
 
-- [ ] **[T3-10]** Order-dependent test isolation: `test_dashboard_auth` errors (3) when run after `test_clear_employee_schedule` in a full-suite run, because both call the shared `_install_frappe_mock()` and `test_clear_employee_schedule` reassigns the shared mock's `frappe.PermissionError` to its own class, so `test_dashboard_auth`'s `assertRaises(builtin PermissionError)` no longer matches (`test_dashboard_auth.py:27,81,103`). Module passes 10/10 in isolation; product code is correct. Makes CI green order-dependent — fix by having each module own/reset its mock exception classes in setUp/tearDown. Surfaced on the sandbox (Python 3.14 discovery order); may or may not reproduce on CI's Python. (found 2026-07-04; PR —)
+- [x] **[T3-10]** **FIXED 2026-07-04: reproduced the order-dependence ambiently (even on Python 3.9 by forcing the collection order) and fixed it — both classes in `test_dashboard_auth` now extend a `_DashboardAuthMockTestCase` base whose `setUp` re-pins `frappe.PermissionError`/`AuthenticationError` before each test, immune to cross-module clobbering (mirrors the module's existing per-use `_patched_throw` defense). Controller-verified: the previously-failing order (`test_dashboard_auth` then `test_clear_employee_schedule`) now passes, benign order still passes, and 67/67 across the full mock-based set.** Order-dependent test isolation: `test_dashboard_auth` errors (3) when run after `test_clear_employee_schedule` in a full-suite run, because both call the shared `_install_frappe_mock()` and `test_clear_employee_schedule` reassigns the shared mock's `frappe.PermissionError` to its own class, so `test_dashboard_auth`'s `assertRaises(builtin PermissionError)` no longer matches (`test_dashboard_auth.py:27,81,103`). Module passes 10/10 in isolation; product code is correct. Makes CI green order-dependent — fix by having each module own/reset its mock exception classes in setUp/tearDown. Surfaced on the sandbox (Python 3.14 discovery order); may or may not reproduce on CI's Python. (found 2026-07-04; PR —)
 
 ## Triage decisions log
 
