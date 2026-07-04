@@ -13,6 +13,9 @@ def get_my_week(employee: str, start_date: str, end_date: str):
     - computed first/last + gross minutes (simple heuristic)
     - flags per day
     """
+    from dewey_time.attendance_engine.hr_calendar import _require_calendar_access
+
+    _require_calendar_access(employee)
     start = getdate(start_date)
     end = getdate(end_date)
     if end < start:
