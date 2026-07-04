@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { PhotoService } from '@/services/photo-service'
-import { getAuthToken } from '@/lib/auth-token'
+import { getPhotoToken } from '@/lib/photo-token'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -29,7 +29,7 @@ export function useUserPhoto({ hasCachedPhoto, frappeEmployeeId, userId, enabled
   const [token, setToken] = useState('')
 
   useEffect(() => {
-    getAuthToken().then((t) => setToken(t || ''))
+    getPhotoToken().then((t) => setToken(t || ''))
   }, [])
 
   if (!enabled) {
