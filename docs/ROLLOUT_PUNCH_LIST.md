@@ -31,15 +31,16 @@ correctness on 2 real weeks, import cleanliness, ADMS Bridge record confirm) and
 the *runtime* permissions probe (static pass done; live non-HR probe deferred).
 See the DEFERRED entry at the bottom.
 
-Bucket counts (proposed): Must fix 3 · Should fix 9 · Can wait 5 ·
-Pending user/sandbox 2. (19 findings)
+Bucket counts (proposed): Must fix 2 open + 1 fixed (T2-3) · Should fix 9 ·
+Can wait 5 · Pending user/sandbox 2. (19 findings; 1 fixed)
 
-**⚠ Headline find (2026-07-04):** running the synthetic suite on the sandbox
-uncovered a **confirmed correctness bug** — the flag engine has NO overnight-shift
-handling, so `LATE_START`/`LEFT_EARLY`/`MISSING_TIME` are silently never emitted
-for any employee on a midnight-crossing shift (**T2-3**, now must-fix, verified
-by `test_overnight_shifts.py`). Live impact hinges on whether Dewey schedules any
-overnight shifts — a 1-query check.
+**✅ Headline find (2026-07-04) — FOUND AND FIXED:** running the synthetic suite on
+the sandbox uncovered a **confirmed correctness bug** — the flag engine had NO
+overnight-shift handling, so `LATE_START`/`LEFT_EARLY`/`MISSING_TIME` were silently
+never emitted for any employee on a midnight-crossing shift (**T2-3**). **Now fixed
++ verified (commit `599f2ec8`); `test_overnight_shifts.py` 7/7 pass, no
+regressions.** Still worth a 1-query check on prod to confirm whether Dewey
+currently schedules overnight shifts (determines whether this was live or latent).
 
 **Flag-correctness (data-trust) — prelaunch reframe (proposed, pending user OK):**
 this is a *prelaunch* system, so there is no representative 2-week real punch
@@ -61,7 +62,7 @@ gap to close: overnight shifts (T2-3).
 
 ## Must fix _(proposed)_
 
-- [ ] **[T2-3]** Overnight-shift flag arithmetic — **CONFIRMED CORRECTNESS BUG (3 distinct engine bugs), controller-verified in source 2026-07-04.** For any employee on a midnight-crossing shift (`end_time < start_time`), `LATE_START`, `LEFT_EARLY`, and `MISSING_TIME` are **all silently never emitted** — their attendance violations go completely undetected. Root cause is systemic: `shift_times.combine_date_time` (shift_times.py:39) stamps shift times onto the single attendance date with no overnight roll, and every consumer inherits that. Evidence: `dewey_time/tests/test_overnight_shifts.py` (7 tests; the 4 bug-demonstrating cases are `@unittest.expectedFailure`, so the suite stays green and they flip to failures the moment the bug is fixed). **Live severity depends on whether any Active employee actually has an overnight shift assigned — a 1-query check on prod (`end_time < start_time` on the assigned Shift Types); latent landmine even if none exist today.** Root causes: (A) `_get_checkins_for_day` (closeout.py:677) fetches D 00:00–23:59 only → the D+1 OUT is excluded → `checkins_count=1` fails the `>= 2` guard (closeout.py:510) → LATE_START skipped; (B) `end_dt = combine_date_time(D, 06:00) = D 06:00` not D+1 (closeout.py:560) → LEFT_EARLY threshold on wrong day, never fires; (C) `if end_min <= start_min: return []` (absence_intervals.py:66) + D+1 date mismatch in `minutes_from_checkin_time` (attendance_segments.py:47) → MISSING_TIME fully disabled overnight. (found 2026-07-04; PR —)
+- [x] **[T2-3]** Overnight-shift flag arithmetic — **FIXED 2026-07-04 (commit `599f2ec8`), controller-verified: 7/7 `test_overnight_shifts.py` pass, full suite 295 tests with zero new regressions (only the pre-existing T3-10 dashboard-auth errors remain).** Fix = day-spanning minute scale + `end_dt` day-roll + overnight-aware checkin window across closeout.py/absence_intervals.py/attendance_segments.py. **Note (semantic choice in the fix):** for overnight shifts LATE_START now fires on the IN punch alone (`>= 1`), where day shifts still require a complete pair (`>= 2`). Was: **CONFIRMED CORRECTNESS BUG (3 distinct engine bugs), controller-verified in source 2026-07-04.** For any employee on a midnight-crossing shift (`end_time < start_time`), `LATE_START`, `LEFT_EARLY`, and `MISSING_TIME` are **all silently never emitted** — their attendance violations go completely undetected. Root cause is systemic: `shift_times.combine_date_time` (shift_times.py:39) stamps shift times onto the single attendance date with no overnight roll, and every consumer inherits that. Evidence: `dewey_time/tests/test_overnight_shifts.py` (7 tests; the 4 bug-demonstrating cases are `@unittest.expectedFailure`, so the suite stays green and they flip to failures the moment the bug is fixed). **Live severity depends on whether any Active employee actually has an overnight shift assigned — a 1-query check on prod (`end_time < start_time` on the assigned Shift Types); latent landmine even if none exist today.** Root causes: (A) `_get_checkins_for_day` (closeout.py:677) fetches D 00:00–23:59 only → the D+1 OUT is excluded → `checkins_count=1` fails the `>= 2` guard (closeout.py:510) → LATE_START skipped; (B) `end_dt = combine_date_time(D, 06:00) = D 06:00` not D+1 (closeout.py:560) → LEFT_EARLY threshold on wrong day, never fires; (C) `if end_min <= start_min: return []` (absence_intervals.py:66) + D+1 date mismatch in `minutes_from_checkin_time` (attendance_segments.py:47) → MISSING_TIME fully disabled overnight. (found 2026-07-04; PR —)
 - [ ] **[T3-3]** Missed closeout webhook → employees with checkins silently get no final flags — `run_company_fallback_closeout` (closeout.py:82) skips employees with any checkins (closeout.py:261), so LATE_START/LEFT_EARLY/MISSING_TIME are never written if the Bridge closeout never calls `notify_device_closeout_status` (closeout.py:121); no Device Closeout Alert row is created so no "!" badge in the SPA; no push, email, or desk notification fires. _Proposed must-fix: silent data-completeness loss; flags HR relies on just never appear._ (found 2026-07-03; PR —)
 - [ ] **[T1-1]** Phone 375px: 7-column week grid is unreadable — day-of-week labels clip ("Tue" renders as "ue", "Today" renders as "Bod...ay"), time sub-labels truncate to "8:11...", shift bars collapse to hairlines — `e2e/.audit-shots/phone-attendance-baseline.png`, scenario `baseline`, phone. _Proposed must-fix IF HR uses phones for daily review; downgrade to should-fix if attendance review is laptop-only._ (found 2026-07-03; PR —)
 
