@@ -31,8 +31,8 @@ correctness on 2 real weeks, import cleanliness, ADMS Bridge record confirm) and
 the *runtime* permissions probe (static pass done; live non-HR probe deferred).
 See the DEFERRED entry at the bottom.
 
-Bucket counts (proposed): Must fix 2 · Should fix 10 · Can wait 4 ·
-Pending user/sandbox 2. (18 findings)
+Bucket counts (proposed): Must fix 2 · Should fix 10 · Can wait 5 ·
+Pending user/sandbox 2. (19 findings)
 
 **Flag-correctness (data-trust) — prelaunch reframe (proposed, pending user OK):**
 this is a *prelaunch* system, so there is no representative 2-week real punch
@@ -43,6 +43,14 @@ overnight shifts (T2-3) and some `ATTENDANCE_ISSUE` reasons (T2-4). Running that
 suite needs the **Docker bench** (`frappe-sandbox up`) — **not** the prod backup.
 Real-data spot-checking (original Track 2 Tasks 7–8) moves to an **early
 post-launch** checklist item, run once real punches accumulate.
+
+**Synthetic suite RUN (2026-07-04, sandbox bench, Python 3.14.2):** `frappe-sandbox
+test --backend` → **288 tests, 276 passed, 9 skipped, 3 errors**. All flag-engine
+modules (closeout, intraday, absence, lunch, integration matrix) **PASS** — flag
+logic is verified for covered scenarios. The 3 errors are all in
+`test_dashboard_auth` and are an **order-dependent test-isolation artifact** (the
+module passes 10/10 in isolation) — not product bugs (T3-10). Remaining coverage
+gap to close: overnight shifts (T2-3).
 
 ## Must fix _(proposed)_
 
@@ -78,6 +86,10 @@ post-launch** checklist item, run once real punches accumulate.
   - Live permissions probe of all whitelisted endpoints (Task 12 static-source pass is DONE — 1 gap found, T3-9; runtime confirmation still needs a live non-HR probe in the sandbox).
   - `/adms` authorized-user shell reach (Task 6 Steps 2–3). _Guest gate already verified clean on prod: `curl -I https://dewey.frappehr.com/adms` → 301 `/login`; `get_dashboard_token` as guest → 403._
   - ADMS Bridge exclusion — Task 9 **code half is done** (root cause + proposed fixes folded into T2-1 above); only the 1-look Employee-record discriminator confirmation remains.
+
+## Can wait — test hygiene _(proposed)_
+
+- [ ] **[T3-10]** Order-dependent test isolation: `test_dashboard_auth` errors (3) when run after `test_clear_employee_schedule` in a full-suite run, because both call the shared `_install_frappe_mock()` and `test_clear_employee_schedule` reassigns the shared mock's `frappe.PermissionError` to its own class, so `test_dashboard_auth`'s `assertRaises(builtin PermissionError)` no longer matches (`test_dashboard_auth.py:27,81,103`). Module passes 10/10 in isolation; product code is correct. Makes CI green order-dependent — fix by having each module own/reset its mock exception classes in setUp/tearDown. Surfaced on the sandbox (Python 3.14 discovery order); may or may not reproduce on CI's Python. (found 2026-07-04; PR —)
 
 ## Triage decisions log
 
