@@ -43,9 +43,10 @@ def minutes_from_checkin_time(value, attendance_date) -> int | None:
         from frappe.utils import get_datetime
 
         dt = get_datetime(value)
-    if dt.date() != attendance_date:
-        return None
-    return dt.hour * 60 + dt.minute
+    delta_days = (dt.date() - attendance_date).days
+    if delta_days < 0:
+        return None  # punch before the attendance date is not part of this day's shift
+    return delta_days * 1440 + dt.hour * 60 + dt.minute
 
 
 def derive_segments(checkins: list[dict], attendance_date) -> list[dict]:

@@ -63,8 +63,10 @@ def derive_missing_expected_intervals(
 ) -> list[dict]:
     start_min = _parse_shift_time_to_minutes(shift_meta.get("start_time"))
     end_min = _parse_shift_time_to_minutes(shift_meta.get("end_time"))
-    if start_min is None or end_min is None or end_min <= start_min:
+    if start_min is None or end_min is None:
         return []
+    if end_min <= start_min:  # overnight shift: end is next day
+        end_min += 1440
     if max_end_min is not None and max_end_min <= 0:
         return []
 
@@ -244,9 +246,11 @@ def compute_missing_time_intervals(
 
             out_dt = get_datetime(lunch_out)
             in_dt = get_datetime(lunch_in)
+            out_delta = (out_dt.date() - attendance_date).days
+            in_delta = (in_dt.date() - attendance_date).days
             observed_lunch_range = {
-                "startMin": out_dt.hour * 60 + out_dt.minute,
-                "endMin": in_dt.hour * 60 + in_dt.minute,
+                "startMin": max(0, out_delta) * 1440 + out_dt.hour * 60 + out_dt.minute,
+                "endMin": max(0, in_delta) * 1440 + in_dt.hour * 60 + in_dt.minute,
             }
 
     away_intervals = derive_away_gap_intervals(
