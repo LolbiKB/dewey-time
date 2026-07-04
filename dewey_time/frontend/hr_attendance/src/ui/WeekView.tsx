@@ -117,7 +117,8 @@ export function WeekView(props: WeekViewProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">
-      <div className="grid shrink-0 grid-cols-7 border-b border-border/60">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-auto">
+      <div className="grid shrink-0 grid-cols-[repeat(7,minmax(8rem,1fr))] border-b border-border/60">
         {props.weekDates.map((d) => {
           const key = format(d, "yyyy-MM-dd");
           const info = props.daysByDate.get(key);
@@ -225,7 +226,7 @@ export function WeekView(props: WeekViewProps) {
         className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
         aria-label="Week attendance timeline"
       >
-        <div className="grid grid-cols-7" style={{ height: `${canvasHeightPct}%` }}>
+        <div className="grid grid-cols-[repeat(7,minmax(8rem,1fr))]" style={{ height: `${canvasHeightPct}%` }}>
           {props.weekDates.map((d) => {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
@@ -246,6 +247,7 @@ export function WeekView(props: WeekViewProps) {
             );
           })}
         </div>
+      </div>
       </div>
     </div>
   );

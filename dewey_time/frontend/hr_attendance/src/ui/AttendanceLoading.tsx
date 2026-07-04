@@ -40,7 +40,8 @@ export function AttendanceHeaderSkeleton() {
 export function WeekViewSkeleton() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card animate-in fade-in">
-      <div className="grid shrink-0 grid-cols-7 border-b border-border/60">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-auto">
+      <div className="grid shrink-0 grid-cols-[repeat(7,minmax(8rem,1fr))] border-b border-border/60">
         {Array.from({ length: 7 }).map((_, idx) => (
           <div key={idx} className="space-y-2 px-3 py-2">
             <div className="flex items-center justify-between">
@@ -55,7 +56,7 @@ export function WeekViewSkeleton() {
           </div>
         ))}
       </div>
-      <div className="grid min-h-[420px] flex-1 grid-cols-7 gap-px bg-border/40 p-px">
+      <div className="grid min-h-[420px] flex-1 grid-cols-[repeat(7,minmax(8rem,1fr))] gap-px bg-border/40 p-px">
         {Array.from({ length: 7 }).map((_, idx) => (
           <div key={idx} className="flex flex-col gap-2 bg-card p-2">
             <Skeleton className="h-[18%] w-full rounded-sm" />
@@ -64,6 +65,7 @@ export function WeekViewSkeleton() {
             <Skeleton className="h-[22%] w-full rounded-sm" />
           </div>
         ))}
+      </div>
       </div>
     </div>
   );
