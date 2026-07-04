@@ -16,7 +16,6 @@ interface AttendanceLogDataTableProps {
   data: AttendanceLogEntry[]
   meta?: BaseTableMeta
   loading?: boolean
-  isFetching?: boolean
   filters: AttendanceLogFilters
   summary?: AttendanceLogSummary
   onFiltersChange: (filters: AttendanceLogFilters) => void
@@ -29,7 +28,6 @@ export function AttendanceLogDataTable({
   data,
   meta,
   loading,
-  isFetching,
   filters,
   summary,
   onFiltersChange,
@@ -41,7 +39,7 @@ export function AttendanceLogDataTable({
       columns={columns}
       data={data}
       meta={meta}
-      loading={loading || isFetching}
+      loading={loading}
       filters={filters}
       onFiltersChange={onFiltersChange}
       config={{

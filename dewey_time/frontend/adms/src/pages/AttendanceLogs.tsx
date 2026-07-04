@@ -55,7 +55,7 @@ export function AttendanceLogs() {
     }))
   }, [searchParams])
 
-  const { data, meta, isLoading, isError, error, refetchAttendanceLogs, isFetching } =
+  const { data, meta, isLoading, isError, error, refetchAttendanceLogs } =
     useAttendanceLogs(filters)
 
   const { data: summary } = useAttendanceLogSummary()
@@ -190,7 +190,6 @@ export function AttendanceLogs() {
           meta={meta}
           summary={summary}
           loading={isLoading}
-          isFetching={isFetching}
           filters={filters}
           onFiltersChange={setFilters}
           onStatToggle={toggleStatFilter}

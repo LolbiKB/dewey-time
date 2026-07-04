@@ -14,7 +14,6 @@ interface DeviceDataTableProps {
   data: DeviceEntry[]
   meta?: BaseTableMeta
   loading?: boolean
-  isFetching?: boolean
   filters: DeviceFilters
   onFiltersChange: (filters: DeviceFilters) => void
   onRefresh?: () => void
@@ -26,7 +25,6 @@ export function DeviceDataTable({
   data,
   meta,
   loading,
-  isFetching,
   filters,
   onFiltersChange,
   onRefresh,
@@ -37,7 +35,7 @@ export function DeviceDataTable({
       columns={columns}
       data={data}
       meta={meta}
-      loading={loading || isFetching}
+      loading={loading}
       filters={filters}
       onFiltersChange={onFiltersChange}
       config={{

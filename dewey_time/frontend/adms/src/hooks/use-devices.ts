@@ -1,4 +1,4 @@
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query'
 import { DeviceService, type DeviceFilters } from '@/services/device-service'
 
 // Query key factory
@@ -18,6 +18,9 @@ export function useDevices(filters: DeviceFilters = {}) {
     staleTime: 30000, // 30 seconds
     gcTime: 1000 * 60 * 5, // 5 minutes
     retry: 2,
+    // Keep the current page visible during background polls and while a new
+    // page/filter loads, so the table never blanks to a spinner mid-refetch.
+    placeholderData: keepPreviousData,
   })
 }
 
