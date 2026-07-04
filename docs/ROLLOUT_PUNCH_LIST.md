@@ -31,8 +31,18 @@ correctness on 2 real weeks, import cleanliness, ADMS Bridge record confirm) and
 the *runtime* permissions probe (static pass done; live non-HR probe deferred).
 See the DEFERRED entry at the bottom.
 
-Bucket counts (proposed): Must fix 2 · Should fix 9 · Can wait 3 ·
-Pending user/sandbox 2.
+Bucket counts (proposed): Must fix 2 · Should fix 10 · Can wait 4 ·
+Pending user/sandbox 2. (18 findings)
+
+**Flag-correctness (data-trust) — prelaunch reframe (proposed, pending user OK):**
+this is a *prelaunch* system, so there is no representative 2-week real punch
+dataset to audit. Flag correctness is therefore verified **synthetically** for
+launch: a coverage map (`docs/superpowers/audits/2026-07-flag-test-coverage.md`)
+shows **7/8 flag codes have synthetic unit-test coverage**; the gaps are
+overnight shifts (T2-3) and some `ATTENDANCE_ISSUE` reasons (T2-4). Running that
+suite needs the **Docker bench** (`frappe-sandbox up`) — **not** the prod backup.
+Real-data spot-checking (original Track 2 Tasks 7–8) moves to an **early
+post-launch** checklist item, run once real punches accumulate.
 
 ## Must fix _(proposed)_
 
@@ -50,11 +60,13 @@ Pending user/sandbox 2.
 - [ ] **[T3-6]** No rollback procedure is documented anywhere — `HR_ATTENDANCE_DEPLOY.md` covers 404/MIME troubleshooting only; the expected procedure for a broken prod deploy (revert merge commit → merge revert → FC deploy → `bench migrate` re-syncs old committed assets) is undocumented; add a ROLLBACK section to `HR_ATTENDANCE_DEPLOY.md`. (found 2026-07-03; PR —)
 - [ ] **[T1-5]** Three destructive dev buttons ("Clear schedule (dev)", "Clear all (dev)", "Wipe patterns (dev)") render unconditionally in the schedule header (`WeeklySchedulePage.tsx:351–375`) — visible to any HR user, no `import.meta.env.DEV` or role gate on the buttons themselves. **Revised must-fix → should-fix (Task 12 permissions audit):** the backend IS gated — every destructive path requires System Manager/Administrator via `_require_system_manager_for_clear()` (dev_tools.py:132), so a regular HR user without that role cannot actually execute a wipe even with the buttons shown; each is also behind a typed-name confirm. Real issue: confusing/dangerous-looking dev controls in the HR UI + reliance on role-gating alone. Hide them from non-dev / non-SysMgr builds — `e2e/.audit-shots/laptop-schedule-wizard-loaded.png`, scenario `baseline`, laptop. (found 2026-07-03; PR —)
 - [ ] **[T3-9]** `get_my_week` exposes any employee's checkins + attendance flags to any authenticated user — `dewey_time.attendance_engine.api.get_my_week` (api.py:8) is `@frappe.whitelist()` with no permission check and takes an arbitrary `employee` param, returning that employee's `Employee Checkin` + `Attendance Flag` rows. Any logged-in user (incl. employees, if the rollout is employee-facing) can read a colleague's attendance by calling this legacy endpoint directly, bypassing the HR gate on `get_employee_calendar`. Source-confirmed; runtime probe deferred to sandbox. Fix: add an access check as the first statement, or remove the endpoint (the SPA uses `get_employee_calendar`, not this). (found 2026-07-04; PR —)
+- [ ] **[T2-3]** Overnight-shift flag arithmetic is **untested** — no synthetic unit test exercises `LATE_START`/`LEFT_EARLY`/`MISSING_TIME` on a shift whose `end_time < start_time` (crosses midnight); every flag-engine test uses 09:00–17:00 day shifts (`test_closeout.py`, `test_intraday.py`, `test_absence_flags.py`). The engine claims overnight-awareness (`shift_times.py`) but that path has zero coverage. **Pre-launch data-trust method (per the prelaunch reframe): verify flag logic by synthetic edge-case tests, not real data.** Add overnight-shift cases before launch. _Proposed should-fix; **must-fix if any employee actually works a midnight-crossing shift** — cheap to determine from the imported shift data (`end_time < start_time`)._ — evidence: `docs/superpowers/audits/2026-07-flag-test-coverage.md`. (found 2026-07-04; PR —)
 
 ## Can wait _(proposed)_
 
 - [ ] **[T3-1]** ~10 stray screenshot PNGs untracked at repo root (`di-home*.png`, `mine-final*.png`, `render-*.png`, …) — delete or gitignore; risk of an accidental commit. _Trivial cleanup, do anytime._ (found 2026-07-03; PR —)
 - [ ] **[T3-5]** `HR_ATTENDANCE_DEPLOY.md` never warns that CI does NOT rebuild the bundle — `.github/workflows/frontend.yml` runs only `test:web` and `test:e2e`; merging a frontend PR without first running `npm run build` locally and committing the output ships stale assets to prod with no CI gate to catch it. _Should-fix-adjacent: known footgun; folding a warning into the deploy doc alongside T3-6 closes it cheaply._ (found 2026-07-03; PR —)
+- [ ] **[T2-4]** `ATTENDANCE_ISSUE` has only partial synthetic coverage — of its reasons, only `delivery_failed` and `single_checkin` are directly asserted in tests; `unpaired_punch`, `unknown_device_branch`, and `missing_lunch_pair` are untested. Add cases for the untested reasons. _Lower priority than T2-3._ — evidence: `docs/superpowers/audits/2026-07-flag-test-coverage.md`. (found 2026-07-04; PR —)
 - [ ] **[T3-7]** Schema patches that ran during a deploy cannot be undone by git revert — `dewey_time/patches.txt` includes behavior-altering patches (`reset_shift_type_naming_to_prompt`, `disable_schedule_naming_server_scripts`) that delete Property Setters and disable Server Scripts; these DB-side changes persist after a code rollback, so rolling back to a prior commit may leave the DB in a state the old code did not expect. _Document as a rollback caveat under T3-6._ (found 2026-07-03; PR —)
 
 ## Pending — user action / sandbox tracks
