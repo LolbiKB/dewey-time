@@ -1,0 +1,110 @@
+# Rollout Punch List
+
+Single source of truth for pre-rollout readiness. Spec:
+`docs/superpowers/specs/2026-07-03-pre-rollout-readiness-design.md`.
+
+Rollout is ready when **Must fix** is empty, every **Should fix** has a recorded
+decision, and the launch checklist (spec Phase 4) has passed once against prod.
+
+**Entry format:**
+`- [ ] **[T<track>-<n>]** <title> — <evidence: screenshot path or repro note> (found <date>; PR —)`
+
+Tracks: T1 = UI walk, T2 = data trust, T3 = failure/permissions/deploy.
+
+## Status (2026-07-04)
+
+Backup-independent audit is **complete**: UI walk (T1); failure-visibility +
+deploy/rollback tracing (T3); prod `/adms` guest gate (clean); ADMS Bridge
+source root-cause (T2-1); and a **source-level permissions audit of every
+whitelisted endpoint** (Task 12 static pass). 16 tracked items — **buckets are
+`(proposed)` pending the user's final triage** (spec Phase 2 gate).
+
+**Key permissions result:** the destructive `dev_tools` clear/wipe endpoints ARE
+backend-gated — every destructive path requires System Manager/Administrator via
+`_require_system_manager_for_clear()` (dev_tools.py:132). So T1-5 is a
+frontend-only UX / defense-in-depth issue, **not** "any HR user can wipe" — a
+regular HR user without System Manager cannot execute a wipe even with the
+buttons visible. One real hole found: `get_my_week` is ungated (T3-9).
+
+**Still pending — need the anonymized prod seed:** the data-trust track (flag
+correctness on 2 real weeks, import cleanliness, ADMS Bridge record confirm) and
+the *runtime* permissions probe (static pass done; live non-HR probe deferred).
+See the DEFERRED entry at the bottom.
+
+Bucket counts (proposed): **Must fix 0 open + 3 fixed (T2-3, T3-3, T1-1)** ·
+Should fix **0 open + 8 fixed** (T3-9, T3-6, T2-1, T1-2, T1-3, T1-4, T3-4, T3-2) · Can wait 3 open + 2 fixed (T3-5, T3-7) ·
+Pending user/sandbox 2. (19 findings; **13 fixed total** — **Must-fix AND Should-fix buckets both closed**).
+Remaining: Can-wait only (T3-1 stray PNGs, T2-4 ATTENDANCE_ISSUE synthetic coverage, T3-10 test-isolation) + 2 user-side items (T2-2 import CSV, T3-8 FC backups) + the launch checklist (Phase 4).
+
+**✅ Headline find (2026-07-04) — FOUND AND FIXED:** running the synthetic suite on
+the sandbox uncovered a **confirmed correctness bug** — the flag engine had NO
+overnight-shift handling, so `LATE_START`/`LEFT_EARLY`/`MISSING_TIME` were silently
+never emitted for any employee on a midnight-crossing shift (**T2-3**). **Now fixed
++ verified (commit `599f2ec8`); `test_overnight_shifts.py` 7/7 pass, no
+regressions.** **Confirmed LATENT (user, 2026-07-04): overnight shifts are rare
+and none are currently scheduled, so no live attendance data was affected — the
+fix pre-empts a future landmine rather than repairing live damage.**
+
+**Flag-correctness (data-trust) — prelaunch reframe (proposed, pending user OK):**
+this is a *prelaunch* system, so there is no representative 2-week real punch
+dataset to audit. Flag correctness is therefore verified **synthetically** for
+launch: a coverage map (`docs/superpowers/audits/2026-07-flag-test-coverage.md`)
+shows **7/8 flag codes have synthetic unit-test coverage**; the gaps are
+overnight shifts (T2-3) and some `ATTENDANCE_ISSUE` reasons (T2-4). Running that
+suite needs the **Docker bench** (`frappe-sandbox up`) — **not** the prod backup.
+Real-data spot-checking (original Track 2 Tasks 7–8) moves to an **early
+post-launch** checklist item, run once real punches accumulate.
+
+**Synthetic suite RUN (2026-07-04, sandbox bench, Python 3.14.2):** `frappe-sandbox
+test --backend` → **288 tests, 276 passed, 9 skipped, 3 errors**. All flag-engine
+modules (closeout, intraday, absence, lunch, integration matrix) **PASS** — flag
+logic is verified for covered scenarios. The 3 errors are all in
+`test_dashboard_auth` and are an **order-dependent test-isolation artifact** (the
+module passes 10/10 in isolation) — not product bugs (T3-10). Remaining coverage
+gap to close: overnight shifts (T2-3).
+
+## Must fix _(proposed)_
+
+- [x] **[T2-3]** Overnight-shift flag arithmetic — **FIXED 2026-07-04 (commit `599f2ec8`), controller-verified: 7/7 `test_overnight_shifts.py` pass, full suite 295 tests with zero new regressions (only the pre-existing T3-10 dashboard-auth errors remain).** Fix = day-spanning minute scale + `end_dt` day-roll + overnight-aware checkin window across closeout.py/absence_intervals.py/attendance_segments.py. **Live/latent: LATENT** — user confirms no overnight shifts currently scheduled (rare); fix is pre-emptive. **Note (semantic choice in the fix, low-stakes given no overnight shifts):** for overnight shifts LATE_START now fires on the IN punch alone (`>= 1`), where day shifts still require a complete pair (`>= 2`); left as-is. Was: **CONFIRMED CORRECTNESS BUG (3 distinct engine bugs), controller-verified in source 2026-07-04.** For any employee on a midnight-crossing shift (`end_time < start_time`), `LATE_START`, `LEFT_EARLY`, and `MISSING_TIME` are **all silently never emitted** — their attendance violations go completely undetected. Root cause is systemic: `shift_times.combine_date_time` (shift_times.py:39) stamps shift times onto the single attendance date with no overnight roll, and every consumer inherits that. Evidence: `dewey_time/tests/test_overnight_shifts.py` (7 tests; the 4 bug-demonstrating cases are `@unittest.expectedFailure`, so the suite stays green and they flip to failures the moment the bug is fixed). **Live severity depends on whether any Active employee actually has an overnight shift assigned — a 1-query check on prod (`end_time < start_time` on the assigned Shift Types); latent landmine even if none exist today.** Root causes: (A) `_get_checkins_for_day` (closeout.py:677) fetches D 00:00–23:59 only → the D+1 OUT is excluded → `checkins_count=1` fails the `>= 2` guard (closeout.py:510) → LATE_START skipped; (B) `end_dt = combine_date_time(D, 06:00) = D 06:00` not D+1 (closeout.py:560) → LEFT_EARLY threshold on wrong day, never fires; (C) `if end_min <= start_min: return []` (absence_intervals.py:66) + D+1 date mismatch in `minutes_from_checkin_time` (attendance_segments.py:47) → MISSING_TIME fully disabled overnight. (found 2026-07-04; PR —)
+- [x] **[T3-3]** **FIXED 2026-07-04 (commit `284e4a86`, Option A), controller-verified (suite green + regression test `test_company_fallback_closes_out_punched_employee_when_no_device_alert`).** Missed closeout webhook → employees with checkins silently got no final flags — `run_company_fallback_closeout` (closeout.py:82) skips employees with any checkins (closeout.py:261), so LATE_START/LEFT_EARLY/MISSING_TIME are never written if the Bridge closeout never calls `notify_device_closeout_status` (closeout.py:121); no Device Closeout Alert row is created so no "!" badge in the SPA; no push, email, or desk notification fires. _Proposed must-fix: silent data-completeness loss; flags HR relies on just never appear._ (found 2026-07-03; PR —)
+- [x] **[T1-1]** **FIXED 2026-07-04 (commit `0169dc4d`), controller-verified via before/after screenshots.** Phone 375px 7-column week grid was unreadable — labels clipped ("ue", "Bod...ay"), time sub-labels truncated, shift bars collapsed to hairlines. Fix: `grid-cols-[repeat(7,minmax(8rem,1fr))]` (floors each column at 128px, fills to 1fr on desktop → desktop pixel-identical) + a shared horizontal-scroll wrapper so the header and timeline scroll in sync (`WeekView.tsx`, `AttendanceLoading.tsx`; committed bundle rebuilt). Phone now shows full day labels + full time ranges ("8:11 AM – 5:05 PM") + substantial shift bars, ~2.5 columns with horizontal scroll. _Minor residual (can-wait polish): the in-bar micro time-labels are still tight at phone width, but that info is now redundant with the readable column header._ (found 2026-07-03; PR —)
+
+## Should fix _(proposed)_
+
+- [x] **[T1-2]** **FIXED 2026-07-04 (commit `fc394345`), screenshot-verified.** Error state now shows a single-line banner + Retry button and an "Attendance data unavailable" error card in place of the misleading grid — no more fake "Day off" week under an error. Was: api-error state: error banner contained a redundant "There was an error." secondary line that adds no information, and there is no retry button on the banner itself (only the small refresh icon in the header toolbar is available); additionally the calendar renders "Day off" in every column below the error, which looks like stale data rather than a loading failure — `e2e/.audit-shots/laptop-attendance-api-error.png`, scenario `api-error`, laptop. _Proposed should-fix, leaning high: the fake "Day off" grid under an error is a trust risk._ (found 2026-07-03; PR —)
+- [x] **[T1-3]** **FIXED 2026-07-04 (commit `fc394345`), screenshot-verified.** Never-scheduled employees now get a distinct "No schedule configured — Assign a Shift Schedule Assignment in ERPNext…" card; genuinely-off weeks still show the Day off grid. Was: `no-schedule` state (employee with `has_shift_assignment: false`) rendered identically to `empty-week` (scheduled employee, no work days) — both show "Day off" grid with pink header and no explanatory copy; an HR user onboarding a new employee cannot tell whether the view reflects a configured week off or a missing schedule that needs setup — `e2e/.audit-shots/laptop-attendance-no-schedule.png`, scenario `no-schedule`, laptop. (found 2026-07-03; PR —)
+- [x] **[T1-4]** **FIXED 2026-07-04 (commit `fc394345`), screenshot-verified.** The 4 header buttons now form a compact 2×2 grid at phone width (`sm:contents` dissolves it on desktop) and the page scrolls, so the shift-block editor (Template + day toggles + time fields) is visible/usable on phone. Was: Phone 375px: `/hr-schedule` shift-block editor inaccessible — four header action buttons (Import, Clear schedule, Clear all, Wipe patterns) stack vertically at mobile width, consuming ~55% of the viewport; the WeekPatternGroupEditor inside the `flex min-h-0 flex-1` card is squeezed to zero visible height, leaving only the card title "Shift blocks" visible between the header and the footer. HR cannot view or edit any shift blocks on phone — `e2e/.audit-shots/phone-schedule-baseline.png`, scenario `baseline`, phone. _Proposed should-fix: the schedule wizard is likely a laptop admin task; raise to must-fix if used on phones._ (found 2026-07-03; PR —)
+- [x] **[T2-1]** **FIXED 2026-07-04 (commit `c143a2d9`), controller-verified (22 tests, suite green).** Went with a config-driven exclusion (option a-variant): `_list_calendar_employee_rows` now filters out IDs in site_config `hr_calendar_excluded_employees` (JSON list or comma/newline string). Covers **both** pickers — `/hr-schedule`'s coverage payload routes through the same function (coverage_api.py:51). **User action to activate:** set the config to the Bridge's employee id, e.g. `bench --site <site> set-config -p hr_calendar_excluded_employees '["<bridge-employee-id>"]'`. ADMS Bridge service account appeared in HR employee pickers — selectable in `/hr-attendance` and `/hr-schedule` pickers; search fix (#57) stopped it polluting results but it was still listed. **Root cause (source-confirmed, Task 9 code half):** `_list_calendar_employee_rows` (`hr_calendar.py:330–348`) filters Employees on `{"status": "Active"}` only — no service-account exclusion. The Bridge exists as an Active *Employee* record, so it lists. There is no exclusion config anywhere: `Dewey Time Settings` has only web-push/VAPID/landing fields, and the Bridge authenticates as a User via api_key (`bridge_auth.py`), not a fixed email, so there's no configured service-user to key off. A cleanup patch (`cleanup_adms_bridge_desk_artifacts.py`) already removes stray "ADMS Bridge" *desk* records but not the Employee. **Proposed fix (pick one; discriminator needs 1 look at the real Employee record — sandbox):** (a) add an `excluded_calendar_employees` field to `Dewey Time Settings` and filter it out in the query; (b) exclude by a stable discriminator on the Bridge Employee (its `user_id`/designation) once confirmed; or (c) data fix — don't keep the service account as an Active Employee. (found 2026-07-02; PR —)
+- [x] **[T3-2]** **FIXED 2026-07-04 (commit `af0d0dc5`), screenshot-verified.** The SPA now compares the Device Sync Status watermark to the wall clock and shows an informational amber banner ("Device data may be stale — last device sync Xh ago") when nothing has been delivered for >3h, so a stalled Bridge is visible on the HR screen instead of only surfacing ~18h later. +unit tests + a `stale-sync` audit scenario. Was: Bridge punch stasis is invisible: no consumer checked wall-clock freshness of Device Sync Status — `device_sync.py:153` writes the watermark; `hr_calendar.py:478` reads it; `attendancePunches.ts:211` only flags lag when `pending_count > 0` or `last_device_log_at > last_delivered_at` within the frozen row, never against wall clock; no scheduler audits DSS row age; no push/email/notification fires; only signal is UNNOTIFIED_ABSENCE flags ~18 h later. (found 2026-07-03; PR —)
+- [x] **[T3-4]** **FIXED 2026-07-04 (commit `c00abbf7`), controller-verified (caught + fixed an overnight false-alarm: heartbeat now records before the business-hours gate, 24/7).** `run_intraday_scheduler` records a durable heartbeat (`tabDefaultValue` global-default); new whitelisted `get_engine_health` endpoint reports `healthy` = intraday ran within 90 min. An external uptime monitor (API-key auth) polls it and alerts on `healthy=false`/non-200 — a dead scheduler stops the heartbeat. +5 tests, doc note in ARCHITECTURE.md. Was: Scheduler death had no dead-man's switch in app code — `*/30` intraday (hooks.py:111) and `daily` fallback closeout (hooks.py:108) stopping produces no heartbeat failure, no email, no push, no notification; no job audits last-ran-at; Frappe Cloud infra may alert on worker death but this is outside app code and cannot be verified from code alone. (found 2026-07-03; PR —)
+- [x] **[T3-6]** **FIXED 2026-07-04: added a `## Rollback` section to `HR_ATTENDANCE_DEPLOY.md`** (revert merge → deploy → migrate re-syncs old bundle, + the patch caveat from T3-7). No rollback procedure was documented anywhere — `HR_ATTENDANCE_DEPLOY.md` covered 404/MIME troubleshooting only; the expected procedure for a broken prod deploy (revert merge commit → merge revert → FC deploy → `bench migrate` re-syncs old committed assets) is undocumented; add a ROLLBACK section to `HR_ATTENDANCE_DEPLOY.md`. (found 2026-07-03; PR —)
+- [ ] **[T1-5]** Three destructive dev buttons ("Clear schedule (dev)", "Clear all (dev)", "Wipe patterns (dev)") render unconditionally in the schedule header (`WeeklySchedulePage.tsx:351–375`) — visible to any HR user, no `import.meta.env.DEV` or role gate on the buttons themselves. **Revised must-fix → should-fix (Task 12 permissions audit):** the backend IS gated — every destructive path requires System Manager/Administrator via `_require_system_manager_for_clear()` (dev_tools.py:132), so a regular HR user without that role cannot actually execute a wipe even with the buttons shown; each is also behind a typed-name confirm. Real issue: confusing/dangerous-looking dev controls in the HR UI + reliance on role-gating alone. Hide them from non-dev / non-SysMgr builds — `e2e/.audit-shots/laptop-schedule-wizard-loaded.png`, scenario `baseline`, laptop. (found 2026-07-03; PR —)
+- [x] **[T3-9]** **FIXED 2026-07-04 (commit `b8c17401`), controller-verified (+3 regression tests in `test_api.py`).** `get_my_week` exposed any employee's checkins + attendance flags to any authenticated user — `dewey_time.attendance_engine.api.get_my_week` (api.py:8) is `@frappe.whitelist()` with no permission check and takes an arbitrary `employee` param, returning that employee's `Employee Checkin` + `Attendance Flag` rows. Any logged-in user (incl. employees, if the rollout is employee-facing) can read a colleague's attendance by calling this legacy endpoint directly, bypassing the HR gate on `get_employee_calendar`. Source-confirmed; runtime probe deferred to sandbox. Fix: add an access check as the first statement, or remove the endpoint (the SPA uses `get_employee_calendar`, not this). (found 2026-07-04; PR —)
+## Can wait _(proposed)_
+
+- [ ] **[T3-1]** ~10 stray screenshot PNGs untracked at repo root (`di-home*.png`, `mine-final*.png`, `render-*.png`, …) — delete or gitignore; risk of an accidental commit. _Trivial cleanup, do anytime._ (found 2026-07-03; PR —)
+- [x] **[T3-5]** **FIXED 2026-07-04: added a "CI does not rebuild the bundle" warning to `HR_ATTENDANCE_DEPLOY.md`.** `HR_ATTENDANCE_DEPLOY.md` never warned that CI does NOT rebuild the bundle — `.github/workflows/frontend.yml` runs only `test:web` and `test:e2e`; merging a frontend PR without first running `npm run build` locally and committing the output ships stale assets to prod with no CI gate to catch it. _Should-fix-adjacent: known footgun; folding a warning into the deploy doc alongside T3-6 closes it cheaply._ (found 2026-07-03; PR —)
+- [ ] **[T2-4]** `ATTENDANCE_ISSUE` has only partial synthetic coverage — of its reasons, only `delivery_failed` and `single_checkin` are directly asserted in tests; `unpaired_punch`, `unknown_device_branch`, and `missing_lunch_pair` are untested. Add cases for the untested reasons. _Lower priority than T2-3._ — evidence: `docs/superpowers/audits/2026-07-flag-test-coverage.md`. (found 2026-07-04; PR —)
+- [x] **[T3-7]** **FIXED 2026-07-04: documented as a caveat under the new Rollback section** ("Schema patches do NOT roll back with the code"). Schema patches that ran during a deploy cannot be undone by git revert — `dewey_time/patches.txt` includes behavior-altering patches (`reset_shift_type_naming_to_prompt`, `disable_schedule_naming_server_scripts`) that delete Property Setters and disable Server Scripts; these DB-side changes persist after a code rollback, so rolling back to a prior commit may leave the DB in a state the old code did not expect. _Document as a rollback caveat under T3-6._ (found 2026-07-03; PR —)
+
+## Pending — user action / sandbox tracks
+
+- [ ] **[T2-2]** Fresh prod import problems CSV not yet verified — expect only the ~4 known bad-badge `EMPLOYEE_NOT_FOUND` rows. **Blocked on user** re-running the prod import and sharing the CSV. (found 2026-07-02; PR —)
+- [ ] **[T3-8]** USER CHECK — confirm in the Frappe Cloud dashboard that scheduled offsite backups are enabled and a recent backup exists for the prod site before rollout; cannot be verified from code. (found 2026-07-03; PR —)- [ ] **[TRACK — DEFERRED, needs backup seed]** Sandbox-dependent tracks were **not run this session** (no anonymized prod seed available). Deferred to a future session after `fetch_backup.py` → `frappe-sandbox seed --prod`:
+  - Flag correctness on 2 real weeks (spec Track 2 / plan Tasks 5, 7, 8) — the core data-trust verification; **not yet done**.
+  - Import cleanliness structural checks (Task 10) — plus the T2-2 CSV (user).
+  - Live permissions probe of all whitelisted endpoints (Task 12 static-source pass is DONE — 1 gap found, T3-9; runtime confirmation still needs a live non-HR probe in the sandbox).
+  - `/adms` authorized-user shell reach (Task 6 Steps 2–3). _Guest gate already verified clean on prod: `curl -I https://dewey.frappehr.com/adms` → 301 `/login`; `get_dashboard_token` as guest → 403._
+  - ADMS Bridge exclusion — Task 9 **code half is done** (root cause + proposed fixes folded into T2-1 above); only the 1-look Employee-record discriminator confirmation remains.
+
+## Can wait — test hygiene _(proposed)_
+
+- [ ] **[T3-10]** Order-dependent test isolation: `test_dashboard_auth` errors (3) when run after `test_clear_employee_schedule` in a full-suite run, because both call the shared `_install_frappe_mock()` and `test_clear_employee_schedule` reassigns the shared mock's `frappe.PermissionError` to its own class, so `test_dashboard_auth`'s `assertRaises(builtin PermissionError)` no longer matches (`test_dashboard_auth.py:27,81,103`). Module passes 10/10 in isolation; product code is correct. Makes CI green order-dependent — fix by having each module own/reset its mock exception classes in setUp/tearDown. Surfaced on the sandbox (Python 3.14 discovery order); may or may not reproduce on CI's Python. (found 2026-07-04; PR —)
+
+## Triage decisions log
+
+_(user decisions recorded here: entry id → bucket, date, rationale)_
+
+## Launch checklist record
+
+_(completed once, per spec Phase 4)_

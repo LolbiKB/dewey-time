@@ -8,6 +8,7 @@ _install_frappe_mock()
 from dewey_time.attendance_engine.hr_calendar import (
     HR_STAFF_ROLES,
     _employee_linked_to_user,
+    _excluded_calendar_employees,
     _filter_auto_flags_for_calendar_day,
     _is_hr_staff,
     _list_calendar_employee_rows,
@@ -151,5 +152,94 @@ class TestCalendarAccess(unittest.TestCase):
             out,
             {"employees": [{"id": "EMP-001"}], "current_user_employee": "EMP-001"},
         )
+
+
+class TestExcludedCalendarEmployees(unittest.TestCase):
+    """Tests for _excluded_calendar_employees config parsing."""
+
+    def test_returns_empty_when_unset(self):
+        with patch("dewey_time.attendance_engine.hr_calendar.frappe.conf") as conf:
+            conf.get.return_value = None
+            self.assertEqual(_excluded_calendar_employees(), [])
+
+    def test_parses_json_list(self):
+        with patch("dewey_time.attendance_engine.hr_calendar.frappe.conf") as conf:
+            conf.get.return_value = ["ADMS-BRIDGE", "SVC-ACCOUNT"]
+            result = _excluded_calendar_employees()
+            self.assertEqual(result, ["ADMS-BRIDGE", "SVC-ACCOUNT"])
+
+    def test_parses_comma_separated_string(self):
+        with patch("dewey_time.attendance_engine.hr_calendar.frappe.conf") as conf:
+            conf.get.return_value = "ADMS-BRIDGE, SVC-ACCOUNT"
+            result = _excluded_calendar_employees()
+            self.assertEqual(result, ["ADMS-BRIDGE", "SVC-ACCOUNT"])
+
+    def test_parses_newline_separated_string(self):
+        with patch("dewey_time.attendance_engine.hr_calendar.frappe.conf") as conf:
+            conf.get.return_value = "ADMS-BRIDGE\nSVC-ACCOUNT"
+            result = _excluded_calendar_employees()
+            self.assertEqual(result, ["ADMS-BRIDGE", "SVC-ACCOUNT"])
+
+
+class TestListCalendarEmployeeRowsExclusion(unittest.TestCase):
+    """Tests for the exclusion filter applied in _list_calendar_employee_rows."""
+
+    def _base_patches(self):
+        """Return a context manager stack that mocks the dependencies of
+        _list_calendar_employee_rows to isolate just the exclusion logic."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def _ctx(excluded_ids, get_all_return):
+            with patch(
+                "dewey_time.attendance_engine.hr_calendar._excluded_calendar_employees",
+                return_value=excluded_ids,
+            ), patch(
+                "dewey_time.attendance_engine.hr_calendar.frappe.db.has_column",
+                return_value=False,
+            ), patch(
+                "dewey_time.attendance_engine.hr_calendar.frappe.get_all",
+                return_value=get_all_return,
+            ) as mock_get_all, patch(
+                "dewey_time.attendance_engine.hr_calendar._shift_schedule_assignment_metadata_by_employee",
+                return_value={},
+            ), patch(
+                "dewey_time.attendance_engine.hr_calendar.shift_assignment_bounds_by_employee",
+                return_value={},
+            ), patch(
+                "dewey_time.attendance_engine.hr_calendar.first_checkin_date_by_employee",
+                return_value={},
+            ):
+                yield mock_get_all
+
+        return _ctx
+
+    def test_exclusion_applied_on_see_all_path(self):
+        """HR see-all path (employee_ids=None): excluded IDs appear in the filter."""
+        ctx = self._base_patches()
+        with ctx(["ADMS-BRIDGE"], []) as mock_get_all:
+            _list_calendar_employee_rows(None, include_all=True)
+            _, call_kwargs = mock_get_all.call_args
+            name_filter = call_kwargs["filters"].get("name")
+            self.assertEqual(name_filter, ["not in", ["ADMS-BRIDGE"]])
+
+    def test_no_exclusion_filter_when_config_empty(self):
+        """When hr_calendar_excluded_employees is unset, no name filter is added."""
+        ctx = self._base_patches()
+        with ctx([], []) as mock_get_all:
+            _list_calendar_employee_rows(None, include_all=True)
+            _, call_kwargs = mock_get_all.call_args
+            self.assertNotIn("name", call_kwargs["filters"])
+
+    def test_exclusion_not_applied_on_personal_path(self):
+        """Non-HR path (employee_ids set): exclusion is irrelevant; 'in' filter is used."""
+        ctx = self._base_patches()
+        with ctx(["ADMS-BRIDGE"], []) as mock_get_all:
+            _list_calendar_employee_rows(["EMP-001"], include_all=True)
+            _, call_kwargs = mock_get_all.call_args
+            name_filter = call_kwargs["filters"].get("name")
+            self.assertEqual(name_filter, ["in", ["EMP-001"]])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import timedelta
 
@@ -33,6 +34,16 @@ def _employee_linked_to_user(user: str | None = None) -> str | None:
     if not user or user == "Guest":
         return None
     return frappe.db.get_value("Employee", {"user_id": user, "status": "Active"}, "name")
+
+
+def _excluded_calendar_employees() -> list[str]:
+    """Employee IDs to hide from the HR calendar/schedule pickers (e.g. the ADMS
+    Bridge service account). Configured via site_config `hr_calendar_excluded_employees`
+    (a JSON list or a comma/newline-separated string)."""
+    raw = frappe.conf.get("hr_calendar_excluded_employees") or []
+    if isinstance(raw, str):
+        raw = [p.strip() for p in re.split(r"[,\n]", raw) if p.strip()]
+    return [str(e) for e in raw if e]
 
 
 def _require_hr_role():
@@ -335,6 +346,10 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
     filters: dict = {"status": "Active"}
     if employee_ids is not None:
         filters["name"] = ["in", employee_ids]
+    else:
+        excluded = _excluded_calendar_employees()
+        if excluded:
+            filters["name"] = ["not in", excluded]
 
     rows = (
         frappe.get_all(

@@ -29,9 +29,26 @@ INTRADAY_FLAG_CODES = [
 
 def run_intraday_scheduler():
     """Cron entry: refresh provisional flags for today during configured business hours."""
+    # Record the heartbeat first, on every scheduler fire (24/7) — it proves the
+    # scheduler is alive, independent of whether we're in the business window.
+    # (Recording it only after the window check would falsely report the engine
+    # "stale" overnight, when the scheduler is fine but simply not doing work.)
+    _record_intraday_heartbeat()
     if not _is_within_intraday_window():
         return
     refresh_intraday_flags_for_date(nowdate())
+
+
+_HEARTBEAT_KEY = "dewey_time_last_intraday_run_at"
+
+
+def _record_intraday_heartbeat():
+    """Record a durable heartbeat so get_engine_health can detect a stale scheduler."""
+    try:
+        ts = now_datetime().isoformat(timespec="seconds")
+        frappe.db.set_global_default(_HEARTBEAT_KEY, ts)
+    except Exception:
+        pass  # heartbeat write must never break the scheduler run
 
 
 def refresh_intraday_flags_for_date(attendance_date):

@@ -259,6 +259,16 @@ def _generate_company_fallback_for_date(*, company: str, attendance_date):
 
         checkins = _get_checkins_for_day(employee=employee, attendance_date=attendance_date)
         if checkins:
+            # T3-3: no open device closeout alert for this branch means the device closeout
+            # webhook never completed for this day. Without this, a punched employee would
+            # silently never receive LATE_START/LEFT_EARLY/MISSING_TIME. Run the full closeout
+            # ourselves. Idempotent (AUTO flags are delete/recreated), so a late device webhook
+            # simply regenerates the same flags.
+            _generate_for_employee_date(
+                employee=employee,
+                attendance_date=attendance_date,
+                include_unnotified_absence=False,
+            )
             continue
         if should_skip_absence_flags(employee=employee, employee_branch=employee_branch, attendance_date=attendance_date):
             continue
@@ -409,8 +419,14 @@ def _generate_for_employee_date(
 
     shift_assignment = _get_shift_assignment(employee=employee, attendance_date=attendance_date)
     on_shift = bool(shift_assignment)
+    # Resolve shift_meta early so _get_checkins_for_day can extend the window for overnight shifts.
+    _early_shift_meta = (
+        _get_shift_meta(shift_assignment["shift_type"])
+        if shift_assignment and shift_assignment.get("shift_type")
+        else None
+    )
 
-    checkins = _get_checkins_for_day(employee=employee, attendance_date=attendance_date)
+    checkins = _get_checkins_for_day(employee=employee, attendance_date=attendance_date, shift_meta=_early_shift_meta)
     checkins_count = len(checkins)
 
     first_in_dt = checkins[0]["time"] if checkins else None
@@ -491,11 +507,7 @@ def _generate_for_employee_date(
             )
         return
 
-    shift_meta = (
-        _get_shift_meta(shift_assignment["shift_type"])
-        if shift_assignment and shift_assignment.get("shift_type")
-        else None
-    )
+    shift_meta = _early_shift_meta  # already resolved before _get_checkins_for_day
     start_grace = effective_start_grace(shift_meta) if shift_meta else 0
     end_grace = effective_end_grace(shift_meta) if shift_meta else 0
     lunch_grace = effective_lunch_return_grace(shift_meta) if shift_meta else 0
@@ -506,8 +518,14 @@ def _generate_for_employee_date(
         evidence["shift_start"] = start_dt.isoformat()
         evidence.update(grace_evidence(shift_meta))
         evidence["late_threshold"] = late_threshold.isoformat()
-        # Only flag LATE_START when there is a complete IN/OUT pair (≥2 punches).
-        if checkins_count >= 2 and first_in_dt and first_in_dt > late_threshold:
+        # For overnight shifts (end < start), LATE_START is detectable from the IN punch alone.
+        # For day shifts, require a complete IN/OUT pair (≥2 punches) to avoid false positives.
+        _is_overnight = (
+            shift_meta.get("end_time") is not None
+            and shift_meta["end_time"] < shift_meta["start_time"]
+        )
+        _min_punches_for_late = 1 if _is_overnight else 2
+        if checkins_count >= _min_punches_for_late and first_in_dt and first_in_dt > late_threshold:
             flags_to_create.append(
                 (
                     "LATE_START",
@@ -558,6 +576,9 @@ def _generate_for_employee_date(
         )
         if last_out_dt and shift_meta.get("end_time") is not None:
             end_dt = _combine_date_time(attendance_date, shift_meta["end_time"])
+            _start_time = shift_meta.get("start_time")
+            if _start_time is not None and end_dt <= _combine_date_time(attendance_date, _start_time):
+                end_dt = end_dt + timedelta(days=1)  # overnight: roll end to next day
             early_threshold = end_dt - timedelta(minutes=end_grace)
             evidence["shift_end"] = end_dt.isoformat()
             evidence["early_threshold"] = early_threshold.isoformat()
@@ -673,9 +694,20 @@ def _get_shift_meta(shift_type: str):
     return enrich_shift_meta(meta)
 
 
-def _get_checkins_for_day(*, employee: str, attendance_date):
+def _get_checkins_for_day(*, employee: str, attendance_date, shift_meta=None):
     start = get_datetime(str(attendance_date) + " 00:00:00")
-    end = get_datetime(str(attendance_date) + " 23:59:59")
+    # For overnight shifts (end_time < start_time), extend the upper bound to include D+1 punches.
+    if shift_meta:
+        _end_time = shift_meta.get("end_time")
+        _start_time = shift_meta.get("start_time")
+        if _end_time is not None and _start_time is not None and _end_time < _start_time:
+            _end_grace = effective_end_grace(shift_meta)
+            _next_day = getdate(attendance_date) + timedelta(days=1)
+            end = _combine_date_time(_next_day, _end_time) + timedelta(minutes=_end_grace + 60)
+        else:
+            end = get_datetime(str(attendance_date) + " 23:59:59")
+    else:
+        end = get_datetime(str(attendance_date) + " 23:59:59")
     return (
         frappe.get_all(
             "Employee Checkin",

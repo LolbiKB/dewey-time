@@ -22,6 +22,12 @@ This writes:
 
 Commit `public/hr_attendance/assets/*`, `www/hr-attendance.html`, and `www/hr-schedule.html` with your code changes.
 
+> **⚠ CI does not rebuild the bundle.** `.github/workflows/frontend.yml` runs the
+> tests only (`test:web`, `e2e`) — it never runs `npm run build`. If you change
+> frontend source but forget to rebuild and commit `public/hr_attendance/assets/*`,
+> the merge ships **stale assets** and nothing catches it. Always `npm run build`
+> and commit the output in the **same PR** as the source change.
+
 ## How Frappe serves the bundle
 
 | URL | Served from |
@@ -71,6 +77,30 @@ Implementation: `dewey_time/utils/sync_hr_attendance_assets.py`
 Every migrate runs `sync_app_branding_assets()` (copies all of `public/images/`). Desk **Workspace / Desktop Icon** for Dewey Time are not created — patch `remove_dewey_time_desk_workspace` deletes them if present.
 
 Verify both URLs return **200** SVG in the browser.
+
+## Rollback
+
+Prod is broken right after a deploy. Because the built bundle is committed to
+git, reverting the code restores the previous bundle:
+
+1. **Revert the merge** — `git revert -m 1 <merge-commit>` (or revert the specific
+   commit), then open + merge the revert PR. This restores the prior
+   `public/hr_attendance/assets/*` and `www/*.html` exactly as they were.
+2. **Deploy** the revert on Frappe Cloud → `bench migrate` runs
+   `sync_hr_attendance_assets`, which republishes the old bundle (the reverted
+   `build-id.txt` no longer matches the deployed one, so the sync re-copies).
+3. **Hard-refresh** to clear the cached `index.js` (stable filename); the reverted
+   `www/*.html` carries the old `?v=` timestamp so most clients bust automatically.
+
+> **⚠ Schema patches do NOT roll back with the code.** A git revert restores code
+> and the committed bundle, but any DB migration/patch that already ran stays
+> applied — e.g. `dewey_time/patches.txt` entries that delete Property Setters or
+> disable Server Scripts (`reset_shift_type_naming_to_prompt`,
+> `disable_schedule_naming_server_scripts`). Reverting the code does not undo those
+> DB-side changes, so rolling back to a commit whose code predates a patch can
+> leave the DB in a state the old code doesn't expect. If a bad deploy included a
+> schema patch, plan the DB rollback separately (restore a backup or hand-reverse
+> the patch) — code revert alone is not enough.
 
 ## Troubleshooting
 

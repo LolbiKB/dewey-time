@@ -1,6 +1,6 @@
 import type { Checkin } from "@/types/calendar";
 
-import { minutesFromDateTime } from "@/lib/attendanceTime";
+import { minutesFromDateTime, parseDateTimeLocal } from "@/lib/attendanceTime";
 
 export type Segment = {
   start: Checkin;
@@ -661,4 +661,44 @@ export function computeDayTimeWindow(
   if (endMin <= startMin) return null;
 
   return { startMin, endMin, span: endMin - startMin };
+}
+
+/**
+ * Number of minutes without a device delivery that triggers the staleness banner.
+ * 3 hours — conservative enough to catch a stalled Bridge before UNNOTIFIED_ABSENCE fires.
+ */
+export const SYNC_STALE_AFTER_MIN = 180;
+
+/**
+ * Compare the freshest `last_delivered_at` watermark across all device sync rows
+ * against `now` and return whether it exceeds SYNC_STALE_AFTER_MIN.
+ *
+ * Pass `now` explicitly so the function is unit-testable without mocking Date.
+ * No rows (device not registered for this view) → stale=false (no false positives).
+ */
+export function checkDeviceSyncStaleness(
+  deviceSync: DeviceSyncStatus[] | undefined,
+  now: Date
+): { stale: boolean; lastDeliveredAt: string | null; minutesSince: number | null } {
+  if (!deviceSync?.length) return { stale: false, lastDeliveredAt: null, minutesSince: null };
+
+  let freshest: Date | null = null;
+  let freshestStr: string | null = null;
+
+  for (const row of deviceSync) {
+    if (!row.last_delivered_at) continue;
+    const d = parseDateTimeLocal(row.last_delivered_at);
+    if (!Number.isFinite(d.getTime())) continue;
+    if (freshest === null || d.getTime() > freshest.getTime()) {
+      freshest = d;
+      freshestStr = row.last_delivered_at;
+    }
+  }
+
+  if (!freshest) return { stale: false, lastDeliveredAt: null, minutesSince: null };
+
+  const minutesSince = (now.getTime() - freshest.getTime()) / 60000;
+  const stale = minutesSince > SYNC_STALE_AFTER_MIN;
+
+  return { stale, lastDeliveredAt: freshestStr, minutesSince };
 }

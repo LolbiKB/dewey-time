@@ -1,8 +1,62 @@
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import frappe
-from frappe.utils import get_datetime, getdate
+from frappe.utils import get_datetime, getdate, now_datetime
+
+
+_HEARTBEAT_KEY = "dewey_time_last_intraday_run_at"
+_STALE_AFTER_MINUTES = 90  # intraday runs every 30 min; 3 missed cycles = stale
+
+
+def _read_heartbeat_value():
+    """Read the intraday heartbeat from the durable global-default KV store.
+
+    Extracted as a named function so tests can stub it without needing to
+    monkeypatch frappe.defaults across a module boundary.
+    """
+    return frappe.defaults.get_global_default(_HEARTBEAT_KEY)
+
+
+@frappe.whitelist()
+def get_engine_health():
+    """Report whether the intraday scheduler is alive.
+
+    The external uptime monitor authenticates with a Frappe API key
+    (Authorization: token <key>:<secret>) and should alert on healthy=false
+    or any non-200 response — a dead scheduler stops the heartbeat, the
+    endpoint goes stale, and the monitor fires.
+    """
+    server_now = now_datetime()
+    raw = _read_heartbeat_value()
+
+    last_run_at = None
+    minutes_since = None
+    healthy = False
+
+    if raw:
+        try:
+            # We write the heartbeat as a plain ISO string ("YYYY-MM-DDTHH:MM:SS");
+            # use stdlib fromisoformat to avoid Frappe's get_datetime format assumptions.
+            last_run_dt = datetime.fromisoformat(str(raw))
+            # now_datetime() returns a naive datetime in server local time;
+            # strip tzinfo from last_run_dt if present so the subtraction is safe.
+            if last_run_dt.tzinfo is not None:
+                last_run_dt = last_run_dt.replace(tzinfo=None)
+            delta = server_now - last_run_dt
+            minutes_since = round(delta.total_seconds() / 60, 1)
+            last_run_at = str(raw)
+            healthy = minutes_since <= _STALE_AFTER_MINUTES
+        except Exception:
+            pass  # corrupt timestamp → treat as never run
+
+    return {
+        "healthy": healthy,
+        "last_intraday_run_at": last_run_at,
+        "minutes_since_last_run": minutes_since,
+        "stale_after_minutes": _STALE_AFTER_MINUTES,
+        "server_time": server_now.isoformat(timespec="seconds"),
+    }
 
 
 @frappe.whitelist()
@@ -13,6 +67,9 @@ def get_my_week(employee: str, start_date: str, end_date: str):
     - computed first/last + gross minutes (simple heuristic)
     - flags per day
     """
+    from dewey_time.attendance_engine.hr_calendar import _require_calendar_access
+
+    _require_calendar_access(employee)
     start = getdate(start_date)
     end = getdate(end_date)
     if end < start:
