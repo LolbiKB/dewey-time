@@ -32,9 +32,9 @@ the *runtime* permissions probe (static pass done; live non-HR probe deferred).
 See the DEFERRED entry at the bottom.
 
 Bucket counts (proposed): **Must fix 0 open + 3 fixed (T2-3, T3-3, T1-1)** ·
-Should fix **0 open + 8 fixed** (T3-9, T3-6, T2-1, T1-2, T1-3, T1-4, T3-4, T3-2) · Can wait 3 open + 2 fixed (T3-5, T3-7) ·
-Pending user/sandbox 2. (19 findings; **13 fixed total** — **Must-fix AND Should-fix buckets both closed**).
-Remaining: Can-wait only (T3-1 stray PNGs, T2-4 ATTENDANCE_ISSUE synthetic coverage, T3-10 test-isolation) + 2 user-side items (T2-2 import CSV, T3-8 FC backups) + the launch checklist (Phase 4).
+Should fix **0 open + 8 fixed** (T3-9, T3-6, T2-1, T1-2, T1-3, T1-4, T3-4, T3-2) · Can wait 2 open + 3 fixed (T3-1, T3-5, T3-7) ·
+Pending user/sandbox 2. (19 findings; **14 fixed total** — **Must-fix AND Should-fix buckets both closed**).
+Remaining: Can-wait only (T2-4 ATTENDANCE_ISSUE synthetic coverage, T3-10 test-isolation) + 2 user-side items (T2-2 import CSV, T3-8 FC backups) + the launch checklist (Phase 4).
 
 **✅ Headline find (2026-07-04) — FOUND AND FIXED:** running the synthetic suite on
 the sandbox uncovered a **confirmed correctness bug** — the flag engine had NO
@@ -82,7 +82,7 @@ gap to close: overnight shifts (T2-3).
 - [x] **[T3-9]** **FIXED 2026-07-04 (commit `b8c17401`), controller-verified (+3 regression tests in `test_api.py`).** `get_my_week` exposed any employee's checkins + attendance flags to any authenticated user — `dewey_time.attendance_engine.api.get_my_week` (api.py:8) is `@frappe.whitelist()` with no permission check and takes an arbitrary `employee` param, returning that employee's `Employee Checkin` + `Attendance Flag` rows. Any logged-in user (incl. employees, if the rollout is employee-facing) can read a colleague's attendance by calling this legacy endpoint directly, bypassing the HR gate on `get_employee_calendar`. Source-confirmed; runtime probe deferred to sandbox. Fix: add an access check as the first statement, or remove the endpoint (the SPA uses `get_employee_calendar`, not this). (found 2026-07-04; PR —)
 ## Can wait _(proposed)_
 
-- [ ] **[T3-1]** ~10 stray screenshot PNGs untracked at repo root (`di-home*.png`, `mine-final*.png`, `render-*.png`, …) — delete or gitignore; risk of an accidental commit. _Trivial cleanup, do anytime._ (found 2026-07-03; PR —)
+- [x] **[T3-1]** **FIXED 2026-07-04: gitignored (`/*.png`, root-scoped) so the strays can no longer be accidentally committed; the files stay on disk (they're the user's design/QA screenshots, not ours to delete).** ~10 stray screenshot PNGs untracked at repo root (`di-home*.png`, `mine-final*.png`, `render-*.png`, …) — delete or gitignore; risk of an accidental commit. _Trivial cleanup, do anytime._ (found 2026-07-03; PR —)
 - [x] **[T3-5]** **FIXED 2026-07-04: added a "CI does not rebuild the bundle" warning to `HR_ATTENDANCE_DEPLOY.md`.** `HR_ATTENDANCE_DEPLOY.md` never warned that CI does NOT rebuild the bundle — `.github/workflows/frontend.yml` runs only `test:web` and `test:e2e`; merging a frontend PR without first running `npm run build` locally and committing the output ships stale assets to prod with no CI gate to catch it. _Should-fix-adjacent: known footgun; folding a warning into the deploy doc alongside T3-6 closes it cheaply._ (found 2026-07-03; PR —)
 - [ ] **[T2-4]** `ATTENDANCE_ISSUE` has only partial synthetic coverage — of its reasons, only `delivery_failed` and `single_checkin` are directly asserted in tests; `unpaired_punch`, `unknown_device_branch`, and `missing_lunch_pair` are untested. Add cases for the untested reasons. _Lower priority than T2-3._ — evidence: `docs/superpowers/audits/2026-07-flag-test-coverage.md`. (found 2026-07-04; PR —)
 - [x] **[T3-7]** **FIXED 2026-07-04: documented as a caveat under the new Rollback section** ("Schema patches do NOT roll back with the code"). Schema patches that ran during a deploy cannot be undone by git revert — `dewey_time/patches.txt` includes behavior-altering patches (`reset_shift_type_naming_to_prompt`, `disable_schedule_naming_server_scripts`) that delete Property Setters and disable Server Scripts; these DB-side changes persist after a code rollback, so rolling back to a prior commit may leave the DB in a state the old code did not expect. _Document as a rollback caveat under T3-6._ (found 2026-07-03; PR —)
