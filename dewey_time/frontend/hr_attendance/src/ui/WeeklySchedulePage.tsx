@@ -344,35 +344,40 @@ export function WeeklySchedulePage() {
                       className="h-9 w-full sm:w-64"
                       compact
                     />
-                    <SpreadsheetImportTrigger
-                      onClick={() => navigate("/hr-schedule/import")}
-                      className="w-full sm:w-auto"
-                    />
-                    <ClearEmployeeScheduleDialog
-                      employee={scheduleEmployeeId}
-                      employeeRow={selectedEmployee}
-                      employeeLabel={employeeLabel}
-                      triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                      disabled={!scheduleEmployeeId}
-                      onSuccess={() => {
-                        setSaveSuccessUrl(null);
-                        void refreshContext();
-                      }}
-                    />
-                    <ClearAllSchedulesDialog
-                      triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                      onSuccess={() => {
-                        setSaveSuccessUrl(null);
-                        void refreshContext();
-                      }}
-                    />
-                    <ClearSitePatternsDialog
-                      triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                      onSuccess={() => {
-                        setSaveSuccessUrl(null);
-                        void refreshContext();
-                      }}
-                    />
+                    {/* On mobile: 2-column grid so buttons take 2 rows instead of 4,
+                        freeing space for the shift-block editor below.
+                        sm:contents dissolves the wrapper back into the flex parent on desktop. */}
+                    <div className="grid grid-cols-2 gap-2 sm:contents">
+                      <SpreadsheetImportTrigger
+                        onClick={() => navigate("/hr-schedule/import")}
+                        className="w-full sm:w-auto"
+                      />
+                      <ClearEmployeeScheduleDialog
+                        employee={scheduleEmployeeId}
+                        employeeRow={selectedEmployee}
+                        employeeLabel={employeeLabel}
+                        triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                        disabled={!scheduleEmployeeId}
+                        onSuccess={() => {
+                          setSaveSuccessUrl(null);
+                          void refreshContext();
+                        }}
+                      />
+                      <ClearAllSchedulesDialog
+                        triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                        onSuccess={() => {
+                          setSaveSuccessUrl(null);
+                          void refreshContext();
+                        }}
+                      />
+                      <ClearSitePatternsDialog
+                        triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                        onSuccess={() => {
+                          setSaveSuccessUrl(null);
+                          void refreshContext();
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

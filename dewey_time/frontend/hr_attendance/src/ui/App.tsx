@@ -3,7 +3,6 @@ import {
   deviceAlertsByDate,
   deviceAlertsForWeek,
   deviceSyncByDate,
-  formatAttendanceLoadError,
   useCalendarEmployees,
   useEmployeeCalendar,
 } from "@/hooks/useHrAttendanceData";
@@ -11,6 +10,7 @@ import { useEmployeeSelection } from "@/hooks/useEmployeeSelection";
 import type { CalendarPayload, Day, Flag, Severity } from "@/types/calendar";
 import { addDays, format, startOfWeek } from "date-fns";
 import { useFrappeAuth } from "frappe-react-sdk";
+import { Loader2Icon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
@@ -180,7 +180,6 @@ export function App() {
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
   const loadError = employeesError ?? calendarError;
-  const loadErrorMessage = loadError ? formatAttendanceLoadError(loadError) : null;
 
   async function refetchPage() {
     setIsRefreshing(true);
@@ -249,16 +248,22 @@ export function App() {
         <Page className="gap-0">
           {loadError ? (
             <Card className="mb-3 border-destructive/40 bg-destructive/5 animate-in fade-in">
-              <CardContent className="py-3 text-sm text-destructive">
+              <CardContent className="flex items-start justify-between gap-3 py-3 text-sm text-destructive">
                 <div>
                   Could not load attendance data.{" "}
                   {hrStaff
                     ? "Confirm you have HR User access and try again."
                     : "Confirm your user is linked to an active Employee record."}
                 </div>
-                {loadErrorMessage ? (
-                  <div className="mt-1 text-xs text-destructive/90">{loadErrorMessage}</div>
-                ) : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => void refetchPage()}
+                  disabled={isRefreshing}
+                >
+                  {isRefreshing ? <Loader2Icon className="size-3.5 animate-spin" /> : "Retry"}
+                </Button>
               </CardContent>
             </Card>
           ) : null}
@@ -312,20 +317,41 @@ export function App() {
                   weekKey={weekKey}
                   direction={weekNavDirection}
                 >
-                  <WeekView
-                    weekDates={weekDates}
-                    daysByDate={daysByDate}
-                    alertsByDate={alertsByDate}
-                    syncByDate={syncByDate}
-                    onInspectDay={(date) => {
-                      setInspectingDate(date);
-                      setReviewingFlag(null);
-                    }}
-                    onInspectFlag={(date, flag) => {
-                      setInspectingDate(date);
-                      setReviewingFlag(flag);
-                    }}
-                  />
+                  {calendarError ? (
+                    <Card className="flex min-h-0 flex-1 items-center justify-center border-destructive/20 bg-destructive/5 animate-in fade-in">
+                      <CardContent className="py-12 text-center">
+                        <p className="font-medium text-destructive">Attendance data unavailable</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Use Retry above to reload.
+                        </p>
+                      </CardContent>
+                    </Card>
+                  ) : selectedEmployee?.has_shift_assignment === false ? (
+                    <Card className="flex min-h-0 flex-1 items-center justify-center border-dashed animate-in fade-in">
+                      <CardContent className="max-w-sm py-12 text-center">
+                        <p className="font-medium">No schedule configured</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Assign a Shift Schedule Assignment in ERPNext to enable expected hours,
+                          lunch, and grace rules.
+                        </p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <WeekView
+                      weekDates={weekDates}
+                      daysByDate={daysByDate}
+                      alertsByDate={alertsByDate}
+                      syncByDate={syncByDate}
+                      onInspectDay={(date) => {
+                        setInspectingDate(date);
+                        setReviewingFlag(null);
+                      }}
+                      onInspectFlag={(date, flag) => {
+                        setInspectingDate(date);
+                        setReviewingFlag(flag);
+                      }}
+                    />
+                  )}
                 </WeekViewAnimatedShell>
               </>
             )}
