@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dewey_time.attendance_engine.attendance_segments import derive_unpaired_punches
-from dewey_time.attendance_engine.lunch_flags import evaluate_lunch_flags
 
 
 def evaluate_record_issue_flags(
@@ -56,24 +55,13 @@ def evaluate_record_issue_flags(
             )
         )
 
-    if shift_meta and checkins_count >= 2:
-        lunch_flags = evaluate_lunch_flags(
-            checkins=checkins,
-            shift_meta=shift_meta,
-            attendance_date=attendance_date,
-            grace_minutes=grace_minutes,
-        )
-        for code, evidence in lunch_flags:
-            if code == "MISSING_LUNCH":
-                flags.append(
-                    (
-                        "ATTENDANCE_ISSUE",
-                        {
-                            "reason": "missing_lunch_pair",
-                            **evidence,
-                        },
-                    )
-                )
+    # NOTE: there is deliberately no missing_lunch_pair path here. It used to
+    # call evaluate_lunch_flags() and fold a MISSING_LUNCH code into an
+    # ATTENDANCE_ISSUE, but evaluate_lunch_flags only ever emits LATE_FROM_LUNCH
+    # (never MISSING_LUNCH), so the branch was dead and was removed. LATE_FROM_LUNCH
+    # is emitted directly by the lunch detector in closeout. If a real
+    # "employee never took their scheduled lunch" rule is ever wanted, it needs a
+    # deliberate detector + rule decision — reintroduce the reason then.
 
     for item in undelivered_items or []:
         flags.append(
