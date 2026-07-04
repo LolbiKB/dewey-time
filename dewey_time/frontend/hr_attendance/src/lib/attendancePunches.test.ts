@@ -5,6 +5,7 @@ import type { Checkin } from "@/types/calendar";
 
 import {
   buildShiftExemptIntervals,
+  checkDeviceSyncStaleness,
   classifyUnpairedPresentations,
   computeWeekTimelineWindow,
   deriveSegments,
@@ -15,6 +16,7 @@ import {
   hasTimelineErrorPunches,
   shiftTimelinePolicyFromShift,
   subtractExemptFromGap,
+  SYNC_STALE_AFTER_MIN,
   TIMELINE_VIEWPORT_MINUTES,
   weekTimelineCanvasHeightPct,
   weekTimelineNeedsScroll,
@@ -335,4 +337,79 @@ test("classify does not open session on off-shift today", () => {
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.kind, "offShiftPunch");
+});
+
+// ── checkDeviceSyncStaleness ────────────────────────────────────────────────
+
+/** Format a Date as "YYYY-MM-DD HH:MM:SS" in LOCAL time — matches parseDateTimeLocal input. */
+function localDtStr(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const dy = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${mo}-${dy} ${h}:${m}:${s}`;
+}
+
+test("checkDeviceSyncStaleness: empty array → not stale", () => {
+  const now = new Date(2026, 6, 4, 14, 0, 0); // July 4 2026, 14:00 local
+  const result = checkDeviceSyncStaleness([], now);
+  assert.equal(result.stale, false);
+  assert.equal(result.lastDeliveredAt, null);
+  assert.equal(result.minutesSince, null);
+});
+
+test("checkDeviceSyncStaleness: undefined → not stale", () => {
+  const now = new Date(2026, 6, 4, 14, 0, 0);
+  const result = checkDeviceSyncStaleness(undefined, now);
+  assert.equal(result.stale, false);
+  assert.equal(result.minutesSince, null);
+});
+
+test(`checkDeviceSyncStaleness: 5h-old row → stale with minutesSince≈300 (SYNC_STALE_AFTER_MIN=${SYNC_STALE_AFTER_MIN})`, () => {
+  const now = new Date(2026, 6, 4, 14, 0, 0);
+  const fiveHAgo = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  const result = checkDeviceSyncStaleness(
+    [{ device_sn: "DEV-01", local_date: "2026-07-04", last_delivered_at: localDtStr(fiveHAgo) }],
+    now
+  );
+  assert.equal(result.stale, true);
+  assert.ok(
+    result.minutesSince != null && Math.abs(result.minutesSince - 300) < 1,
+    `expected minutesSince≈300, got ${result.minutesSince}`
+  );
+});
+
+test("checkDeviceSyncStaleness: fresh row (30 min ago) → not stale", () => {
+  const now = new Date(2026, 6, 4, 14, 0, 0);
+  const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
+  const result = checkDeviceSyncStaleness(
+    [{ device_sn: "DEV-01", local_date: "2026-07-04", last_delivered_at: localDtStr(thirtyMinAgo) }],
+    now
+  );
+  assert.equal(result.stale, false);
+  assert.ok(
+    result.minutesSince != null && Math.abs(result.minutesSince - 30) < 1,
+    `expected minutesSince≈30, got ${result.minutesSince}`
+  );
+});
+
+test("checkDeviceSyncStaleness: picks freshest of multiple rows — 2h ago not stale despite one 5h-old row", () => {
+  const now = new Date(2026, 6, 4, 14, 0, 0);
+  const fiveHAgo = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  const twoHAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+  const result = checkDeviceSyncStaleness(
+    [
+      { device_sn: "DEV-01", local_date: "2026-07-04", last_delivered_at: localDtStr(fiveHAgo) },
+      { device_sn: "DEV-02", local_date: "2026-07-04", last_delivered_at: localDtStr(twoHAgo) },
+    ],
+    now
+  );
+  // 2h = 120 min < 180 min threshold → not stale
+  assert.equal(result.stale, false);
+  assert.ok(
+    result.minutesSince != null && Math.abs(result.minutesSince - 120) < 1,
+    `expected minutesSince≈120, got ${result.minutesSince}`
+  );
 });

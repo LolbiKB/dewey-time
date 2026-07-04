@@ -16,6 +16,7 @@ import { useOutletContext } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { checkDeviceSyncStaleness } from "@/lib/attendancePunches";
 import {
   clampDateToNavBounds,
   computeWeekNavBounds,
@@ -33,7 +34,7 @@ import {
 } from "@/ui/AttendanceLoading";
 import { AttendanceToolbar } from "@/ui/AttendanceToolbar";
 import { DayInspectorSheet } from "@/ui/DayInspectorSheet";
-import { DeviceCloseoutBanner } from "@/ui/DeviceAlerts";
+import { DeviceCloseoutBanner, DeviceSyncStalenessBanner } from "@/ui/DeviceAlerts";
 import { WeekView } from "@/ui/WeekView";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 
@@ -115,6 +116,11 @@ export function App() {
   );
   const syncByDate = useMemo(
     () => deviceSyncByDate(payload.device_sync ?? []),
+    [payload.device_sync]
+  );
+
+  const syncStaleness = useMemo(
+    () => checkDeviceSyncStaleness(payload.device_sync, new Date()),
     [payload.device_sync]
   );
 
@@ -311,6 +317,9 @@ export function App() {
               <>
                 {weekDeviceAlerts.length > 0 ? (
                   <DeviceCloseoutBanner alerts={weekDeviceAlerts} />
+                ) : null}
+                {syncStaleness.stale && syncStaleness.minutesSince != null ? (
+                  <DeviceSyncStalenessBanner minutesSince={syncStaleness.minutesSince} />
                 ) : null}
                 <WeekViewAnimatedShell
                   loading={isCalendarLoading}

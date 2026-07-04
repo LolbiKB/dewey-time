@@ -19,6 +19,7 @@ export const AUDIT_SCENARIOS = [
   "api-error", // calendar API returns 500
   "slow-load", // calendar API takes 5s — capture the loading state
   "crowded-list", // 40+ employees incl. ADMS Bridge + very long names
+  "stale-sync", // device_sync has one row >3h old → staleness banner visible
 ] as const;
 
 export type AuditScenario = (typeof AUDIT_SCENARIOS)[number];
@@ -36,6 +37,20 @@ const FLAG_CODES = [
 
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Format a Date as "YYYY-MM-DD HH:MM:SS" in LOCAL time.
+ * Must match the format the app parses via parseDateTimeLocal (space separator, no timezone).
+ */
+function localDtStr(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const dy = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${mo}-${dy} ${h}:${m}:${s}`;
 }
 
 function flag(date: string, code: string) {
@@ -264,6 +279,31 @@ export async function stubAuditScenario(page: Page, scenario: AuditScenario): Pr
 
     if (scenario === "crowded-list" && p.includes("list_calendar_employees")) {
       return json({ employees: crowdedEmployees(), current_user_employee: "DI-0100" });
+    }
+
+    if (scenario === "stale-sync" && p.includes("get_employee_calendar")) {
+      // last_delivered_at is 5 hours ago in local time so the staleness banner shows "5h ago"
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
+      const start = url.searchParams.get("start_date") ?? ymd(new Date());
+      return json(
+        calendarPayload(
+          url,
+          () => {}, // days are the happy-path baseline
+          {
+            device_sync: [
+              {
+                device_sn: "DEV-01",
+                branch: "BRANCH-A",
+                local_date: start,
+                last_delivered_at: localDtStr(fiveHoursAgo),
+                last_device_log_at: null,
+                pending_count: 0,
+                last_error: null,
+              },
+            ],
+          }
+        )
+      );
     }
 
     return route.fallback();

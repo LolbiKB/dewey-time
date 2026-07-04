@@ -1,7 +1,7 @@
 import { formatDeviceAlertStatus } from "@/hooks/useHrAttendanceData";
-import { formatBranchLabel } from "@/lib/attendanceTime";
+import { formatBranchLabel, formatDurationMinutes } from "@/lib/attendanceTime";
 import type { DeviceAlert } from "@/types/calendar";
-import { AlertTriangleIcon } from "lucide-react";
+import { AlertTriangleIcon, ClockIcon } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -27,6 +27,25 @@ export function DeviceCloseoutBanner({ alerts }: { alerts: DeviceAlert[] }) {
             ))}
           </ul>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Informational amber banner shown when no device punch has arrived for >3h.
+ * Surfaces a stalled Bridge before the first UNNOTIFIED_ABSENCE flag appears.
+ */
+export function DeviceSyncStalenessBanner({ minutesSince }: { minutesSince: number }) {
+  const ago = formatDurationMinutes(Math.round(minutesSince));
+  return (
+    <Card className="border-amber-500/30 bg-amber-500/5 animate-in fade-in">
+      <CardContent className="flex items-center gap-3 py-3 text-sm">
+        <ClockIcon className="mt-px size-4 shrink-0 text-amber-500" />
+        <span className="text-foreground">
+          Device data may be stale — last device sync{" "}
+          <span className="font-medium">{ago}</span> ago.
+        </span>
       </CardContent>
     </Card>
   );
