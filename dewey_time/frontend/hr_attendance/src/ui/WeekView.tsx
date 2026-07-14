@@ -1,16 +1,13 @@
 import type { Day, DeviceAlert, DeviceSyncStatus, Flag } from "@/types/calendar";
 import { format, isSameDay } from "date-fns";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
-import {
-  formatDayCheckinTimeRange,
-  minutesFromDateTime,
-  parseTimeToMinutes,
-} from "@/lib/attendanceTime";
-import { computeWeekTimelineWindow, weekTimelineCanvasHeightPct } from "@/lib/attendancePunches";
+import { DayChips } from "@/ui/DayChips";
+import { formatDayCheckinTimeRange } from "@/lib/attendanceTime";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
+import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
 
 function WeekDayDateBadge(props: {
   dayNum: string;
@@ -75,39 +72,8 @@ export type WeekViewProps = {
 export function WeekView(props: WeekViewProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const weekWindow = useMemo(() => {
-    const mins: number[] = [];
-    for (const d of props.weekDates) {
-      const key = format(d, "yyyy-MM-dd");
-      const info = props.daysByDate.get(key);
-      for (const c of info?.checkins ?? []) {
-        const m = minutesFromDateTime(c.time);
-        if (m != null) mins.push(m);
-      }
-      if (info?.first_in) {
-        const m = minutesFromDateTime(info.first_in);
-        if (m != null) mins.push(m);
-      }
-      if (info?.last_out) {
-        const m = minutesFromDateTime(info.last_out);
-        if (m != null) mins.push(m);
-      }
-      const shift = info?.shift;
-      if (shift?.shift_assigned) {
-        const start = parseTimeToMinutes(shift.start_time ?? null);
-        const end = parseTimeToMinutes(shift.end_time ?? null);
-        if (start != null) mins.push(start);
-        if (end != null) mins.push(end);
-        const lunchStart = parseTimeToMinutes(shift.lunch_start ?? null);
-        const lunchEnd = parseTimeToMinutes(shift.lunch_end ?? null);
-        if (lunchStart != null) mins.push(lunchStart);
-        if (lunchEnd != null) mins.push(lunchEnd);
-      }
-    }
-    return computeWeekTimelineWindow(mins);
-  }, [props.daysByDate, props.weekDates]);
-
-  const canvasHeightPct = weekTimelineCanvasHeightPct(weekWindow.spanMinutes);
+  const weekWindow = useWeekTimelineWindow(props.weekDates, props.daysByDate);
+  const canvasHeightPct = weekWindow.canvasHeightPct;
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -184,37 +150,12 @@ export function WeekView(props: WeekViewProps) {
                 ) : null}
               </div>
 
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                {info?.leave?.on_leave ? (
-                  <AppTooltip
-                    content={
-                      info.leave.leave_type ? `On leave · ${info.leave.leave_type}` : "On leave"
-                    }
-                    side="bottom"
-                  >
-                    <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground">
-                      Leave
-                    </span>
-                  </AppTooltip>
-                ) : null}
-                {offShiftFlag ? (
-                  <AppTooltip content="Review off-shift punch flag" side="bottom">
-                    <button
-                      type="button"
-                      onClick={() => props.onInspectFlag(key, offShiftFlag)}
-                      className="inline-flex max-w-full items-center rounded-full border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold text-destructive hover:bg-destructive/15"
-                    >
-                      OFF_SHIFT
-                    </button>
-                  </AppTooltip>
-                ) : null}
-                {(props.alertsByDate.get(key) ?? []).length > 0 ? (
-                  <AppTooltip content="Device closeout pending" side="bottom">
-                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-brand-accent/40 bg-brand-accent/10 px-1 text-[10px] font-semibold text-brand-accent">
-                      !
-                    </span>
-                  </AppTooltip>
-                ) : null}
+              <div className="mt-1">
+                <DayChips
+                  day={info}
+                  alerts={props.alertsByDate.get(key) ?? []}
+                  onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
+                />
               </div>
             </div>
           );

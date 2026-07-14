@@ -7,6 +7,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   employeeShortName,
   formatScheduleCoverage,
@@ -33,6 +35,7 @@ export type WeeklyScheduleSheetProps = {
 };
 
 export function WeeklyScheduleSheet(props: WeeklyScheduleSheetProps) {
+  const isMobile = useIsMobile();
   const week = buildWeekSchedule(props.weekDates, props.daysByDate);
   const summary = summarizeWeekSchedule(week);
   const patternLabel = describeWeekSchedulePattern(week);
@@ -63,8 +66,12 @@ export function WeeklyScheduleSheet(props: WeeklyScheduleSheetProps) {
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent
-        side="right"
-        className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+        side={isMobile ? "bottom" : "right"}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        className={cn(
+          "flex flex-col gap-0 overflow-hidden p-0",
+          isMobile ? "max-h-[min(90dvh,44rem)] rounded-t-2xl" : "w-full sm:max-w-md",
+        )}
       >
         <SheetHeader className="space-y-1 border-b border-border/60 px-5 py-4 text-left">
           <div className="flex items-start gap-3">

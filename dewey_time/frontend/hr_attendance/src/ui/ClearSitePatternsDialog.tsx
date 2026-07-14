@@ -12,14 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -122,27 +115,57 @@ export function ClearSitePatternsDialog(props: ClearSitePatternsDialogProps) {
         Wipe patterns (dev)
       </Button>
 
-      <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent
-          className="flex max-h-[min(90dvh,40rem)] flex-col gap-0 p-0 sm:max-w-lg"
-          showCloseButton
-        >
-          <DialogHeader className="space-y-2 border-b border-border/60 px-5 py-4 text-left">
-            <div className="flex flex-wrap items-center gap-2 pr-8">
-              <DialogTitle className="text-base">Nuclear wipe — site patterns</DialogTitle>
-              <Badge variant="destructive" className="font-normal">
-                Dev only
-              </Badge>
-            </div>
-            <DialogDescription className="text-sm leading-relaxed">
-              Deletes all Shift Schedules (PAT) and Shift Types on the site. Optionally clears
-              every employee&apos;s SSAs, shift assignments, flags, and linked check-ins first —
-              full reset before a clean bulk import.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-            {result ? (
+      <ResponsiveModal
+        open={open}
+        onOpenChange={handleOpenChange}
+        size="md"
+        title={
+          <div className="flex flex-wrap items-center gap-2 pr-8">
+            <span className="text-base">Nuclear wipe — site patterns</span>
+            <Badge variant="destructive" className="font-normal">
+              Dev only
+            </Badge>
+          </div>
+        }
+        description={
+          <span className="text-sm leading-relaxed">
+            Deletes all Shift Schedules (PAT) and Shift Types on the site. Optionally clears
+            every employee&apos;s SSAs, shift assignments, flags, and linked check-ins first —
+            full reset before a clean bulk import.
+          </span>
+        }
+        headerClassName="space-y-2 border-b border-border/60 px-5 py-4 text-left"
+        bodyClassName="space-y-4 px-5 py-4"
+        footer={
+          result ? (
+            <Button type="button" size="default" className="h-9" onClick={() => handleOpenChange(false)}>
+              Done
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="default"
+              className="h-9 min-w-[9rem] bg-destructive text-white hover:bg-destructive/90"
+              disabled={!canClear}
+              onClick={() => void handleClear()}
+            >
+              {loading ? (
+                <>
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                  Wiping…
+                </>
+              ) : (
+                <>
+                  <Trash2Icon className="size-3.5" />
+                  Wipe site patterns
+                </>
+              )}
+            </Button>
+          )
+        }
+        footerClassName="mx-0 mb-0 shrink-0 gap-2 border-t border-border/60 bg-muted/50 px-5 py-4 sm:justify-end"
+      >
+        {result ? (
               <div className="space-y-3 rounded-lg border px-3 py-3">
                 <div className="flex items-start gap-2">
                   {result.verified_empty ? (
@@ -324,37 +347,7 @@ export function ClearSitePatternsDialog(props: ClearSitePatternsDialogProps) {
                 ) : null}
               </>
             )}
-          </div>
-
-          <DialogFooter className="mx-0 mb-0 shrink-0 gap-2 border-t border-border/60 bg-muted/50 px-5 py-4 sm:justify-end">
-            {result ? (
-              <Button type="button" size="default" className="h-9" onClick={() => handleOpenChange(false)}>
-                Done
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="default"
-                className="h-9 min-w-[9rem] bg-destructive text-white hover:bg-destructive/90"
-                disabled={!canClear}
-                onClick={() => void handleClear()}
-              >
-                {loading ? (
-                  <>
-                    <Loader2Icon className="size-3.5 animate-spin" />
-                    Wiping…
-                  </>
-                ) : (
-                  <>
-                    <Trash2Icon className="size-3.5" />
-                    Wipe site patterns
-                  </>
-                )}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </ResponsiveModal>
     </>
   );
 }

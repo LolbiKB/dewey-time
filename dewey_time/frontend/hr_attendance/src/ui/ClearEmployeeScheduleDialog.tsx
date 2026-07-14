@@ -13,14 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useClearEmployeeSchedule } from "@/hooks/useClearEmployeeSchedule";
@@ -132,27 +125,57 @@ export function ClearEmployeeScheduleDialog(props: ClearEmployeeScheduleDialogPr
         Clear schedule (dev)
       </Button>
 
-      <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent
-          className="flex max-h-[min(90dvh,40rem)] flex-col gap-0 p-0 sm:max-w-lg"
-          showCloseButton
-        >
-          <DialogHeader className="space-y-2 border-b border-border/60 px-5 py-4 text-left">
-            <div className="flex flex-wrap items-center gap-2 pr-8">
-              <DialogTitle className="text-base">Clear schedule data</DialogTitle>
-              <Badge variant="destructive" className="font-normal">
-                Dev only
-              </Badge>
-            </div>
-            <DialogDescription className="text-sm leading-relaxed">
-              Permanently removes this employee&apos;s shift assignments, schedule assignments,
-              attendance flags, and linked HRMS check-ins/attendance in those shift windows. Shared
-              Shift Types and Patterns are not deleted.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-            <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
+      <ResponsiveModal
+        open={open}
+        onOpenChange={handleOpenChange}
+        size="md"
+        title={
+          <div className="flex flex-wrap items-center gap-2 pr-8">
+            <span className="text-base">Clear schedule data</span>
+            <Badge variant="destructive" className="font-normal">
+              Dev only
+            </Badge>
+          </div>
+        }
+        description={
+          <span className="text-sm leading-relaxed">
+            Permanently removes this employee&apos;s shift assignments, schedule assignments,
+            attendance flags, and linked HRMS check-ins/attendance in those shift windows. Shared
+            Shift Types and Patterns are not deleted.
+          </span>
+        }
+        headerClassName="space-y-2 border-b border-border/60 px-5 py-4 text-left"
+        bodyClassName="space-y-4 px-5 py-4"
+        footer={
+          result ? (
+            <Button type="button" size="default" className="h-9" onClick={() => handleOpenChange(false)}>
+              Done
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="default"
+              className="h-9 min-w-[9rem] bg-destructive text-white hover:bg-destructive/90 hover:text-white disabled:bg-destructive/50 disabled:text-white/80"
+              disabled={!canClear}
+              onClick={() => void handleClear()}
+            >
+              {loading ? (
+                <>
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                  Clearing…
+                </>
+              ) : (
+                <>
+                  <Trash2Icon className="size-3.5" />
+                  {totalCount > 0 ? `Clear ${totalCount}` : "Clear all"}
+                </>
+              )}
+            </Button>
+          )
+        }
+        footerClassName="mx-0 mb-0 shrink-0 gap-2 border-t border-border/60 bg-muted/50 px-5 py-4 sm:justify-end"
+      >
+        <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
               <EmployeeAvatar
                 employee={props.employeeRow ?? null}
                 fallbackId={props.employee}
@@ -335,37 +358,7 @@ export function ClearEmployeeScheduleDialog(props: ClearEmployeeScheduleDialogPr
                 ) : null}
               </>
             )}
-          </div>
-
-          <DialogFooter className="mx-0 mb-0 shrink-0 gap-2 border-t border-border/60 bg-muted/50 px-5 py-4 sm:justify-end">
-            {result ? (
-              <Button type="button" size="default" className="h-9" onClick={() => handleOpenChange(false)}>
-                Done
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="default"
-                className="h-9 min-w-[9rem] bg-destructive text-white hover:bg-destructive/90 hover:text-white disabled:bg-destructive/50 disabled:text-white/80"
-                disabled={!canClear}
-                onClick={() => void handleClear()}
-              >
-                {loading ? (
-                  <>
-                    <Loader2Icon className="size-3.5 animate-spin" />
-                    Clearing…
-                  </>
-                ) : (
-                  <>
-                    <Trash2Icon className="size-3.5" />
-                    {totalCount > 0 ? `Clear ${totalCount}` : "Clear all"}
-                  </>
-                )}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </ResponsiveModal>
     </>
   );
 }

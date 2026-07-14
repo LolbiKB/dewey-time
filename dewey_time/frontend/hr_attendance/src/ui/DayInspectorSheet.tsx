@@ -32,6 +32,7 @@ import {
 import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
 import { flagDialogTitle, formatFlagContextDate, formatFlagStatusLabel, flagIsProvisional } from "@/lib/flagDetails";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { DeviceAlertRow } from "@/ui/DeviceAlerts";
 import { FlagDetailPanel } from "@/ui/FlagDetailPanel";
 
@@ -54,6 +55,7 @@ export type DayInspectorSheetProps = {
 };
 
 export function DayInspectorSheet(props: DayInspectorSheetProps) {
+  const isMobile = useIsMobile();
   const [activeTab, setActiveTab] = useState<"timeline" | "punches" | "flags">("timeline");
   const segments = useMemo(
     () => deriveSegments(props.inspectingDay?.checkins ?? []),
@@ -96,7 +98,16 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
 
   return (
     <Sheet open={!!props.inspectingDate} onOpenChange={(open) => !open && props.onClose()}>
-      <SheetContent side="right" className="flex w-[440px] flex-col overflow-hidden sm:max-w-md">
+      <SheetContent
+        side={isMobile ? "bottom" : "right"}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        className={cn(
+          "flex flex-col overflow-hidden",
+          isMobile
+            ? "max-h-[min(90dvh,44rem)] rounded-t-2xl"
+            : "w-full sm:w-[440px] sm:max-w-md",
+        )}
+      >
         <SheetHeader>
           {props.reviewingFlag ? (
             <>

@@ -36,11 +36,14 @@ import { AttendanceToolbar } from "@/ui/AttendanceToolbar";
 import { DayInspectorSheet } from "@/ui/DayInspectorSheet";
 import { DeviceCloseoutBanner, DeviceSyncStalenessBanner } from "@/ui/DeviceAlerts";
 import { WeekView } from "@/ui/WeekView";
+import { WeekDayView } from "@/ui/WeekDayView";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
+import { useIsMobile } from "@/hooks/useIsMobile";
 
 export function App() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
   const { currentUser, isLoading: authLoading } = useFrappeAuth();
+  const isMobile = useIsMobile();
   const [anchor, setAnchor] = useState<Date>(() => new Date());
   const [weekNavDirection, setWeekNavDirection] = useState<"prev" | "next" | "jump">("jump");
   const [employeeLoading, setEmployeeLoading] = useState(false);
@@ -222,6 +225,15 @@ export function App() {
 
   const inspectingDay = inspectingDate ? daysByDate.get(inspectingDate) : undefined;
 
+  const handleInspectDay = (date: string) => {
+    setInspectingDate(date);
+    setReviewingFlag(null);
+  };
+  const handleInspectFlag = (date: string, flag: Flag) => {
+    setInspectingDate(date);
+    setReviewingFlag(flag);
+  };
+
   if (authLoading) {
     return <AttendancePageSkeleton label="Starting session…" />;
   }
@@ -345,20 +357,23 @@ export function App() {
                         </p>
                       </CardContent>
                     </Card>
+                  ) : isMobile ? (
+                    <WeekDayView
+                      weekDates={weekDates}
+                      daysByDate={daysByDate}
+                      alertsByDate={alertsByDate}
+                      syncByDate={syncByDate}
+                      onInspectDay={handleInspectDay}
+                      onInspectFlag={handleInspectFlag}
+                    />
                   ) : (
                     <WeekView
                       weekDates={weekDates}
                       daysByDate={daysByDate}
                       alertsByDate={alertsByDate}
                       syncByDate={syncByDate}
-                      onInspectDay={(date) => {
-                        setInspectingDate(date);
-                        setReviewingFlag(null);
-                      }}
-                      onInspectFlag={(date, flag) => {
-                        setInspectingDate(date);
-                        setReviewingFlag(flag);
-                      }}
+                      onInspectDay={handleInspectDay}
+                      onInspectFlag={handleInspectFlag}
                     />
                   )}
                 </WeekViewAnimatedShell>
