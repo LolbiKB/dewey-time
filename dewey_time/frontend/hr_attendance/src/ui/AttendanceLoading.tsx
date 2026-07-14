@@ -40,32 +40,50 @@ export function AttendanceHeaderSkeleton() {
 export function WeekViewSkeleton() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card animate-in fade-in">
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-auto">
-      <div className="grid shrink-0 grid-cols-[repeat(7,minmax(8rem,1fr))] border-b border-border/60">
-        {Array.from({ length: 7 }).map((_, idx) => (
-          <div key={idx} className="space-y-2 px-3 py-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+      {/* Mobile: day switcher + pip strip + one tall timeline (matches WeekDayView) */}
+      <div className="flex min-h-0 flex-1 flex-col md:hidden">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+          <Skeleton className="size-8 shrink-0 rounded-md" />
+          <Skeleton className="h-4 min-w-0 flex-1 rounded" />
+          <Skeleton className="size-8 shrink-0 rounded-md" />
+        </div>
+        <div className="flex shrink-0 items-center justify-between gap-1 px-3 py-2">
+          {Array.from({ length: 7 }).map((_, idx) => (
+            <Skeleton key={idx} className="h-9 flex-1 rounded-lg" />
+          ))}
+        </div>
+        <div className="min-h-0 flex-1 p-3">
+          <Skeleton className="h-full min-h-[320px] w-full rounded-xl" />
+        </div>
+      </div>
+
+      {/* Desktop: the 7-column grid */}
+      <div className="hidden min-h-0 flex-1 flex-col overflow-x-auto md:flex">
+        <div className="grid shrink-0 grid-cols-[repeat(7,minmax(8rem,1fr))] border-b border-border/60">
+          {Array.from({ length: 7 }).map((_, idx) => (
+            <div key={idx} className="space-y-2 px-3 py-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-3 w-8" />
+                  <Skeleton className="size-6 rounded-full" />
+                </div>
                 <Skeleton className="h-3 w-8" />
-                <Skeleton className="size-6 rounded-full" />
               </div>
-              <Skeleton className="h-3 w-8" />
+              <Skeleton className="h-2.5 w-20" />
+              <Skeleton className="h-4 w-10 rounded-full" />
             </div>
-            <Skeleton className="h-2.5 w-20" />
-            <Skeleton className="h-4 w-10 rounded-full" />
-          </div>
-        ))}
-      </div>
-      <div className="grid min-h-[420px] flex-1 grid-cols-[repeat(7,minmax(8rem,1fr))] gap-px bg-border/40 p-px">
-        {Array.from({ length: 7 }).map((_, idx) => (
-          <div key={idx} className="flex flex-col gap-2 bg-card p-2">
-            <Skeleton className="h-[18%] w-full rounded-sm" />
-            <Skeleton className="h-[28%] w-full rounded-sm" />
-            <Skeleton className="h-[12%] w-[80%] rounded-sm" />
-            <Skeleton className="h-[22%] w-full rounded-sm" />
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+        <div className="grid min-h-[420px] flex-1 grid-cols-[repeat(7,minmax(8rem,1fr))] gap-px bg-border/40 p-px">
+          {Array.from({ length: 7 }).map((_, idx) => (
+            <div key={idx} className="flex flex-col gap-2 bg-card p-2">
+              <Skeleton className="h-[18%] w-full rounded-sm" />
+              <Skeleton className="h-[28%] w-full rounded-sm" />
+              <Skeleton className="h-[12%] w-[80%] rounded-sm" />
+              <Skeleton className="h-[22%] w-full rounded-sm" />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
