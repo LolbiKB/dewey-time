@@ -1,16 +1,12 @@
 import type { Day, DeviceAlert, DeviceSyncStatus, Flag } from "@/types/calendar";
 import { format, isSameDay } from "date-fns";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
-import {
-  formatDayCheckinTimeRange,
-  minutesFromDateTime,
-  parseTimeToMinutes,
-} from "@/lib/attendanceTime";
-import { computeWeekTimelineWindow, weekTimelineCanvasHeightPct } from "@/lib/attendancePunches";
+import { formatDayCheckinTimeRange } from "@/lib/attendanceTime";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
+import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
 
 function WeekDayDateBadge(props: {
   dayNum: string;
@@ -75,39 +71,8 @@ export type WeekViewProps = {
 export function WeekView(props: WeekViewProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const weekWindow = useMemo(() => {
-    const mins: number[] = [];
-    for (const d of props.weekDates) {
-      const key = format(d, "yyyy-MM-dd");
-      const info = props.daysByDate.get(key);
-      for (const c of info?.checkins ?? []) {
-        const m = minutesFromDateTime(c.time);
-        if (m != null) mins.push(m);
-      }
-      if (info?.first_in) {
-        const m = minutesFromDateTime(info.first_in);
-        if (m != null) mins.push(m);
-      }
-      if (info?.last_out) {
-        const m = minutesFromDateTime(info.last_out);
-        if (m != null) mins.push(m);
-      }
-      const shift = info?.shift;
-      if (shift?.shift_assigned) {
-        const start = parseTimeToMinutes(shift.start_time ?? null);
-        const end = parseTimeToMinutes(shift.end_time ?? null);
-        if (start != null) mins.push(start);
-        if (end != null) mins.push(end);
-        const lunchStart = parseTimeToMinutes(shift.lunch_start ?? null);
-        const lunchEnd = parseTimeToMinutes(shift.lunch_end ?? null);
-        if (lunchStart != null) mins.push(lunchStart);
-        if (lunchEnd != null) mins.push(lunchEnd);
-      }
-    }
-    return computeWeekTimelineWindow(mins);
-  }, [props.daysByDate, props.weekDates]);
-
-  const canvasHeightPct = weekTimelineCanvasHeightPct(weekWindow.spanMinutes);
+  const weekWindow = useWeekTimelineWindow(props.weekDates, props.daysByDate);
+  const canvasHeightPct = weekWindow.canvasHeightPct;
 
   useEffect(() => {
     const el = scrollRef.current;
