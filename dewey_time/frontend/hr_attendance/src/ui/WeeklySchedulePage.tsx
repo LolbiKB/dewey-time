@@ -12,14 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -594,7 +587,7 @@ export function WeeklySchedulePage() {
         generateThrough={generateThrough}
       />
 
-      <Dialog
+      <ResponsiveModal
         open={confirmOpen}
         onOpenChange={(o) => {
           if (applying) return; // don't let an outside-click/Escape dismiss mid-save
@@ -604,88 +597,22 @@ export function WeeklySchedulePage() {
             if (status?.type === "error") clearStatus();
           }
         }}
-      >
-        <DialogContent className="max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="break-words">
-              {isEditing
-                ? `Change ${employeeLabel ?? "this employee"}'s schedule?`
-                : "Create shared shift records?"}
-            </DialogTitle>
-            <DialogDescription>
-              {isEditing
-                ? "Review what changes and confirm to apply."
-                : "Confirm to create shared Shift Type and Shift Schedule records on save."}
-            </DialogDescription>
-          </DialogHeader>
-          {pendingConfirmPlan.length ? (
-            <ul className="min-w-0 space-y-2 text-sm">
-              {pendingConfirmPlan.map((item) => (
-                <li key={`${item.doctype}-${item.name}`} className="flex min-w-0 items-center gap-2">
-                  <CheckIcon className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate" title={item.name}>
-                    {item.name}
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{item.doctype}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {(() => {
-            const summary = summarizeReconcile(pendingReconcile);
-            if (!summary.hasChanges) return null;
-            return (
-              <div className="mt-1 min-w-0 space-y-1 rounded-md border border-border/60 bg-muted/30 p-3">
-                <p className="text-xs font-medium text-foreground break-words">
-                  What changes on {pendingReconcile?.effective_from}
-                </p>
-                <ul className="space-y-0.5 text-xs text-muted-foreground">
-                  {summary.lines.map((line, i) => (
-                    <li key={i} className="break-words">
-                      {line}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })()}
-          {reconcileRetiresShifts(pendingReconcile) ? (
-            <div className="mt-2 min-w-0 space-y-1.5">
-              <Label htmlFor="schedule-change-confirm" className="text-xs text-muted-foreground">
-                Type{" "}
-                <span className="font-medium text-foreground">
-                  {employeeLabel ?? "the employee's name"}
-                </span>{" "}
-                to confirm this change
-              </Label>
-              <Input
-                id="schedule-change-confirm"
-                value={confirmText}
-                onChange={(e) => setConfirmText(e.target.value)}
-                placeholder={employeeLabel ?? "Employee name"}
-                autoComplete="off"
-                spellCheck={false}
-                className={cn(
-                  "h-9 text-sm",
-                  confirmText.length > 0 &&
-                    !confirmNameMatches(confirmText, employeeLabel) &&
-                    "border-destructive/50 focus-visible:ring-destructive/30",
-                )}
-              />
-              {confirmText.length > 0 && !confirmNameMatches(confirmText, employeeLabel) ? (
-                <p className="text-xs text-destructive">Name doesn't match.</p>
-              ) : null}
-            </div>
-          ) : null}
-          {status?.type === "error" ? (
-            <p
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm break-words text-destructive"
-            >
-              {status.message}
-            </p>
-          ) : null}
-          <DialogFooter>
+        size="md"
+        title={
+          <span className="break-words">
+            {isEditing
+              ? `Change ${employeeLabel ?? "this employee"}'s schedule?`
+              : "Create shared shift records?"}
+          </span>
+        }
+        description={
+          isEditing
+            ? "Review what changes and confirm to apply."
+            : "Confirm to create shared Shift Type and Shift Schedule records on save."
+        }
+        bodyClassName="px-6 py-2"
+        footer={
+          <>
             <Button
               type="button"
               variant="outline"
@@ -717,9 +644,77 @@ export function WeeklySchedulePage() {
                 "Create and save"
               )}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </>
+        }
+      >
+        {pendingConfirmPlan.length ? (
+          <ul className="min-w-0 space-y-2 text-sm">
+            {pendingConfirmPlan.map((item) => (
+              <li key={`${item.doctype}-${item.name}`} className="flex min-w-0 items-center gap-2">
+                <CheckIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate" title={item.name}>
+                  {item.name}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">{item.doctype}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {(() => {
+          const summary = summarizeReconcile(pendingReconcile);
+          if (!summary.hasChanges) return null;
+          return (
+            <div className="mt-1 min-w-0 space-y-1 rounded-md border border-border/60 bg-muted/30 p-3">
+              <p className="text-xs font-medium text-foreground break-words">
+                What changes on {pendingReconcile?.effective_from}
+              </p>
+              <ul className="space-y-0.5 text-xs text-muted-foreground">
+                {summary.lines.map((line, i) => (
+                  <li key={i} className="break-words">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })()}
+        {reconcileRetiresShifts(pendingReconcile) ? (
+          <div className="mt-2 min-w-0 space-y-1.5">
+            <Label htmlFor="schedule-change-confirm" className="text-xs text-muted-foreground">
+              Type{" "}
+              <span className="font-medium text-foreground">
+                {employeeLabel ?? "the employee's name"}
+              </span>{" "}
+              to confirm this change
+            </Label>
+            <Input
+              id="schedule-change-confirm"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={employeeLabel ?? "Employee name"}
+              autoComplete="off"
+              spellCheck={false}
+              className={cn(
+                "h-9 text-sm",
+                confirmText.length > 0 &&
+                  !confirmNameMatches(confirmText, employeeLabel) &&
+                  "border-destructive/50 focus-visible:ring-destructive/30",
+              )}
+            />
+            {confirmText.length > 0 && !confirmNameMatches(confirmText, employeeLabel) ? (
+              <p className="text-xs text-destructive">Name doesn't match.</p>
+            ) : null}
+          </div>
+        ) : null}
+        {status?.type === "error" ? (
+          <p
+            role="alert"
+            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm break-words text-destructive"
+          >
+            {status.message}
+          </p>
+        ) : null}
+      </ResponsiveModal>
     </>
   );
 }

@@ -2,14 +2,7 @@ import { CheckIcon, ChevronDownIcon, LayoutTemplateIcon, Loader2Icon } from "luc
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatShiftTime12h } from "@/lib/weekSchedule";
@@ -178,44 +171,37 @@ export function WeeklyScheduleTemplatePickerDialog(props: WeeklyScheduleTemplate
     props.value === "manual" ? "Template" : templateCompactTitle(selectedOption.blocks);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setQuery("");
-      }}
-    >
-      <DialogTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className={cn(
-            "h-9 w-full min-w-0 justify-between gap-2",
-            props.triggerClassName ?? "sm:w-64"
-          )}
-          disabled={props.disabled}
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <LayoutTemplateIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate text-left font-normal">
-              {props.loading ? "Loading…" : triggerLabel}
-            </span>
-          </span>
-          <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
-        </Button>
-      </DialogTrigger>
-
-      <DialogContent
-        className="flex max-h-[min(88dvh,36rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
-        showCloseButton
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        className={cn(
+          "h-9 w-full min-w-0 justify-between gap-2",
+          props.triggerClassName ?? "sm:w-64"
+        )}
+        disabled={props.disabled}
+        onClick={() => setOpen(true)}
       >
-        <DialogHeader className="shrink-0 space-y-1.5 border-b border-border/60 px-5 py-4 text-left">
-          <DialogTitle className="text-base">Schedule templates</DialogTitle>
-          <DialogDescription className="text-sm leading-relaxed">
-            Pick a pattern to fill shift blocks. Times shown in 12-hour format.
-          </DialogDescription>
-        </DialogHeader>
+        <span className="flex min-w-0 items-center gap-2">
+          <LayoutTemplateIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate text-left font-normal">
+            {props.loading ? "Loading…" : triggerLabel}
+          </span>
+        </span>
+        <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
+      </Button>
 
+      <ResponsiveModal
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setQuery("");
+        }}
+        size="md"
+        title={<span className="text-base">Schedule templates</span>}
+        description="Pick a pattern to fill shift blocks. Times shown in 12-hour format."
+        headerClassName="shrink-0 space-y-1.5 border-b border-border/60 px-5 py-4 text-left"
+      >
         <div className="shrink-0 px-5 py-3">
           <Input
             value={query}
@@ -253,7 +239,7 @@ export function WeeklyScheduleTemplatePickerDialog(props: WeeklyScheduleTemplate
             )}
           </div>
         </ScrollArea>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveModal>
+    </>
   );
 }

@@ -1,13 +1,7 @@
 import { CalendarRangeIcon, Loader2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
@@ -33,68 +27,63 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
   const ssaCount = props.plan?.groups?.length ?? 0;
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" showCloseButton>
-        <DialogHeader className="space-y-1 border-b border-border/60 px-5 py-4 text-left">
-          <div className="flex items-start gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <CalendarRangeIcon className="size-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <DialogTitle className="text-base">Weekly schedule preview</DialogTitle>
-              <DialogDescription className="text-xs">
-                {workDays} work · {offDays} off
-                {weeklyHoursLabel ? ` · ${weeklyHoursLabel}/wk` : null}
-                {ssaCount ? ` · ${ssaCount} SSA${ssaCount !== 1 ? "s" : ""}` : null}
-                {props.effectiveFrom
-                  ? props.generateThrough
-                    ? ` · ${props.effectiveFrom} → ${props.generateThrough}`
-                    : ` · from ${props.effectiveFrom} · open-ended`
-                  : null}
-              </DialogDescription>
-            </div>
+    <ResponsiveModal
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      size="md"
+      title={<span className="text-base">Weekly schedule preview</span>}
+      description={
+        <>
+          {workDays} work · {offDays} off
+          {weeklyHoursLabel ? ` · ${weeklyHoursLabel}/wk` : null}
+          {ssaCount ? ` · ${ssaCount} SSA${ssaCount !== 1 ? "s" : ""}` : null}
+          {props.effectiveFrom
+            ? props.generateThrough
+              ? ` · ${props.effectiveFrom} → ${props.generateThrough}`
+              : ` · from ${props.effectiveFrom} · open-ended`
+            : null}
+        </>
+      }
+      headerClassName="space-y-1 border-b border-border/60 px-5 py-4 text-left"
+    >
+      <div className="max-h-[min(70dvh,32rem)] overflow-y-auto px-5 py-4">
+        <WeekPatternStrip pattern={props.weekPattern} />
+
+        <Separator className="my-5" />
+
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium">Matched patterns</h3>
+            <p className="text-xs text-muted-foreground">
+              One Shift Schedule Assignment (SSA) per group — same records created when you save.
+            </p>
           </div>
-        </DialogHeader>
 
-        <div className="max-h-[min(70dvh,32rem)] overflow-y-auto px-5 py-4">
-          <WeekPatternStrip pattern={props.weekPattern} />
+          {props.resolveError ? (
+            <p className="text-sm text-destructive">{String(props.resolveError)}</p>
+          ) : props.resolving && !props.plan?.groups?.length ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2Icon className="size-4 animate-spin" />
+              Matching patterns…
+            </p>
+          ) : props.plan?.groups?.length ? (
+            <ResolvePlanGroupsList groups={props.plan.groups} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Configure shift blocks to see which records will be used.
+            </p>
+          )}
 
-          <Separator className="my-5" />
-
-          <section className="space-y-3">
-            <div>
-              <h3 className="text-sm font-medium">Matched patterns</h3>
-              <p className="text-xs text-muted-foreground">
-                One Shift Schedule Assignment (SSA) per group — same records created when you save.
-              </p>
-            </div>
-
-            {props.resolveError ? (
-              <p className="text-sm text-destructive">{String(props.resolveError)}</p>
-            ) : props.resolving && !props.plan?.groups?.length ? (
-              <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2Icon className="size-4 animate-spin" />
-                Matching patterns…
-              </p>
-            ) : props.plan?.groups?.length ? (
-              <ResolvePlanGroupsList groups={props.plan.groups} />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Configure shift blocks to see which records will be used.
-              </p>
-            )}
-
-            {props.plan?.warnings?.length ? (
-              <ul className="space-y-1">
-                {props.plan.warnings.map((w, i) => (
-                  <li key={i} className="text-xs text-brand-accent">{w}</li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
-        </div>
-      </DialogContent>
-    </Dialog>
+          {props.plan?.warnings?.length ? (
+            <ul className="space-y-1">
+              {props.plan.warnings.map((w, i) => (
+                <li key={i} className="text-xs text-brand-accent">{w}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      </div>
+    </ResponsiveModal>
   );
 }
 
