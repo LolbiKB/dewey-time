@@ -201,6 +201,7 @@ export function WeeklyScheduleTemplatePickerDialog(props: WeeklyScheduleTemplate
         title={<span className="text-base">Schedule templates</span>}
         description="Pick a pattern to fill shift blocks. Times shown in 12-hour format."
         headerClassName="shrink-0 space-y-1.5 border-b border-border/60 px-5 py-4 text-left"
+        bodyClassName="flex min-h-0 flex-1 flex-col"
       >
         <div className="shrink-0 px-5 py-3">
           <Input

@@ -118,7 +118,7 @@ export function WeekDayView(props: WeekDayViewProps) {
 
       {/* One full-width day timeline, shared axis */}
       <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div style={{ height: `${weekWindow.canvasHeightPct}%` }}>
+        <div style={{ height: `${weekWindow.canvasHeightPct}%` }} className="[&>button]:border-0">
           <DayCell
             date={selectedDate}
             outside={false}

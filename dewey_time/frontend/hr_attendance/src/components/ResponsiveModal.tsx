@@ -25,6 +25,9 @@ const SIZE_MAXW: Record<"sm" | "md" | "lg", string> = {
   lg: "sm:max-w-2xl",
 };
 
+// Note: `size` and `showCloseButton` apply to the DESKTOP (Dialog) leg only.
+// The mobile bottom Sheet is always full-width and uses the primitive's default close button.
+
 export type ResponsiveModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
