@@ -76,7 +76,13 @@ import {
   userKeys,
 } from '@/hooks/use-users'
 import { UserService, type UserEntry, type SyncStatusEntry } from '@/services/user-service'
-import { deriveEnrollPhase, type EnrollPhase } from '@/lib/enrollment-phase'
+import {
+  deriveEnrollPhase,
+  shouldShowSlowHint,
+  ENROLL_SLOW_HINT_MS,
+  ENROLL_AUTO_RECOVERY_MS,
+  type EnrollPhase,
+} from '@/lib/enrollment-phase'
 import { SyncToolbarActions } from '@/components/users/sync-toolbar-actions'
 import { UserPhotoTab } from '@/components/users/user-photo-tab'
 import { useUserSyncAggregate } from '@/hooks/use-user-sync-aggregate'
@@ -473,7 +479,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
 
   useEffect(() => {
     if (phase !== 'idle' && phase !== 'success' && phase !== 'failed') {
-      const timer = setTimeout(() => setShowTimeout(true), 30000)
+      const timer = setTimeout(() => setShowTimeout(true), ENROLL_SLOW_HINT_MS)
       return () => clearTimeout(timer)
     }
     setShowTimeout(false)
@@ -503,7 +509,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
       } finally {
         setRecoveryPending(false)
       }
-    }, 45000)
+    }, ENROLL_AUTO_RECOVERY_MS)
     return () => clearTimeout(timer)
   }, [rawPhase, hasTemplate, user?.id, recoveryQueuedAt])
 
@@ -846,14 +852,14 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
             {phase === 'cleaning_up' && <div><div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto mb-2"><Loader2 className={cn("h-5 w-5 animate-spin", signalText.progress)} /></div><div className="font-medium text-sm">Removing from device</div><div className="text-xs text-muted-foreground">Enrollment did not complete — cleaning up registrar</div></div>}
           </div>
 
-          {showTimeout && (phase === 'enrolling' || phase === 'accepted') && (
+          {showTimeout && shouldShowSlowHint(phase, ENROLL_SLOW_HINT_MS) && (
             <div className="space-y-2">
               <div className={cn("flex items-center gap-2 p-2 rounded-lg border text-xs", signalAlert.attention)}>
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                 <span>
                   {phase === 'accepted'
                     ? 'Upload is taking longer than expected. You can close this dialog — enrollment continues in the background.'
-                    : 'Taking longer than expected...'}
+                    : 'Still waiting for the user to scan at the device…'}
                 </span>
               </div>
               {phase === 'accepted' && (
