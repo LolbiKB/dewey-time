@@ -241,5 +241,27 @@ class TestListCalendarEmployeeRowsExclusion(unittest.TestCase):
             self.assertEqual(name_filter, ["in", ["EMP-001"]])
 
 
+class EmployeeNavMetaClockBasedTests(unittest.TestCase):
+    def test_nav_meta_reports_clock_based_for_contract(self):
+        from dewey_time.attendance_engine import hr_calendar
+
+        with patch.object(hr_calendar, "first_checkin_date_by_employee", return_value={}), \
+             patch.object(hr_calendar, "shift_assignment_bounds_by_employee", return_value={}), \
+             patch.object(hr_calendar.frappe.db, "get_value", return_value="Contract"):
+            meta = hr_calendar._employee_nav_meta("EMP-1")
+
+        self.assertTrue(meta["is_clock_based"])
+
+    def test_nav_meta_reports_not_clock_based_for_full_time(self):
+        from dewey_time.attendance_engine import hr_calendar
+
+        with patch.object(hr_calendar, "first_checkin_date_by_employee", return_value={}), \
+             patch.object(hr_calendar, "shift_assignment_bounds_by_employee", return_value={}), \
+             patch.object(hr_calendar.frappe.db, "get_value", return_value="Full-time"):
+            meta = hr_calendar._employee_nav_meta("EMP-1")
+
+        self.assertFalse(meta["is_clock_based"])
+
+
 if __name__ == "__main__":
     unittest.main()
