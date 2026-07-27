@@ -65,6 +65,7 @@ export type WeekViewProps = {
   daysByDate: Map<string, Day>;
   alertsByDate: Map<string, DeviceAlert[]>;
   syncByDate: Map<string, DeviceSyncStatus[]>;
+  isClockBased?: boolean;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 };
