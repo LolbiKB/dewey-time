@@ -11,7 +11,13 @@ def evaluate_record_issue_flags(
     grace_minutes: int = 0,
     undelivered_items: list[dict] | None = None,
 ) -> list[tuple[str, dict]]:
-    """Returns ATTENDANCE_ISSUE rows (on-shift only — caller must gate off-shift)."""
+    """Returns ATTENDANCE_ISSUE rows. The caller decides when these apply.
+
+    The body is shift-agnostic — it never reads ``shift_meta`` or
+    ``grace_minutes`` — so it has two legitimate callers: the on-shift closeout
+    path, and the clock-day path for employees with no schedule. Both reasons it
+    can emit (unpaired punches, unknown device branch) are pure punch arithmetic.
+    """
     flags: list[tuple[str, dict]] = []
     checkins_count = len(checkins or [])
 
