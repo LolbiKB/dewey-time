@@ -34,6 +34,27 @@ def is_weekly_schedule_eligible(employment_type: str | None) -> bool:
     return normalized in allowed
 
 
+def is_clock_based(employment_type: str | None) -> bool:
+    """True when this employee clocks in/out rather than working to a schedule.
+
+    The complement of the Weekly-Schedule allowlist, with two deliberate
+    exceptions, both of which fail toward *keeping* schedule enforcement:
+
+    - A blank type is NOT clock-based. Blank means nobody has classified this
+      employee yet — a data gap that should stay visible as OFF_SHIFT_PUNCH
+      noise rather than be silently reinterpreted as a policy decision.
+    - A non-string is NOT clock-based. ``Employee.employment_type`` is a Frappe
+      Data field, so a non-string is bad data or a test double; treating it as
+      clock-based would silently disable late/absence detection for someone who
+      really is scheduled.
+    """
+    if not isinstance(employment_type, str):
+        return False
+    if not employment_type.strip():
+        return False
+    return not is_weekly_schedule_eligible(employment_type)
+
+
 def _time_to_minutes(value) -> int | None:
     """Minutes-since-midnight for ``HH:MM`` / ``HH:MM:SS`` strings or time objects."""
     if value is None:
