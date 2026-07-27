@@ -936,8 +936,8 @@ export function dayPipState(
 ): PipState {
   if (isToday) return "today";
   if (day?.holiday != null) return "holiday";
-  const clockDay = isClockBased === true && day?.shift?.shift_assigned !== true;
-  if (!clockDay && day?.shift?.shift_assigned !== true) return "off";
+  const unscheduled = day?.shift?.shift_assigned !== true;
+  if (unscheduled && !isClockBased) return "off";
   if ((day?.flags ?? []).length > 0) return "flagged";
   return "normal";
 }
