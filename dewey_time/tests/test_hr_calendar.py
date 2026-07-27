@@ -247,6 +247,7 @@ class EmployeeNavMetaClockBasedTests(unittest.TestCase):
 
         with patch.object(hr_calendar, "first_checkin_date_by_employee", return_value={}), \
              patch.object(hr_calendar, "shift_assignment_bounds_by_employee", return_value={}), \
+             patch.object(hr_calendar.frappe.db, "has_column", return_value=True), \
              patch.object(hr_calendar.frappe.db, "get_value", return_value="Contract"):
             meta = hr_calendar._employee_nav_meta("EMP-1")
 
@@ -257,10 +258,23 @@ class EmployeeNavMetaClockBasedTests(unittest.TestCase):
 
         with patch.object(hr_calendar, "first_checkin_date_by_employee", return_value={}), \
              patch.object(hr_calendar, "shift_assignment_bounds_by_employee", return_value={}), \
+             patch.object(hr_calendar.frappe.db, "has_column", return_value=True), \
              patch.object(hr_calendar.frappe.db, "get_value", return_value="Full-time"):
             meta = hr_calendar._employee_nav_meta("EMP-1")
 
         self.assertFalse(meta["is_clock_based"])
+
+    def test_nav_meta_survives_missing_employment_type_column(self):
+        from dewey_time.attendance_engine import hr_calendar
+
+        with patch.object(hr_calendar, "first_checkin_date_by_employee", return_value={}), \
+             patch.object(hr_calendar, "shift_assignment_bounds_by_employee", return_value={}), \
+             patch.object(hr_calendar.frappe.db, "has_column", return_value=False), \
+             patch.object(hr_calendar.frappe.db, "get_value") as get_value:
+            meta = hr_calendar._employee_nav_meta("EMP-1")
+
+        self.assertFalse(meta["is_clock_based"])
+        get_value.assert_not_called()
 
 
 if __name__ == "__main__":

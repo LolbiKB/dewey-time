@@ -432,7 +432,11 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
 def _employee_nav_meta(employee: str) -> dict:
     checkin = first_checkin_date_by_employee([employee]).get(employee, {})
     bounds = shift_assignment_bounds_by_employee([employee]).get(employee, {})
-    employment_type = frappe.db.get_value("Employee", employee, "employment_type")
+    employment_type = (
+        frappe.db.get_value("Employee", employee, "employment_type")
+        if frappe.db.has_column("Employee", "employment_type")
+        else None
+    )
     return {
         "first_checkin_date": checkin.get("first_checkin_date"),
         "schedule_max_date": bounds.get("schedule_max_date"),
