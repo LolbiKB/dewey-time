@@ -18,11 +18,17 @@ export function stepDay(weekDates: Date[], currentKey: string, dir: -1 | 1): str
   return key(weekDates[next]!);
 }
 
-// Matches the desktop grid's off-day rule (holiday wins; no assigned shift == off).
-export function dayPipState(day: Day | undefined, isToday: boolean): PipState {
+// Matches the desktop grid's off-day rule (holiday wins; no assigned shift == off),
+// except for clock-based employees, whose unscheduled days are normal working days.
+export function dayPipState(
+  day: Day | undefined,
+  isToday: boolean,
+  isClockBased?: boolean
+): PipState {
   if (isToday) return "today";
   if (day?.holiday != null) return "holiday";
-  if (day?.shift?.shift_assigned !== true) return "off";
+  const unscheduled = day?.shift?.shift_assigned !== true;
+  if (unscheduled && !isClockBased) return "off";
   if ((day?.flags ?? []).length > 0) return "flagged";
   return "normal";
 }

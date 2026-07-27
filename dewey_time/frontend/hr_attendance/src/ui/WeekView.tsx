@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { AppTooltip } from "@/ui/AppTooltip";
 import { DayChips } from "@/ui/DayChips";
 import { formatDayCheckinTimeRange } from "@/lib/attendanceTime";
+import { isClockDay } from "@/lib/clockDay";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
@@ -91,8 +92,9 @@ export function WeekView(props: WeekViewProps) {
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
           const holiday = info?.holiday ?? null;
+          const clockDay = isClockDay(props.isClockBased, info);
           // Holiday wins: treat as off-day in UI even if a Shift Assignment exists.
-          const isOffDay = holiday != null || info?.shift?.shift_assigned !== true;
+          const isOffDay = holiday != null || (!clockDay && info?.shift?.shift_assigned !== true);
           const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
           const offShiftFlag = dayOffShiftPunchFlag(info);
           const timeRange = formatDayCheckinTimeRange(info);
@@ -155,6 +157,7 @@ export function WeekView(props: WeekViewProps) {
                 <DayChips
                   day={info}
                   alerts={props.alertsByDate.get(key) ?? []}
+                  isClockDay={clockDay}
                   onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
                 />
               </div>

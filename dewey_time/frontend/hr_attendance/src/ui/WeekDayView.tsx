@@ -4,6 +4,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { isClockDay } from "@/lib/clockDay";
 import { cn } from "@/lib/utils";
 import { initialSelectedDate, stepDay, dayPipState, type PipState } from "@/lib/weekDayView";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
@@ -85,7 +86,7 @@ export function WeekDayView(props: WeekDayViewProps) {
         {props.weekDates.map((d) => {
           const key = format(d, "yyyy-MM-dd");
           const isToday = isSameDay(d, new Date());
-          const state = dayPipState(props.daysByDate.get(key), isToday);
+          const state = dayPipState(props.daysByDate.get(key), isToday, props.isClockBased);
           const active = key === selectedKey;
           return (
             <button
@@ -113,6 +114,7 @@ export function WeekDayView(props: WeekDayViewProps) {
         <DayChips
           day={selectedInfo}
           alerts={props.alertsByDate.get(selectedKey) ?? []}
+          isClockDay={isClockDay(props.isClockBased, selectedInfo)}
           onInspectFlag={(flag) => props.onInspectFlag(selectedKey, flag)}
         />
       </div>
