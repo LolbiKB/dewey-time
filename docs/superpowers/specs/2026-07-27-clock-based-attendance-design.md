@@ -83,13 +83,24 @@ is no absence concept without a schedule to be absent from.
 
 ```python
 def is_clock_based(employment_type: str | None) -> bool:
-    """Non-blank type outside the Weekly-Schedule allowlist."""
-    return bool((employment_type or "").strip()) and not is_weekly_schedule_eligible(employment_type)
+    """Non-blank string type outside the Weekly-Schedule allowlist."""
+    if not isinstance(employment_type, str):
+        return False
+    if not employment_type.strip():
+        return False
+    return not is_weekly_schedule_eligible(employment_type)
 ```
 
 It belongs in this module: it is the literal complement of the allowlist already
 defined there, and the module is deliberately Frappe-free so it unit-tests with plain
 `unittest` and no bench.
+
+Both guards fail in the same direction — toward *keeping* schedule enforcement. Blank is
+covered above. The `isinstance` check matters because `Employee.employment_type` is a
+Frappe Data field, so a non-string is bad data or a test double; treating such a value as
+clock-based would silently disable late and absence detection for someone who really is
+scheduled. Erring toward enforcement means the failure mode is visible noise rather than
+silent under-reporting.
 
 ### Engine
 
@@ -125,6 +136,14 @@ the employment-type rule in exactly one language.
 `docs/CALENDAR_DATA_CONTRACT.md` gains the field and the policy table above.
 
 ### Frontend
+
+**The empty-state gate must be unblocked first.** `App.tsx:350` renders a "No schedule
+configured" card *instead of* the week view whenever
+`selectedEmployee?.has_shift_assignment === false`. A clock-based employee has no Shift
+Schedule Assignment by definition, so without changing this condition they never reach
+the grid at all and every other frontend change here is invisible. The gate becomes
+`has_shift_assignment === false && !is_clock_based`. (Found during implementation
+planning, after the design was first approved.)
 
 ```ts
 const isClockDay = employee.is_clock_based && day.shift?.shift_assigned !== true;
@@ -213,6 +232,9 @@ as a gap. Changing the sort is a separate decision.
 | `attendance_engine/closeout.py` | split the `not on_shift` branch; extract the non-primary-branch helper |
 | `attendance_engine/record_issue_flags.py` | docstring correction only |
 | `attendance_engine/hr_calendar.py` | expose `is_clock_based` on nav meta + picker rows |
+| `frontend/.../App.tsx` | unblock the "No schedule configured" gate for clock-based employees |
 | `frontend/.../WeekView.tsx`, `WeekDayView.tsx`, `DayChips.tsx` | neutral clock-day styling + "Clock" chip |
+| `frontend/.../lib/weekDayView.ts` | `dayPipState` becomes clock-aware |
+| `frontend/.../lib/clockDay.ts` | new: `isClockDay`, net-worked minutes, display formatting |
 | `frontend/.../types/calendar.ts` | `is_clock_based` field |
 | `dewey_time/docs/CALENDAR_DATA_CONTRACT.md` | document field + policy table |
