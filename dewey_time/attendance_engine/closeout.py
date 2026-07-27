@@ -392,7 +392,9 @@ def has_delivery_or_record_failure_today(employee: str, attendance_date) -> bool
     return False
 
 
-def _non_primary_site_punch_flag(*, checkins: list[dict], employee_branch: str | None):
+def _non_primary_site_punch_flag(
+    *, checkins: list[dict], employee_branch: str | None
+) -> tuple[str, dict] | None:
     """NON_PRIMARY_SITE_PUNCH when punches land on a branch that isn't the employee's.
 
     Pure branch arithmetic with no shift input, which is why the scheduled path
