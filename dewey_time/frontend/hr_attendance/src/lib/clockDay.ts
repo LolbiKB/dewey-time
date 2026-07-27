@@ -35,3 +35,18 @@ export function clockDayMinutes(
   if (grossMinutes != null) return { minutes: grossMinutes, unverified: true };
   return { minutes: null, unverified: false };
 }
+
+/**
+ * Display string for a clock day's worked total. The `~` prefix marks a gross-span
+ * fallback (segments were unusable), so an approximate figure never reads as exact.
+ */
+export function formatClockDayTotal(total: {
+  minutes: number | null;
+  unverified: boolean;
+}): string | null {
+  if (total.minutes == null) return null;
+  const hours = Math.floor(total.minutes / 60);
+  const mins = total.minutes % 60;
+  const body = hours === 0 ? `${mins}m` : mins === 0 ? `${hours}h` : `${hours}h ${mins}m`;
+  return total.unverified ? `~${body}` : body;
+}

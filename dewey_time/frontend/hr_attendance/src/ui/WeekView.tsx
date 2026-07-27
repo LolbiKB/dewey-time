@@ -5,7 +5,8 @@ import { useEffect, useRef } from "react";
 import { AppTooltip } from "@/ui/AppTooltip";
 import { DayChips } from "@/ui/DayChips";
 import { formatDayCheckinTimeRange } from "@/lib/attendanceTime";
-import { isClockDay } from "@/lib/clockDay";
+import { clockDayMinutes, formatClockDayTotal, isClockDay } from "@/lib/clockDay";
+import { deriveSegments } from "@/lib/segmentInspector";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
@@ -98,6 +99,11 @@ export function WeekView(props: WeekViewProps) {
           const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
           const offShiftFlag = dayOffShiftPunchFlag(info);
           const timeRange = formatDayCheckinTimeRange(info);
+          const clockTotal = clockDay
+            ? formatClockDayTotal(
+                clockDayMinutes(deriveSegments(info?.checkins ?? []), info?.gross_minutes ?? null)
+              )
+            : null;
           return (
             <div
               key={key}
@@ -142,6 +148,12 @@ export function WeekView(props: WeekViewProps) {
               {holiday ? (
                 <div className="mt-0.5 truncate text-[10px] font-semibold text-brand-accent/80">
                   Holiday
+                </div>
+              ) : null}
+
+              {clockTotal ? (
+                <div className="mt-0.5 truncate text-[10px] font-semibold tabular-nums text-foreground">
+                  {clockTotal}
                 </div>
               ) : null}
 
