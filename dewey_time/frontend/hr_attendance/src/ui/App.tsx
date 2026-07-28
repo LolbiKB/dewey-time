@@ -1,4 +1,4 @@
-import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import { EmptyState, Page, Section } from "@lolbikb/dewey-ui";
 import {
   deviceAlertsByDate,
   deviceAlertsForWeek,
@@ -290,44 +290,44 @@ export function App() {
             </Alert>
           ) : null}
 
-          {/* `actions` is deliberately left unused: dewey-ui renders it in a
-              `shrink-0` column that starves the title at phone width. The
-              toolbar is a full-width row, so it goes in `children`, which
-              PageHeader renders as its own row beneath the title. */}
-          <PageHeader title="Attendance">
-            {isBootstrapping ? (
-              <AttendanceHeaderSkeleton />
-            ) : (
-              <div className="shrink-0 animate-in fade-in slide-in-from-top-1">
-                <AttendanceToolbar
-                  employees={employees}
-                  employee={employee}
-                  onEmployeeChange={selectEmployee}
-                  hrStaff={hrStaff}
-                  employeeLoading={employeeLoading && isCalendarLoading}
-                  weekDates={weekDates}
-                  weekStart={weekStart}
-                  weekAssignedShiftDays={weekAssignedShiftDays}
-                  showWeekScheduleHint={!!employee && !isCalendarLoading}
-                  daysByDate={daysByDate}
-                  anchor={anchor}
-                  onSelectDate={selectAnchor}
-                  onPrevWeek={goPrev}
-                  onNextWeek={goNext}
-                  onToday={goToday}
-                  onRefresh={() => void refetchPage()}
-                  employeeLabel={employeeShortName(selectedEmployee, employee)}
-                  canGoPrev={canGoPrev}
-                  canGoNext={canGoNext}
-                  calendarMinDate={calendarMinDate}
-                  calendarMaxDate={calendarMaxDate}
-                  isRefreshing={isRefreshing}
-                  isCalendarLoading={isCalendarLoading}
-                  weekFlagCounts={weekFlagCounts}
-                />
-              </div>
-            )}
-          </PageHeader>
+          {/* No PageHeader here, unlike the other three routes — this is the one
+              screen that never had a heading to convert. Its nav tab already
+              reads "Attendance" (top strip on desktop, bottom bar on phone), so
+              a title would only duplicate that label while taking ~40px off the
+              week grid on the viewport that can least afford it. An sr-only
+              heading was considered and declined. */}
+          {isBootstrapping ? (
+            <AttendanceHeaderSkeleton />
+          ) : (
+            <div className="shrink-0 animate-in fade-in slide-in-from-top-1">
+              <AttendanceToolbar
+                employees={employees}
+                employee={employee}
+                onEmployeeChange={selectEmployee}
+                hrStaff={hrStaff}
+                employeeLoading={employeeLoading && isCalendarLoading}
+                weekDates={weekDates}
+                weekStart={weekStart}
+                weekAssignedShiftDays={weekAssignedShiftDays}
+                showWeekScheduleHint={!!employee && !isCalendarLoading}
+                daysByDate={daysByDate}
+                anchor={anchor}
+                onSelectDate={selectAnchor}
+                onPrevWeek={goPrev}
+                onNextWeek={goNext}
+                onToday={goToday}
+                onRefresh={() => void refetchPage()}
+                employeeLabel={employeeShortName(selectedEmployee, employee)}
+                canGoPrev={canGoPrev}
+                canGoNext={canGoNext}
+                calendarMinDate={calendarMinDate}
+                calendarMaxDate={calendarMaxDate}
+                isRefreshing={isRefreshing}
+                isCalendarLoading={isCalendarLoading}
+                weekFlagCounts={weekFlagCounts}
+              />
+            </div>
+          )}
 
           <Section grow>
             {isBootstrapping ? (

@@ -67,8 +67,14 @@ test("ScheduleCoveragePage uses dewey-ui's Page", () => {
   assert.ok(!src.includes("max-w-7xl"), "hand-rolled container should be gone");
 });
 
-test("App uses PageHeader and Section inside Page", () => {
+// /hr-attendance is the one route that never had a heading to convert, so —
+// unlike the other three — it gets no PageHeader. Its nav tab already reads
+// "Attendance" at every viewport, and a title costs ~40px above the week grid
+// on the phone. An sr-only heading was considered and declined. Pin both the
+// Section adoption and the absence of a title so neither drifts back.
+test("App renders Section inside Page and adds no page title of its own", () => {
   const src = source("App.tsx");
-  assert.ok(src.includes("<PageHeader"), "expected <PageHeader> from @lolbikb/dewey-ui");
   assert.ok(src.includes("<Section"), "expected <Section> from @lolbikb/dewey-ui");
+  assert.ok(!src.includes("<PageHeader"), "/hr-attendance must not render a PageHeader");
+  assert.ok(!src.includes("<h1"), "/hr-attendance must not hand-roll a page title either");
 });
