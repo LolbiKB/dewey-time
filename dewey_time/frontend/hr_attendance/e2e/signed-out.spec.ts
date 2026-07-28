@@ -87,7 +87,12 @@ test("signed-out: a 403 gets the sign-in card too", async ({ page }) => {
 
 test("signed-out: /hr-schedule redirects to the attendance card", async ({ page }) => {
   await page.goto("/hr-schedule");
-  await expect(page).toHaveURL(/\/hr-attendance$/);
+  // Tolerates a query string on purpose: the employee hooks resolve even signed
+  // out and sync `?employee=…` into the URL shortly after the redirect lands, so
+  // an end-anchored pattern races that write and fails about one run in three.
+  // It still has to be a URL assertion — checking only the card would pass even
+  // if the redirect never happened, since /hr-schedule renders a card either way.
+  await expect(page).toHaveURL(/\/hr-attendance(\?|$)/);
   await expectSignInCard(page);
 });
 
