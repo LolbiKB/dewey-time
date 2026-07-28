@@ -153,7 +153,7 @@ AUTO-generated flag values (stored in `Attendance Flag.flag_code`):
 - `ATTENDANCE_ISSUE` — incomplete punch data
 - `UNNOTIFIED_ABSENCE` — on-shift, zero checkins
 - `MISSING_IN_OR_OUT` — *declared/reserved but not currently emitted*; the single-checkin case emits `ATTENDANCE_ISSUE` (reason `single_checkin`)
-- `OFF_SHIFT_PUNCH` — checkins present but employee is off-shift or on holiday
+- `OFF_SHIFT_PUNCH` — checkins present but employee is off-shift or on holiday; not emitted for clock-based employees (employment type outside the Weekly-Schedule allowlist) on a non-holiday unscheduled day, where only punch-integrity flags apply
 - `NON_PRIMARY_SITE_PUNCH` — employee branch ≠ checkin device branch
 - `LATE_FROM_LUNCH` — returned late from observed lunch
 - `NO_CHECKIN_YET` — *declared/reserved but not currently emitted*

@@ -4,7 +4,8 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { isClockDay } from "@/lib/clockDay";
+import { clockDayMinutes, formatClockDayTotal, isClockDay } from "@/lib/clockDay";
+import { deriveSegments } from "@/lib/segmentInspector";
 import { cn } from "@/lib/utils";
 import { initialSelectedDate, stepDay, dayPipState, type PipState } from "@/lib/weekDayView";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
@@ -47,6 +48,17 @@ export function WeekDayView(props: WeekDayViewProps) {
   const selectedInfo = props.daysByDate.get(selectedKey);
   const atFirst = selectedKey === format(props.weekDates[0]!, "yyyy-MM-dd");
   const atLast = selectedKey === format(props.weekDates[6]!, "yyyy-MM-dd");
+
+  // Net worked hours — the headline figure of a clock day. Same computation as
+  // the desktop week grid, so the two surfaces cannot report different totals.
+  const clockTotal = isClockDay(props.isClockBased, selectedInfo)
+    ? formatClockDayTotal(
+        clockDayMinutes(
+          deriveSegments(selectedInfo?.checkins ?? []),
+          selectedInfo?.gross_minutes ?? null,
+        ),
+      )
+    : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">
@@ -109,14 +121,17 @@ export function WeekDayView(props: WeekDayViewProps) {
         })}
       </div>
 
-      {/* Selected-day chips */}
-      <div className="shrink-0 px-3">
+      {/* Selected-day chips + clock-day total */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-3">
         <DayChips
           day={selectedInfo}
           alerts={props.alertsByDate.get(selectedKey) ?? []}
           isClockDay={isClockDay(props.isClockBased, selectedInfo)}
           onInspectFlag={(flag) => props.onInspectFlag(selectedKey, flag)}
         />
+        {clockTotal ? (
+          <span className="text-xs font-semibold tabular-nums text-foreground">{clockTotal}</span>
+        ) : null}
       </div>
 
       {/* One full-width day timeline, shared axis */}

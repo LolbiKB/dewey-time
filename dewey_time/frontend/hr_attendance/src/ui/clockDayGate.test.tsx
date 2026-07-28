@@ -18,3 +18,12 @@ test("WeekView and WeekDayView both receive isClockBased", () => {
   const matches = app.match(/isClockBased=\{/g) ?? [];
   assert.equal(matches.length, 2);
 });
+
+// The calendar payload carries is_clock_based too, so a lagging or failed employees
+// fetch must not silently downgrade a clock day back to an off-shift day.
+test("both call sites prefer the payload over the employees list", () => {
+  const matches =
+    app.match(/isClockBased=\{payload\.is_clock_based \?\? selectedEmployee\?\.is_clock_based\}/g) ??
+    [];
+  assert.equal(matches.length, 2);
+});

@@ -9,6 +9,11 @@ export type DayChipsProps = {
   onInspectFlag?: (flag: Flag) => void;
 };
 
+// Shared look for the informational (non-alarming) chips — Clock and Leave.
+// The off-shift chip deliberately does not use it: that one is destructive-toned.
+const NEUTRAL_CHIP =
+  "inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground";
+
 function offShiftPunchFlag(day?: Day): Flag | undefined {
   return (day?.flags ?? []).find((flag) => flag.flag_code === "OFF_SHIFT_PUNCH");
 }
@@ -26,9 +31,7 @@ export function DayChips(props: DayChipsProps) {
     <div className="flex flex-wrap items-center gap-1.5">
       {props.isClockDay ? (
         <AppTooltip content="Clock in/out — no schedule, no lateness rules" side="bottom">
-          <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground">
-            Clock
-          </span>
+          <span className={NEUTRAL_CHIP}>Clock</span>
         </AppTooltip>
       ) : null}
       {onLeave ? (
@@ -36,9 +39,7 @@ export function DayChips(props: DayChipsProps) {
           content={props.day?.leave?.leave_type ? `On leave · ${props.day.leave.leave_type}` : "On leave"}
           side="bottom"
         >
-          <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground">
-            Leave
-          </span>
+          <span className={NEUTRAL_CHIP}>Leave</span>
         </AppTooltip>
       ) : null}
       {offShiftFlag ? (

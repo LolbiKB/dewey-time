@@ -364,7 +364,7 @@ export function App() {
                       daysByDate={daysByDate}
                       alertsByDate={alertsByDate}
                       syncByDate={syncByDate}
-                      isClockBased={selectedEmployee?.is_clock_based}
+                      isClockBased={payload.is_clock_based ?? selectedEmployee?.is_clock_based}
                       onInspectDay={handleInspectDay}
                       onInspectFlag={handleInspectFlag}
                     />
@@ -374,7 +374,7 @@ export function App() {
                       daysByDate={daysByDate}
                       alertsByDate={alertsByDate}
                       syncByDate={syncByDate}
-                      isClockBased={selectedEmployee?.is_clock_based}
+                      isClockBased={payload.is_clock_based ?? selectedEmployee?.is_clock_based}
                       onInspectDay={handleInspectDay}
                       onInspectFlag={handleInspectFlag}
                     />
