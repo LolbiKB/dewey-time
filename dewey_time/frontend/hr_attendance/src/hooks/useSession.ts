@@ -24,6 +24,7 @@ export function useSession() {
     // declines to retry) or as the login page Frappe serves with a 200, which
     // frappeCall surfaces as a non-4xx error and the default *would* retry
     // twice with backoff — seconds of spinner in place of the sign-in card.
+    // e2e/signed-out.spec.ts pins this by request count: 1 with it, 3 without.
     retry: false,
   });
 
