@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
-    "@lolbikb/dewey-ui": "^1.11.0",
+    "@lolbikb/dewey-ui": "^1.16.0",
     "@radix-ui/react-popover": "latest",
     "@tanstack/react-query": "^5.101.4",
     "class-variance-authority": "^0.7.1",
