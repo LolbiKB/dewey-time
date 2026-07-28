@@ -46,7 +46,7 @@ Tasks 3–6 are mechanical conversions of ~1,400 lines of existing hooks. Transc
 | `src/lib/frappe.test.ts` | Transport contract: CSRF on POST only, unwrap, error extraction. |
 | `src/lib/queryKeys.ts` | Hierarchical array-key registry. The single source of cache identity. |
 | `src/lib/queryKeys.test.ts` | Asserts the prefix property that invalidation depends on. |
-| `src/lib/queryClient.ts` | QueryClient configuration (ADMS's, verbatim). |
+| `src/lib/queryClient.ts` | QueryClient config — ADMS's freshness strategy, deliberately divergent retry. |
 | `src/lib/toast.ts` | `notifySuccess`/`notifyError`/… helpers over sonner. |
 | `src/services/calendar.ts` | `list_calendar_employees`, `get_employee_calendar`, `get_calendar_session`. |
 | `src/services/schedule.ts` | The five `schedule_api.*` methods. |
@@ -315,18 +315,21 @@ function hasPrefix(key: readonly unknown[], prefix: readonly unknown[]): boolean
   return prefix.length <= key.length && prefix.every((part, i) => key[i] === part);
 }
 
-test("every schedule key is invalidated by the schedule family prefix", () => {
-  const all = queryKeys.schedule.all;
-  assert.ok(hasPrefix(queryKeys.schedule.context("EMP-1"), all));
-  assert.ok(hasPrefix(queryKeys.schedule.resolve("EMP-1", "2026-08-01", "{}"), all));
-  assert.ok(hasPrefix(queryKeys.schedule.templates(24), all));
-  assert.ok(hasPrefix(queryKeys.schedule.holidays("EMP-1", "2026-08-01", "2026-08-31"), all));
-});
-
-test("every calendar key is invalidated by the calendar family prefix", () => {
-  assert.ok(
-    hasPrefix(queryKeys.calendar.employee("EMP-1", "2026-08-01", "2026-08-31"), queryKeys.calendar.all),
-  );
+// Walks the WHOLE registry rather than naming families, so it stays correct as
+// later tasks add keys and needs no per-family edit. Two hand-written family
+// tests were the original design; they left 5 of 9 builders unasserted, which
+// the Task 1 review caught.
+test("every key builder carries its family prefix", () => {
+  for (const [family, members] of Object.entries(queryKeys)) {
+    const { all, ...builders } = members as { all: readonly unknown[] } & Record<string, unknown>;
+    for (const [name, build] of Object.entries(builders)) {
+      if (typeof build !== "function") continue;
+      const key = (build as (...a: unknown[]) => readonly unknown[])(
+        ...Array.from({ length: build.length }, (_, i) => `arg${i}`),
+      );
+      assert.ok(hasPrefix(key, all), `${family}.${name} escapes its family`);
+    }
+  }
 });
 
 // Without this, the tests above would pass for a registry where every key is
@@ -409,11 +412,15 @@ Create `src/lib/queryClient.ts`:
 ```ts
 import { QueryClient } from "@tanstack/react-query";
 
+import { FrappeCallError } from "@/lib/frappe";
+
 /**
- * Matches ADMS's configuration (frontend/adms/src/App.tsx:27-46) so both apps
- * behave identically: data is stale immediately (always revalidate on mount)
- * but stays cached for 5 minutes, and refetches when the user returns to the
- * tab or the network reconnects.
+ * Follows ADMS's freshness strategy (frontend/adms/src/App.tsx:27-46): data is
+ * stale immediately (always revalidate on mount) but stays cached for 5
+ * minutes, and refetches when the user returns to the tab or the network
+ * reconnects.
+ *
+ * Deliberately diverges from ADMS on retry — see the comments below.
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -422,16 +429,25 @@ export const queryClient = new QueryClient({
       gcTime: 1000 * 60 * 5,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
-      retry: 2,
+      // 4xx is the server's verdict, not a blip: a 403 session-expiry or a 417
+      // frappe.throw() is re-issued pointlessly and delays the message the user
+      // needs. FrappeCallError.status exists to discriminate exactly this.
+      retry: (count, err) =>
+        !(err instanceof FrappeCallError && err.status >= 400 && err.status < 500) && count < 2,
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
     },
     mutations: {
-      retry: 1,
+      // Deliberately NOT ADMS's retry:1. Our mutations create Shift Assignments
+      // and delete schedules; a retry after a commit-then-drop duplicates them.
+      // This is react-query's own default.
+      retry: false,
       retryDelay: 1000,
     },
   },
 });
 ```
+
+**This divergence from ADMS is human-approved** (Task 1 review, 2026-07-28). ADMS's mutations are device commands; ours create Shift Assignments and delete schedules, so `retry: 1` would duplicate a write that had already committed before the network dropped. Do not "restore parity" here in a later task.
 
 - [ ] **Step 11: Mount the provider alongside the existing one**
 
