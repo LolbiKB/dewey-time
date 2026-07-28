@@ -21,8 +21,27 @@ frappe.db.delete = MagicMock()
 frappe.db.has_column = MagicMock(return_value=True)
 frappe.form_dict = {}
 
+# Only the two modules this file exercises. They bind getdate/add_days and
+# frappe helpers at import time, so they must be re-imported after the mocks
+# above are in place.
+#
+# This used to purge EVERY `dewey_time.attendance_engine.*` module, which is
+# what caused issue #70. A blanket purge is invisible here but corrupts any
+# test module imported *earlier*: that module keeps the function objects it
+# bound from the old module object, while `sys.modules` repopulates with a new
+# one. `mock.patch("…hr_calendar._is_hr_staff")` then patches the new module
+# while the earlier test calls the old module's function — the mock resolves,
+# is passed in, and is never called. Whether it bites depends on test discovery
+# order, which is why it only ever reproduced in CI.
+#
+# Keep this list narrow. Anything added here must be a module this file itself
+# re-imports below.
+_RELOAD_MODULES = (
+    "dewey_time.attendance_engine.dev_tools",
+    "dewey_time.attendance_engine.schedule_resolver",
+)
 for mod_name in list(sys.modules):
-    if mod_name.startswith("dewey_time.attendance_engine."):
+    if mod_name.startswith(_RELOAD_MODULES):
         del sys.modules[mod_name]
 
 
