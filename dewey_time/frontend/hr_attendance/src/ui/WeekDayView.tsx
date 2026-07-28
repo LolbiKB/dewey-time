@@ -136,7 +136,15 @@ export function WeekDayView(props: WeekDayViewProps) {
 
       {/* One full-width day timeline, shared axis */}
       <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div style={{ height: `${weekWindow.canvasHeightPct}%` }} className="[&>button]:border-0">
+        {/* `grid`, not a plain block, and that is load-bearing: DayCell's root is
+            a <button>, which is inline-level and therefore shrinks to its content
+            width. WeekView never notices because it renders DayCell into
+            `grid-cols-[repeat(7,minmax(8rem,1fr))]`, where grid items stretch to
+            fill their column. Rendered into a block wrapper the same button
+            collapsed to a narrow sliver on phones (issue #71). A single-column
+            grid stretches it by the same mechanism the week grid uses, so the two
+            surfaces cannot drift apart. */}
+        <div style={{ height: `${weekWindow.canvasHeightPct}%` }} className="grid [&>button]:border-0">
           <DayCell
             date={selectedDate}
             outside={false}
