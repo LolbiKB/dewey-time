@@ -1,7 +1,6 @@
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { addDays, parseISO } from "date-fns";
 import { CheckIcon } from "lucide-react";
-import { useFrappeAuth } from "frappe-react-sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
@@ -27,6 +26,7 @@ import {
   useCalendarEmployees,
 } from "@/hooks/useHrAttendanceData";
 import { useEmployeeSelection } from "@/hooks/useEmployeeSelection";
+import { useSession } from "@/hooks/useSession";
 import {
   useApplyWeeklySchedule,
   useScheduleContext,
@@ -80,7 +80,7 @@ import type { HrAccessOutletContext } from "@/lib/hrAccess";
 
 export function WeeklySchedulePage() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
-  const { currentUser, isLoading: authLoading } = useFrappeAuth();
+  const { currentUser, isLoading: authLoading } = useSession();
   const navigate = useNavigate();
 
   const [shiftBlocks, setShiftBlocks] = useState<ShiftBlock[]>([]);

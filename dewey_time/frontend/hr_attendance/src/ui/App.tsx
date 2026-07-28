@@ -7,9 +7,9 @@ import {
   useEmployeeCalendar,
 } from "@/hooks/useHrAttendanceData";
 import { useEmployeeSelection } from "@/hooks/useEmployeeSelection";
+import { useSession } from "@/hooks/useSession";
 import type { CalendarPayload, Day, Flag, Severity } from "@/types/calendar";
 import { addDays, format, startOfWeek } from "date-fns";
-import { useFrappeAuth } from "frappe-react-sdk";
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
@@ -43,7 +43,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 
 export function App() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
-  const { currentUser, isLoading: authLoading } = useFrappeAuth();
+  const { currentUser, isLoading: authLoading } = useSession();
   const isMobile = useIsMobile();
   const [anchor, setAnchor] = useState<Date>(() => new Date());
   const [weekNavDirection, setWeekNavDirection] = useState<"prev" | "next" | "jump">("jump");

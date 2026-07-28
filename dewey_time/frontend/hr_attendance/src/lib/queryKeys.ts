@@ -9,7 +9,12 @@
  */
 export const queryKeys = {
   session: {
+    // `all` is the calendar session (get_calendar_session — hr_staff +
+    // employee_id). `user` is a separate request for the logged-in user id, so
+    // it needs its own key: two queries sharing one key share one cache entry,
+    // and whichever mounted first would hand the other its payload.
     all: ["session"] as const,
+    user: () => [...queryKeys.session.all, "user"] as const,
   },
 
   employees: {
