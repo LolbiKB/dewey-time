@@ -1,38 +1,30 @@
-import { useFrappeGetCall, useFrappePostCall } from "frappe-react-sdk";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { extractFrappeError } from "@/lib/frappeError";
-import type {
-  ApplyScheduleResult,
-  HolidayPreviewItem,
-  ResolvePlan,
-  ScheduleContext,
-  WeeklyScheduleTemplate,
-  WeekPattern,
-} from "@/types/schedule";
+import { queryKeys } from "@/lib/queryKeys";
+import {
+  applyWeeklySchedule,
+  getHolidayPreview,
+  getScheduleContext,
+  listScheduleTemplates,
+  resolveSchedulePlan,
+} from "@/services/schedule";
+import type { ApplyScheduleResult, WeekPattern } from "@/types/schedule";
 import { validateWeekPattern, weekPatternForApi } from "@/types/schedule";
 
-const CONTEXT_METHOD = "dewey_time.attendance_engine.schedule_api.get_employee_schedule_context";
-const RESOLVE_METHOD = "dewey_time.attendance_engine.schedule_api.resolve_weekly_schedule_plan";
-const HOLIDAY_METHOD = "dewey_time.attendance_engine.schedule_api.get_holiday_preview";
-const APPLY_METHOD = "dewey_time.attendance_engine.schedule_api.apply_weekly_schedule";
-const TEMPLATES_METHOD = "dewey_time.attendance_engine.schedule_api.list_weekly_schedule_templates";
-
 export function useScheduleContext(employee: string | null) {
-  const params = useMemo(() => (employee ? { employee } : undefined), [employee]);
-  const swrKey = employee ? `${CONTEXT_METHOD}:${employee}` : null;
-
-  const { data, error, isLoading, mutate } = useFrappeGetCall<ScheduleContext>(
-    CONTEXT_METHOD,
-    params,
-    swrKey
-  );
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: employee ? queryKeys.schedule.context(employee) : queryKeys.schedule.all,
+    queryFn: () => getScheduleContext(employee!),
+    enabled: Boolean(employee),
+  });
 
   return {
-    context: data?.message ?? null,
+    context: data ?? null,
     error,
     isLoading,
-    refresh: mutate,
+    refresh: refetch,
   };
 }
 
@@ -41,26 +33,19 @@ export function useHolidayPreview(
   startDate: string | null,
   endDate: string | null
 ) {
-  const params = useMemo(
-    () =>
-      employee && startDate && endDate
-        ? { employee, start_date: startDate, end_date: endDate }
-        : undefined,
-    [employee, endDate, startDate]
-  );
-  const swrKey =
-    employee && startDate && endDate
-      ? `${HOLIDAY_METHOD}:${employee}:${startDate}:${endDate}`
-      : null;
+  const enabled = Boolean(employee && startDate && endDate);
 
-  const { data, error, isLoading } = useFrappeGetCall<{ holidays: HolidayPreviewItem[] }>(
-    HOLIDAY_METHOD,
-    params,
-    swrKey
-  );
+  const { data, error, isLoading } = useQuery({
+    queryKey: enabled
+      ? queryKeys.schedule.holidays(employee!, startDate!, endDate!)
+      : queryKeys.schedule.all,
+    queryFn: () =>
+      getHolidayPreview({ employee: employee!, startDate: startDate!, endDate: endDate! }),
+    enabled,
+  });
 
   return {
-    holidays: data?.message?.holidays ?? [],
+    holidays: data?.holidays ?? [],
     error,
     isLoading,
   };
@@ -92,43 +77,35 @@ export function useWeeklyScheduleResolve(
     };
   }, [debounceMs, effectiveFrom, employee, patternJson, patternValid]);
 
-  const params = useMemo(
-    () =>
-      employee && effectiveFrom && debouncedPatternJson
-        ? {
-            employee,
-            effective_from: effectiveFrom,
-            week_pattern: debouncedPatternJson,
-          }
-        : undefined,
-    [debouncedPatternJson, effectiveFrom, employee]
-  );
+  const enabled = Boolean(employee && effectiveFrom && debouncedPatternJson);
 
-  const swrKey =
-    employee && effectiveFrom && debouncedPatternJson
-      ? `${RESOLVE_METHOD}:${employee}:${effectiveFrom}:${debouncedPatternJson}`
-      : null;
-
-  const { data, error, isLoading, mutate } = useFrappeGetCall<ResolvePlan>(
-    RESOLVE_METHOD,
-    params,
-    swrKey
-  );
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: enabled
+      ? queryKeys.schedule.resolve(employee!, effectiveFrom!, debouncedPatternJson!)
+      : queryKeys.schedule.all,
+    queryFn: () =>
+      resolveSchedulePlan({
+        employee: employee!,
+        effectiveFrom: effectiveFrom!,
+        weekPatternJson: debouncedPatternJson!,
+      }),
+    enabled,
+  });
 
   const isDebouncing = Boolean(
     patternValid && employee && effectiveFrom && debouncedPatternJson !== patternJson
   );
-  const hasPlan = Boolean(data?.message);
-  const resolving = isDebouncing || Boolean(swrKey && isLoading && !hasPlan);
+  const hasPlan = Boolean(data);
+  const resolving = isDebouncing || Boolean(enabled && isLoading && !hasPlan);
 
   const refreshPlan = useCallback(() => {
     if (!patternValid || !employee || !effectiveFrom) return;
     setDebouncedPatternJson(patternJson);
-    void mutate();
-  }, [effectiveFrom, employee, mutate, patternJson, patternValid]);
+    void refetch();
+  }, [effectiveFrom, employee, patternJson, patternValid, refetch]);
 
   return {
-    plan: data?.message ?? null,
+    plan: data ?? null,
     resolveError: error,
     resolving,
     validationIssues,
@@ -138,8 +115,38 @@ export function useWeeklyScheduleResolve(
 }
 
 export function useApplyWeeklySchedule() {
-  const { call, loading, reset } = useFrappePostCall<{ message: ApplyScheduleResult }>(APPLY_METHOD);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const { mutateAsync, reset, isPending } = useMutation({
+    mutationFn: (args: {
+      employee: string;
+      week_pattern: WeekPattern;
+      create_shifts_after: string;
+      generate_through?: string | null;
+      confirm_create?: boolean;
+    }) =>
+      applyWeeklySchedule({
+        employee: args.employee,
+        week_pattern: JSON.stringify(weekPatternForApi(args.week_pattern)),
+        create_shifts_after: args.create_shifts_after,
+        generate_through: args.generate_through ?? "",
+        confirm_create: Boolean(args.confirm_create),
+      }),
+    onSuccess: (payload) => {
+      // A needs_confirm response is the server's dry run — it wrote nothing, so
+      // there is no stale cache to clear. Without this, every "Review changes"
+      // click invalidates three families and refetches every active query in
+      // them for a preview the user has not accepted yet.
+      if (payload?.needs_confirm) return;
+
+      void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
+      // Clearing or re-applying a schedule changes what the attendance week shows.
+      // Nothing invalidated this before — the calendar silently served stale data.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
+    },
+  });
 
   const apply = useCallback(
     async (args: {
@@ -153,14 +160,7 @@ export function useApplyWeeklySchedule() {
       reset();
 
       try {
-        const result = await call({
-          employee: args.employee,
-          week_pattern: JSON.stringify(weekPatternForApi(args.week_pattern)),
-          create_shifts_after: args.create_shifts_after,
-          generate_through: args.generate_through ?? "",
-          confirm_create: args.confirm_create ? 1 : 0,
-        });
-        const payload = result?.message ?? (result as unknown as ApplyScheduleResult);
+        const payload = await mutateAsync(args);
 
         if (payload?.needs_confirm) {
           return payload;
@@ -187,26 +187,20 @@ export function useApplyWeeklySchedule() {
         return null;
       }
     },
-    [call, reset]
+    [mutateAsync, reset]
   );
 
-  return { apply, applying: loading, status, clearStatus: () => setStatus(null) };
+  return { apply, applying: isPending, status, clearStatus: () => setStatus(null) };
 }
 
 export function useWeeklyScheduleTemplates(limit = 12) {
-  const params = useMemo(() => ({ limit }), [limit]);
-  const swrKey = `${TEMPLATES_METHOD}:${limit}`;
-
-  const { data, error, isLoading, mutate } = useFrappeGetCall<{ templates: WeeklyScheduleTemplate[] }>(
-    TEMPLATES_METHOD,
-    params,
-    swrKey
-  );
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.schedule.templates(limit),
+    queryFn: () => listScheduleTemplates(limit),
+  });
 
   return {
-    templates: data?.message?.templates ?? [],
-    error,
+    templates: data?.templates ?? [],
     isLoading,
-    refresh: mutate,
   };
 }

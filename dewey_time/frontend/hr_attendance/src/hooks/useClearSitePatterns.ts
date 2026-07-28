@@ -1,15 +1,13 @@
-import { useFrappePostCall } from "frappe-react-sdk";
-import { useCallback, useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 
 import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
+import { queryKeys } from "@/lib/queryKeys";
+import {
+  clearSitePatternsStep as clearSitePatternsStepApi,
+  previewClearSitePatterns,
+} from "@/services/maintenance";
 import type { ClearSitePatternsPreview } from "@/types/schedule";
-
-export const PREVIEW_CLEAR_SITE_PATTERNS_METHOD =
-  "dewey_time.attendance_engine.dev_tools.preview_clear_site_schedule_patterns_api";
-
-// Bounded, committed step — called repeatedly until `done` so the wipe never times out.
-export const CLEAR_SITE_PATTERNS_STEP_METHOD =
-  "dewey_time.attendance_engine.dev_tools.clear_site_patterns_step_api";
 
 export const CLEAR_SITE_PATTERNS_CONFIRM_PHRASE = "CLEAR SITE PATTERNS";
 
@@ -36,36 +34,45 @@ export type WipeProgress = {
 const MAX_WIPE_STEPS = 5000;
 
 export function useClearSitePatterns() {
-  const previewCall = useFrappePostCall<{ message: ClearSitePatternsPreview }>(
-    PREVIEW_CLEAR_SITE_PATTERNS_METHOD
-  );
-  const stepCall = useFrappePostCall<{ message: WipeStep }>(CLEAR_SITE_PATTERNS_STEP_METHOD);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [progress, setProgress] = useState<WipeProgress | null>(null);
   const [running, setRunning] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
-  const previewCallRef = useRef(previewCall);
-  previewCallRef.current = previewCall;
-  const stepCallRef = useRef(stepCall);
-  stepCallRef.current = stepCall;
+  // Each call is one bounded, committed batch (see MAX_WIPE_STEPS loop below) —
+  // there's no single "the clear succeeded" mutation event to hang cache
+  // invalidation off of (this mutation's onSuccess would fire — and
+  // re-invalidate — after every intermediate step). Instead invalidation
+  // happens once, unconditionally, in clearSitePatterns's own `finally` below,
+  // covering every exit from the loop (done, step limit, or a thrown error).
+  const { mutateAsync: stepMutateAsync } = useMutation({
+    mutationFn: (args: { clearEmployeeData: boolean }) =>
+      clearSitePatternsStepApi({
+        confirmPhrase: CLEAR_SITE_PATTERNS_CONFIRM_PHRASE,
+        clearEmployeeData: args.clearEmployeeData,
+      }),
+  });
 
-  const loading = previewCall.loading || running;
+  const loading = previewLoading || running;
 
   const loadPreview = useCallback(
     async (clearEmployeeData = true): Promise<ClearSitePatternsPreview | null> => {
       setStatus(null);
-      previewCallRef.current.reset();
+      setPreviewLoading(true);
       try {
-        const result = await previewCallRef.current.call({
-          clear_employee_data: clearEmployeeData ? 1 : 0,
+        return await queryClient.fetchQuery({
+          queryKey: queryKeys.maintenance.siteClearPreview(clearEmployeeData),
+          queryFn: () => previewClearSitePatterns(clearEmployeeData),
         });
-        return result?.message ?? (result as unknown as ClearSitePatternsPreview) ?? null;
       } catch (error) {
         setStatus({ type: "error", message: formatAttendanceLoadError(error) });
         return null;
+      } finally {
+        setPreviewLoading(false);
       }
     },
-    []
+    [queryClient]
   );
 
   const clearSitePatterns = useCallback(
@@ -76,11 +83,7 @@ export function useClearSitePatterns() {
       try {
         let initialTotal = 0;
         for (let i = 0; i < MAX_WIPE_STEPS; i++) {
-          const result = await stepCallRef.current.call({
-            confirm_phrase: CLEAR_SITE_PATTERNS_CONFIRM_PHRASE,
-            clear_employee_data: clearEmployeeData ? 1 : 0,
-          });
-          const step = (result?.message ?? (result as unknown as WipeStep)) || null;
+          const step = await stepMutateAsync({ clearEmployeeData });
           if (!step) {
             setStatus({ type: "error", message: "Wipe step returned no response" });
             return null;
@@ -121,10 +124,19 @@ export function useClearSitePatterns() {
         setStatus({ type: "error", message: formatAttendanceLoadError(error) });
         return null;
       } finally {
+        // Every batch here is independently committed, so the database can have
+        // changed even if this call returns null/throws (a bad step response, the
+        // MAX_WIPE_STEPS backstop, or a network drop mid-wipe). Invalidate
+        // unconditionally, once per call, regardless of how the loop exits —
+        // otherwise those paths leave deleted rows in the calendar/coverage/
+        // schedule caches.
+        void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
         setRunning(false);
       }
     },
-    []
+    [queryClient, stepMutateAsync]
   );
 
   const clearStatus = useCallback(() => {

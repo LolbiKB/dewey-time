@@ -1,8 +1,3 @@
-export const PARSE_METHOD =
-  "dewey_time.attendance_engine.schedule_import.parse_schedule_upload";
-export const APPLY_METHOD =
-  "dewey_time.attendance_engine.schedule_api.apply_weekly_schedule";
-
 export const DAY_ABBREV: Record<string, string> = {
   Monday: "M",
   Tuesday: "T",

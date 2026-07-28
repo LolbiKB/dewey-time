@@ -1,4 +1,5 @@
-import type { ReconcilePreview } from "@/types/schedule";
+import { cloneWeekPattern, weekPatternToBlocks } from "@/types/schedule";
+import type { ReconcilePreview, ScheduleContext, ShiftBlock } from "@/types/schedule";
 
 export type ScheduleChangeSummary = {
   hasChanges: boolean;
@@ -65,4 +66,25 @@ export function confirmNameMatches(
   const a = (typed ?? "").trim().toLowerCase();
   const b = (employeeName ?? "").trim().toLowerCase();
   return a.length > 0 && a === b;
+}
+
+export type ScheduleFormState = {
+  shiftBlocks: ShiftBlock[];
+  effectiveFrom: string;
+  generateThrough: string;
+  limitGenerateThrough: boolean;
+};
+
+/** Derives the editable form fields from a schedule context — the server's week
+ * pattern and defaults become the form's starting point. Shared by the
+ * "employee changed" seed effect and the post-save re-seed: a refetched
+ * context doesn't update the form on its own (the form holds its own local
+ * state), so both call sites reset from it explicitly. */
+export function scheduleFormStateFromContext(context: ScheduleContext): ScheduleFormState {
+  return {
+    shiftBlocks: weekPatternToBlocks(cloneWeekPattern(context.week_pattern)),
+    effectiveFrom: context.default_effective_from,
+    generateThrough: context.default_generate_through ?? "",
+    limitGenerateThrough: false,
+  };
 }

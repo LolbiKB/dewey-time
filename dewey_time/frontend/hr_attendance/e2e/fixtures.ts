@@ -3,11 +3,14 @@ import type { Page } from "@playwright/test";
 /**
  * Network stubs for the HR Attendance SPA.
  *
- * The app authenticates through frappe-react-sdk, which reads the logged-in user
- * from the `user_id` cookie (synchronously, no request), then loads data from
- * `/api/method/...` endpoints. We seed the cookie and fulfil every API method with
- * canned data so the E2E tests need no Frappe backend. Calendar days are generated
- * for whatever date range the app requests, so tests are independent of "today".
+ * The app reads the logged-in user from `frappe.auth.get_logged_user`, then loads
+ * data from the other `/api/method/...` endpoints. We fulfil every API method with
+ * canned data so the E2E tests need no Frappe backend. The session cookies are
+ * seeded too even though nothing in `src/` reads them: they are what keeps
+ * signed-out.spec.ts discriminating, since a regression to cookie-derived auth
+ * would show a signed-in user there instead of the sign-in card. Calendar days
+ * are generated for whatever date range the app requests, so tests are independent
+ * of "today".
  */
 
 function ymd(d: Date): string {

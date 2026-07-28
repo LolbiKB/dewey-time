@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { Loader2Icon } from "lucide-react";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 export function LoadingIndicator(props: { label?: string; className?: string }) {
@@ -13,7 +13,9 @@ export function LoadingIndicator(props: { label?: string; className?: string }) 
         props.className
       )}
     >
-      <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+      {/* aria-hidden overrides Spinner's own role="status"/aria-label: the
+          adjacent label is the announcement, and two would double up. */}
+      <Spinner aria-hidden="true" />
       {props.label ? <span>{props.label}</span> : null}
     </div>
   );

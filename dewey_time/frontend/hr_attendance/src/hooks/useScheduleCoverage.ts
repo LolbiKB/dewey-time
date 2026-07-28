@@ -1,15 +1,14 @@
-import { useFrappeGetCall } from "frappe-react-sdk";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
+import { queryKeys } from "@/lib/queryKeys";
 import {
   bucketByWeeklyHours,
   type CoverageCounts,
   type CoverageEmployee,
   type HoursBucket,
-  type ScheduleCoveragePayload,
 } from "@/lib/scheduleCoverage";
-
-const COVERAGE_METHOD = "dewey_time.attendance_engine.coverage_api.get_schedule_coverage";
+import { getScheduleCoverage } from "@/services/coverage";
 
 const EMPTY_COUNTS: CoverageCounts = {
   active: 0,
@@ -28,23 +27,20 @@ export type ScheduleCoverage = {
 };
 
 export function useScheduleCoverage(): ScheduleCoverage {
-  const { data, error, isLoading, mutate } = useFrappeGetCall<ScheduleCoveragePayload>(
-    COVERAGE_METHOD,
-    undefined,
-    COVERAGE_METHOD,
-  );
-
-  const payload = data?.message;
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: queryKeys.coverage.all,
+    queryFn: getScheduleCoverage,
+  });
 
   return useMemo(
     () => ({
-      unassigned: payload?.unassigned ?? [],
-      buckets: bucketByWeeklyHours(payload?.assigned ?? []),
-      counts: payload?.counts ?? EMPTY_COUNTS,
+      unassigned: data?.unassigned ?? [],
+      buckets: bucketByWeeklyHours(data?.assigned ?? []),
+      counts: data?.counts ?? EMPTY_COUNTS,
       isLoading,
       error,
-      refresh: () => void mutate(),
+      refresh: () => void refetch(),
     }),
-    [payload, isLoading, error, mutate],
+    [data, isLoading, error, refetch],
   );
 }

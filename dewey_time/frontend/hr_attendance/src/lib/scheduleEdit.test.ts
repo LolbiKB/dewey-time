@@ -1,8 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { summarizeReconcile, reconcileRetiresShifts, confirmNameMatches } from "@/lib/scheduleEdit";
-import type { ReconcilePreview } from "@/types/schedule";
+import {
+  summarizeReconcile,
+  reconcileRetiresShifts,
+  confirmNameMatches,
+  scheduleFormStateFromContext,
+} from "@/lib/scheduleEdit";
+import { emptyWeekPattern } from "@/types/schedule";
+import type { ReconcilePreview, ScheduleContext } from "@/types/schedule";
 
 const EMPTY: ReconcilePreview = {
   effective_from: "2026-07-01",
@@ -80,4 +86,58 @@ test("confirmNameMatches: empty and mismatch are false", () => {
   assert.equal(confirmNameMatches("", "Jane Doe"), false);
   assert.equal(confirmNameMatches("Jane", "Jane Doe"), false);
   assert.equal(confirmNameMatches("Jane Doe", null), false);
+});
+
+function contextWith(overrides: Partial<ScheduleContext> = {}): ScheduleContext {
+  const week_pattern = emptyWeekPattern();
+  week_pattern.days[0] = {
+    ...week_pattern.days[0]!,
+    works: true,
+    start_time: "08:00",
+    end_time: "17:00",
+  };
+  return {
+    employee: "EMP-1",
+    employee_name: "Jane Doe",
+    ssas: [],
+    enabled_ssa_count: 0,
+    can_apply: true,
+    assignment_summary: {},
+    week_pattern,
+    default_effective_from: "2026-08-01",
+    default_generate_through: "2026-10-30",
+    ...overrides,
+  };
+}
+
+// Regression coverage for the WeeklySchedulePage post-save re-seed: the form
+// only self-updates on employee change ([context?.employee] as its effect
+// dependency), so both that seed effect and the post-save refetch call this
+// same function to reset the form from the server's fresh defaults.
+test("scheduleFormStateFromContext seeds the form from the context's defaults", () => {
+  const state = scheduleFormStateFromContext(contextWith());
+  assert.equal(state.effectiveFrom, "2026-08-01");
+  assert.equal(state.generateThrough, "2026-10-30");
+  assert.equal(state.limitGenerateThrough, false);
+  assert.equal(state.shiftBlocks.length, 1);
+  assert.deepEqual(state.shiftBlocks[0]!.days, ["Monday"]);
+  assert.equal(state.shiftBlocks[0]!.profile.start_time, "08:00");
+  assert.equal(state.shiftBlocks[0]!.profile.end_time, "17:00");
+});
+
+// The regression this guards against: after a save with "limit end date" on
+// and a chosen generateThrough, the server's post-save context reports an
+// open-ended default (no generate_through). A stale re-seed would leave the
+// old limited values in the form; the fresh state must reflect the server.
+test("scheduleFormStateFromContext resets an open-ended generate-through and the limit toggle", () => {
+  const state = scheduleFormStateFromContext(contextWith({ default_generate_through: "" }));
+  assert.equal(state.generateThrough, "");
+  assert.equal(state.limitGenerateThrough, false);
+});
+
+test("scheduleFormStateFromContext does not alias the context's week_pattern", () => {
+  const context = contextWith();
+  const state = scheduleFormStateFromContext(context);
+  state.shiftBlocks[0]!.profile.start_time = "09:00";
+  assert.equal(context.week_pattern.days[0]!.start_time, "08:00");
 });

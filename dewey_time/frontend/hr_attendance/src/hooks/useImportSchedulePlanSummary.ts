@@ -1,11 +1,11 @@
-import { useFrappePostCall } from "frappe-react-sdk";
+import { useQueries } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
+import { queryKeys } from "@/lib/queryKeys";
+import { resolveSchedulePlan } from "@/services/schedule";
 import type { ResolvePlan, WeekPattern } from "@/types/schedule";
 import { summarizeWeekPattern, weekPatternForApi } from "@/types/schedule";
-
-const RESOLVE_METHOD = "dewey_time.attendance_engine.schedule_api.resolve_weekly_schedule_plan";
 
 export type ImportPatternBucket = {
   patternKey: string;
@@ -85,18 +85,8 @@ export function useImportSchedulePlanSummary(
   effectiveFrom: string | null,
   debounceMs = 400
 ) {
-  const { call } = useFrappePostCall<{ message: ResolvePlan }>(RESOLVE_METHOD);
-  const [plans, setPlans] = useState<ImportPatternPlan[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [debouncedKey, setDebouncedKey] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const requestId = useRef(0);
-  // The fetch effect keys ONLY on the debounced key; the live inputs are read
-  // from this ref so identity churn (buildImportPatternBuckets returns a fresh
-  // array each render) can't bypass the debounce and re-fire resolve calls.
-  const latest = useRef({ buckets, effectiveFrom, call });
-  latest.current = { buckets, effectiveFrom, call };
 
   const bucketKey = useMemo(() => {
     if (!effectiveFrom || !buckets.length) return null;
@@ -115,56 +105,50 @@ export function useImportSchedulePlanSummary(
     };
   }, [bucketKey, debounceMs]);
 
-  useEffect(() => {
-    const { buckets, effectiveFrom, call } = latest.current;
-    if (!debouncedKey || !effectiveFrom || !buckets.length) {
-      setPlans([]);
-      setLoading(false);
-      setError(null);
-      return;
+  // Debounce the trigger, not each request (same shape as
+  // useWeeklyScheduleResolve): the buckets themselves are known
+  // synchronously (they come from the current selection), so they stay live
+  // — only the network fetch is gated on `settled`, via each query's
+  // `enabled`. This is what useWeeklyScheduleResolve's `isDebouncing` fold
+  // into `resolving` does too: keep the panel mounted (bucket/employee
+  // counts render immediately) and show "Matching…" through the debounce
+  // window, instead of unmounting it on every selection change.
+  const settled = bucketKey !== null && bucketKey === debouncedKey;
+
+  const results = useQueries({
+    queries: buckets.map((bucket) => ({
+      queryKey: queryKeys.schedule.resolve(
+        bucket.representativeEmployee,
+        effectiveFrom ?? "",
+        bucket.patternKey
+      ),
+      queryFn: () =>
+        resolveSchedulePlan({
+          employee: bucket.representativeEmployee,
+          effectiveFrom: effectiveFrom!,
+          weekPatternJson: bucket.patternKey,
+        }),
+      enabled: settled,
+    })),
+  });
+
+  const plans: ImportPatternPlan[] = buckets.map((bucket, i) => {
+    const result = results[i];
+    if (result?.isError) {
+      return { ...bucket, plan: null, error: formatAttendanceLoadError(result.error) };
     }
+    return { ...bucket, plan: result?.data ?? null, error: null };
+  });
 
-    const id = ++requestId.current;
-    setLoading(true);
-    setError(null);
+  const loading = !settled || results.some((r) => r.isPending);
+  const stats = collectStats(plans);
 
-    void (async () => {
-      try {
-        const resolved = await Promise.all(
-          buckets.map(async (bucket): Promise<ImportPatternPlan> => {
-            try {
-              const result = await call({
-                employee: bucket.representativeEmployee,
-                effective_from: effectiveFrom,
-                week_pattern: JSON.stringify(weekPatternForApi(bucket.weekPattern)),
-              });
-              const plan = result?.message ?? (result as unknown as ResolvePlan);
-              return { ...bucket, plan, error: null };
-            } catch (err) {
-              return {
-                ...bucket,
-                plan: null,
-                error: formatAttendanceLoadError(err),
-              };
-            }
-          })
-        );
-
-        if (requestId.current !== id) return;
-        setPlans(resolved);
-      } catch (err) {
-        if (requestId.current !== id) return;
-        setError(formatAttendanceLoadError(err));
-        setPlans([]);
-      } finally {
-        if (requestId.current === id) setLoading(false);
-      }
-    })();
-  }, [debouncedKey]);
-
-  const stats = useMemo(() => collectStats(plans), [plans]);
-
-  return { plans, stats, loading, error };
+  // Per-bucket errors already surface on `plans[i].error` above; this
+  // top-level field mirrors the pre-conversion hook's shape (a genuine
+  // Promise.all-level failure, which can't happen with useQueries — each
+  // query fails independently into its own `result.isError`) so callers
+  // don't need to change.
+  return { plans, stats, loading, error: null as string | null };
 }
 
 export function buildImportPatternBuckets(

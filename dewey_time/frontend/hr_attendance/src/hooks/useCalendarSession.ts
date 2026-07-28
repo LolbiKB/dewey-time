@@ -1,29 +1,31 @@
-import { useFrappeGetCall } from "frappe-react-sdk";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-const SESSION_METHOD = "dewey_time.attendance_engine.hr_calendar.get_calendar_session";
+import { sessionProbeRetry } from "@/lib/queryClient";
+import { queryKeys } from "@/lib/queryKeys";
+import { getCalendarSession } from "@/services/calendar";
 
-type CalendarSession = {
+export type CalendarSession = {
   hr_staff: boolean;
   employee_id: string | null;
 };
 
 export function useCalendarSession() {
-  const { data, error, isLoading } = useFrappeGetCall<CalendarSession>(
-    SESSION_METHOD,
-    undefined,
-    SESSION_METHOD
-  );
-
-  const session = data?.message;
+  const { data, error, isLoading } = useQuery({
+    queryKey: queryKeys.session.all,
+    queryFn: getCalendarSession,
+    // Same probe, same gate: without this an expired session burns the default's
+    // two backoffs on a login-page-200 before the shell resolves hrStaff.
+    retry: sessionProbeRetry,
+  });
 
   return useMemo(
     () => ({
-      hrStaff: session?.hr_staff ?? false,
-      linkedEmployeeId: session?.employee_id ?? null,
+      hrStaff: data?.hr_staff ?? false,
+      linkedEmployeeId: data?.employee_id ?? null,
       isLoading,
       error,
     }),
-    [error, isLoading, session?.employee_id, session?.hr_staff]
+    [error, isLoading, data?.employee_id, data?.hr_staff]
   );
 }

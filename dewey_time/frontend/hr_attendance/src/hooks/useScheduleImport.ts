@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useFrappePostCall } from "frappe-react-sdk";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { queryKeys } from "@/lib/queryKeys";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
   buildApplyRows,
@@ -12,6 +13,7 @@ import {
   loadImportState,
   saveImportState,
 } from "@/lib/scheduleImportPersist";
+import { applyScheduleImportRow, parseScheduleImport } from "@/services/scheduleImport";
 import type {
   FeedbackRow,
   ParsedRow,
@@ -20,7 +22,6 @@ import type {
   RowApplyStatus,
   RowFilter,
 } from "@/types/scheduleImport";
-import { APPLY_METHOD, PARSE_METHOD } from "@/ui/schedule-import/constants";
 import { fileToBase64 } from "@/ui/schedule-import/format";
 
 export type ImportStep = "idle" | "parsing" | "preview" | "applying" | "done";
@@ -70,8 +71,9 @@ export function useScheduleImport(options?: {
   const cancelRef = useRef(false);
   const hydratedRef = useRef(false);
 
-  const { call: callParse } = useFrappePostCall<{ message: ParseResult }>(PARSE_METHOD);
-  const { call: callApply } = useFrappePostCall<{ message: unknown }>(APPLY_METHOD);
+  const queryClient = useQueryClient();
+  const { mutateAsync: parseMutateAsync } = useMutation({ mutationFn: parseScheduleImport });
+  const { mutateAsync: applyMutateAsync } = useMutation({ mutationFn: applyScheduleImportRow });
 
   // Restore an in-progress review from a previous visit (refresh / back-nav).
   useEffect(() => {
@@ -140,8 +142,7 @@ export function useScheduleImport(options?: {
       setStep("parsing");
       try {
         const b64 = await fileToBase64(file);
-        const result = await callParse({ file_b64: b64, filename: file.name });
-        const parsed: ParseResult = result?.message ?? (result as unknown as ParseResult);
+        const parsed: ParseResult = await parseMutateAsync({ file_b64: b64, filename: file.name });
         setRows(parsed.rows);
         setSummary(parsed.summary);
         setFeedbackRows(parsed.feedback_rows ?? []);
@@ -164,7 +165,7 @@ export function useScheduleImport(options?: {
         setStep("idle");
       }
     },
-    [callParse]
+    [parseMutateAsync]
   );
 
   const toggleRow = useCallback((index: number) => {
@@ -211,42 +212,56 @@ export function useScheduleImport(options?: {
     setStep("applying");
 
     let anyOk = false;
-    await runScheduleImportApply({
-      rows: applyRows,
-      batchEffectiveFrom: effectiveFrom,
-      groupOverrides,
-      laneLimit: LANE_LIMIT,
-      shouldCancel: () => cancelRef.current,
-      applyRow: async (row, effective) => {
-        setApplyStatuses((prev) => ({ ...prev, [row.index]: { type: "applying" } }));
-        try {
-          await callApply({
-            employee: row.employee,
-            week_pattern: row.weekPatternJson,
-            create_shifts_after: effective,
-            generate_through: "",
-            confirm_create: 1,
-            derive_employment_type: 1,
-          });
-        } catch (err) {
-          throw new Error(extractFrappeError(err, "Failed"));
-        }
-      },
-      onOutcome: (outcome: ApplyOutcome) => {
-        if (outcome.ok) anyOk = true;
-        setApplyStatuses((prev) => ({
-          ...prev,
-          [outcome.index]: outcome.ok
-            ? { type: "ok" }
-            : { type: "error", message: outcome.error },
-        }));
-      },
-    });
+    try {
+      await runScheduleImportApply({
+        rows: applyRows,
+        batchEffectiveFrom: effectiveFrom,
+        groupOverrides,
+        laneLimit: LANE_LIMIT,
+        shouldCancel: () => cancelRef.current,
+        applyRow: async (row, effective) => {
+          setApplyStatuses((prev) => ({ ...prev, [row.index]: { type: "applying" } }));
+          try {
+            await applyMutateAsync({
+              employee: row.employee,
+              week_pattern: row.weekPatternJson,
+              create_shifts_after: effective,
+              generate_through: "",
+              confirm_create: 1,
+              derive_employment_type: 1,
+            });
+          } catch (err) {
+            throw new Error(extractFrappeError(err, "Failed"));
+          }
+        },
+        onOutcome: (outcome: ApplyOutcome) => {
+          if (outcome.ok) anyOk = true;
+          setApplyStatuses((prev) => ({
+            ...prev,
+            [outcome.index]: outcome.ok
+              ? { type: "ok" }
+              : { type: "error", message: outcome.error },
+          }));
+        },
+      });
+    } finally {
+      // Each row here is its own committed apply call, so there is no single
+      // "the import succeeded" mutation event to hang cache invalidation off
+      // of (same shape as useClearSitePatterns's batched wipe). A bulk import
+      // writes Shift Assignments/Types/Schedules that the schedule, calendar,
+      // and coverage views all read, so invalidate all three unconditionally,
+      // once, regardless of how the loop exits (done, cancelled, or every row
+      // failing) — otherwise a partial or cancelled run leaves those caches
+      // serving pre-import data.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
+    }
 
     setAppliedAt(new Date().toISOString());
     setStep("done");
     if (anyOk) options?.onApplied?.();
-  }, [rows, selected, effectiveFrom, groupOverrides, callApply, options]);
+  }, [rows, selected, effectiveFrom, groupOverrides, applyMutateAsync, queryClient, options]);
 
   const cancel = useCallback(() => {
     cancelRef.current = true;
