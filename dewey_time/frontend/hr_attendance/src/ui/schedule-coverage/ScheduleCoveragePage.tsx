@@ -57,11 +57,12 @@ export function ScheduleCoveragePage() {
           </p>
         ) : null}
 
-        {/* The view switcher is a wide row, not a compact control — it belongs
-            in PageHeader's `children` (its own full-width row below the title),
-            not `actions`, or it starves the title column at phone width. */}
-        {/* A view switcher, not document tabs — role=group + aria-pressed avoids the
-            ARIA Tabs keyboard contract (arrow keys / tabpanel) we don't implement. */}
+        {/* This is a wide row, not a compact control, so — per Task 3/4's rule —
+            it belongs in PageHeader's `children` (its own full-width row below
+            the title), not `actions`, or it starves the title column at phone
+            width. It's a view switcher, not document tabs — role=group +
+            aria-pressed avoids the ARIA Tabs keyboard contract (arrow keys /
+            tabpanel) we don't implement. */}
         <div
           role="group"
           aria-label="Coverage views"
