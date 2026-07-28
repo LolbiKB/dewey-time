@@ -178,6 +178,10 @@ Employee Checkin punches arrive via the standard Frappe Resource API with `custo
 
 ## Deployment Notes
 
-- After any frontend change, run `npm run build` then `bench migrate` to push assets to `sites/assets/`.
+- **The built assets are the deployed artifact and MUST be committed.** After any frontend change, run `npm run build` and **commit the resulting `dewey_time/public/hr_attendance/**` and `dewey_time/www/hr-{attendance,schedule}.html`** in the same PR, then `bench migrate` locally to push them to `sites/assets/`.
+
+  Frappe Cloud **never builds this SPA** — it cannot: the app depends on the private `@lolbikb/dewey-ui` package and a fresh `npm install` returns 401 without a `NODE_AUTH_TOKEN`. Whatever bundle is committed is what users get. A merged PR that changes `frontend/` but not `public/hr_attendance/` ships *nothing*.
+
+  This is easy to get wrong, because the rebuilt files are noisy and look like generated clutter you should discard. They have been missed before: assets went un-rebuilt from #58 through #74 (four PRs of frontend work, none of it live) until a35c950e. If a task instruction ever tells you build output is "a verification artifact, not a deliverable", it is wrong — that exact wording caused this.
 - On Frappe Cloud, asset MIME/404 issues are documented in `dewey_time/docs/HR_ATTENDANCE_DEPLOY.md`.
 - The `patches.txt` manifest (at `dewey_time/patches.txt`) must be updated whenever a new patch file is added under `dewey_time/patches/`.
