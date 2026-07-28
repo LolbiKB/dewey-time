@@ -45,16 +45,6 @@ const RouterLink = ({ href, ...props }: ComponentProps<"a"> & { href: string }) 
   <Link to={href} {...props} />
 );
 
-function breadcrumbsFor(tab: AppTab, pathname: string, employee: string | null) {
-  if (tab === "attendance") return [{ label: "Attendance" }];
-  const schedule = { label: "Schedule", href: tabHref("schedule", employee) };
-  if (pathname.startsWith("/hr-schedule/import")) {
-    return [schedule, { label: "Import" }];
-  }
-  if (tab === "coverage") return [schedule, { label: "Coverage" }];
-  return [{ label: "Schedule" }];
-}
-
 export function HrAppShell() {
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
@@ -111,7 +101,6 @@ export function HrAppShell() {
       logo={<DeweyTimeLockup />}
       homeHref={tabHref("attendance", employee)}
       linkComponent={RouterLink}
-      breadcrumbs={breadcrumbsFor(tab, pathname, employee)}
       headerEnd={
         <>
           <NotificationsButton />

@@ -14,7 +14,7 @@ everything above the primitives:
 | Page container | `<Page>` from dewey-ui | hand-rolled `mx-auto max-w-7xl px-5 py-4` on 3 of 4 routes |
 | Data layer | `@tanstack/react-query` + `services/` + `query-keys.ts` | `frappe-react-sdk` (SWR), keys built inline as strings |
 | Feedback | sonner toasts via `lib/toast.ts` | inline status `Card` banners |
-| Chrome | breadcrumbs, live status in header | none |
+| Chrome | live status in header | none |
 | Errors | `error-boundary.tsx` mounted at root | **none — any render throw white-screens the app** |
 | shadcn style | `new-york` | `radix-nova` |
 
@@ -59,8 +59,12 @@ decision during implementation:
 
 Verified against the live registry (62 UI components) and dewey-ui v1.11.0's
 exports. dewey-ui provides `Page`, `PageHeader`, `Section`, `EmptyState`,
-`Breadcrumb*`, `GenericDataTable`. It has **no** `Alert`, `Spinner`, `Field`, or
-`Item` — those come from shadcn.
+`Breadcrumb*`, `GenericDataTable`, and — from **1.16.0**, which this work upgrades
+to — the whole `Field` family. It has **no** `Alert`, `Spinner`, or `Item`; those
+three come from shadcn.
+
+The app was pinned to `^1.11.0` when this spec was written. Task 2 upgrades it to
+`^1.16.0`, which is why `Field` moves from shadcn to a dewey-ui shim.
 
 HR's `components.json` moves from `radix-nova` to **`new-york`**, matching ADMS.
 This governs newly-added components only; it does not rewrite existing files.
@@ -160,8 +164,13 @@ Every route becomes `<Page>` → `<PageHeader title description actions>` →
 wrappers. dewey-ui's own comment states `Page` "owns ALL page padding … the
 single source of page insets across both apps".
 
-`HrAppShell` gains breadcrumbs, following ADMS's pattern: Attendance ·
-Schedule · Schedule › Import · Schedule › Coverage.
+**Breadcrumbs are deliberately NOT added** (corrected 2026-07-28, during Task 2).
+An earlier draft of this spec listed them as an ADMS feature HR lacked. That was
+wrong: dewey-ui's `AppShell` renders `breadcrumbs` only in its sidebar branch —
+`TabsShell` does not accept the prop at any version, including HEAD. Both apps
+use `navMode: {type: "tabs"}`, so ADMS passes `breadcrumbs` and gets nothing
+too. It was never a real difference between the apps. Adding breadcrumb support
+to `TabsShell` is a dewey-ui change, not an HR-SPA one.
 
 By the sourcing rule:
 
@@ -172,7 +181,6 @@ By the sourcing rule:
 | `Spinner` | shadcn (new) | 26 `Loader2Icon animate-spin` sites |
 | `Field` | shadcn (new) | effective-from / generate-through footer group, `WeeklySchedulePage.tsx:495-542` |
 | `Item` | shadcn (new) | confirm-plan list `WeeklySchedulePage.tsx:650-662`, `ResolvePlanGroupsList` |
-| `Breadcrumb` | dewey-ui re-export shim | `HrAppShell` |
 
 ### Feedback
 
@@ -260,9 +268,10 @@ by sequencing it last and alone.
 | `src/services/*.ts` | new — 5 service modules (`calendar`, `schedule`, `coverage`, `scheduleImport`, `maintenance`) |
 | `src/lib/toast.ts` | new — ADMS's notify helpers |
 | `src/components/error-boundary.tsx` | new — copied from ADMS |
-| `src/components/ui/{alert,spinner,field,item,breadcrumb}.tsx` | new — shadcn / dewey-ui shim |
+| `src/components/ui/{alert,spinner,item}.tsx` | new — shadcn (dewey-ui exports none of these) |
+| `src/components/ui/field.tsx` | new — dewey-ui re-export shim (1.16.0 ships the Field family) |
 | `src/hooks/*.ts` | 13 files — rewritten as react-query hooks over `services/` |
 | `src/main.tsx` | QueryClientProvider, ErrorBoundary, drop FrappeProvider |
-| `src/ui/HrAppShell.tsx` | breadcrumbs |
+| `src/ui/HrAppShell.tsx` | unchanged — see the breadcrumb correction under Chrome |
 | `src/ui/App.tsx`, `WeeklySchedulePage.tsx`, `schedule-import/ScheduleImportPage.tsx`, `schedule-coverage/ScheduleCoveragePage.tsx` | Page/PageHeader/Section; Alert/Spinner/EmptyState/Field/Item; toasts |
 | `src/ui/AttendanceLoading.tsx` | Spinner swap only — skeleton shapes are domain and stay |

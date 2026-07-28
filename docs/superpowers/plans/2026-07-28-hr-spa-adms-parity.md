@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - **Sourcing rule, in strict order:** `@lolbikb/dewey-ui` export → shadcn registry (`npx shadcn@latest add <name>`) → hand-roll only with a comment stating why neither fit.
-- **dewey-ui provides** `Page`, `PageHeader`, `Section`, `EmptyState`, `Breadcrumb*`, `GenericDataTable`. It has **no** `Alert`, `Spinner`, `Field`, or `Item` — those come from shadcn.
+- **dewey-ui provides** `Page`, `PageHeader`, `Section`, `EmptyState`, `GenericDataTable`, and — from **1.16.0**, which Task 2 upgrades to — the whole `Field` family. It has **no** `Alert`, `Spinner`, or `Item`; those three come from shadcn.
+- **No breadcrumbs** (corrected during Task 2). dewey-ui's `AppShell` renders `breadcrumbs` only in its sidebar branch; `TabsShell` does not accept the prop at any version. Both apps use tabs mode, so ADMS passes breadcrumbs and gets nothing too — it was never a real difference. Do not add them.
 - **The domain layer is not touched.** `DayTimeline`, `WeekView`, `WeekDayView`, `DayChips`, `WeekScheduleGantt`, `WeekPatternGroupEditor`, `DayInspectorSheet`, `FlagDetailPanel`, `WeekFlagSummary`, `EmployeeAvatar`, `MobileTabBar`, every domain module in `lib/` (`attendancePunches`, `clockDay`, `weekCalendar`, `shiftTimeline`, `lunchDetection`, `scheduleCoverage`), and all of `brand/` keep their exact current markup and classes.
 - **Domain empty states stay hand-rolled.** `WeekPatternGroupEditor.tsx:97` and `WeekScheduleGantt.tsx:196` are domain visuals and are **not** converted to `EmptyState`. Only the four generic ones are.
 - **The test runner stays `tsx --test`.** Do not introduce vitest. New test files must match the existing `test:web` globs (`src/lib/*.test.ts`, `src/ui/*.test.tsx`, `src/components/*.test.tsx`) so they are picked up without a package.json script change.
@@ -54,8 +55,8 @@ Tasks 3–6 are mechanical conversions of ~1,400 lines of existing hooks. Transc
 | `src/services/maintenance.ts` | All seven `dev_tools.*` methods — three preview/clear pairs plus `run_engine_for_employee`. |
 | `src/components/error-boundary.tsx` | Root render-error boundary. |
 | `src/components/error-boundary.test.tsx` | `getDerivedStateFromError` contract. |
-| `src/components/ui/{alert,spinner,field,item}.tsx` | shadcn additions (new-york). |
-| `src/components/ui/breadcrumb.tsx` | dewey-ui re-export shim. |
+| `src/components/ui/{alert,spinner,item}.tsx` | shadcn additions (new-york). |
+| `src/components/ui/field.tsx` | dewey-ui re-export shim (1.16.0 ships the Field family). |
 | `src/ui/chromeMigration.test.tsx` | Source pins: `<Page>` per route, no manual-refetch counters. |
 
 **Modified files:** `components.json`, `package.json`, `src/main.tsx`, `src/ui/HrAppShell.tsx`, the four page components, and the 13 files in `src/hooks/`.
@@ -509,7 +510,7 @@ Claude-Session: https://claude.ai/code/session_01Hwjg53M2fPQ56z9p2BBThC"
 
 **Files:**
 - Modify: `components.json`, `src/main.tsx`, `src/ui/HrAppShell.tsx`
-- Create: `src/components/error-boundary.tsx`, `src/components/error-boundary.test.tsx`, `src/lib/toast.ts`, `src/components/ui/breadcrumb.tsx`, and the shadcn additions
+- Create: `src/components/error-boundary.tsx`, `src/components/error-boundary.test.tsx`, `src/lib/toast.ts`, and the shadcn additions
 - Reference: `frontend/adms/src/components/error-boundary.tsx`, `frontend/adms/src/lib/toast.ts`
 
 **Interfaces:**
@@ -519,9 +520,8 @@ Claude-Session: https://claude.ai/code/session_01Hwjg53M2fPQ56z9p2BBThC"
   - `notifySuccess(title, description?, options?)`, `notifyError(...)`, `notifyInfo(...)`, `notifyWarning(...)`, `notifyOperationFailed(action: string, error: unknown, options?)` from `@/lib/toast`
   - `Alert`, `AlertTitle`, `AlertDescription` from `@/components/ui/alert`
   - `Spinner` from `@/components/ui/spinner`
-  - `Field`, `FieldLabel`, `FieldDescription` from `@/components/ui/field`
+  - `Field`, `FieldLabel`, `FieldDescription` from `@/components/ui/field` (a dewey-ui shim)
   - `Item`, `ItemContent`, `ItemTitle` from `@/components/ui/item`
-  - `Breadcrumb*` from `@/components/ui/breadcrumb`
 
 - [ ] **Step 1: Switch the shadcn style to new-york**
 
@@ -541,21 +541,28 @@ npx shadcn@latest add alert spinner field item
 
 Expected: creates `src/components/ui/{alert,spinner,field,item}.tsx`. If the CLI offers to overwrite any existing file, decline — HR's other `components/ui/*` files are dewey-ui re-export shims and must not be replaced with local implementations.
 
-- [ ] **Step 3: Add the breadcrumb re-export shim**
+- [ ] **Step 3: Make `field.tsx` a dewey-ui shim, not a shadcn implementation**
 
-dewey-ui already exports these, so by the sourcing rule this is a shim, not an implementation. Create `src/components/ui/breadcrumb.tsx`:
+The controller upgrades `@lolbikb/dewey-ui` from `^1.11.0` to `^1.16.0` (npm install is controller work; `package.json` and `package-lock.json` arrive already modified in your tree, and your Step 13 commit includes both). 1.16.0 ships the whole `Field` family, so by the sourcing rule it is no longer a shadcn component here.
+
+Create `src/components/ui/field.tsx` as a shim, matching every other shim in that directory:
 
 ```tsx
 export {
-  Breadcrumb,
-  BreadcrumbEllipsis,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+  FieldTitle,
 } from "@lolbikb/dewey-ui"
 ```
+
+Verify that export list against `node_modules/@lolbikb/dewey-ui/dist/index.d.ts` before writing it; re-export exactly what exists. `alert.tsx`, `spinner.tsx`, and `item.tsx` stay local shadcn implementations — dewey-ui 1.16.0 exports none of those three.
 
 - [ ] **Step 4: Write the failing error-boundary test**
 
@@ -728,49 +735,35 @@ and close it after `</QueryClientProvider>`:
   </React.StrictMode>
 ```
 
-- [ ] **Step 10: Add breadcrumbs to the shell**
+- [ ] **Step 10: Leave `HrAppShell.tsx` alone**
 
-In `src/ui/HrAppShell.tsx`, add this helper above `export function HrAppShell()`:
+An earlier version of this plan added breadcrumbs here. **Do not.** dewey-ui's `AppShell` renders `breadcrumbs` only in its sidebar branch — `TabsShell` destructures `navMode, logo, title, homeHref, headerEnd, linkComponent, children` and not `breadcrumbs`, at every version including HEAD. `HrAppShell` uses `navMode: {type: "tabs"}`, so the prop is silently dropped.
 
-```tsx
-function breadcrumbsFor(tab: AppTab, pathname: string, employee: string | null) {
-  if (tab === "attendance") return [{ label: "Attendance" }];
-  const schedule = { label: "Schedule", href: tabHref("schedule", employee) };
-  if (pathname.startsWith("/hr-schedule/import")) {
-    return [schedule, { label: "Import" }];
-  }
-  if (tab === "coverage") return [schedule, { label: "Coverage" }];
-  return [{ label: "Schedule" }];
-}
-```
+The spec originally listed breadcrumbs as an ADMS feature HR lacked. That was wrong: ADMS passes `breadcrumbs` too, in tabs mode, and gets nothing. It was never a difference between the apps. Adding breadcrumb support to `TabsShell` would be a change to dewey-ui, out of scope here.
 
-Then pass it to `AppShell`, immediately after the `linkComponent` prop:
-
-```tsx
-      linkComponent={RouterLink}
-      breadcrumbs={breadcrumbsFor(tab, pathname, employee)}
-```
+`src/ui/HrAppShell.tsx` must be byte-identical to its state at the start of this task. Verify: `git diff <task-base> -- src/ui/HrAppShell.tsx` prints nothing.
 
 - [ ] **Step 11: Run the full suite, typecheck, and build**
 
 Run: `npm run test:web && npx tsc --noEmit && npm run build`
-Expected: 205 existing + 2 new = 207 tests pass; no new `tsc` errors; build succeeds.
+Expected: 209 existing + 2 new = 211 tests pass; no new `tsc` errors; build succeeds. (The dewey-ui 1.11 → 1.16 bump in Step 3 changes no test counts.)
 
 - [ ] **Step 12: Verify in a browser**
 
-Run `npm run dev:hr` from `dewey_time/`, open `http://localhost:8080/hr-attendance`, and confirm: breadcrumbs render in the header on all four routes, and nothing else has visibly moved. Capture a screenshot of `/hr-attendance` at 1440×900 — it is the baseline Tasks 3–6 are compared against.
+Run `npm run dev:hr` from `dewey_time/`, open `http://localhost:8080/hr-attendance`, and confirm nothing has visibly moved — this task adds primitives and an error boundary but changes no rendered route. The dewey-ui 1.11 → 1.16 bump in Step 3 is the thing to look at: five minor versions of the shared design system land at once. Capture a screenshot of `/hr-attendance` at 1440×900 — it is the baseline Tasks 3–6 are compared against.
 
 Reading the source is not sufficient here. A prior branch in this repo shipped a timeline colour bug that three review layers cleared from source and only a rendered page caught.
 
 - [ ] **Step 13: Commit**
 
 ```bash
-git add components.json src/components/error-boundary.tsx src/components/error-boundary.test.tsx src/components/ui/alert.tsx src/components/ui/spinner.tsx src/components/ui/field.tsx src/components/ui/item.tsx src/components/ui/breadcrumb.tsx src/lib/toast.ts src/main.tsx src/ui/HrAppShell.tsx
-git commit -m "feat(hr-web): error boundary, toast helpers, breadcrumbs, shadcn primitives
+git add components.json package.json package-lock.json src/components/error-boundary.tsx src/components/error-boundary.test.tsx src/components/ui/alert.tsx src/components/ui/spinner.tsx src/components/ui/field.tsx src/components/ui/item.tsx src/lib/toast.ts src/main.tsx
+git commit -m "feat(hr-web): error boundary, toast helpers, shadcn primitives
 
 The SPA had no error boundary — any render throw white-screened the whole app.
-Adds ADMS's boundary, its notify* helpers, breadcrumbs in the shell, and the
-four shadcn primitives dewey-ui does not export (alert, spinner, field, item).
+Adds ADMS's boundary, its notify* helpers, and the three shadcn primitives
+dewey-ui does not export (alert, spinner, item). Field comes from dewey-ui
+1.16.0 as a shim.
 shadcn style aligned to new-york to match ADMS.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
@@ -1464,7 +1457,7 @@ Claude-Session: https://claude.ai/code/session_01Hwjg53M2fPQ56z9p2BBThC"
 | After task | `test:web` | `test:e2e` | Browser check |
 |---|---|---|---|
 | 1 | 205 | 18 | build only |
-| 2 | 207 | 18 | breadcrumbs; **capture the baseline screenshot** |
+| 2 | 211 | 18 | **capture the baseline screenshot** |
 | 3 | 209 | 18 | `/hr-schedule` at 1440×900 + 390×844 |
 | 4 | 210 | 18 | full import wizard walkthrough |
 | 5 | 211 | 18 | `/hr-schedule/coverage` |
