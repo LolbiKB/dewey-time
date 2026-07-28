@@ -6,7 +6,7 @@
 
 **Architecture:** A new Frappe transport (`lib/frappe.ts`) generalises the pattern already proven in `pwa/push.ts`, and feeds react-query through a hierarchical key registry whose prefix structure makes cache invalidation correct by construction. Routes are then converted one at a time — data layer, chrome, and feedback together in a single pass per route — so each page file is opened once and reaches its final state before the next begins.
 
-**Tech Stack:** React 19, TypeScript, Vite, TailwindCSS v4, `@tanstack/react-query` v5, `@lolbikb/dewey-ui` v1.11.0, shadcn registry (`new-york`), `tsx --test` (node test runner), Playwright.
+**Tech Stack:** React 19, TypeScript, Vite, TailwindCSS v4, `@tanstack/react-query` v5, `@lolbikb/dewey-ui` v1.16.0 (Task 2 upgrades from 1.11.0), shadcn registry (`new-york`), `tsx --test` (node test runner), Playwright.
 
 ## Global Constraints
 
