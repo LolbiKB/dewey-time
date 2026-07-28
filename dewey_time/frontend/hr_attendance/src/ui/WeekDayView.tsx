@@ -146,6 +146,7 @@ export function WeekDayView(props: WeekDayViewProps) {
             timelineStartMin={weekWindow.startMin}
             timelineEndMin={weekWindow.endMin}
             deviceSync={props.syncByDate.get(selectedKey) ?? []}
+            isClockDay={isClockDay(props.isClockBased, selectedInfo)}
             onInspectDay={() => props.onInspectDay(selectedKey)}
           />
         </div>

@@ -188,6 +188,7 @@ export function WeekView(props: WeekViewProps) {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
             const isToday = isSameDay(d, new Date());
+            const clockDay = isClockDay(props.isClockBased, info);
             return (
               <DayCell
                 key={key}
@@ -199,6 +200,7 @@ export function WeekView(props: WeekViewProps) {
                 timelineStartMin={weekWindow.startMin}
                 timelineEndMin={weekWindow.endMin}
                 deviceSync={props.syncByDate.get(key) ?? []}
+                isClockDay={clockDay}
                 onInspectDay={() => props.onInspectDay(key)}
               />
             );

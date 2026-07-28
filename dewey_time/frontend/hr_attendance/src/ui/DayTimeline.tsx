@@ -59,6 +59,7 @@ export function DayCell(props: {
   timelineStartMin?: number;
   timelineEndMin?: number;
   deviceSync?: DeviceSyncStatus[];
+  isClockDay?: boolean;
   onInspectDay: () => void;
 }) {
   const checkins = props.info?.checkins ?? [];
@@ -127,6 +128,7 @@ export function DayCell(props: {
               observedLunch={props.info?.observed_lunch ?? null}
               deviceSync={props.deviceSync}
               dense={props.dense}
+              isClockDay={props.isClockDay}
               windowStartMin={props.timelineStartMin}
               windowEndMin={props.timelineEndMin}
             />
@@ -160,16 +162,31 @@ function DayDayTrack(props: {
   observedLunch: ObservedLunch | null;
   deviceSync?: DeviceSyncStatus[];
   dense: boolean;
+  isClockDay?: boolean;
   windowStartMin?: number;
   windowEndMin?: number;
 }) {
   const onShift = props.shift?.shift_assigned === true;
-  const color = onShift ? "bg-primary" : "bg-brand-accent/80";
-  const offShiftSegmentClass = onShift
+  /**
+   * Tone only — never a claim that a shift exists. A clock day has no schedule,
+   * so its punches are ordinary worked time and must not read as an exception.
+   * Everything that judges the employee against a schedule keeps using `onShift`.
+   */
+  const workedTone = onShift || props.isClockDay === true;
+  const color = workedTone ? "bg-primary" : "bg-brand-accent/80";
+  const offShiftSegmentClass = workedTone
     ? cn(color, "shadow-sm ring-1 ring-foreground/10")
     : "border border-dashed border-brand-accent/50 bg-brand-accent/25 shadow-sm ring-1 ring-brand-accent/20";
   const openSessionUncertainClass =
     "border border-dashed border-brand-accent/50 bg-brand-accent/15";
+  /**
+   * A clock day carries no obligation to be present — the engine deliberately emits
+   * no MISSING_TIME for it — so an unpaid break is neutral, not an unaccounted absence.
+   */
+  const awayGapClass =
+    props.isClockDay === true
+      ? "border-muted-foreground/40 bg-muted/40"
+      : "border-destructive/40 bg-destructive/15";
 
   const span = computeDaySpan(props.firstIn, props.lastOut);
   const segments = deriveSegments(props.checkins);
@@ -430,7 +447,7 @@ function DayDayTrack(props: {
           <div
             className={cn(
               "absolute left-1/2 w-[12px] -translate-x-1/2 rounded-sm",
-              onShift ? color : "border border-dashed border-brand-accent/50 bg-brand-accent/25"
+              workedTone ? color : "border border-dashed border-brand-accent/50 bg-brand-accent/25"
             )}
             style={{
               top: `calc(${span.topPct}% + 8px)`,
@@ -476,7 +493,7 @@ function DayDayTrack(props: {
                     ? "border-muted-foreground/40 bg-muted/40"
                     : isScheduledLunch
                       ? "border-muted-foreground/45 bg-muted/35"
-                      : "border-destructive/40 bg-destructive/15"
+                      : awayGapClass
                 )}
                 style={{
                   top: `${topPct}%`,
@@ -513,7 +530,9 @@ function DayDayTrack(props: {
                 <div
                   className={cn(
                     "absolute inset-x-2 rounded-sm",
-                    onShift ? cn(color, "shadow-sm ring-1 ring-foreground/10") : offShiftSegmentClass
+                    workedTone
+                      ? cn(color, "shadow-sm ring-1 ring-foreground/10")
+                      : offShiftSegmentClass
                   )}
                   style={{
                     top: `${topPct}%`,
