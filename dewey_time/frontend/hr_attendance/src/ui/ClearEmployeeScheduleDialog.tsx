@@ -1,3 +1,4 @@
+import { EmptyState } from "@lolbikb/dewey-ui";
 import {
   AlertTriangleIcon,
   CalendarRangeIcon,
@@ -223,10 +224,7 @@ export function ClearEmployeeScheduleDialog(props: ClearEmployeeScheduleDialogPr
             ) : (
               <>
                 {loading && !preview ? (
-                  <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed py-8 text-sm text-muted-foreground">
-                    <Loader2Icon className="size-4 animate-spin" />
-                    Loading impact preview…
-                  </div>
+                  <EmptyState icon={Loader2Icon} title="Loading impact preview…" />
                 ) : preview ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -247,12 +245,10 @@ export function ClearEmployeeScheduleDialog(props: ClearEmployeeScheduleDialogPr
                     </div>
 
                     {totalCount === 0 ? (
-                      <div className="rounded-lg border border-dashed px-3 py-6 text-center">
-                        <p className="text-sm font-medium">Nothing to clear</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          This employee has no shift assignments, SSAs, or flags.
-                        </p>
-                      </div>
+                      <EmptyState
+                        title="Nothing to clear"
+                        description="This employee has no shift assignments, SSAs, or flags."
+                      />
                     ) : (
                       <div className="grid grid-cols-3 gap-2">
                         <ImpactStat

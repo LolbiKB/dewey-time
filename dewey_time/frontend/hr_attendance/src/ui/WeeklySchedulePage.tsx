@@ -1,9 +1,11 @@
+import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { addDays, parseISO } from "date-fns";
-import { CheckIcon, Loader2Icon } from "lucide-react";
+import { CheckIcon } from "lucide-react";
 import { useFrappeAuth } from "frappe-react-sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, Navigate, useNavigate, useOutletContext } from "react-router-dom";
+import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,9 +15,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ResponsiveModal } from "@/components/ResponsiveModal";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Item, ItemContent, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import {
@@ -44,6 +49,7 @@ import {
   SchedulePreviewTrigger,
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
+import { notifySuccess } from "@/lib/toast";
 import { summarizeReconcile, reconcileRetiresShifts, confirmNameMatches } from "@/lib/scheduleEdit";
 import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
 import {
@@ -54,7 +60,6 @@ import {
   LoadingIndicator,
   WeeklyScheduleAnimatedShell,
   WeeklyScheduleEditorSkeleton,
-  WeeklyScheduleHeaderSkeleton,
   WeeklySchedulePageSkeleton,
 } from "@/ui/AttendanceLoading";
 import { ClearAllSchedulesDialog } from "@/ui/ClearAllSchedulesDialog";
@@ -83,10 +88,7 @@ export function WeeklySchedulePage() {
   const [pendingConfirmPlan, setPendingConfirmPlan] = useState<
     Array<{ name: string; doctype: string }>
   >([]);
-  const [saveSuccessUrl, setSaveSuccessUrl] = useState<string | null>(null);
   const [pendingReconcile, setPendingReconcile] = useState<ReconcilePreview | null>(null);
-  const [savedNonce, setSavedNonce] = useState(0);
-  const [lastReconciled, setLastReconciled] = useState<ApplyScheduleResult["reconciled"] | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [templateKey, setTemplateKey] = useState<string>("manual");
   const appliedTemplateFingerprint = useRef<string | null>(null);
@@ -120,8 +122,7 @@ export function WeeklySchedulePage() {
     employee && !selectedEmployee && employeesLoading
   );
 
-  const { context, isLoading: contextLoading, refresh: refreshContext } =
-    useScheduleContext(scheduleEmployeeId);
+  const { context, isLoading: contextLoading } = useScheduleContext(scheduleEmployeeId);
 
   useEffect(() => {
     if (!scheduleEmployeeId) return;
@@ -138,8 +139,7 @@ export function WeeklySchedulePage() {
     setEffectiveFrom(context.default_effective_from);
     setGenerateThrough(context.default_generate_through ?? "");
     setLimitGenerateThrough(false);
-    setSaveSuccessUrl(null);
-  }, [context?.employee, savedNonce]);
+  }, [context?.employee]);
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
   const { plan, resolving, resolveError } = useWeeklyScheduleResolve(
@@ -236,10 +236,16 @@ export function WeeklySchedulePage() {
     }
 
     if (result.ok) {
-      setSaveSuccessUrl(result.attendance_url ?? `/hr-attendance?employee=${scheduleEmployeeId}`);
-      setSavedNonce((n) => n + 1);
-      setLastReconciled(result.reconciled ?? null);
-      void refreshContext();
+      const url = result.attendance_url ?? `/hr-attendance?employee=${scheduleEmployeeId}`;
+      const reconciled = result.reconciled;
+      notifySuccess(
+        reconciled &&
+          (reconciled.inactivated_assignments.length || reconciled.trimmed_assignments.length)
+          ? `Schedule updated — ${reconciled.inactivated_assignments.length} inactivated, ${reconciled.trimmed_assignments.length} trimmed.`
+          : "Schedule saved successfully.",
+        undefined,
+        { action: { label: "Open attendance", onClick: () => navigate(url) } },
+      );
       return true;
     }
 
@@ -313,268 +319,222 @@ export function WeeklySchedulePage() {
 
   return (
     <>
-      <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-        <div className="mx-auto flex h-full w-full max-w-7xl flex-col px-5 py-4 sm:px-8 sm:py-5">
-          <header className="mb-3 shrink-0 space-y-2">
-            {isBootstrapping ? (
-              <WeeklyScheduleHeaderSkeleton />
-            ) : (
-              <div className="animate-in fade-in slide-in-from-top-1">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <h1 className="text-lg font-semibold tracking-tight">Weekly Schedule</h1>
-                    <p className="text-sm text-muted-foreground">
-                      Configure shared shift patterns for an employee.
-                    </p>
-                  </div>
+      <Page>
+        <PageHeader
+          title="Weekly Schedule"
+          description="Configure shared shift patterns for an employee."
+          // PageHeader's title/actions row never stacks (unlike the old
+          // lg:flex-row header), so only the compact picker lives in `actions` —
+          // it alone stays narrow enough to sit beside the title down to phone
+          // widths. The four dialog triggers are wide as a group; they go in
+          // `children` below as their own full-width row instead of squeezing
+          // the title column to zero.
+          actions={
+            <ScheduleEmployeePicker
+              employees={employees}
+              value={employee}
+              onChange={selectEmployee}
+              isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
+              className="h-9 w-40 sm:w-64"
+              compact
+            />
+          }
+        >
+          {/* This sits in PageHeader's `children` (a flex-col stack), not a row,
+              so — unlike the old actions row — it stays a grid/flex container of
+              its own rather than dissolving via sm:contents: 2-column grid on
+              mobile, a wrapping row from sm: up. */}
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+            <SpreadsheetImportTrigger
+              onClick={() => navigate("/hr-schedule/import")}
+              className="w-full sm:w-auto"
+            />
+            <ClearEmployeeScheduleDialog
+              employee={scheduleEmployeeId}
+              employeeRow={selectedEmployee}
+              employeeLabel={employeeLabel}
+              triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+              disabled={!scheduleEmployeeId}
+            />
+            <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+            <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+          </div>
 
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <ScheduleEmployeePicker
-                      employees={employees}
-                      value={employee}
-                      onChange={selectEmployee}
-                      isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
-                      className="h-9 w-full sm:w-64"
-                      compact
-                    />
-                    {/* On mobile: 2-column grid so buttons take 2 rows instead of 4,
-                        freeing space for the shift-block editor below.
-                        sm:contents dissolves the wrapper back into the flex parent on desktop. */}
-                    <div className="grid grid-cols-2 gap-2 sm:contents">
-                      <SpreadsheetImportTrigger
-                        onClick={() => navigate("/hr-schedule/import")}
-                        className="w-full sm:w-auto"
-                      />
-                      <ClearEmployeeScheduleDialog
-                        employee={scheduleEmployeeId}
-                        employeeRow={selectedEmployee}
-                        employeeLabel={employeeLabel}
-                        triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                        disabled={!scheduleEmployeeId}
-                        onSuccess={() => {
-                          setSaveSuccessUrl(null);
-                          void refreshContext();
-                        }}
-                      />
-                      <ClearAllSchedulesDialog
-                        triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                        onSuccess={() => {
-                          setSaveSuccessUrl(null);
-                          void refreshContext();
-                        }}
-                      />
-                      <ClearSitePatternsDialog
-                        triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-                        onSuccess={() => {
-                          setSaveSuccessUrl(null);
-                          void refreshContext();
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {ineligibleMessage ? (
-              <Card className="border-brand-accent/30 bg-muted/40">
-                <CardContent className="py-2.5 text-sm text-foreground">
-                  {ineligibleMessage} Pick an eligible employee above to continue.
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {isEditing && scheduleEmployeeId && !ineligibleMessage ? (
-              <Card className="border-brand-accent/40 bg-brand-accent/10">
-                <CardContent className="py-2.5 text-sm text-foreground">
-                  <span className="font-medium">
-                    Editing {employeeLabel ?? "this employee"}'s schedule.
-                  </span>{" "}
-                  Changes take effect {effectiveFrom || "the effective date"}. Existing future
-                  shifts will be replaced.
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {saveSuccessUrl ? (
-              <Card className="border-primary/30 bg-muted/40">
-                <CardContent className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
-                  <span className="text-primary">
-                    {lastReconciled &&
-                    (lastReconciled.inactivated_assignments.length ||
-                      lastReconciled.trimmed_assignments.length)
-                      ? `Schedule updated — ${lastReconciled.inactivated_assignments.length} inactivated, ${lastReconciled.trimmed_assignments.length} trimmed.`
-                      : "Schedule saved successfully."}
-                  </span>
-                  <Button asChild size="sm" variant="outline">
-                    <Link to={saveSuccessUrl}>Open attendance</Link>
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : null}
-          </header>
-
-          <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {isBootstrapping ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-3">
-                <WeeklyScheduleEditorSkeleton />
-                <LoadingIndicator label="Loading schedule…" className="justify-center pb-1" />
-              </div>
-            ) : awaitingEmployeeRow ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-3">
-                <WeeklyScheduleEditorSkeleton />
-                <LoadingIndicator label="Loading employee…" className="justify-center pb-1" />
-              </div>
-            ) : !scheduleEmployeeId ? (
-              <Card className="flex min-h-0 flex-1 items-center justify-center border-dashed">
-                <CardContent className="py-12 text-center">
-                  <p className="font-medium">
-                    {ineligibleMessage ? "Employee not eligible" : "Select an employee"}
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {ineligibleMessage ??
-                      "Their current pattern loads when available."}
-                  </p>
-                </CardContent>
-              </Card>
-            ) : (
-              <WeeklyScheduleAnimatedShell
-                loading={isScheduleLoading}
-                employeeKey={scheduleEmployeeId}
-              >
-                <Card
-                  className={cn(
-                    "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-                    scheduleReadOnly && "opacity-95"
-                  )}
-                >
-                  <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0 space-y-1">
-                      <CardTitle className="text-base">Shift blocks</CardTitle>
-                      {validationIssues[0] && !scheduleReadOnly ? (
-                        <CardDescription className="text-destructive">
-                          {validationIssues[0].message}
-                        </CardDescription>
-                      ) : (
-                        <CardDescription>
-                          {scheduleReadOnly
-                            ? "Preview only — clear existing SSAs to edit."
-                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
-                        </CardDescription>
-                      )}
-                    </div>
-                    <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
-                      <WeeklyScheduleTemplatePickerDialog
-                        value={templateKey}
-                        options={templateOptions}
-                        onSelect={applyTemplate}
-                        loading={templatesLoading}
-                        disabled={scheduleReadOnly}
-                        triggerClassName="sm:min-w-[20rem] sm:max-w-md"
-                      />
-                    </div>
-                  </CardHeader>
-                  <ScrollArea className="min-h-0 flex-1">
-                    <CardContent className="px-5 pb-5 pt-0">
-                      <WeekPatternGroupEditor
-                        blocks={shiftBlocks}
-                        onChange={handleShiftBlocksChange}
-                        validationIssues={validationIssues}
-                        disabled={scheduleReadOnly}
-                      />
-                    </CardContent>
-                  </ScrollArea>
-                </Card>
-              </WeeklyScheduleAnimatedShell>
-            )}
-          </main>
-
-          {scheduleEmployeeId ? (
-            <footer className="mt-3 shrink-0 border-t border-border/60 pt-3">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:max-w-2xl">
-                  <DatePickerInput
-                    id="effective-from"
-                    label="Effective from"
-                    value={effectiveFrom}
-                    onChange={setEffectiveFrom}
-                    min={isEditing ? addDays(new Date(), 1) : undefined}
-                  />
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label htmlFor="generate-through-limit" className="text-xs">
-                        Generate through
-                      </Label>
-                      <div className="flex items-center gap-2">
-                        <Label
-                          htmlFor="generate-through-limit"
-                          className="text-xs font-normal text-muted-foreground"
-                        >
-                          Limit end date
-                        </Label>
-                        <Switch
-                          id="generate-through-limit"
-                          checked={limitGenerateThrough}
-                          disabled={scheduleReadOnly}
-                          onCheckedChange={(checked) => {
-                            setLimitGenerateThrough(checked);
-                            if (!checked) setGenerateThrough("");
-                          }}
-                        />
-                      </div>
-                    </div>
-                    {limitGenerateThrough ? (
-                      <DatePickerInput
-                        id="generate-through"
-                        value={generateThrough}
-                        onChange={setGenerateThrough}
-                        placeholder="Pick end date"
-                        min={effectiveFrom ? parseISO(effectiveFrom) : undefined}
-                        max={generateThroughMax}
-                        disabled={scheduleReadOnly}
-                      />
-                    ) : (
-                      <p className="flex h-10 items-center text-xs text-muted-foreground">
-                        Open-ended — generates 90 days of Shift Assignments from the effective date. Re-save to extend.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                  {status?.type === "error" ? (
-                    <p className="text-sm text-destructive">{status.message}</p>
-                  ) : null}
-                  <SchedulePreviewTrigger
-                    onClick={() => setPreviewOpen(true)}
-                    disabled={!scheduleEmployeeId || shiftBlocks.length === 0}
-                    resolving={resolving}
-                    groupCount={plan?.groups?.length}
-                  />
-                  <Button
-                    type="button"
-                    size="default"
-                    className="h-9 min-w-[7.5rem]"
-                    onClick={() => void handleSave(false)}
-                    disabled={saveDisabled}
-                  >
-                    {applying ? (
-                      <>
-                        <Loader2Icon className="size-3.5 animate-spin" />
-                        Saving
-                      </>
-                    ) : isEditing ? (
-                      "Review changes"
-                    ) : (
-                      "Save schedule"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </footer>
+          {ineligibleMessage ? (
+            <Alert className="border-brand-accent/30 bg-brand-accent/10">
+              <AlertDescription className="text-foreground">
+                {ineligibleMessage} Pick an eligible employee above to continue.
+              </AlertDescription>
+            </Alert>
           ) : null}
-        </div>
-      </div>
+
+          {isEditing && scheduleEmployeeId && !ineligibleMessage ? (
+            <Alert className="border-brand-accent/40 bg-brand-accent/10">
+              <AlertDescription className="text-foreground">
+                <span className="font-medium">
+                  Editing {employeeLabel ?? "this employee"}'s schedule.
+                </span>{" "}
+                Changes take effect {effectiveFrom || "the effective date"}. Existing future
+                shifts will be replaced.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </PageHeader>
+
+        <Section grow className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {isBootstrapping ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
+              <WeeklyScheduleEditorSkeleton />
+              <LoadingIndicator label="Loading schedule…" className="justify-center pb-1" />
+            </div>
+          ) : awaitingEmployeeRow ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
+              <WeeklyScheduleEditorSkeleton />
+              <LoadingIndicator label="Loading employee…" className="justify-center pb-1" />
+            </div>
+          ) : !scheduleEmployeeId ? (
+            <EmptyState
+              className="min-h-0 flex-1"
+              title={ineligibleMessage ? "Employee not eligible" : "Select an employee"}
+              description={ineligibleMessage ?? "Their current pattern loads when available."}
+            />
+          ) : (
+            <WeeklyScheduleAnimatedShell
+              loading={isScheduleLoading}
+              employeeKey={scheduleEmployeeId}
+            >
+              <Card
+                className={cn(
+                  "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+                  scheduleReadOnly && "opacity-95"
+                )}
+              >
+                <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <CardTitle className="text-base">Shift blocks</CardTitle>
+                    {validationIssues[0] && !scheduleReadOnly ? (
+                      <CardDescription className="text-destructive">
+                        {validationIssues[0].message}
+                      </CardDescription>
+                    ) : (
+                      <CardDescription>
+                        {scheduleReadOnly
+                          ? "Preview only — clear existing SSAs to edit."
+                          : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                      </CardDescription>
+                    )}
+                  </div>
+                  <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
+                    <WeeklyScheduleTemplatePickerDialog
+                      value={templateKey}
+                      options={templateOptions}
+                      onSelect={applyTemplate}
+                      loading={templatesLoading}
+                      disabled={scheduleReadOnly}
+                      triggerClassName="sm:min-w-[20rem] sm:max-w-md"
+                    />
+                  </div>
+                </CardHeader>
+                <ScrollArea className="min-h-0 flex-1">
+                  <CardContent className="px-5 pb-5 pt-0">
+                    <WeekPatternGroupEditor
+                      blocks={shiftBlocks}
+                      onChange={handleShiftBlocksChange}
+                      validationIssues={validationIssues}
+                      disabled={scheduleReadOnly}
+                    />
+                  </CardContent>
+                </ScrollArea>
+              </Card>
+            </WeeklyScheduleAnimatedShell>
+          )}
+        </Section>
+
+        {scheduleEmployeeId ? (
+          <footer className="shrink-0 border-t border-border/60 pt-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:max-w-2xl">
+                <DatePickerInput
+                  id="effective-from"
+                  label="Effective from"
+                  value={effectiveFrom}
+                  onChange={setEffectiveFrom}
+                  min={isEditing ? addDays(new Date(), 1) : undefined}
+                />
+                <Field>
+                  <div className="flex items-center justify-between gap-2">
+                    <FieldLabel htmlFor="generate-through-limit" className="text-xs font-normal">
+                      Generate through
+                    </FieldLabel>
+                    <div className="flex items-center gap-2">
+                      <FieldLabel
+                        htmlFor="generate-through-limit"
+                        className="text-xs font-normal text-muted-foreground"
+                      >
+                        Limit end date
+                      </FieldLabel>
+                      <Switch
+                        id="generate-through-limit"
+                        checked={limitGenerateThrough}
+                        disabled={scheduleReadOnly}
+                        onCheckedChange={(checked) => {
+                          setLimitGenerateThrough(checked);
+                          if (!checked) setGenerateThrough("");
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {limitGenerateThrough ? (
+                    <DatePickerInput
+                      id="generate-through"
+                      value={generateThrough}
+                      onChange={setGenerateThrough}
+                      placeholder="Pick end date"
+                      min={effectiveFrom ? parseISO(effectiveFrom) : undefined}
+                      max={generateThroughMax}
+                      disabled={scheduleReadOnly}
+                    />
+                  ) : (
+                    <FieldDescription className="flex h-10 items-center">
+                      Open-ended — generates 90 days of Shift Assignments from the effective date. Re-save to extend.
+                    </FieldDescription>
+                  )}
+                </Field>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                {status?.type === "error" ? (
+                  <p className="text-sm text-destructive">{status.message}</p>
+                ) : null}
+                <SchedulePreviewTrigger
+                  onClick={() => setPreviewOpen(true)}
+                  disabled={!scheduleEmployeeId || shiftBlocks.length === 0}
+                  resolving={resolving}
+                  groupCount={plan?.groups?.length}
+                />
+                <Button
+                  type="button"
+                  size="default"
+                  className="h-9 min-w-[7.5rem]"
+                  onClick={() => void handleSave(false)}
+                  disabled={saveDisabled}
+                >
+                  {applying ? (
+                    <>
+                      <Spinner className="size-3.5" />
+                      Saving
+                    </>
+                  ) : isEditing ? (
+                    "Review changes"
+                  ) : (
+                    "Save schedule"
+                  )}
+                </Button>
+              </div>
+            </div>
+          </footer>
+        ) : null}
+      </Page>
 
       <SchedulePlanPreviewDialog
         open={previewOpen}
@@ -635,7 +595,7 @@ export function WeeklySchedulePage() {
             >
               {applying ? (
                 <>
-                  <Loader2Icon className="size-3.5 animate-spin" />
+                  <Spinner className="size-3.5" />
                   Saving
                 </>
               ) : isEditing ? (
@@ -648,17 +608,19 @@ export function WeeklySchedulePage() {
         }
       >
         {pendingConfirmPlan.length ? (
-          <ul className="min-w-0 space-y-2 text-sm">
+          <div className="space-y-1.5 text-sm">
             {pendingConfirmPlan.map((item) => (
-              <li key={`${item.doctype}-${item.name}`} className="flex min-w-0 items-center gap-2">
+              <Item key={`${item.doctype}-${item.name}`} variant="outline" size="sm" className="min-w-0">
                 <CheckIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate" title={item.name}>
-                  {item.name}
-                </span>
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="truncate font-normal" title={item.name}>
+                    {item.name}
+                  </ItemTitle>
+                </ItemContent>
                 <span className="shrink-0 text-xs text-muted-foreground">{item.doctype}</span>
-              </li>
+              </Item>
             ))}
-          </ul>
+          </div>
         ) : null}
         {(() => {
           const summary = summarizeReconcile(pendingReconcile);
@@ -707,12 +669,9 @@ export function WeeklySchedulePage() {
           </div>
         ) : null}
         {status?.type === "error" ? (
-          <p
-            role="alert"
-            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm break-words text-destructive"
-          >
-            {status.message}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription className="break-words">{status.message}</AlertDescription>
+          </Alert>
         ) : null}
       </ResponsiveModal>
     </>

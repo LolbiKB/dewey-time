@@ -1,61 +1,69 @@
-import { useFrappePostCall } from "frappe-react-sdk";
-import { useCallback, useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 
 import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
+import { queryKeys } from "@/lib/queryKeys";
+import {
+  clearAllSchedules as clearAllSchedulesApi,
+  previewClearAllSchedules,
+} from "@/services/maintenance";
 import type {
   ClearAllSchedulesPreview,
   ClearAllSchedulesResponse,
   ClearAllSchedulesResult,
 } from "@/types/schedule";
 
-export const PREVIEW_CLEAR_ALL_METHOD =
-  "dewey_time.attendance_engine.dev_tools.preview_clear_all_employee_schedules_api";
-
-export const CLEAR_ALL_SCHEDULES_METHOD =
-  "dewey_time.attendance_engine.dev_tools.clear_all_employee_schedules_api";
-
 export const CLEAR_ALL_CONFIRM_PHRASE = "CLEAR ALL SCHEDULES";
 
 export function useClearAllSchedules() {
-  const previewCall = useFrappePostCall<{ message: ClearAllSchedulesPreview }>(PREVIEW_CLEAR_ALL_METHOD);
-  const clearCall = useFrappePostCall<{ message: ClearAllSchedulesResponse }>(CLEAR_ALL_SCHEDULES_METHOD);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
-  const previewCallRef = useRef(previewCall);
-  previewCallRef.current = previewCall;
-  const clearCallRef = useRef(clearCall);
-  clearCallRef.current = clearCall;
+  const {
+    mutateAsync: clearMutateAsync,
+    reset: resetClearMutation,
+    isPending: clearing,
+  } = useMutation({
+    mutationFn: (args: { includeAllActive: boolean }) =>
+      clearAllSchedulesApi({ confirmPhrase: CLEAR_ALL_CONFIRM_PHRASE, includeAllActive: args.includeAllActive }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
+      // Clearing schedules changes what the attendance week shows. Nothing
+      // invalidated the calendar/coverage caches before this — they silently
+      // served stale data.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
+    },
+  });
 
-  const loading = previewCall.loading || clearCall.loading;
+  const loading = previewLoading || clearing;
 
   const loadPreview = useCallback(
     async (includeAllActive = false): Promise<ClearAllSchedulesPreview | null> => {
       setStatus(null);
-      previewCallRef.current.reset();
+      setPreviewLoading(true);
       try {
-        const result = await previewCallRef.current.call({
-          include_all_active: includeAllActive ? 1 : 0,
+        return await queryClient.fetchQuery({
+          queryKey: queryKeys.maintenance.allClearPreview(),
+          queryFn: () => previewClearAllSchedules(includeAllActive),
         });
-        return result?.message ?? (result as unknown as ClearAllSchedulesPreview) ?? null;
       } catch (error) {
         setStatus({ type: "error", message: formatAttendanceLoadError(error) });
         return null;
+      } finally {
+        setPreviewLoading(false);
       }
     },
-    []
+    [queryClient]
   );
 
   const clearAllSchedules = useCallback(
     async (includeAllActive = false): Promise<ClearAllSchedulesResult | null> => {
       setStatus(null);
-      clearCallRef.current.reset();
+      resetClearMutation();
       try {
-        const result = await clearCallRef.current.call({
-          confirm: true,
-          confirm_phrase: CLEAR_ALL_CONFIRM_PHRASE,
-          include_all_active: includeAllActive ? 1 : 0,
-        });
-        const payload = result?.message ?? (result as unknown as ClearAllSchedulesResponse);
+        const payload: ClearAllSchedulesResponse = await clearMutateAsync({ includeAllActive });
         if (!payload) {
           setStatus({ type: "error", message: "Clear did not return a response" });
           return null;
@@ -86,7 +94,7 @@ export function useClearAllSchedules() {
         return null;
       }
     },
-    []
+    [clearMutateAsync, resetClearMutation]
   );
 
   const clearStatus = useCallback(() => setStatus(null), []);

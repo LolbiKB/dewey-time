@@ -1,50 +1,63 @@
-import { useFrappePostCall } from "frappe-react-sdk";
-import { useCallback, useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 
 import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
+import { queryKeys } from "@/lib/queryKeys";
+import { clearEmployeeSchedule as clearEmployeeScheduleApi, previewClearEmployeeSchedule } from "@/services/maintenance";
 import type {
   ClearSchedulePreview,
   ClearScheduleResponse,
   ClearScheduleResult,
 } from "@/types/schedule";
 
-export const PREVIEW_CLEAR_METHOD =
-  "dewey_time.attendance_engine.dev_tools.preview_clear_employee_schedule_api";
-
-export const CLEAR_SCHEDULE_METHOD =
-  "dewey_time.attendance_engine.dev_tools.clear_employee_schedule_api";
-
 export function useClearEmployeeSchedule() {
-  const previewCall = useFrappePostCall<{ message: ClearSchedulePreview }>(PREVIEW_CLEAR_METHOD);
-  const clearCall = useFrappePostCall<{ message: ClearScheduleResponse }>(CLEAR_SCHEDULE_METHOD);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
-  const previewCallRef = useRef(previewCall);
-  previewCallRef.current = previewCall;
-  const clearCallRef = useRef(clearCall);
-  clearCallRef.current = clearCall;
+  const {
+    mutateAsync: clearMutateAsync,
+    reset: resetClearMutation,
+    isPending: clearing,
+  } = useMutation({
+    mutationFn: (employee: string) => clearEmployeeScheduleApi(employee),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
+      // Clearing a schedule changes what the attendance week shows. Nothing
+      // invalidated the calendar/coverage caches before this — they silently
+      // served stale data.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
+    },
+  });
 
-  const loading = previewCall.loading || clearCall.loading;
+  const loading = previewLoading || clearing;
 
-  const loadPreview = useCallback(async (employee: string): Promise<ClearSchedulePreview | null> => {
-    setStatus(null);
-    previewCallRef.current.reset();
-    try {
-      const result = await previewCallRef.current.call({ employee });
-      return result?.message ?? (result as unknown as ClearSchedulePreview) ?? null;
-    } catch (error) {
-      setStatus({ type: "error", message: formatAttendanceLoadError(error) });
-      return null;
-    }
-  }, []);
+  const loadPreview = useCallback(
+    async (employee: string): Promise<ClearSchedulePreview | null> => {
+      setStatus(null);
+      setPreviewLoading(true);
+      try {
+        return await queryClient.fetchQuery({
+          queryKey: queryKeys.maintenance.employeeClearPreview(employee),
+          queryFn: () => previewClearEmployeeSchedule(employee),
+        });
+      } catch (error) {
+        setStatus({ type: "error", message: formatAttendanceLoadError(error) });
+        return null;
+      } finally {
+        setPreviewLoading(false);
+      }
+    },
+    [queryClient]
+  );
 
   const clearSchedule = useCallback(
     async (employee: string): Promise<ClearScheduleResult | null> => {
       setStatus(null);
-      clearCallRef.current.reset();
+      resetClearMutation();
       try {
-        const result = await clearCallRef.current.call({ employee, confirm: true });
-        const payload = result?.message ?? (result as unknown as ClearScheduleResponse);
+        const payload: ClearScheduleResponse = await clearMutateAsync(employee);
         if (!payload) {
           setStatus({ type: "error", message: "Clear did not return a response" });
           return null;
@@ -69,7 +82,7 @@ export function useClearEmployeeSchedule() {
         return null;
       }
     },
-    []
+    [clearMutateAsync, resetClearMutation]
   );
 
   const clearStatus = useCallback(() => setStatus(null), []);
