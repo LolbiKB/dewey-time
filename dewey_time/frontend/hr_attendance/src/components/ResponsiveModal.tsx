@@ -67,7 +67,7 @@ export function ResponsiveModal(props: ResponsiveModalProps) {
             <SheetTitle>{props.title}</SheetTitle>
             {props.description ? <SheetDescription>{props.description}</SheetDescription> : null}
           </SheetHeader>
-          <div className={cn("min-h-0 flex-1 overflow-y-auto", props.bodyClassName)}>
+          <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", props.bodyClassName)}>
             {props.children}
           </div>
           {props.footer ? (
@@ -94,7 +94,7 @@ export function ResponsiveModal(props: ResponsiveModalProps) {
           <DialogTitle>{props.title}</DialogTitle>
           {props.description ? <DialogDescription>{props.description}</DialogDescription> : null}
         </DialogHeader>
-        <div className={cn("min-h-0 flex-1 overflow-y-auto", props.bodyClassName)}>
+        <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", props.bodyClassName)}>
           {props.children}
         </div>
         {props.footer ? (
