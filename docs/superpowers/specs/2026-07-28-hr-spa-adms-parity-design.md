@@ -120,8 +120,10 @@ Four new modules, mirroring ADMS's shape:
   `gcTime: 5min`, `refetchOnWindowFocus`, `refetchOnReconnect`, `retry: 2` with
   exponential backoff capped at 30s; mutations `retry: 1`.
 
-- **`services/{calendar,schedule,coverage,import,engine}.ts`** — plain async
-  functions over `frappeCall`, with typed arguments and returns. No React.
+- **`services/{calendar,schedule,coverage,scheduleImport,maintenance}.ts`** —
+  plain async functions over `frappeCall`, with typed arguments and returns. No
+  React. `maintenance.ts` covers the whole `dev_tools.*` namespace: the three
+  preview/clear pairs and `run_engine_for_employee`.
 
 `lib/frappe.ts` is written inline in the main session, not delegated to a
 subagent: it is auth-adjacent, and a plausible-looking wrong answer there passes
@@ -255,7 +257,7 @@ by sequencing it last and alone.
 | `src/lib/frappe.ts` | new — transport (written inline, not delegated) |
 | `src/lib/queryKeys.ts` | new — array-key registry |
 | `src/lib/queryClient.ts` | new — ADMS's QueryClient config |
-| `src/services/*.ts` | new — 5 service modules |
+| `src/services/*.ts` | new — 5 service modules (`calendar`, `schedule`, `coverage`, `scheduleImport`, `maintenance`) |
 | `src/lib/toast.ts` | new — ADMS's notify helpers |
 | `src/components/error-boundary.tsx` | new — copied from ADMS |
 | `src/components/ui/{alert,spinner,field,item,breadcrumb}.tsx` | new — shadcn / dewey-ui shim |
