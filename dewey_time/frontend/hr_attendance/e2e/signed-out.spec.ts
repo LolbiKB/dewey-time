@@ -20,15 +20,22 @@
  *   - 403, for an unauthenticated whitelisted call
  *   - 200 carrying the login *page*, when a session has expired
  *
- * That last one is what makes `retry: false` in useSession load-bearing, and it
- * is the only one that does. queryClient's default predicate
- * (queryClient.ts:26-27) already refuses to retry a FrappeCallError with a 4xx
- * status, so the 403 case is never retried with or without the option. But
- * frappeCall turns login HTML into a FrappeCallError with status **200**
- * (frappe.ts:80-85), which is not 4xx, so the default *would* retry it twice
- * with backoff. The request count is what pins the option — 1 with it, 3
- * without — and it has to be the count rather than the latency, because the
- * ~3s of backoff still fits inside the timeout below.
+ * That last one is what makes useSession's `sessionProbeRetry` predicate
+ * load-bearing, and it is the only one of the three that does. queryClient's
+ * default already refuses to retry a FrappeCallError with a 4xx status, so the
+ * 403 case is never retried either way. But frappeCall turns login HTML into a
+ * FrappeCallError with status **200** (frappe.ts:80-85), which is not 4xx, so
+ * the default *would* retry it — a backoff spent on a verdict that cannot
+ * change.
+ *
+ * A fourth case covers the other half of that predicate. The probe is a real
+ * request now (frappe-react-sdk read a cookie), so it can fail for reasons that
+ * are not a verdict, and the gate collapses "signed out" and "the probe failed"
+ * to the same `currentUser: null`. One dropped request on first paint must not
+ * tell a signed-in user they are signed out, so a 5xx buys exactly one retry.
+ *
+ * Both are pinned by request count rather than latency, because the backoff
+ * still fits inside the timeout below: 1 for the 200, 2 for the 500.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { stubFrappe } from "./fixtures";
@@ -111,7 +118,29 @@ test("signed-out: an expired session's login page is not retried", async ({ page
   await page.goto("/hr-attendance");
   await expectSignInCard(page);
 
-  // 3 here means `retry: false` was dropped from useSession and the user waited
-  // out two backoffs for a card that could not change.
+  // >1 here means useSession's predicate stopped special-casing the 200, and the
+  // user waited out a backoff for a card that could not change.
   expect(requests).toBe(1);
+});
+
+test("signed-out: a 500 is retried once before the sign-in card", async ({ page }) => {
+  let requests = 0;
+  await page.route(LOGGED_USER, (route) => {
+    requests += 1;
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ exc_type: "InternalServerError" }),
+    });
+  });
+
+  await page.goto("/hr-attendance");
+  await expectSignInCard(page);
+
+  // The card is the barrier: it only renders once the query has stopped
+  // retrying, so the count is settled here. 1 would mean a single blip on first
+  // paint tells a signed-in user they are signed out — the failure the
+  // predicate exists to prevent. 3 would mean the un-narrowed default leaked
+  // back in and the sign-in card is two backoffs behind the truth.
+  expect(requests).toBe(2);
 });

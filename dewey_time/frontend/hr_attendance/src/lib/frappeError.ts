@@ -1,15 +1,19 @@
 /**
- * Extract a human-readable message from a frappe-react-sdk error.
+ * Extract a human-readable message from a Frappe error body.
  *
  * For a server-side `frappe.throw(...)`, Frappe returns the actual text in
  * `_server_messages` (a JSON-encoded list of JSON-encoded `{message, title}`
- * objects) — NOT in the top-level `message`, which frappe-react-sdk fills with
- * its generic "There was an error." So a naive `err.message` read hides every
- * real error. This unwraps `_server_messages` first, then `exception`, then a
- * non-generic `message`, and finally the caller's fallback.
+ * objects) — NOT in the top-level `message`, which carries only the generic
+ * "There was an error." So a naive `message` read hides every real error. This
+ * unwraps `_server_messages` first, then `exception`, then a non-generic
+ * `message`, and finally the caller's fallback.
+ *
+ * `frappeCall` runs every non-ok response through here before wrapping it in a
+ * FrappeCallError (frappe.ts:69-74), which is what puts the server's own words
+ * on `error.message` for the UI.
  */
 
-const GENERIC_SDK_MESSAGE = "There was an error.";
+const GENERIC_ERROR_MESSAGE = "There was an error.";
 
 function stripHtml(value: string): string {
   return value
@@ -58,7 +62,7 @@ function parseServerMessages(raw: string): string[] {
 
 export function extractFrappeError(
   err: unknown,
-  fallback: string = GENERIC_SDK_MESSAGE,
+  fallback: string = GENERIC_ERROR_MESSAGE,
 ): string {
   if (err == null) return fallback;
   if (typeof err === "string") return err.trim() || fallback;
@@ -82,7 +86,7 @@ export function extractFrappeError(
   if (
     typeof message === "string" &&
     message.trim() &&
-    message.trim() !== GENERIC_SDK_MESSAGE
+    message.trim() !== GENERIC_ERROR_MESSAGE
   ) {
     return message.trim();
   }

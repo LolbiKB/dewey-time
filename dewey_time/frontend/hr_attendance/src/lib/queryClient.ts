@@ -36,3 +36,29 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * Retry policy for the two session probes (useSession, useCalendarSession),
+ * which diverges from the query default above in both directions.
+ *
+ * Narrower: an expired Frappe session arrives as the login *page* under HTTP
+ * 200, which frappeCall surfaces as a FrappeCallError with status 200
+ * (frappe.ts:80-85). That is not 4xx, so the default would retry it — a backoff
+ * spent on a verdict that cannot change, showing a spinner where the sign-in
+ * card belongs. `status < 500` declines that, and the 403 case with it.
+ *
+ * Wider: these probes gate every route, and they are a real request — the
+ * frappe-react-sdk version this replaced read a cookie and could not fail — so
+ * they can fail for reasons that are not a verdict. The gate cannot tell the
+ * difference, because useSession collapses "signed out" and "the probe failed"
+ * to the same `currentUser: null`. Without a retry, one dropped request on
+ * first paint tells a signed-in user they are signed out and leaves them there.
+ * So a 5xx, or a network TypeError that is not a FrappeCallError at all, buys
+ * exactly one more attempt.
+ *
+ * Still no 4xx retries and still nothing for mutations, per the ruled policy.
+ * e2e/signed-out.spec.ts pins both halves by request count: 1 for the 200, 2
+ * for the 500.
+ */
+export const sessionProbeRetry = (count: number, err: unknown): boolean =>
+  count < 1 && !(err instanceof FrappeCallError && err.status < 500);

@@ -106,7 +106,7 @@ export function formatDeviceAlertStatus(status: string): string {
   }
 }
 
-/** Extract a readable message from frappe-react-sdk / Axios errors. */
+/** Extract a readable message from a rejected loader: FrappeCallError, string, or error body. */
 export function formatAttendanceLoadError(error: unknown): string {
   if (!error) return "Unknown error";
 

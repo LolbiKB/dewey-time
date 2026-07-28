@@ -133,7 +133,13 @@ export function useApplyWeeklySchedule() {
         generate_through: args.generate_through ?? "",
         confirm_create: Boolean(args.confirm_create),
       }),
-    onSuccess: () => {
+    onSuccess: (payload) => {
+      // A needs_confirm response is the server's dry run — it wrote nothing, so
+      // there is no stale cache to clear. Without this, every "Review changes"
+      // click invalidates three families and refetches every active query in
+      // them for a preview the user has not accepted yet.
+      if (payload?.needs_confirm) return;
+
       void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
       // Clearing or re-applying a schedule changes what the attendance week shows.
       // Nothing invalidated this before — the calendar silently served stale data.

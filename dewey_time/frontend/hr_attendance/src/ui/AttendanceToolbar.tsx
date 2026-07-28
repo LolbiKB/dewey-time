@@ -35,7 +35,6 @@ export type AttendanceToolbarProps = {
   onNextWeek: () => void;
   onToday: () => void;
   onRefresh: () => void;
-  onRunEngineSuccess?: () => void;
   employeeLabel?: string | null;
   canGoPrev: boolean;
   canGoNext: boolean;
@@ -141,7 +140,6 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
             employee={props.employee}
             employeeLabel={props.employeeLabel}
             weekStart={props.weekStart}
-            onSuccess={props.onRunEngineSuccess}
             disabled={navDisabled}
           />
         ) : null}

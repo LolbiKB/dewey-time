@@ -74,6 +74,9 @@ test("ScheduleCoveragePage uses dewey-ui's Page", () => {
 // Section adoption and the absence of a title so neither drifts back.
 test("App renders Section inside Page and adds no page title of its own", () => {
   const src = source("App.tsx");
+  // The name says "inside Page", so assert Page too — the Section check alone
+  // would stay green with <Page> deleted, under a name claiming otherwise.
+  assert.ok(src.includes("<Page"), "expected <Page> from @lolbikb/dewey-ui");
   assert.ok(src.includes("<Section"), "expected <Section> from @lolbikb/dewey-ui");
   assert.ok(!src.includes("<PageHeader"), "/hr-attendance must not render a PageHeader");
   assert.ok(!src.includes("<h1"), "/hr-attendance must not hand-roll a page title either");

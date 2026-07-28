@@ -101,7 +101,7 @@ export function ScheduleImportPage() {
         <StepIndicator step={controller.step} />
       </PageHeader>
 
-      <Section grow className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Section grow>
         {stage === "upload" ? (
           <UploadStep
             onFile={(file) => void controller.handleFile(file)}
