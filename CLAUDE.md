@@ -80,7 +80,7 @@ React SPA (frontend/hr_attendance/src/)
   ├─ /hr-attendance  → WeekView grid + DayTimeline + FlagDetailPanel (HR review)
   └─ /hr-schedule    → WeeklySchedulePage (wizard for bulk shift assignment)
 
-ADMS dashboard (prebuilt bundle in public/adms/ — no source in repo)
+ADMS dashboard (source in frontend/adms/ — built into public/adms/)
   └─ /adms           → device-admin SPA, gated by dashboard_auth token exchange
 ```
 
@@ -140,7 +140,8 @@ Stack: React (pinned `latest`, currently React 19), TypeScript, Vite, TailwindCS
 A second SPA for device administration, separate from the HR attendance app:
 
 - Served via the Frappe `www/` page convention — `www/adms.html` (shell) + `www/adms.py` (`get_context` redirects Guests to `/login`).
-- Shipped as a **prebuilt bundle in `public/adms/`** — there is no source in this repo; build it in its own project and drop the output here.
+- **Source lives in this repo** at `frontend/adms/` (moved here from the `zkteco-adms-bridg` repo, which is now backend-only). Build it with `npm run build:frappe` from that directory — `scripts/build-adms.mjs` emits the bundle into `public/adms/`.
+- It talks to Supabase *and* Frappe, uses `@tanstack/react-query` + `@tanstack/react-table`, and shares the `@lolbikb/dewey-ui` design system with the HR SPA.
 - Copied to `sites/assets/` by `utils/sync_adms_assets.py` on `after_migrate`.
 - Access is gated by `attendance_engine/dashboard_auth.py`: the SPA calls `get_dashboard_token`, and the two desk-less roles `ADMS Admin` / `ADMS Super Admin` (auto-created by `ensure_adms_roles`) scope access.
 
