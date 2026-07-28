@@ -21,6 +21,7 @@
 - **`window.csrf_token`** is already injected by `www/hr-attendance.html:23` and `www/hr-schedule.html:23`. No server-side change is needed anywhere in this plan.
 - **Do not run `npm install` for new packages yourself if you are a subagent** — the single dependency addition is called out in Task 1 Step 1 and is the controller's to run. Report if it is missing rather than installing it.
 - **Git discipline:** `git add` only the named files. Never `git add -A`, `.`, or `-u`. Never checkout/switch/branch/stash/reset/rebase/merge/clean/push.
+- **`npm run build` is a verification step, never a deliverable.** It rewrites seven *tracked* files — `dewey_time/public/hr_attendance/{index.html,assets/index.js,assets/index.js.map,assets/index.css,assets/build-id.txt}` and `dewey_time/www/{hr-attendance.html,hr-schedule.html}`. **Never commit them.** The last two frontend PRs (#65, #68) did not; assets were last committed in `11f8ac70` (#58) and are rebuilt at deploy time. Leave them dirty and say so in your report — the controller restores them before generating the review package.
 - **Commit message trailers**, on every commit:
   ```
   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
