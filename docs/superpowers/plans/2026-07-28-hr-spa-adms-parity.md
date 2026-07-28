@@ -968,6 +968,7 @@ Convert the `<header>` block (lines 318-377) to `<PageHeader title="Weekly Sched
 | Lines 379-397 (`ineligibleMessage`, `isEditing` cards) | `<Card>` → `<Alert>`. These are persistent conditions and stay inline — do not convert to toasts. |
 | Lines 399-414 (`saveSuccessUrl` card) | Delete; replaced by a toast in Step 9. |
 | Lines 428-439 (`!scheduleEmployeeId` card) | → `<EmptyState title={…} description={…} />` from `@lolbikb/dewey-ui`. |
+| `ClearEmployeeScheduleDialog.tsx:226` and `:250` (two dashed-border empty states) | → `<EmptyState>`. These are generic "nothing here" states, not domain visuals. Do **not** touch anything else in this file — `dialogMigration.test.tsx` asserts it contains `ResponsiveModal` and does **not** import from `@/components/ui/dialog`. |
 | Lines 495-542 (effective-from / generate-through) | → shadcn `<Field>` / `<FieldLabel>` / `<FieldDescription>`. |
 | Lines 650-662 (`pendingConfirmPlan` list) | → shadcn `<Item>` / `<ItemContent>` / `<ItemTitle>`. |
 | Lines 561-565, 636-640 (`Loader2Icon className="… animate-spin"`) | → `<Spinner />`. |
@@ -1043,7 +1044,7 @@ Expected: 209 tests pass, 18 e2e pass, no new `tsc` errors, build succeeds.
 - [ ] **Step 14: Commit**
 
 ```bash
-git add src/services/schedule.ts src/services/maintenance.ts src/hooks/useWeeklySchedule.ts src/hooks/useClearEmployeeSchedule.ts src/hooks/useClearAllSchedules.ts src/hooks/useClearSitePatterns.ts src/ui/WeeklySchedulePage.tsx src/ui/chromeMigration.test.tsx
+git add src/services/schedule.ts src/services/maintenance.ts src/hooks/useWeeklySchedule.ts src/hooks/useClearEmployeeSchedule.ts src/hooks/useClearAllSchedules.ts src/hooks/useClearSitePatterns.ts src/ui/WeeklySchedulePage.tsx src/ui/ClearEmployeeScheduleDialog.tsx src/ui/chromeMigration.test.tsx
 git commit -m "refactor(hr-web): convert /hr-schedule to react-query + dewey-ui chrome
 
 Data layer, chrome and feedback converted in one pass. Deletes the savedNonce
