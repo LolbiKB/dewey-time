@@ -23,3 +23,27 @@ test("WeeklySchedulePage has no manual-refetch counter", () => {
   assert.ok(!src.includes("savedNonce"), "savedNonce should be gone");
   assert.ok(!src.includes("refreshContext()"), "manual refreshContext() calls should be gone");
 });
+
+const SCHEDULE_MAINTENANCE_HOOK_FILES = [
+  "../hooks/useWeeklySchedule.ts",
+  "../hooks/useClearEmployeeSchedule.ts",
+  "../hooks/useClearAllSchedules.ts",
+  "../hooks/useClearSitePatterns.ts",
+];
+
+// Clearing or (re)applying a schedule changes what the attendance week and
+// coverage views show, so every write hook here has to invalidate all three
+// families, not just the one it obviously touches — `useClearSitePatterns.ts`
+// once invalidated all three, but only on the loop's clean-finish path,
+// leaving the wipe's other exits (step-limit, network error) serving stale
+// calendar/coverage data after rows were already deleted. Tasks 4-6 copy this
+// exact three-line block into more files; pin it here so a future copy can't
+// silently drop one of the three.
+test("schedule/maintenance write hooks invalidate schedule, calendar, and coverage caches", () => {
+  for (const path of SCHEDULE_MAINTENANCE_HOOK_FILES) {
+    const src = source(path);
+    for (const family of ["queryKeys.schedule.all", "queryKeys.calendar.all", "queryKeys.coverage.all"]) {
+      assert.ok(src.includes(family), `${path} is missing an invalidation of ${family}`);
+    }
+  }
+});

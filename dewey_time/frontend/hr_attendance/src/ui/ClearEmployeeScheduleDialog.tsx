@@ -17,6 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { useClearEmployeeSchedule } from "@/hooks/useClearEmployeeSchedule";
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee } from "@/types/calendar";
@@ -224,7 +225,7 @@ export function ClearEmployeeScheduleDialog(props: ClearEmployeeScheduleDialogPr
             ) : (
               <>
                 {loading && !preview ? (
-                  <EmptyState icon={Loader2Icon} title="Loading impact preview…" />
+                  <EmptyState icon={Spinner} title="Loading impact preview…" />
                 ) : preview ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-2">

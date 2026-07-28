@@ -41,7 +41,9 @@ export const queryKeys = {
     all: ["maintenance"] as const,
     employeeClearPreview: (employee: string) =>
       [...queryKeys.maintenance.all, "employee-clear-preview", employee] as const,
-    allClearPreview: () => [...queryKeys.maintenance.all, "all-clear-preview"] as const,
-    siteClearPreview: () => [...queryKeys.maintenance.all, "site-clear-preview"] as const,
+    allClearPreview: (includeAllActive: boolean) =>
+      [...queryKeys.maintenance.all, "all-clear-preview", includeAllActive] as const,
+    siteClearPreview: (clearEmployeeData: boolean) =>
+      [...queryKeys.maintenance.all, "site-clear-preview", clearEmployeeData] as const,
   },
 } as const;

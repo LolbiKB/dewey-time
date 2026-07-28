@@ -42,9 +42,10 @@ export function useClearSitePatterns() {
 
   // Each call is one bounded, committed batch (see MAX_WIPE_STEPS loop below) —
   // there's no single "the clear succeeded" mutation event to hang cache
-  // invalidation off of, so it happens once, explicitly, when the loop reports
-  // `done` rather than in this mutation's onSuccess (which would otherwise fire
-  // — and re-invalidate — after every intermediate step).
+  // invalidation off of (this mutation's onSuccess would fire — and
+  // re-invalidate — after every intermediate step). Instead invalidation
+  // happens once, unconditionally, in clearSitePatterns's own `finally` below,
+  // covering every exit from the loop (done, step limit, or a thrown error).
   const { mutateAsync: stepMutateAsync } = useMutation({
     mutationFn: (args: { clearEmployeeData: boolean }) =>
       clearSitePatternsStepApi({
@@ -61,7 +62,7 @@ export function useClearSitePatterns() {
       setPreviewLoading(true);
       try {
         return await queryClient.fetchQuery({
-          queryKey: queryKeys.maintenance.siteClearPreview(),
+          queryKey: queryKeys.maintenance.siteClearPreview(clearEmployeeData),
           queryFn: () => previewClearSitePatterns(clearEmployeeData),
         });
       } catch (error) {
@@ -114,12 +115,6 @@ export function useClearSitePatterns() {
                 message: `Wipe incomplete — rows remain: ${leftover || "unknown"}.`,
               });
             }
-            // Wiping site patterns changes what shifts/coverage exist. Nothing
-            // invalidated the calendar/coverage caches before this — they
-            // silently served stale data.
-            void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
-            void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
-            void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
             return step;
           }
         }
@@ -129,6 +124,15 @@ export function useClearSitePatterns() {
         setStatus({ type: "error", message: formatAttendanceLoadError(error) });
         return null;
       } finally {
+        // Every batch here is independently committed, so the database can have
+        // changed even if this call returns null/throws (a bad step response, the
+        // MAX_WIPE_STEPS backstop, or a network drop mid-wipe). Invalidate
+        // unconditionally, once per call, regardless of how the loop exits —
+        // otherwise those paths leave deleted rows in the calendar/coverage/
+        // schedule caches.
+        void queryClient.invalidateQueries({ queryKey: queryKeys.schedule.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
         setRunning(false);
       }
     },

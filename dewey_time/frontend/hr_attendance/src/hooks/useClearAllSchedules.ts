@@ -45,7 +45,7 @@ export function useClearAllSchedules() {
       setPreviewLoading(true);
       try {
         return await queryClient.fetchQuery({
-          queryKey: queryKeys.maintenance.allClearPreview(),
+          queryKey: queryKeys.maintenance.allClearPreview(includeAllActive),
           queryFn: () => previewClearAllSchedules(includeAllActive),
         });
       } catch (error) {

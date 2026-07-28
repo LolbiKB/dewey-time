@@ -37,7 +37,6 @@ import type { ShiftBlock, WeekPattern } from "@/types/schedule";
 import {
   apply55DayTemplate,
   blocksFingerprint,
-  cloneWeekPattern,
   emptyWeekPattern,
   findMatchingTemplateKey,
   validateWeekPattern,
@@ -50,7 +49,12 @@ import {
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
 import { notifySuccess } from "@/lib/toast";
-import { summarizeReconcile, reconcileRetiresShifts, confirmNameMatches } from "@/lib/scheduleEdit";
+import {
+  summarizeReconcile,
+  reconcileRetiresShifts,
+  confirmNameMatches,
+  scheduleFormStateFromContext,
+} from "@/lib/scheduleEdit";
 import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
 import {
   isWeeklyScheduleEligible,
@@ -122,7 +126,8 @@ export function WeeklySchedulePage() {
     employee && !selectedEmployee && employeesLoading
   );
 
-  const { context, isLoading: contextLoading } = useScheduleContext(scheduleEmployeeId);
+  const { context, isLoading: contextLoading, refresh: refetchContext } =
+    useScheduleContext(scheduleEmployeeId);
 
   useEffect(() => {
     if (!scheduleEmployeeId) return;
@@ -135,10 +140,11 @@ export function WeeklySchedulePage() {
 
   useEffect(() => {
     if (!context) return;
-    setShiftBlocks(weekPatternToBlocks(cloneWeekPattern(context.week_pattern)));
-    setEffectiveFrom(context.default_effective_from);
-    setGenerateThrough(context.default_generate_through ?? "");
-    setLimitGenerateThrough(false);
+    const seeded = scheduleFormStateFromContext(context);
+    setShiftBlocks(seeded.shiftBlocks);
+    setEffectiveFrom(seeded.effectiveFrom);
+    setGenerateThrough(seeded.generateThrough);
+    setLimitGenerateThrough(seeded.limitGenerateThrough);
   }, [context?.employee]);
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
@@ -246,6 +252,22 @@ export function WeeklySchedulePage() {
         undefined,
         { action: { label: "Open attendance", onClick: () => navigate(url) } },
       );
+
+      // Re-seed the form from the server's fresh defaults after a save. The
+      // effect below only re-runs on context?.employee — a refetched context
+      // for the *same* employee (new week_pattern/enabled_ssa_count/defaults)
+      // doesn't change that string, so it wouldn't otherwise re-fire, leaving
+      // stale pre-save values in the form (e.g. effectiveFrom falling below
+      // the "Effective from" min once isEditing flips true on this refetch).
+      const refetched = await refetchContext();
+      if (refetched.data) {
+        const seeded = scheduleFormStateFromContext(refetched.data);
+        setShiftBlocks(seeded.shiftBlocks);
+        setEffectiveFrom(seeded.effectiveFrom);
+        setGenerateThrough(seeded.generateThrough);
+        setLimitGenerateThrough(seeded.limitGenerateThrough);
+      }
+
       return true;
     }
 
