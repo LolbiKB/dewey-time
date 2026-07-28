@@ -98,6 +98,7 @@ export type CalendarPayload = {
   first_checkin_date?: string | null;
   schedule_max_date?: string | null;
   has_shift_assignment?: boolean;
+  is_clock_based?: boolean;
 };
 
 export type CalendarEmployee = {
@@ -111,6 +112,8 @@ export type CalendarEmployee = {
   company?: string | null;
   employment_type?: string | null;
   is_full_time?: boolean;
+  /** Employment type is set and outside the Weekly-Schedule allowlist — clocks in/out. */
+  is_clock_based?: boolean;
   /** Enabled Shift Schedule Assignment (HR Setup) — same as has_shift_assignment */
   has_shift_schedule_assignment?: boolean;
   /** True when employee has enabled Shift Schedule Assignment */

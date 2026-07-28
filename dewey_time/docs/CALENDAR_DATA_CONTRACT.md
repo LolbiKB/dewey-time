@@ -32,7 +32,8 @@ Returns Active employees sorted with shift coverage first.
   "has_shift_schedule_assignment": true,
   "shift_schedule_assignment": "HR-SHSA-26-05-00002",
   "schedule_min_date": "2026-05-01",
-  "schedule_max_date": "2026-08-31"
+  "schedule_max_date": "2026-08-31",
+  "is_clock_based": false
 }
 ```
 
@@ -63,6 +64,27 @@ Per day:
 ```
 
 `grace_minutes` is **effective start grace** = `max(custom_grace_minutes, late_entry_grace_period)` from Shift Type (see `shift_grace.py`).
+
+### Clock-based employees
+
+`is_clock_based` appears on `list_calendar_employees` rows and at the top level of
+`get_employee_calendar`. It is `true` when `Employee.employment_type` is set and is
+**not** one of `Full-time`, `Part-time Fixed`, `Intern`.
+
+A **clock day** is `is_clock_based && !day.shift.shift_assigned`. On a clock day the
+engine emits only `ATTENDANCE_ISSUE` and `NON_PRIMARY_SITE_PUNCH`; `LATE_START`,
+`LEFT_EARLY`, `MISSING_TIME`, `LATE_FROM_LUNCH`, `UNNOTIFIED_ABSENCE` and
+`OFF_SHIFT_PUNCH` are all suppressed.
+
+| Employment type | Shift Assignment on date | Result |
+|---|---|---|
+| Outside the allowlist | no | Clock day |
+| Outside the allowlist | yes | Scheduled day — full logic |
+| Full-time / Part-time Fixed / Intern | no | `OFF_SHIFT_PUNCH` |
+| Blank / unset | no | `OFF_SHIFT_PUNCH` |
+
+A blank employment type stays on the scheduled path deliberately: it is an
+unclassified employee, not a policy decision, and should remain visible.
 
 Holiday day (flag engine treats as off; UI shows holiday board):
 

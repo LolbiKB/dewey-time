@@ -5,6 +5,8 @@ import { useEffect, useRef } from "react";
 import { AppTooltip } from "@/ui/AppTooltip";
 import { DayChips } from "@/ui/DayChips";
 import { formatDayCheckinTimeRange } from "@/lib/attendanceTime";
+import { clockDayMinutes, formatClockDayTotal, isClockDay } from "@/lib/clockDay";
+import { deriveSegments } from "@/lib/segmentInspector";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
@@ -65,6 +67,7 @@ export type WeekViewProps = {
   daysByDate: Map<string, Day>;
   alertsByDate: Map<string, DeviceAlert[]>;
   syncByDate: Map<string, DeviceSyncStatus[]>;
+  isClockBased?: boolean;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 };
@@ -90,11 +93,17 @@ export function WeekView(props: WeekViewProps) {
           const info = props.daysByDate.get(key);
           const isToday = isSameDay(d, new Date());
           const holiday = info?.holiday ?? null;
+          const clockDay = isClockDay(props.isClockBased, info);
           // Holiday wins: treat as off-day in UI even if a Shift Assignment exists.
-          const isOffDay = holiday != null || info?.shift?.shift_assigned !== true;
+          const isOffDay = holiday != null || (!clockDay && info?.shift?.shift_assigned !== true);
           const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
           const offShiftFlag = dayOffShiftPunchFlag(info);
           const timeRange = formatDayCheckinTimeRange(info);
+          const clockTotal = clockDay
+            ? formatClockDayTotal(
+                clockDayMinutes(deriveSegments(info?.checkins ?? []), info?.gross_minutes ?? null)
+              )
+            : null;
           return (
             <div
               key={key}
@@ -142,6 +151,12 @@ export function WeekView(props: WeekViewProps) {
                 </div>
               ) : null}
 
+              {clockTotal ? (
+                <div className="mt-0.5 truncate text-[10px] font-semibold tabular-nums text-foreground">
+                  {clockTotal}
+                </div>
+              ) : null}
+
               <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
                 {timeRange ? (
                   <AppTooltip content="Actual punches" side="bottom">
@@ -154,6 +169,7 @@ export function WeekView(props: WeekViewProps) {
                 <DayChips
                   day={info}
                   alerts={props.alertsByDate.get(key) ?? []}
+                  isClockDay={clockDay}
                   onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
                 />
               </div>
@@ -172,6 +188,7 @@ export function WeekView(props: WeekViewProps) {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
             const isToday = isSameDay(d, new Date());
+            const clockDay = isClockDay(props.isClockBased, info);
             return (
               <DayCell
                 key={key}
@@ -183,6 +200,7 @@ export function WeekView(props: WeekViewProps) {
                 timelineStartMin={weekWindow.startMin}
                 timelineEndMin={weekWindow.endMin}
                 deviceSync={props.syncByDate.get(key) ?? []}
+                isClockDay={clockDay}
                 onInspectDay={() => props.onInspectDay(key)}
               />
             );

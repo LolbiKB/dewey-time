@@ -176,7 +176,8 @@ function ScheduleAccessButton(props: {
   );
 }
 
-function EmployeeOption(props: {
+/** One row of the picker list. Exported so its rendering can be tested directly. */
+export function EmployeeOption(props: {
   employee: CalendarEmployee;
   selected: boolean;
   onSelect: () => void;
@@ -199,6 +200,13 @@ function EmployeeOption(props: {
           {[employee.id, meta].filter(Boolean).join(" · ")}
         </span>
       </span>
+      {employee.is_clock_based ? (
+        // Clock-based employees have no shift coverage, so the list sorts them to
+        // the bottom. Without this they read as "schedule failed to import".
+        <span className="shrink-0 rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+          Clock
+        </span>
+      ) : null}
       {props.selected ? <CheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" /> : null}
     </CommandItem>
   );

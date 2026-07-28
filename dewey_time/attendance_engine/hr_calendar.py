@@ -9,6 +9,7 @@ import frappe
 from frappe.utils import get_datetime, getdate, nowdate
 
 from dewey_time.attendance_engine.closeout import _get_shift_meta, has_open_device_closeout_alert
+from dewey_time.attendance_engine.employment_type import is_clock_based
 from dewey_time.attendance_engine.lunch_detection import detect_observed_lunch
 from dewey_time.attendance_engine.shift_grace import effective_lunch_return_grace, effective_start_grace
 from dewey_time.attendance_engine.holidays import holiday_by_date_for_company
@@ -409,6 +410,7 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
                 "company": row.get("company"),
                 "employment_type": employment_type,
                 "is_full_time": is_full_time_employment(employment_type),
+                "is_clock_based": is_clock_based(employment_type),
                 "has_shift_schedule_assignment": has_shift_assignment,
                 "has_shift_assignment": has_shift_assignment,
                 "shift_schedule_assignment": ssa.get("shift_schedule_assignment"),
@@ -430,10 +432,16 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
 def _employee_nav_meta(employee: str) -> dict:
     checkin = first_checkin_date_by_employee([employee]).get(employee, {})
     bounds = shift_assignment_bounds_by_employee([employee]).get(employee, {})
+    employment_type = (
+        frappe.db.get_value("Employee", employee, "employment_type")
+        if frappe.db.has_column("Employee", "employment_type")
+        else None
+    )
     return {
         "first_checkin_date": checkin.get("first_checkin_date"),
         "schedule_max_date": bounds.get("schedule_max_date"),
         "has_shift_assignment": bool(bounds.get("has_shift_assignment")),
+        "is_clock_based": is_clock_based(employment_type),
     }
 
 

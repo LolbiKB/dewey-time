@@ -347,7 +347,8 @@ export function App() {
                         </p>
                       </CardContent>
                     </Card>
-                  ) : selectedEmployee?.has_shift_assignment === false ? (
+                  ) : selectedEmployee?.has_shift_assignment === false &&
+                    !selectedEmployee?.is_clock_based ? (
                     <Card className="flex min-h-0 flex-1 items-center justify-center border-dashed animate-in fade-in">
                       <CardContent className="max-w-sm py-12 text-center">
                         <p className="font-medium">No schedule configured</p>
@@ -363,6 +364,7 @@ export function App() {
                       daysByDate={daysByDate}
                       alertsByDate={alertsByDate}
                       syncByDate={syncByDate}
+                      isClockBased={payload.is_clock_based ?? selectedEmployee?.is_clock_based}
                       onInspectDay={handleInspectDay}
                       onInspectFlag={handleInspectFlag}
                     />
@@ -372,6 +374,7 @@ export function App() {
                       daysByDate={daysByDate}
                       alertsByDate={alertsByDate}
                       syncByDate={syncByDate}
+                      isClockBased={payload.is_clock_based ?? selectedEmployee?.is_clock_based}
                       onInspectDay={handleInspectDay}
                       onInspectFlag={handleInspectFlag}
                     />

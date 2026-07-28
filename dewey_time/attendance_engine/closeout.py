@@ -26,6 +26,7 @@ from dewey_time.attendance_engine.shift_times import combine_date_time as _combi
 from dewey_time.attendance_engine.holidays import holiday_by_date_for_company
 # Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
 from dewey_time.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
+from dewey_time.attendance_engine.employment_type import is_clock_based
 
 
 CLOSEOUT_STATUSES = frozenset({"closed", "deferred_offline", "closure_failed"})
@@ -391,6 +392,32 @@ def has_delivery_or_record_failure_today(employee: str, attendance_date) -> bool
     return False
 
 
+def _non_primary_site_punch_flag(
+    *, checkins: list[dict], employee_branch: str | None
+) -> tuple[str, dict] | None:
+    """NON_PRIMARY_SITE_PUNCH when punches land on a branch that isn't the employee's.
+
+    Pure branch arithmetic with no shift input, which is why the scheduled path
+    and the clock-day path can share it.
+    """
+    if not employee_branch:
+        return None
+    non_primary_hits = sum(
+        1
+        for c in checkins
+        if c.get("custom_device_branch") and c.get("custom_device_branch") != employee_branch
+    )
+    if non_primary_hits <= 0:
+        return None
+    return (
+        "NON_PRIMARY_SITE_PUNCH",
+        {
+            "employee_branch": employee_branch,
+            "non_primary_checkins": non_primary_hits,
+        },
+    )
+
+
 def _generate_for_employee_date(
     *,
     employee: str,
@@ -465,7 +492,28 @@ def _generate_for_employee_date(
     if not on_shift:
         if checkins_count == 0:
             return
-        flags_to_create.append(("OFF_SHIFT_PUNCH", {"reason": "off_shift_has_checkins"}))
+        if is_clock_based(getattr(employee_doc, "employment_type", None)):
+            # Clock day: no schedule exists to judge against, so only punch-integrity
+            # and location flags apply. LATE_START / LEFT_EARLY / MISSING_TIME /
+            # LATE_FROM_LUNCH / UNNOTIFIED_ABSENCE / OFF_SHIFT_PUNCH are all defined
+            # relative to a shift and are deliberately absent here.
+            # Spec: docs/superpowers/specs/2026-07-27-clock-based-attendance-design.md
+            evidence["clock_based"] = True
+            non_primary_flag = _non_primary_site_punch_flag(
+                checkins=checkins, employee_branch=employee_branch
+            )
+            if non_primary_flag:
+                flags_to_create.append(non_primary_flag)
+            flags_to_create.extend(
+                evaluate_record_issue_flags(
+                    checkins=checkins,
+                    shift_meta=None,
+                    attendance_date=attendance_date,
+                    undelivered_items=undelivered_items,
+                )
+            )
+        else:
+            flags_to_create.append(("OFF_SHIFT_PUNCH", {"reason": "off_shift_has_checkins"}))
         for flag_code, extra_evidence in flags_to_create:
             _insert_flag(
                 employee=employee,
@@ -537,23 +585,11 @@ def _generate_for_employee_date(
                 )
             )
 
-    non_primary_hits = 0
-    if employee_branch:
-        non_primary_hits = sum(
-            1
-            for c in checkins
-            if c.get("custom_device_branch") and c.get("custom_device_branch") != employee_branch
-        )
-    if non_primary_hits > 0:
-        flags_to_create.append(
-            (
-                "NON_PRIMARY_SITE_PUNCH",
-                {
-                    "employee_branch": employee_branch,
-                    "non_primary_checkins": non_primary_hits,
-                },
-            )
-        )
+    non_primary_flag = _non_primary_site_punch_flag(
+        checkins=checkins, employee_branch=employee_branch
+    )
+    if non_primary_flag:
+        flags_to_create.append(non_primary_flag)
 
     if shift_meta and checkins_count > 0:
         flags_to_create.extend(

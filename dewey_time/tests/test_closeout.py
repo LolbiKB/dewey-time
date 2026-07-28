@@ -1,7 +1,7 @@
 import json
 import sys
 import unittest
-from datetime import date, time as dt_time
+from datetime import date, datetime, time as dt_time
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
@@ -619,3 +619,176 @@ class TestDeviceCloseoutAlertDoc(unittest.TestCase):
         )
         doc.autoname()
         self.assertEqual(doc.name, "DCA-sn-100-2026-05-27")
+
+
+class TestOffShiftGate(unittest.TestCase):
+    @patch("dewey_time.attendance_engine.closeout.holiday_by_date_for_company", return_value={})
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment", return_value=None)
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_clock_based_employee_gets_no_off_shift_punch(
+        self, get_cached_doc, _get_shift, get_checkins, _delete_flags, insert_flag, _holiday
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        employee.employment_type = "Contract"
+        get_cached_doc.return_value = employee
+        get_checkins.return_value = [
+            {"time": datetime(2026, 5, 27, 9, 0), "custom_device_branch": "BRANCH-A"},
+            {"time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 5, 27))
+
+        codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertNotIn("OFF_SHIFT_PUNCH", codes)
+        self.assertEqual(codes, [])
+
+    @patch("dewey_time.attendance_engine.closeout.holiday_by_date_for_company", return_value={})
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment", return_value=None)
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_clock_based_single_punch_still_flags_attendance_issue(
+        self, get_cached_doc, _get_shift, get_checkins, _delete_flags, insert_flag, _holiday
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        employee.employment_type = "Contract"
+        get_cached_doc.return_value = employee
+        get_checkins.return_value = [
+            {"time": datetime(2026, 5, 27, 9, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 5, 27))
+
+        codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertIn("ATTENDANCE_ISSUE", codes)
+        self.assertNotIn("OFF_SHIFT_PUNCH", codes)
+        self.assertTrue(insert_flag.call_args_list[0].kwargs["evidence"]["clock_based"])
+
+    @patch("dewey_time.attendance_engine.closeout.holiday_by_date_for_company", return_value={})
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment", return_value=None)
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_clock_based_foreign_branch_still_flags_non_primary(
+        self, get_cached_doc, _get_shift, get_checkins, _delete_flags, insert_flag, _holiday
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        employee.employment_type = "Contract"
+        get_cached_doc.return_value = employee
+        get_checkins.return_value = [
+            {"time": datetime(2026, 5, 27, 9, 0), "custom_device_branch": "BRANCH-B"},
+            {"time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-B"},
+        ]
+
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 5, 27))
+
+        codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertIn("NON_PRIMARY_SITE_PUNCH", codes)
+        self.assertNotIn("OFF_SHIFT_PUNCH", codes)
+
+    @patch("dewey_time.attendance_engine.closeout.holiday_by_date_for_company", return_value={})
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment", return_value=None)
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_clock_based_no_punches_creates_nothing(
+        self, get_cached_doc, _get_shift, _get_checkins, _delete_flags, insert_flag, _holiday
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        employee.employment_type = "Contract"
+        get_cached_doc.return_value = employee
+
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 5, 27))
+
+        insert_flag.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.closeout.holiday_by_date_for_company", return_value={})
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment", return_value=None)
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_blank_employment_type_still_gets_off_shift_punch(
+        self, get_cached_doc, _get_shift, get_checkins, _delete_flags, insert_flag, _holiday
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        employee.employment_type = ""
+        get_cached_doc.return_value = employee
+        get_checkins.return_value = [
+            {"time": datetime(2026, 5, 27, 9, 0), "custom_device_branch": "BRANCH-A"},
+            {"time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 5, 27))
+
+        codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertEqual(codes, ["OFF_SHIFT_PUNCH"])
+
+    @patch("dewey_time.attendance_engine.closeout.holiday_by_date_for_company", return_value={})
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_meta")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_clock_based_with_shift_assignment_still_gets_late_start(
+        self, get_cached_doc, get_shift, get_shift_meta, get_checkins,
+        _delete_flags, insert_flag, _holiday
+    ):
+        """Schedule wins: a stale Shift Assignment keeps full scheduled-day logic."""
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+        from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        employee.employment_type = "Contract"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = enrich_shift_meta(
+            {
+                "start_time": dt_time(8, 0),
+                "end_time": dt_time(17, 0),
+                "custom_lunch_start": None,
+                "custom_lunch_end": None,
+                "custom_grace_minutes": 0,
+                "late_entry_grace_period": 0,
+                "early_exit_grace_period": 0,
+            }
+        )
+        get_checkins.return_value = [
+            {"time": datetime(2026, 5, 27, 9, 30), "custom_device_branch": "BRANCH-A"},
+            {"time": datetime(2026, 5, 27, 17, 0), "custom_device_branch": "BRANCH-A"},
+        ]
+
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 5, 27))
+
+        codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
+        self.assertIn("LATE_START", codes)
+        self.assertNotIn("OFF_SHIFT_PUNCH", codes)

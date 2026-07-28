@@ -11,6 +11,7 @@ import unittest
 from dewey_time.attendance_engine.employment_type import (
     WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
     derive_employment_type,
+    is_clock_based,
     is_weekly_schedule_eligible,
     resolve_apply_employment_type,
     weekly_scheduled_minutes,
@@ -194,6 +195,34 @@ class TestResolveApplyEmploymentType(unittest.TestCase):
         self.assertIn("not eligible", value.lower())
         self.assertIn("Part-time Flexible", value)
         self.assertNotIn("Probation", value)
+
+
+class IsClockBasedTests(unittest.TestCase):
+    def test_allowlist_types_are_not_clock_based(self):
+        for value in WEEKLY_SCHEDULE_EMPLOYMENT_TYPES:
+            self.assertFalse(is_clock_based(value), value)
+
+    def test_types_outside_the_allowlist_are_clock_based(self):
+        self.assertTrue(is_clock_based("Contract"))
+        self.assertTrue(is_clock_based("Casual"))
+        self.assertTrue(is_clock_based("Part-time Flexible"))
+
+    def test_blank_is_not_clock_based(self):
+        # A blank type is an unclassified employee, not a policy decision.
+        self.assertFalse(is_clock_based(None))
+        self.assertFalse(is_clock_based(""))
+        self.assertFalse(is_clock_based("   "))
+
+    def test_allowlist_match_ignores_case_and_whitespace(self):
+        self.assertFalse(is_clock_based("  full-time  "))
+        self.assertFalse(is_clock_based("INTERN"))
+
+    def test_non_string_is_not_clock_based(self):
+        # Fail toward keeping enforcement: anything that is not a real string
+        # (None-like sentinels, test mocks, bad data) must never silently
+        # switch off schedule enforcement for a real employee.
+        self.assertFalse(is_clock_based(object()))
+        self.assertFalse(is_clock_based(123))
 
 
 if __name__ == "__main__":

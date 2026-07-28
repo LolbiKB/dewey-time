@@ -27,3 +27,26 @@ test("dayPipState precedence: today > holiday > off > flagged > normal", () => {
   );
   assert.equal(dayPipState({ shift: { shift_assigned: true }, flags: [] } as unknown as Day, false), "normal");
 });
+
+test("dayPipState returns normal for a clock day, not off", () => {
+  const day = { shift: { shift_assigned: false }, flags: [] } as never;
+  assert.equal(dayPipState(day, false, true), "normal");
+});
+
+test("dayPipState still returns off for an unscheduled non-clock employee", () => {
+  const day = { shift: { shift_assigned: false }, flags: [] } as never;
+  assert.equal(dayPipState(day, false, false), "off");
+});
+
+test("dayPipState still flags a clock day that has flags", () => {
+  const day = {
+    shift: { shift_assigned: false },
+    flags: [{ flag_code: "ATTENDANCE_ISSUE" }],
+  } as never;
+  assert.equal(dayPipState(day, false, true), "flagged");
+});
+
+test("holiday still wins over clock", () => {
+  const day = { shift: { shift_assigned: false }, holiday: { description: "X" } } as never;
+  assert.equal(dayPipState(day, false, true), "holiday");
+});
