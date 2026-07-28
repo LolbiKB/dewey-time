@@ -1,37 +1,26 @@
+import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { useFrappeGetCall } from "frappe-react-sdk";
 import { useEffect, useMemo } from "react";
 
+import { queryKeys } from "@/lib/queryKeys";
 import { calendarFetchRange } from "@/lib/weekCalendar";
-import type { CalendarEmployee, CalendarPayload, DeviceAlert, DeviceSyncStatus } from "@/types/calendar";
-
-const EMPLOYEES_METHOD = "dewey_time.attendance_engine.hr_calendar.list_calendar_employees";
-const CALENDAR_METHOD = "dewey_time.attendance_engine.hr_calendar.get_employee_calendar";
-
-type EmployeesResponse = {
-  employees: CalendarEmployee[];
-  current_user_employee: string | null;
-};
+import { getEmployeeCalendar, listCalendarEmployees } from "@/services/calendar";
+import type { CalendarEmployee, DeviceAlert, DeviceSyncStatus } from "@/types/calendar";
 
 export function useCalendarEmployees() {
-  const { data, error, isLoading, mutate } = useFrappeGetCall<EmployeesResponse>(
-    EMPLOYEES_METHOD,
-    undefined,
-    EMPLOYEES_METHOD
-  );
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: queryKeys.employees.list(),
+    queryFn: listCalendarEmployees,
+  });
 
-  const employees = useMemo<CalendarEmployee[]>(
-    () => data?.message?.employees ?? [],
-    [data?.message]
-  );
-  const currentUserEmployee: string | null = data?.message?.current_user_employee ?? null;
+  const employees = useMemo<CalendarEmployee[]>(() => data?.employees ?? [], [data?.employees]);
 
   return {
     employees,
-    currentUserEmployee,
+    currentUserEmployee: data?.current_user_employee ?? null,
     error,
     isLoading,
-    refresh: mutate,
+    refresh: refetch,
   };
 }
 
@@ -40,37 +29,21 @@ export function useEmployeeCalendar(employee: string | null, anchor: Date) {
   const startDate = format(rangeStart, "yyyy-MM-dd");
   const endDate = format(rangeEnd, "yyyy-MM-dd");
 
-  const params = useMemo(
-    () =>
-      employee
-        ? {
-            employee,
-            start_date: startDate,
-            end_date: endDate,
-          }
-        : undefined,
-    [employee, endDate, startDate]
-  );
-
-  const swrKey = employee ? `${CALENDAR_METHOD}:${employee}:${startDate}:${endDate}` : null;
-
-  const { data, error, isLoading, mutate } = useFrappeGetCall<CalendarPayload>(
-    CALENDAR_METHOD,
-    params,
-    swrKey,
-    undefined,
-    "GET"
-  );
-
-  const payload = data?.message ?? null;
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: employee
+      ? queryKeys.calendar.employee(employee, startDate, endDate)
+      : queryKeys.calendar.all,
+    queryFn: () => getEmployeeCalendar({ employee: employee!, startDate, endDate }),
+    enabled: Boolean(employee),
+  });
 
   return {
-    payload,
+    payload: data ?? null,
     rangeStart,
     rangeEnd,
     error,
     isLoading,
-    refresh: mutate,
+    refresh: refetch,
   };
 }
 

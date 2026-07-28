@@ -1,9 +1,16 @@
-import { useFrappePostCall } from "frappe-react-sdk";
+/**
+ * The "(dev)" flag-engine backfill behind `RunEngineDialog`.
+ *
+ * The dotted method path now lives once, in `services/maintenance.ts`; the
+ * `RUN_ENGINE_METHOD` constant that used to sit here had no importers and would
+ * only have drifted from it.
+ */
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 
 import { formatAttendanceLoadError } from "@/hooks/useHrAttendanceData";
-
-export const RUN_ENGINE_METHOD = "dewey_time.attendance_engine.dev_tools.run_engine_for_employee";
+import { queryKeys } from "@/lib/queryKeys";
+import { runEngineForEmployee } from "@/services/maintenance";
 
 export type RunEngineMode = "intraday" | "closeout" | "both";
 
@@ -24,8 +31,17 @@ export type RunEngineResponse = {
 };
 
 export function useRunEngine() {
-  const { call, loading, reset } = useFrappePostCall<{ message: RunEngineResponse }>(RUN_ENGINE_METHOD);
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const { mutateAsync, reset, isPending } = useMutation({
+    mutationFn: runEngineForEmployee,
+    onSuccess: () => {
+      // Re-running the engine rewrites AUTO flags for the range — exactly what
+      // the week grid renders, so the calendar family has to be dropped.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
+    },
+  });
 
   const runEngine = useCallback(
     async (args: {
@@ -38,8 +54,7 @@ export function useRunEngine() {
       reset();
 
       try {
-        const result = await call(args);
-        const payload = result?.message ?? (result as unknown as RunEngineResponse);
+        const payload = await mutateAsync(args);
         if (!payload?.ok) {
           setStatus({ type: "error", message: "Engine run did not return ok" });
           return null;
@@ -55,14 +70,14 @@ export function useRunEngine() {
         return null;
       }
     },
-    [call, reset]
+    [mutateAsync, reset]
   );
 
   const clearStatus = useCallback(() => setStatus(null), []);
 
   return {
     runEngine,
-    loading,
+    loading: isPending,
     status,
     clearStatus,
   };

@@ -66,3 +66,9 @@ test("ScheduleCoveragePage uses dewey-ui's Page", () => {
   assert.ok(src.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
   assert.ok(!src.includes("max-w-7xl"), "hand-rolled container should be gone");
 });
+
+test("App uses PageHeader and Section inside Page", () => {
+  const src = source("App.tsx");
+  assert.ok(src.includes("<PageHeader"), "expected <PageHeader> from @lolbikb/dewey-ui");
+  assert.ok(src.includes("<Section"), "expected <Section> from @lolbikb/dewey-ui");
+});
