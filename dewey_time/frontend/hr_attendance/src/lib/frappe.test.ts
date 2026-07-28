@@ -110,6 +110,29 @@ test("frappeCall throws FrappeCallError carrying the server message", async () =
         assert.ok(err instanceof FrappeCallError);
         assert.equal(err.message, "Employee is not eligible.");
         assert.equal(err.status, 417);
+        assert.equal(err.method, "dewey_time.x.write");
+        return true;
+      },
+    );
+  } finally {
+    restore();
+    restoreWindow();
+  }
+});
+
+test("frappeCall throws FrappeCallError when the response has no {message} envelope", async () => {
+  const restoreWindow = stubWindow("");
+  // A 204, or a session-expiry HTML page served with 200: res.json() rejects and
+  // the transport's own .catch() hands the success path exactly this null. That
+  // path must not destructure it — callers catch FrappeCallError, not TypeError.
+  const { restore } = stubFetch({ ok: true, status: 200, body: null });
+  try {
+    await assert.rejects(
+      () => frappeCall("dewey_time.x.read"),
+      (err: unknown) => {
+        assert.ok(err instanceof FrappeCallError);
+        assert.equal(err.status, 200);
+        assert.equal(err.method, "dewey_time.x.read");
         return true;
       },
     );

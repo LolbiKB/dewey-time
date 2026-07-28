@@ -8,18 +8,20 @@ function hasPrefix(key: readonly unknown[], prefix: readonly unknown[]): boolean
   return prefix.length <= key.length && prefix.every((part, i) => key[i] === part);
 }
 
-test("every schedule key is invalidated by the schedule family prefix", () => {
-  const all = queryKeys.schedule.all;
-  assert.ok(hasPrefix(queryKeys.schedule.context("EMP-1"), all));
-  assert.ok(hasPrefix(queryKeys.schedule.resolve("EMP-1", "2026-08-01", "{}"), all));
-  assert.ok(hasPrefix(queryKeys.schedule.templates(24), all));
-  assert.ok(hasPrefix(queryKeys.schedule.holidays("EMP-1", "2026-08-01", "2026-08-31"), all));
-});
-
-test("every calendar key is invalidated by the calendar family prefix", () => {
-  assert.ok(
-    hasPrefix(queryKeys.calendar.employee("EMP-1", "2026-08-01", "2026-08-31"), queryKeys.calendar.all),
-  );
+// Walks the whole registry rather than naming families, so a key added by a
+// later task is covered the moment it is written — no per-family edit needed,
+// and no builder can slip through unasserted.
+test("every key builder carries its family prefix", () => {
+  for (const [family, members] of Object.entries(queryKeys)) {
+    const { all, ...builders } = members as { all: readonly unknown[] } & Record<string, unknown>;
+    for (const [name, build] of Object.entries(builders)) {
+      if (typeof build !== "function") continue;
+      const key = (build as (...a: unknown[]) => readonly unknown[])(
+        ...Array.from({ length: build.length }, (_, i) => `arg${i}`),
+      );
+      assert.ok(hasPrefix(key, all), `${family}.${name} escapes its family`);
+    }
+  }
 });
 
 // Without this, the tests above would pass for a registry where every key is

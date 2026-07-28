@@ -73,5 +73,16 @@ export async function frappeCall<T>(
     });
   }
 
+  // `body` is null whenever res.json() rejected above — an empty 204, or the
+  // HTML login page Frappe serves with a 200 when the session has expired.
+  // Destructuring that yields an opaque TypeError; callers only ever catch
+  // FrappeCallError, so the failure has to arrive as one.
+  if (body === null || typeof body !== "object" || !("message" in body)) {
+    throw new FrappeCallError(`${method} returned no JSON envelope (${res.status})`, {
+      status: res.status,
+      method,
+    });
+  }
+
   return (body as { message: T }).message;
 }
