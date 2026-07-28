@@ -29,6 +29,7 @@ const SCHEDULE_MAINTENANCE_HOOK_FILES = [
   "../hooks/useClearEmployeeSchedule.ts",
   "../hooks/useClearAllSchedules.ts",
   "../hooks/useClearSitePatterns.ts",
+  "../hooks/useScheduleImport.ts",
 ];
 
 // Clearing or (re)applying a schedule changes what the attendance week and
@@ -46,4 +47,13 @@ test("schedule/maintenance write hooks invalidate schedule, calendar, and covera
       assert.ok(src.includes(family), `${path} is missing an invalidation of ${family}`);
     }
   }
+});
+
+test("ScheduleImportPage uses dewey-ui's Page", () => {
+  const src = readFileSync(
+    new URL("./schedule-import/ScheduleImportPage.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.ok(src.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
+  assert.ok(!src.includes("max-w-7xl"), "hand-rolled container should be gone");
 });

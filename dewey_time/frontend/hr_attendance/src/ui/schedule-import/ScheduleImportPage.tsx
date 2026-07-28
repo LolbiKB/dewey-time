@@ -1,6 +1,8 @@
-import { ArrowLeftIcon, UploadIcon } from "lucide-react";
+import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import { ArrowLeftIcon } from "lucide-react";
 import { Link, Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useScheduleImport, type ImportStep } from "@/hooks/useScheduleImport";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
@@ -65,8 +67,8 @@ export function ScheduleImportPage() {
 
   if (sessionLoading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading…
+      <div className="flex h-full items-center justify-center">
+        <EmptyState icon={Spinner} title="Loading…" className="border-none" />
       </div>
     );
   }
@@ -77,34 +79,22 @@ export function ScheduleImportPage() {
   const stage = stepStage(controller.step);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-      <header className="shrink-0 border-b border-border/60 px-5 py-3 sm:px-8">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-2.5">
-          <Link
-            to="/hr-schedule"
-            className="inline-flex w-fit items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeftIcon className="size-3.5" />
-            Weekly Schedule
-          </Link>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <UploadIcon className="size-5" />
-              </span>
-              <div>
-                <h1 className="text-base font-semibold tracking-tight">Import from spreadsheet</h1>
-                <p className="text-xs text-muted-foreground">
-                  Validate a normalised CSV, then apply schedules in bulk.
-                </p>
-              </div>
-            </div>
-            <StepIndicator step={controller.step} />
-          </div>
-        </div>
-      </header>
+    <Page>
+      <Link
+        to="/hr-schedule"
+        className="inline-flex w-fit shrink-0 items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeftIcon className="size-3.5" />
+        Weekly Schedule
+      </Link>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col">
+      <PageHeader
+        title="Import from spreadsheet"
+        description="Validate a normalised CSV, then apply schedules in bulk."
+        actions={<StepIndicator step={controller.step} />}
+      />
+
+      <Section grow className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {stage === "upload" ? (
           <UploadStep
             onFile={(file) => void controller.handleFile(file)}
@@ -118,7 +108,7 @@ export function ScheduleImportPage() {
             onBackToSchedule={() => navigate("/hr-schedule")}
           />
         )}
-      </div>
-    </div>
+      </Section>
+    </Page>
   );
 }
