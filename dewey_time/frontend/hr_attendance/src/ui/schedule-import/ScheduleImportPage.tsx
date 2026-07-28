@@ -91,8 +91,15 @@ export function ScheduleImportPage() {
       <PageHeader
         title="Import from spreadsheet"
         description="Validate a normalised CSV, then apply schedules in bulk."
-        actions={<StepIndicator step={controller.step} />}
-      />
+      >
+        {/* StepIndicator is ~250-260px and never wraps/shrinks — PageHeader's
+            title/actions row doesn't wrap at any width (min-w-0 + truncate on
+            the title, shrink-0 on actions), so it belongs in `children` as
+            its own full-width row below the title, not in `actions`, or it
+            collapses the title to a sliver at phone width. Same rule Task 3
+            documented for WeeklySchedulePage's dialog-trigger row. */}
+        <StepIndicator step={controller.step} />
+      </PageHeader>
 
       <Section grow className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {stage === "upload" ? (

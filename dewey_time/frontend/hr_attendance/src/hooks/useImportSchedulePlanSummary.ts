@@ -106,31 +106,33 @@ export function useImportSchedulePlanSummary(
   }, [bucketKey, debounceMs]);
 
   // Debounce the trigger, not each request (same shape as
-  // useWeeklyScheduleResolve): only hand react-query the live buckets once
-  // the debounce has settled on the current key. Until then the query set
-  // below is empty, so no resolve call fires for a selection that's still
-  // changing.
+  // useWeeklyScheduleResolve): the buckets themselves are known
+  // synchronously (they come from the current selection), so they stay live
+  // — only the network fetch is gated on `settled`, via each query's
+  // `enabled`. This is what useWeeklyScheduleResolve's `isDebouncing` fold
+  // into `resolving` does too: keep the panel mounted (bucket/employee
+  // counts render immediately) and show "Matching…" through the debounce
+  // window, instead of unmounting it on every selection change.
   const settled = bucketKey !== null && bucketKey === debouncedKey;
-  const activeBuckets = settled ? buckets : [];
-  const activeEffectiveFrom = settled ? effectiveFrom! : null;
 
   const results = useQueries({
-    queries: activeBuckets.map((bucket) => ({
+    queries: buckets.map((bucket) => ({
       queryKey: queryKeys.schedule.resolve(
         bucket.representativeEmployee,
-        activeEffectiveFrom!,
+        effectiveFrom ?? "",
         bucket.patternKey
       ),
       queryFn: () =>
         resolveSchedulePlan({
           employee: bucket.representativeEmployee,
-          effectiveFrom: activeEffectiveFrom!,
+          effectiveFrom: effectiveFrom!,
           weekPatternJson: bucket.patternKey,
         }),
+      enabled: settled,
     })),
   });
 
-  const plans: ImportPatternPlan[] = activeBuckets.map((bucket, i) => {
+  const plans: ImportPatternPlan[] = buckets.map((bucket, i) => {
     const result = results[i];
     if (result?.isError) {
       return { ...bucket, plan: null, error: formatAttendanceLoadError(result.error) };
@@ -138,9 +140,14 @@ export function useImportSchedulePlanSummary(
     return { ...bucket, plan: result?.data ?? null, error: null };
   });
 
-  const loading = activeBuckets.length > 0 && results.some((r) => r.isPending);
-  const stats = useMemo(() => collectStats(plans), [plans]);
+  const loading = !settled || results.some((r) => r.isPending);
+  const stats = collectStats(plans);
 
+  // Per-bucket errors already surface on `plans[i].error` above; this
+  // top-level field mirrors the pre-conversion hook's shape (a genuine
+  // Promise.all-level failure, which can't happen with useQueries — each
+  // query fails independently into its own `result.isError`) so callers
+  // don't need to change.
   return { plans, stats, loading, error: null as string | null };
 }
 
