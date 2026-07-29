@@ -80,8 +80,12 @@ export function DayCell(props: {
     <button
       type="button"
       onClick={props.onInspectDay}
+      // A whole day column is one button, so the global press-scale (see
+      // brand/base.css) would shrink a ~500px-tall surface on every tap. Opt out
+      // and press with colour, matching the hover/focus tint already used here.
+      data-press="none"
       className={cn(
-        "group relative min-h-0 border-b border-r border-border/60 p-3 pl-5 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 focus:ring-2 focus:ring-ring/40",
+        "group relative min-h-0 border-b border-r border-border/60 p-3 pl-5 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 active:bg-muted/30 focus:ring-2 focus:ring-ring/40",
         props.dense ? "h-full" : "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
         props.today && "bg-primary/3 ring-1 ring-primary/20"

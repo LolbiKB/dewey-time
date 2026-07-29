@@ -46,7 +46,6 @@ export function App() {
   const { currentUser, isLoading: authLoading } = useSession();
   const isMobile = useIsMobile();
   const [anchor, setAnchor] = useState<Date>(() => new Date());
-  const [weekNavDirection, setWeekNavDirection] = useState<"prev" | "next" | "jump">("jump");
   const [employeeLoading, setEmployeeLoading] = useState(false);
 
   const {
@@ -204,23 +203,19 @@ export function App() {
 
   function goPrev() {
     if (!canGoPrev) return;
-    setWeekNavDirection("prev");
     setAnchor((d) => addDays(d, -7));
   }
 
   function goNext() {
     if (!canGoNext) return;
-    setWeekNavDirection("next");
     setAnchor((d) => addDays(d, 7));
   }
 
   function goToday() {
-    setWeekNavDirection("jump");
     setAnchor(clampDateToNavBounds(new Date(), weekNavBounds));
   }
 
   function selectAnchor(date: Date) {
-    setWeekNavDirection("jump");
     setAnchor(clampDateToNavBounds(date, weekNavBounds));
   }
 
@@ -299,7 +294,7 @@ export function App() {
           {isBootstrapping ? (
             <AttendanceHeaderSkeleton />
           ) : (
-            <div className="shrink-0 animate-in fade-in slide-in-from-top-1">
+            <div className="shrink-0 animate-in fade-in">
               <AttendanceToolbar
                 employees={employees}
                 employee={employee}
@@ -346,7 +341,6 @@ export function App() {
                 <WeekViewAnimatedShell
                   loading={isCalendarLoading}
                   weekKey={weekKey}
-                  direction={weekNavDirection}
                 >
                   {calendarError ? (
                     <Card className="flex min-h-0 flex-1 items-center justify-center border-destructive/20 bg-destructive/5 animate-in fade-in">

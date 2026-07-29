@@ -105,10 +105,19 @@ export function AttendancePageSkeleton(props: { label?: string }) {
   );
 }
 
+/**
+ * Crossfades the week grid when the week changes. The `key` is what makes the
+ * fade re-run: changing it remounts the subtree, so `animate-in` plays again.
+ *
+ * Deliberately a fade with no transform. This used to slide the whole grid 24px
+ * in the direction of travel (and zoom on a jump), which on a grid that fills
+ * the viewport reads as the page lurching rather than as a transition — the
+ * cost of a transform scales with the surface it moves, and this is the largest
+ * surface in the app.
+ */
 export function WeekViewAnimatedShell(props: {
   loading: boolean;
   weekKey: string;
-  direction: "prev" | "next" | "jump";
   children: ReactNode;
 }) {
   if (props.loading) {
@@ -120,15 +129,7 @@ export function WeekViewAnimatedShell(props: {
   }
 
   return (
-    <div
-      key={`${props.weekKey}-${props.direction}`}
-      className={cn(
-        "flex min-h-0 flex-1 flex-col animate-in fade-in fill-mode-both",
-        props.direction === "next" && "slide-in-from-right-6",
-        props.direction === "prev" && "slide-in-from-left-6",
-        props.direction === "jump" && "slide-in-from-bottom-2 zoom-in-98"
-      )}
-    >
+    <div key={props.weekKey} className="flex min-h-0 flex-1 flex-col animate-in fade-in fill-mode-both">
       {props.children}
     </div>
   );
@@ -207,10 +208,10 @@ export function WeeklyScheduleAnimatedShell(props: {
   }
 
   return (
-    <div
-      key={props.employeeKey}
-      className="flex min-h-0 flex-1 flex-col animate-in fade-in fill-mode-both slide-in-from-bottom-2 zoom-in-98"
-    >
+    // Fade only, for the same reason as WeekViewAnimatedShell: the schedule
+    // editor fills the viewport, so sliding and zooming it on every employee
+    // switch moves the whole page rather than signalling a swap.
+    <div key={props.employeeKey} className="flex min-h-0 flex-1 flex-col animate-in fade-in fill-mode-both">
       {props.children}
     </div>
   );

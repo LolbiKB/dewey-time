@@ -97,8 +97,15 @@
 .group:hover .dw-hover-dial .dw-pen             { animation: dw-draw-ring var(--dw-draw-dur) var(--dw-ease-draw) both, dw-pen-fade var(--dw-draw-dur) linear both; }
 
 /* —— tactile press on real action buttons (exclude switches / tabs) —— */
-button:not([role='switch']):not([role='tab']) { transition: transform 0.06s ease; }
-button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform: scale(0.97); }
+/* `scale()` is size-relative, so one percentage cannot suit every button: the 3%
+   that read as a crisp press on a 32px control moved the week grid's day column
+   (173x509 on desktop, 370x505 on a phone — the whole cell is one <button>) by
+   ~7px, which reads as the layout lurching rather than a button depressing. Two
+   guards: the scale is small enough that even a tall control stays inside ~2px,
+   and surface-sized buttons — grid cells, list rows — opt out with
+   data-press="none" and signal the press with colour instead. */
+button:not([role='switch']):not([role='tab']):not([data-press='none']) { transition: transform 0.06s ease; }
+button:not([role='switch']):not([role='tab']):not([data-press='none']):active:not(:disabled) { transform: scale(0.99); }
 
 /* —— reduced motion: blanket off —— */
 @media (prefers-reduced-motion: reduce) {
@@ -126,3 +133,15 @@ button:not([role='switch']):not([role='tab']):active:not(:disabled) { transform:
     -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
   }
 }
+
+/* The shell is a fixed 100svh frame that never scrolls as a document — every
+   scrollable region is an inner container. Without this, any drag those inner
+   containers don't consume (the pip strip, the toolbar, a timeline already at
+   its end) falls through to the document and rubber-bands the entire frame,
+   which reads as the app sliding around under your finger. `none` also stops
+   the pull-to-refresh gesture, which would reload the SPA mid-review.
+
+   Height is deliberately NOT pinned here: body sizes to the 100svh shell, so
+   the document is already unscrollable, and forcing `height: 100%` (= the LARGE
+   viewport) would instead open a gap below the shell on phones. */
+html, body { overscroll-behavior: none; }

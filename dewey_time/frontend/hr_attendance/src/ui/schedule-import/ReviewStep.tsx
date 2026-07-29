@@ -184,7 +184,7 @@ export function ReviewStep(props: {
               </Button>
             ) : null}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-3">
             <div className="space-y-2">
               {visibleRows.length === 0 ? (
                 <p className="py-10 text-center text-sm text-muted-foreground">
