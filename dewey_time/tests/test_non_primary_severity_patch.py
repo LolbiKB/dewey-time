@@ -16,8 +16,11 @@ class TestNonPrimarySeverityPatch(unittest.TestCase):
         self.assertEqual(sql.call_count, 1)
         statement = sql.call_args[0][0]
         self.assertIn("tabAttendance Flag", statement)
-        self.assertIn("NON_PRIMARY_SITE_PUNCH", statement)
-        self.assertIn("INFO", statement)
+        normalised = " ".join(statement.split())
+        self.assertIn(
+            "WHERE flag_code = 'NON_PRIMARY_SITE_PUNCH' AND severity != 'INFO'",
+            normalised,
+        )
 
     def test_patch_is_idempotent_by_construction(self):
         """It must skip rows already at INFO, so a second migrate is a no-op
