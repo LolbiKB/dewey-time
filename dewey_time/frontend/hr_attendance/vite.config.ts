@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { createProxyOptions } from "./proxyOptions";
+import { DEV_PORT } from "./devPort";
 
 // Doppio-style: build into public/hr_attendance/, served at /assets/dewey_time/hr_attendance/
 export default defineConfig(({ command, mode }) => {
@@ -19,7 +20,11 @@ export default defineConfig(({ command, mode }) => {
     server:
       command === "serve"
         ? {
-            port: 8080,
+            port: DEV_PORT,
+            // Fail instead of sliding to 8081 on a conflict. A moved dev server
+            // is invisible to Playwright, which keeps polling the port it was
+            // told about — the silent half of issue #72.
+            strictPort: true,
             host: true,
             proxy,
           }
