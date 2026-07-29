@@ -46,6 +46,33 @@ test("dayPipState still flags a clock day that has flags", () => {
   assert.equal(dayPipState(day, false, true), "flagged");
 });
 
+test("dayPipState reads an INFO-only day as normal", () => {
+  const day = {
+    shift: { shift_assigned: true },
+    flags: [{ flag_code: "NON_PRIMARY_SITE_PUNCH", severity: "INFO" }],
+  } as never;
+  assert.equal(dayPipState(day, false), "normal");
+});
+
+test("dayPipState still flags a day with an INFO flag and a WARNING flag", () => {
+  const day = {
+    shift: { shift_assigned: true },
+    flags: [
+      { flag_code: "NON_PRIMARY_SITE_PUNCH", severity: "INFO" },
+      { flag_code: "LATE_START", severity: "WARNING" },
+    ],
+  } as never;
+  assert.equal(dayPipState(day, false), "flagged");
+});
+
+test("dayPipState treats a flag with no severity as flagged", () => {
+  const day = {
+    shift: { shift_assigned: true },
+    flags: [{ flag_code: "LATE_START" }],
+  } as never;
+  assert.equal(dayPipState(day, false), "flagged");
+});
+
 test("holiday still wins over clock", () => {
   const day = { shift: { shift_assigned: false }, holiday: { description: "X" } } as never;
   assert.equal(dayPipState(day, false, true), "holiday");
