@@ -226,7 +226,7 @@
         {
           "name": "AUTO-emp-2026-05-08-NON_PRIMARY_SITE_PUNCH",
           "flag_code": "NON_PRIMARY_SITE_PUNCH",
-          "severity": "WARNING",
+          "severity": "INFO",
           "source": "AUTO",
           "status": "OPEN",
           "day_closed": 1,

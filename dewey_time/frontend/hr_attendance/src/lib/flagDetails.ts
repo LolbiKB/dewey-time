@@ -55,7 +55,7 @@ const FLAG_SUMMARIES: Record<string, string> = {
   UNNOTIFIED_ABSENCE:
     "No punches were recorded on a scheduled shift day at closeout. Confirm leave, holiday, or absence with the employee.",
   NON_PRIMARY_SITE_PUNCH:
-    "At least one punch came from a device branch that does not match the employee's assigned branch.",
+    "At least one punch came from a site other than the employee's primary site. This is often expected — cover shifts, deliveries, or multi-site roles.",
   UNKNOWN_DEVICE_BRANCH:
     "At least one punch is missing device branch metadata and could not be validated against the employee site.",
   DELIVERY_FAILED:
