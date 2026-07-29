@@ -277,5 +277,39 @@ class EmployeeNavMetaClockBasedTests(unittest.TestCase):
         get_value.assert_not_called()
 
 
+class TestCalendarPayloadEmployeeBranch(unittest.TestCase):
+    """The payload must carry the employee's primary branch: the SPA compares each
+    punch's device branch against it, and cannot do so if it is never sent."""
+
+    def _call(self, branch):
+        from datetime import date as _date
+
+        import dewey_time.attendance_engine.hr_calendar as hc
+
+        def _get_value(doctype, name, field=None, *args, **kwargs):
+            if doctype == "Employee" and field == "branch":
+                return branch
+            return None
+
+        with patch.object(hc, "_require_calendar_access"), patch.object(
+            hc, "getdate", lambda v: _date.fromisoformat(str(v))
+        ), patch.object(hc, "get_datetime", lambda v: str(v)), patch.object(
+            hc.frappe.db, "get_value", side_effect=_get_value
+        ), patch.object(
+            hc.frappe, "get_all", return_value=[]
+        ), patch.object(
+            hc.frappe.db, "table_exists", return_value=False
+        ):
+            return hc.get_employee_calendar("EMP-001", "2026-07-27", "2026-07-27")
+
+    def test_payload_exposes_employee_branch(self):
+        self.assertEqual(self._call("BRANCH-A")["employee_branch"], "BRANCH-A")
+
+    def test_payload_exposes_none_when_branch_unset(self):
+        payload = self._call(None)
+        self.assertIn("employee_branch", payload)
+        self.assertIsNone(payload["employee_branch"])
+
+
 if __name__ == "__main__":
     unittest.main()
