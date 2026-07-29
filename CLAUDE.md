@@ -57,7 +57,9 @@ npm run dev:hr
 npm run dev:hr:cloud
 ```
 
-The Vite dev server starts at `http://localhost:8080` (set in `frontend/hr_attendance/vite.config.ts`). The built output goes to `dewey_time/public/hr_attendance/` and is copied to `sites/assets/` on `bench migrate`.
+The Vite dev server starts at `http://localhost:8080` — the port lives in `frontend/hr_attendance/devPort.ts`, which `vite.config.ts` and `playwright.config.ts` both import so the two can never disagree. Override it with `PORT` (`PORT=8099 npm run test:e2e`) when something else owns 8080. Vite uses `strictPort`, so a conflict is an error rather than a silent move to 8081, and the e2e suite refuses to run against an origin that is not this app instead of failing every test with no mention of ports.
+
+The built output goes to `dewey_time/public/hr_attendance/` and is copied to `sites/assets/` on `bench migrate`.
 
 > **Build prerequisite:** the SPA depends on the private package `@lolbikb/dewey-ui` published to GitHub Packages (`frontend/hr_attendance/.npmrc` points `@lolbikb` at `npm.pkg.github.com`). A fresh `npm install` returns **401** unless `NODE_AUTH_TOKEN` is set to a GitHub PAT with `read:packages`.
 
