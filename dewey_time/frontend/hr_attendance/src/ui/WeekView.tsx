@@ -67,6 +67,7 @@ export type WeekViewProps = {
   alertsByDate: Map<string, DeviceAlert[]>;
   syncByDate: Map<string, DeviceSyncStatus[]>;
   isClockBased?: boolean;
+  employeeBranch?: string | null;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 };
@@ -189,6 +190,7 @@ export function WeekView(props: WeekViewProps) {
                 timelineEndMin={weekWindow.endMin}
                 deviceSync={props.syncByDate.get(key) ?? []}
                 isClockDay={clockDay}
+                employeeBranch={props.employeeBranch}
                 onInspectDay={() => props.onInspectDay(key)}
               />
             );

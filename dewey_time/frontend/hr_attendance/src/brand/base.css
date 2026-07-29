@@ -145,3 +145,19 @@ button:not([role='switch']):not([role='tab']):not([data-press='none']):active:no
    the document is already unscrollable, and forcing `height: 100%` (= the LARGE
    viewport) would instead open a gap below the shell on phones. */
 html, body { overscroll-behavior: none; }
+
+/* —— off-site punch: a worked segment recorded at a site other than the
+   employee's primary one ——
+   Texture, not colour. The orange accent above is reserved for the urgent
+   signal and is already spent on device alerts and holidays; this is a minor
+   note the employee can usually explain, so it must not borrow that weight.
+   Being a background-image, it layers over the segment's existing fill and
+   survives at any block height — unlike a badge, which vanishes on short
+   segments. */
+.seg-offsite {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgb(255 255 255 / 0.13) 0 5px,
+    transparent 5px 13px
+  );
+}

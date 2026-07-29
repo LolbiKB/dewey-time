@@ -99,6 +99,9 @@ export type CalendarPayload = {
   schedule_max_date?: string | null;
   has_shift_assignment?: boolean;
   is_clock_based?: boolean;
+  /** The employee's primary site (Employee.branch). Null/absent for the many
+   *  employees who have none — consumers must treat that as "do not judge". */
+  employee_branch?: string | null;
 };
 
 export type CalendarEmployee = {

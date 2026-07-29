@@ -7,6 +7,7 @@ import {
   formatBranchLabel,
   formatCheckinTime,
   formatDurationMinutes,
+  isOffSiteSegment,
   minutesFromDateTime,
   parseDateTimeLocal,
   parseTimeToMinutes,
@@ -60,6 +61,7 @@ export function DayCell(props: {
   timelineEndMin?: number;
   deviceSync?: DeviceSyncStatus[];
   isClockDay?: boolean;
+  employeeBranch?: string | null;
   onInspectDay: () => void;
 }) {
   const checkins = props.info?.checkins ?? [];
@@ -133,6 +135,7 @@ export function DayCell(props: {
               deviceSync={props.deviceSync}
               dense={props.dense}
               isClockDay={props.isClockDay}
+              employeeBranch={props.employeeBranch}
               windowStartMin={props.timelineStartMin}
               windowEndMin={props.timelineEndMin}
             />
@@ -167,6 +170,7 @@ function DayDayTrack(props: {
   deviceSync?: DeviceSyncStatus[];
   dense: boolean;
   isClockDay?: boolean;
+  employeeBranch?: string | null;
   windowStartMin?: number;
   windowEndMin?: number;
 }) {
@@ -516,6 +520,10 @@ function DayDayTrack(props: {
             const heightPct = endPct - topPct;
             if (heightPct <= 0) return null;
             const branchLabel = formatBranchLabel(s.branch);
+            // Only worked (green) segments carry it: an off-shift day is already
+            // salmon with dashed red borders, and stacking a second signal there
+            // makes the louder one harder to read.
+            const offSite = workedTone && isOffSiteSegment(s.branch, props.employeeBranch);
             const startLabel = s.start?.time ? format(new Date(s.start.time), "h:mma") : "—";
             const endLabel = s.end?.time ? format(new Date(s.end.time), "h:mma") : "—";
             const compactTip = [
@@ -536,7 +544,8 @@ function DayDayTrack(props: {
                     "absolute inset-x-2 rounded-sm",
                     workedTone
                       ? cn(color, "shadow-sm ring-1 ring-foreground/10")
-                      : offShiftSegmentClass
+                      : offShiftSegmentClass,
+                    offSite && "seg-offsite"
                   )}
                   style={{
                     top: `${topPct}%`,
