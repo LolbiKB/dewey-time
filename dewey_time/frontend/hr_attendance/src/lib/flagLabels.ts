@@ -10,7 +10,7 @@ export const FLAG_LABELS: Record<string, string> = {
   MISSING_IN_OR_OUT: "Missing in or out",
   UNNOTIFIED_ABSENCE: "Did not show up",
   OFF_SHIFT_PUNCH: "Punched on day off",
-  NON_PRIMARY_SITE_PUNCH: "Wrong site",
+  NON_PRIMARY_SITE_PUNCH: "Other site",
   UNKNOWN_DEVICE_BRANCH: "Unknown device branch",
   DELIVERY_FAILED: "Delivery failed",
 };
@@ -69,7 +69,7 @@ export function formatFlagLabel(flagCode: string, evidence?: FlagEvidence | null
 export const FLAG_FILTER_GROUPS = {
   absence: ["UNNOTIFIED_ABSENCE", "MISSING_TIME"],
   schedule: ["LATE_START", "LATE_FROM_LUNCH", "LEFT_EARLY"],
-  wrongSite: ["NON_PRIMARY_SITE_PUNCH"],
+  otherSite: ["NON_PRIMARY_SITE_PUNCH"],
   offShift: ["OFF_SHIFT_PUNCH"],
   record: ["ATTENDANCE_ISSUE", "MISSING_IN_OR_OUT", "UNKNOWN_DEVICE_BRANCH", "DELIVERY_FAILED"],
 } as const;

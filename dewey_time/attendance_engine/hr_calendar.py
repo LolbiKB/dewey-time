@@ -647,5 +647,11 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         "days": days,
         "device_alerts": device_alerts,
         "device_sync": device_sync,
+        # The employee's primary site. Already resolved above for the closeout-alert
+        # and sync-status lookups, so this adds no query. The SPA needs it to tell
+        # which punches happened somewhere other than home; without it the client
+        # cannot make that comparison at all. May be None — a great many employees
+        # have no branch set, and every consumer must treat that as "do not judge".
+        "employee_branch": employee_branch,
         **_employee_nav_meta(employee),
     }

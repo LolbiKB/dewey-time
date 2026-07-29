@@ -2,6 +2,11 @@ import { format, isSameDay } from "date-fns";
 
 import type { Day } from "@/types/calendar";
 
+// Missing/absent severity defaults to non-INFO — matches the ?? "WARNING"
+// convention used elsewhere (e.g. flagDetails.ts, DayInspectorSheet.tsx) so
+// older rows/fixtures without a severity still read as flagged.
+const isNonInfoFlag = (flag: { severity?: string }) => (flag.severity ?? "WARNING") !== "INFO";
+
 export type PipState = "today" | "holiday" | "off" | "flagged" | "normal";
 
 const key = (d: Date) => format(d, "yyyy-MM-dd");
@@ -29,6 +34,6 @@ export function dayPipState(
   if (day?.holiday != null) return "holiday";
   const unscheduled = day?.shift?.shift_assigned !== true;
   if (unscheduled && !isClockBased) return "off";
-  if ((day?.flags ?? []).length > 0) return "flagged";
+  if ((day?.flags ?? []).some(isNonInfoFlag)) return "flagged";
   return "normal";
 }

@@ -792,3 +792,30 @@ class TestOffShiftGate(unittest.TestCase):
         codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
         self.assertIn("LATE_START", codes)
         self.assertNotIn("OFF_SHIFT_PUNCH", codes)
+
+
+class TestNonPrimarySiteSeverity(unittest.TestCase):
+    """Punching at another site is a note, not a warning — HR described it as
+    "not a major offense" and something the employee can justify."""
+
+    def test_severity_is_info_in_closeout(self):
+        from dewey_time.attendance_engine.closeout import FLAG_SEVERITY
+
+        self.assertEqual(FLAG_SEVERITY["NON_PRIMARY_SITE_PUNCH"], "INFO")
+
+    def test_severity_is_info_in_doctype(self):
+        from dewey_time.dewey_time.doctype.attendance_flag.attendance_flag import (
+            FLAG_SEVERITY as DOCTYPE_SEVERITY,
+        )
+
+        self.assertEqual(DOCTYPE_SEVERITY["NON_PRIMARY_SITE_PUNCH"], "INFO")
+
+    def test_the_two_severity_maps_agree(self):
+        """They are duplicated, so they can drift. Pin them together: a future
+        edit to one is then a failing test rather than a silent inconsistency."""
+        from dewey_time.attendance_engine.closeout import FLAG_SEVERITY
+        from dewey_time.dewey_time.doctype.attendance_flag.attendance_flag import (
+            FLAG_SEVERITY as DOCTYPE_SEVERITY,
+        )
+
+        self.assertEqual(FLAG_SEVERITY, DOCTYPE_SEVERITY)

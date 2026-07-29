@@ -99,3 +99,24 @@ export function parseTimeToMinutes(time: string | undefined | null) {
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
 }
+
+/**
+ * Did this segment's punches happen somewhere other than the employee's primary site?
+ *
+ * Both blanks are deliberately NOT off-site, and for different reasons:
+ * - no punch branch → the location is unknown, not elsewhere; that is
+ *   ATTENDANCE_ISSUE's job, and asserting "off-site" would invent a fact.
+ * - no employee branch → there is no primary site to be away from. A great many
+ *   employees have `Employee.branch` unset, and treating that as "everywhere is
+ *   off-site" would mark their entire calendar. The backend guards the same way
+ *   (`if not employee_branch: return None`).
+ */
+export function isOffSiteSegment(
+  segmentBranch: string | null | undefined,
+  employeeBranch: string | null | undefined,
+): boolean {
+  const segment = (segmentBranch ?? "").trim();
+  const primary = (employeeBranch ?? "").trim();
+  if (!segment || !primary) return false;
+  return segment !== primary;
+}
