@@ -602,10 +602,6 @@ export function deriveTimelineGaps(
   return results;
 }
 
-/** Week timeline: 10 hours of time map to the full scroll viewport height. */
-export const TIMELINE_VIEWPORT_HOURS = 10;
-export const TIMELINE_VIEWPORT_MINUTES = TIMELINE_VIEWPORT_HOURS * 60;
-
 export const DEFAULT_TIMELINE_FALLBACK_WINDOW = {
   startMin: 8 * 60,
   endMin: 18 * 60,
@@ -627,21 +623,6 @@ export function computeWeekTimelineWindow(
   const endMin = Math.min(24 * 60, max + marginMinutes);
   const spanMinutes = Math.max(60, endMin - startMin);
   return { startMin, endMin, spanMinutes };
-}
-
-/** Inner week canvas height (% of scroll viewport). Grows when span exceeds 10 hours. */
-export function weekTimelineCanvasHeightPct(
-  spanMinutes: number,
-  viewportMinutes = TIMELINE_VIEWPORT_MINUTES
-): number {
-  return Math.max(100, (spanMinutes / viewportMinutes) * 100);
-}
-
-export function weekTimelineNeedsScroll(
-  spanMinutes: number,
-  viewportMinutes = TIMELINE_VIEWPORT_MINUTES
-): boolean {
-  return spanMinutes > viewportMinutes;
 }
 
 export function computeDayTimeWindow(

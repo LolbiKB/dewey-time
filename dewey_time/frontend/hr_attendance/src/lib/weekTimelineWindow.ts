@@ -1,6 +1,6 @@
 import { format } from "date-fns";
 
-import { computeWeekTimelineWindow, weekTimelineCanvasHeightPct } from "@/lib/attendancePunches";
+import { computeWeekTimelineWindow } from "@/lib/attendancePunches";
 import { minutesFromDateTime, parseTimeToMinutes } from "@/lib/attendanceTime";
 import type { Day } from "@/types/calendar";
 
@@ -8,7 +8,6 @@ export type WeekTimelineWindow = {
   startMin: number;
   endMin: number;
   spanMinutes: number;
-  canvasHeightPct: number;
 };
 
 /** Every minute-of-day that should influence the shared vertical axis across the week. */
@@ -47,11 +46,19 @@ export function collectWeekTimelineMinutes(
   return mins;
 }
 
-/** The shared axis window + inner canvas height, used by both the week grid and the phone day view. */
+/**
+ * The shared vertical axis, used by both the week grid and the phone day view.
+ *
+ * The axis always fits its container — there is no canvas taller than the
+ * viewport and therefore no scrolling. It used to pin 10 hours to the viewport
+ * height and grow the canvas beyond it for wider weeks, which made scrolling
+ * depend on the employee: a plain 09:00-17:00 week fitted, while anyone with an
+ * early start and a late finish silently got a scrollbar. Same screen, two
+ * different interaction models, with nothing on screen explaining why.
+ */
 export function resolveWeekTimelineWindow(
   weekDates: Date[],
   daysByDate: Map<string, Day>,
 ): WeekTimelineWindow {
-  const window = computeWeekTimelineWindow(collectWeekTimelineMinutes(weekDates, daysByDate));
-  return { ...window, canvasHeightPct: weekTimelineCanvasHeightPct(window.spanMinutes) };
+  return computeWeekTimelineWindow(collectWeekTimelineMinutes(weekDates, daysByDate));
 }

@@ -24,10 +24,14 @@ test("collectWeekTimelineMinutes gathers checkin, first/last, and shift minutes"
   assert.ok(mins.includes(17 * 60), "includes shift end 17:00");
 });
 
-test("resolveWeekTimelineWindow falls back to 08:00–18:00 with no data and reports canvas height", () => {
+test("resolveWeekTimelineWindow falls back to 08:00–18:00 with no data", () => {
   const w = resolveWeekTimelineWindow([D("2026-07-14")], new Map());
   assert.equal(w.startMin, 8 * 60);
   assert.equal(w.endMin, 18 * 60);
   assert.equal(w.spanMinutes, 10 * 60);
-  assert.equal(w.canvasHeightPct, 100, "10h span == exactly one viewport");
+  assert.equal(
+    (w as Record<string, unknown>).canvasHeightPct,
+    undefined,
+    "no canvas height: the axis is scaled to fit, never scrolled",
+  );
 });

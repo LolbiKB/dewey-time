@@ -1,6 +1,5 @@
 import type { Day, DeviceAlert, DeviceSyncStatus, Flag } from "@/types/calendar";
 import { format, isSameDay } from "date-fns";
-import { useEffect, useRef } from "react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
 import { DayChips } from "@/ui/DayChips";
@@ -73,16 +72,7 @@ export type WeekViewProps = {
 };
 
 export function WeekView(props: WeekViewProps) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-
   const weekWindow = useWeekTimelineWindow(props.weekDates, props.daysByDate);
-  const canvasHeightPct = weekWindow.canvasHeightPct;
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = 0;
-  }, [weekWindow.startMin, weekWindow.endMin]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">
@@ -178,12 +168,10 @@ export function WeekView(props: WeekViewProps) {
         })}
       </div>
 
-      <div
-        ref={scrollRef}
-        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
-        aria-label="Week attendance timeline"
-      >
-        <div className="grid grid-cols-[repeat(7,minmax(8rem,1fr))]" style={{ height: `${canvasHeightPct}%` }}>
+      {/* No vertical scroll: the axis is scaled to fit this box, so a week with a
+          wide span compresses rather than overflowing. See resolveWeekTimelineWindow. */}
+      <div className="relative min-h-0 flex-1 overflow-hidden" aria-label="Week attendance timeline">
+        <div className="grid h-full grid-cols-[repeat(7,minmax(8rem,1fr))]">
           {props.weekDates.map((d) => {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
