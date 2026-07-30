@@ -43,10 +43,26 @@ rendering:
 `weekSchedule.test.ts:101-115` keeps them alive. Someone intended a shared-axis week Gantt; it
 never landed, and the placeholder shipped instead.
 
-### And the page that needs it doesn't have it
+### There is a third week view, and the broken bar is implemented twice
 
-`/hr-schedule` renders no week view at all. On the page where you author the schedule you cannot
-see the schedule; you switch to `/hr-attendance` to check your own work.
+`SchedulePlanPreviewDialog`'s `WeekPatternStrip` is a **third** week visualisation — seven columns
+of fixed `min-h-[7.5rem]` cards, reached from the Schedule page's "Weekly schedule preview".
+
+Its `MiniShiftTrack` repeats the Gantt's defect verbatim: a fixed `h-14 w-2` bar with lunch
+positioned against `span = endMin - startMin`, i.e. each day scaled to itself
+(`SchedulePlanPreviewDialog.tsx:141-160`). So the same broken idea exists in two files, and the
+app shows a week three different ways:
+
+| surface | shape | bar |
+|---|---|---|
+| `WeekView` — attendance | 7 columns, hour axis | truthful |
+| `WeekScheduleGantt` — sheet | 7 rows | fixed `h-[4.5rem]`, self-scaled |
+| `WeekPatternStrip` — preview dialog | 7 columns | fixed `h-14`, self-scaled |
+
+**The Schedule page already has the data.** `WeekPattern.days[]` carries `weekday`, `works`,
+`start_time`, `end_time`, `lunch_start` and `lunch_end` — everything the canvas needs, already in
+the editor's state and already feeding this dialog. No new fetch is required, and no choice
+between "intended" and "generated" arises: the pattern being edited is what this dialog is for.
 
 ## The decisive finding
 
@@ -79,8 +95,29 @@ visually — this is a refactor there, and its existing tests are the proof.
 
 ### 2. `PlannedWeekCanvas` — the schedule week
 
-New `src/ui/PlannedWeekCanvas.tsx` and `src/ui/PlannedDayColumn.tsx`, driven by
-`WeekDaySchedule[]` from the existing `buildWeekSchedule`.
+New `src/ui/PlannedWeekCanvas.tsx` and `src/ui/PlannedDayColumn.tsx`, driven by a **normalised
+`PlannedDay[]`** so the canvas does not care where its week came from:
+
+```ts
+export type PlannedDay = {
+  key: string;            // date string, or weekday name for an undated pattern
+  label: string;          // "Mon"
+  sublabel?: string;      // "27" for a dated week; omitted for a pattern
+  works: boolean;
+  onLeave?: boolean;
+  leaveType?: string | null;
+  startMin?: number;
+  endMin?: number;
+  lunchStartMin?: number;
+  lunchEndMin?: number;
+  shiftCode?: string;
+  durationMin?: number;
+};
+```
+
+Two thin adapters feed it — `plannedDaysFromWeekPattern(pattern)` for the editor's undated
+Mon–Sun pattern, and `plannedDaysFromSchedule(weekDates, daysByDate)` for a dated week. The
+undated case is why `PlannedDay` carries its own `label`/`sublabel` rather than a `Date`.
 
 - **Window** from `resolveWeekTimelineWindow` — already shift-derived and hour-quantized, which is
   exactly what a planned view wants. No new window rule.
@@ -96,8 +133,11 @@ New `src/ui/PlannedWeekCanvas.tsx` and `src/ui/PlannedDayColumn.tsx`, driven by
 - The shift-type code (`shortShiftTypeCode`) and exact times go in the block's tooltip, matching
   how attendance segments already behave. `AppTooltip` handles touch.
 
-Mounted in `WeeklySchedulePage`'s existing `Section` (`:406-473`), beneath the "Shift blocks"
-editor, under a "Resulting week" label — so editing a pattern updates the week in view.
+**It replaces `WeekPatternStrip` inside the existing "Weekly schedule preview" dialog**
+(`SchedulePlanPreviewDialog.tsx:50`), which is already wired to `weekPattern` and already
+reachable from the page. `MiniShiftTrack` and `DayColumn` are deleted with it. Nothing new is
+mounted on `WeeklySchedulePage` and no data dependency is added — the preview updates live as
+blocks are edited, because it already does.
 
 ### 3. Attendance keeps the facts, loses the chart
 
@@ -122,6 +162,7 @@ Shift blocks, times and lunch are **removed** from this panel — they are on th
 | delete | why |
 |---|---|
 | `src/ui/WeekScheduleGantt.tsx` | replaced; sole consumer is the sheet |
+| `WeekPatternStrip`, `DayColumn`, `MiniShiftTrack`, `clampPct` in `SchedulePlanPreviewDialog.tsx` | replaced by the canvas; second copy of the self-scaled-bar defect |
 | `computeWeekGanttWindow`, `minuteToWeekGanttPct`, `formatGanttAxisHour`, `WeekGanttWindow` | dead; the new canvas uses `resolveWeekTimelineWindow` + `timelineAxis.ts` |
 | `SCHEDULE_DAY_START_MIN`, `SCHEDULE_DAY_END_MIN` | verified no other consumers |
 | `weekSchedule.test.ts:101-115` + its import at `:7` | tests only the above |
