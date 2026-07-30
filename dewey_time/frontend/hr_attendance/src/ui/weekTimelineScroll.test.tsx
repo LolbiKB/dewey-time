@@ -4,6 +4,7 @@ import { format } from "date-fns";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { TooltipProvider } from "../components/ui/tooltip";
+import { resolveWeekTimelineWindow } from "../lib/weekTimelineWindow";
 import { WeekView } from "./WeekView";
 import { WeekDayView } from "./WeekDayView";
 import type { Day } from "../types/calendar";
@@ -20,7 +21,15 @@ import type { Day } from "../types/calendar";
 
 const WEEK = Array.from({ length: 7 }, (_, i) => new Date(`2026-07-${13 + i}T00:00:00`));
 
-/** `from`–`to` every day, as bare punches (no shift), e.g. NARROW vs WIDE spans. */
+/**
+ * `from`–`to` every day, as an assigned shift plus matching punches.
+ *
+ * The shift is what makes this discriminating: the axis is derived from
+ * assigned shift bounds, so NARROW and WIDE must resolve to genuinely
+ * different windows (08:00–18:00 vs 05:00–21:00). Left as bare punches on
+ * `shift_assigned: false`, both collapse onto the same fallback window and
+ * every assertion below passes without proving anything.
+ */
 function weekOf(from: string, to: string): Map<string, Day> {
   return new Map(
     WEEK.map((d) => {
@@ -29,7 +38,7 @@ function weekOf(from: string, to: string): Map<string, Day> {
         date,
         {
           date,
-          shift: { shift_assigned: false },
+          shift: { shift_assigned: true, start_time: from, end_time: to },
           checkins: [
             { time: `${date} ${from}`, custom_device_branch: "HQ" },
             { time: `${date} ${to}`, custom_device_branch: "HQ" },
@@ -110,4 +119,16 @@ test("both surfaces render the same span identically w.r.t. overflow", () => {
   const scroller = /overflow-(?:y-)?auto/;
   assert.equal(scroller.test(renderWeek(NARROW)), scroller.test(renderWeek(WIDE)));
   assert.equal(scroller.test(renderDay(NARROW)), scroller.test(renderDay(WIDE)));
+});
+
+test("the two fixtures resolve to different windows, or this file proves nothing", () => {
+  // Guards the tautology this test previously became: with shift_assigned:false
+  // on both fixtures, NARROW and WIDE landed on the same fallback window and
+  // every assertion above passed while discriminating nothing.
+  const narrow = resolveWeekTimelineWindow(WEEK, NARROW);
+  const wide = resolveWeekTimelineWindow(WEEK, WIDE);
+  assert.notDeepEqual(
+    { s: narrow.startMin, e: narrow.endMin },
+    { s: wide.startMin, e: wide.endMin },
+  );
 });

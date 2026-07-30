@@ -366,6 +366,7 @@ export function App() {
                       syncByDate={syncByDate}
                       isClockBased={payload.is_clock_based ?? selectedEmployee?.is_clock_based}
                       employeeBranch={payload.employee_branch ?? null}
+                      now={new Date()}
                       onInspectDay={handleInspectDay}
                       onInspectFlag={handleInspectFlag}
                     />
@@ -377,6 +378,7 @@ export function App() {
                       syncByDate={syncByDate}
                       isClockBased={payload.is_clock_based ?? selectedEmployee?.is_clock_based}
                       employeeBranch={payload.employee_branch ?? null}
+                      now={new Date()}
                       onInspectDay={handleInspectDay}
                       onInspectFlag={handleInspectFlag}
                     />

@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { useMemo } from "react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
+import { HourGrid } from "@/ui/TimelineAxis";
 import {
   clamp,
   formatBranchLabel,
@@ -17,7 +18,6 @@ import {
   computeDayTimeWindow,
   deriveTimelineGaps,
   deriveUnpairedPunches,
-  hasTimelineErrorPunches,
   shiftTimelinePolicyFromShift,
   type DeviceSyncStatus,
   type PunchPresentation,
@@ -29,8 +29,6 @@ import {
 } from "@/lib/lunchDetection";
 import { deriveSegments } from "@/lib/segmentInspector";
 import {
-  clipScheduledBandToFuture,
-  computeDaySpan,
   computeLateness,
   deriveMissingExpectedIntervals,
   deriveScheduledFutureIntervals,
@@ -56,25 +54,16 @@ export function DayCell(props: {
   outside: boolean;
   today: boolean;
   info?: Day;
-  dense: boolean;
   timelineStartMin?: number;
   timelineEndMin?: number;
   deviceSync?: DeviceSyncStatus[];
   isClockDay?: boolean;
   employeeBranch?: string | null;
+  now?: Date;
   onInspectDay: () => void;
 }) {
   const checkins = props.info?.checkins ?? [];
   const dateKey = format(props.date, "yyyy-MM-dd");
-  const shiftEndMin =
-    props.info?.shift?.shift_assigned && props.info.shift.end_time
-      ? parseTimeToMinutes(props.info.shift.end_time)
-      : null;
-  const hasErrorPunch = hasTimelineErrorPunches(
-    checkins,
-    { dateKey, shiftEndMin, deviceSync: props.deviceSync },
-    punchHelpers
-  );
   const holiday = props.info?.holiday ?? null;
   const shift = holiday ? { shift_assigned: false } : (props.info?.shift ?? { shift_assigned: false });
 
@@ -88,38 +77,15 @@ export function DayCell(props: {
       data-press="none"
       className={cn(
         "group relative min-h-0 border-b border-r border-border/60 p-3 pl-5 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 active:bg-muted/30 focus:ring-2 focus:ring-ring/40",
-        props.dense ? "h-full" : "h-full",
+        "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
         props.today && "bg-primary/3 ring-1 ring-primary/20"
       )}
     >
-      <div className={cn("grid h-full gap-2", props.dense ? "grid-rows-[20px_1fr]" : "grid-rows-[1fr]")}>
-        {props.dense ? (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "h-4 w-1 rounded-full",
-                  hasErrorPunch ? "bg-destructive" : "bg-muted/40"
-                )}
-                aria-hidden="true"
-              />
-              <div className="text-xs font-semibold">{format(props.date, "d")}</div>
-            </div>
-            <div className="opacity-0 transition-opacity group-hover:opacity-100">
-              <span className="text-[11px] text-muted-foreground">Inspect</span>
-            </div>
-          </div>
-        ) : null}
-
+      <div className="grid h-full gap-2 grid-rows-[1fr]">
         <div className="min-h-0 h-full">
           {holiday ? (
-            <div
-              className={cn(
-                "relative rounded-xl bg-muted/25",
-                props.dense ? "" : "min-h-0 h-full"
-              )}
-            >
+            <div className="relative rounded-xl bg-muted/25 min-h-0 h-full">
               <div className="absolute inset-2">
                 <HolidayBoard description={holiday.description} weeklyOff={holiday.weekly_off} />
               </div>
@@ -127,17 +93,17 @@ export function DayCell(props: {
           ) : (
             <DayDayTrack
               firstIn={props.info?.first_in ?? null}
-              lastOut={props.info?.last_out ?? null}
               checkins={checkins}
               shift={shift}
               dateKey={dateKey}
               observedLunch={props.info?.observed_lunch ?? null}
               deviceSync={props.deviceSync}
-              dense={props.dense}
               isClockDay={props.isClockDay}
               employeeBranch={props.employeeBranch}
               windowStartMin={props.timelineStartMin}
               windowEndMin={props.timelineEndMin}
+              today={props.today}
+              now={props.now}
             />
           )}
         </div>
@@ -162,17 +128,17 @@ function HolidayBoard(props: { description: string; weeklyOff: boolean }) {
 
 function DayDayTrack(props: {
   firstIn: string | null;
-  lastOut: string | null;
   checkins: Checkin[];
   shift: ShiftContext;
   dateKey: string;
   observedLunch: ObservedLunch | null;
   deviceSync?: DeviceSyncStatus[];
-  dense: boolean;
   isClockDay?: boolean;
   employeeBranch?: string | null;
   windowStartMin?: number;
   windowEndMin?: number;
+  today?: boolean;
+  now?: Date;
 }) {
   const onShift = props.shift?.shift_assigned === true;
   /**
@@ -196,7 +162,6 @@ function DayDayTrack(props: {
       ? "border-muted-foreground/40 bg-muted/40"
       : "border-destructive/40 bg-destructive/15";
 
-  const span = computeDaySpan(props.firstIn, props.lastOut);
   const segments = deriveSegments(props.checkins);
   const shiftEndMin =
     props.shift?.shift_assigned && props.shift.end_time
@@ -291,7 +256,6 @@ function DayDayTrack(props: {
   const lateness = computeLateness(props.shift, props.firstIn);
 
   const window = useMemo(() => {
-    if (props.dense) return null;
     if (props.windowStartMin != null && props.windowEndMin != null) {
       const span = props.windowEndMin - props.windowStartMin;
       if (span > 0) {
@@ -303,34 +267,28 @@ function DayDayTrack(props: {
       }
     }
     return computeDayTimeWindow(props.checkins ?? [], minutesFromDateTime);
-  }, [props.checkins, props.dense, props.windowEndMin, props.windowStartMin]);
+  }, [props.checkins, props.windowEndMin, props.windowStartMin]);
+
+  const nowMin = useMemo(() => {
+    const d = props.now ?? new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  }, [props.now]);
 
   function pctFromMinute(min: number) {
     if (!window) return clamp((min / (24 * 60)) * 100, 0, 100);
     return clamp(((min - window.startMin) / window.span) * 100, 0, 100);
   }
 
-  function pctFromMinuteDay(min: number) {
-    return clamp((min / (24 * 60)) * 100, 0, 100);
-  }
-
   function renderTimelineBand(
     key: string,
     interval: { startMin: number; endMin: number; minutes: number },
     className: string,
-    label: string,
-    useWeekWindow: boolean
+    label: string
   ) {
-    const topPct = useWeekWindow
-      ? pctFromMinute(interval.startMin)
-      : pctFromMinuteDay(interval.startMin);
-    const bottomPct = useWeekWindow
-      ? pctFromMinute(interval.endMin)
-      : pctFromMinuteDay(interval.endMin);
-    const heightPct = Math.max(2, bottomPct - topPct);
+    const topPct = pctFromMinute(interval.startMin);
+    const bottomPct = pctFromMinute(interval.endMin);
+    const heightPct = bottomPct - topPct;
     if (heightPct <= 0) return null;
-    const topStyle = useWeekWindow ? `${topPct}%` : `calc(${topPct}% + 8px)`;
-    const heightStyle = useWeekWindow ? `${heightPct}%` : `calc(${heightPct}% - 16px)`;
     return (
       <AppTooltip
         key={key}
@@ -339,7 +297,7 @@ function DayDayTrack(props: {
       >
         <div
           className={cn("absolute inset-x-2 rounded-sm", className)}
-          style={{ top: topStyle, height: heightStyle }}
+          style={{ top: `${topPct}%`, height: `${heightPct}%`, minHeight: 3 }}
         />
       </AppTooltip>
     );
@@ -355,19 +313,26 @@ function DayDayTrack(props: {
 
   return (
     <div className="flex h-full flex-col gap-2">
-      <div
-        className={cn("relative rounded-xl bg-muted/25", props.dense ? "" : "min-h-0 flex-1")}
-        style={props.dense ? { height: 96 } : undefined}
-      >
+      <div className="relative rounded-xl bg-muted/25 min-h-0 flex-1">
+        <HourGrid window={window} />
+        {/* Explicit bounds check, not a consequence of the pct maths: pctFromMinute
+            clamps to [0,100], so omitting this renders a plausible line pinned to an
+            edge — a confident 07:00 reading at 03:00 — instead of nothing. */}
+        {props.today && window && nowMin >= window.startMin && nowMin <= window.endMin ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-10"
+            style={{ top: `${pctFromMinute(nowMin)}%` }}
+            aria-hidden="true"
+          >
+            <div className="absolute -left-0.5 -top-[3px] size-1.5 rounded-full bg-destructive" />
+            <div className="h-px bg-destructive/70" />
+          </div>
+        ) : null}
         {!onShift && props.checkins.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center px-3">
             <span className="text-xs text-muted-foreground">Day off</span>
           </div>
         ) : null}
-        <div
-          className="absolute inset-y-2 w-px bg-border/60"
-          style={{ left: "calc(50% - 0.5px)" }}
-        />
 
         {errorPresentations.map((row, idx) => {
           const m = row.startMin;
@@ -408,6 +373,24 @@ function DayDayTrack(props: {
         })}
 
         {openSessions.map((row, idx) => {
+          if (row.confirmedEndMin <= row.startMin) {
+            // No time has accrued to draw as a band — e.g. an unpaired punch
+            // after shift end, capped to zero length by `capEnd`. openSession
+            // is the only presentation kind with no other fallback marker, so
+            // dropping this silently (as the zero-height guard in
+            // renderTimelineBand would) makes a real punch vanish. Reuse the
+            // off-shift tick: this is an informational point, not a worked
+            // span, so it gets the same visual treatment.
+            const topPct = pctFromMinute(row.startMin);
+            return (
+              <AppTooltip key={`open-tick-${idx}`} side="right" content={openSessionLabel(row)}>
+                <div
+                  className="absolute inset-x-2 h-1 rounded-full border border-brand-accent/60 bg-brand-accent/40 shadow-sm"
+                  style={{ top: `calc(${topPct}% - 2px)` }}
+                />
+              </AppTooltip>
+            );
+          }
           const confirmed = renderTimelineBand(
             `open-${idx}`,
             {
@@ -416,8 +399,7 @@ function DayDayTrack(props: {
               minutes: Math.max(0, row.confirmedEndMin - row.startMin),
             },
             cn(color, "shadow-sm ring-1 ring-foreground/10"),
-            openSessionLabel(row),
-            window != null
+            openSessionLabel(row)
           );
           const uncertain =
             row.uncertainEndMin != null && row.uncertainEndMin > row.confirmedEndMin
@@ -429,8 +411,7 @@ function DayDayTrack(props: {
                     minutes: row.uncertainEndMin - row.confirmedEndMin,
                   },
                   openSessionUncertainClass,
-                  "Punches may still be in transit",
-                  window != null
+                  "Punches may still be in transit"
                 )
               : null;
           return (
@@ -446,31 +427,16 @@ function DayDayTrack(props: {
             `scheduled-${idx}`,
             interval,
             scheduledBandClass,
-            "Scheduled",
-            window != null
+            "Scheduled"
           )
         )}
-
-        {props.dense && span && segments.length === 0 ? (
-          <div
-            className={cn(
-              "absolute left-1/2 w-[12px] -translate-x-1/2 rounded-sm",
-              workedTone ? color : "border border-dashed border-brand-accent/50 bg-brand-accent/25"
-            )}
-            style={{
-              top: `calc(${span.topPct}% + 8px)`,
-              height: `calc(${span.heightPct}% - 16px)`,
-            }}
-          />
-        ) : null}
 
         {missingExpected.map((interval, idx) =>
           renderTimelineBand(
             `missing-${idx}`,
             interval,
             "border border-dashed border-destructive/75 bg-destructive/5",
-            "Missing expected",
-            window != null
+            "Missing expected"
           )
         )}
 
@@ -513,7 +479,7 @@ function DayDayTrack(props: {
         })}
 
         {segments.length === 0 ? null : (
-          segments.slice(0, props.dense ? 3 : 6).map((s, idx) => {
+          segments.map((s, idx) => {
             if (s.startMin == null || s.endMin == null) return null;
             const topPct = pctFromMinute(s.startMin);
             const endPct = pctFromMinute(s.endMin);
@@ -552,7 +518,7 @@ function DayDayTrack(props: {
                     height: `${heightPct}%`,
                   }}
                 >
-                  {!props.dense && heightPct >= 12 ? (
+                  {heightPct >= 12 ? (
                     <div className="pointer-events-none absolute inset-0 px-2 pt-1.5 text-white/95">
                       <div className="absolute left-2 top-1.5 text-[11px] font-semibold leading-tight">
                         {startLabel}

@@ -3,8 +3,6 @@ import type { ShiftContext } from "@/types/calendar";
 import {
   clamp,
   minutesFromDateTime,
-  minutesSinceMidnight,
-  parseDateTimeLocal,
   parseTimeToMinutes,
 } from "@/lib/attendanceTime";
 
@@ -182,19 +180,6 @@ export function deriveScheduledFutureIntervals(
     });
   }
   return results;
-}
-
-export function computeDaySpan(firstIn: string | null, lastOut: string | null) {
-  if (!firstIn || !lastOut) return null;
-  const a = parseDateTimeLocal(firstIn);
-  const b = parseDateTimeLocal(lastOut);
-  const aMin = minutesSinceMidnight(a);
-  const bMin = minutesSinceMidnight(b);
-  if (!Number.isFinite(aMin) || !Number.isFinite(bMin) || bMin < aMin) return null;
-  const topPct = clamp((aMin / (24 * 60)) * 100, 0, 100);
-  const bottomPct = clamp((bMin / (24 * 60)) * 100, 0, 100);
-  const heightPct = Math.max(2, bottomPct - topPct);
-  return { topPct, heightPct };
 }
 
 export function computeExpectedWindowPct(shift: ShiftContext) {

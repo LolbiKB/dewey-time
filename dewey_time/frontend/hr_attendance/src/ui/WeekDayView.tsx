@@ -11,6 +11,7 @@ import { initialSelectedDate, stepDay, dayPipState, type PipState } from "@/lib/
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
 import { DayCell } from "@/ui/DayTimeline";
 import { DayChips } from "@/ui/DayChips";
+import { HourGutter } from "@/ui/TimelineAxis";
 
 const PIP_TONE: Record<PipState, string> = {
   today: "bg-primary text-primary-foreground",
@@ -27,6 +28,7 @@ export type WeekDayViewProps = {
   syncByDate: Map<string, DeviceSyncStatus[]>;
   isClockBased?: boolean;
   employeeBranch?: string | null;
+  now?: Date;
   onInspectDay: (date: string) => void;
   onInspectFlag: (date: string, flag: Flag) => void;
 };
@@ -146,18 +148,19 @@ export function WeekDayView(props: WeekDayViewProps) {
             collapsed to a narrow sliver on phones (issue #71). A single-column
             grid stretches it by the same mechanism the week grid uses, so the two
             surfaces cannot drift apart. */}
-        <div className="grid h-full [&>button]:border-0">
+        <div className="grid h-full grid-cols-[3.5rem_1fr] [&>button]:border-0">
+          <HourGutter window={weekWindow} />
           <DayCell
             date={selectedDate}
             outside={false}
             today={isSameDay(selectedDate, new Date())}
             info={selectedInfo}
-            dense={false}
             timelineStartMin={weekWindow.startMin}
             timelineEndMin={weekWindow.endMin}
             deviceSync={props.syncByDate.get(selectedKey) ?? []}
             isClockDay={isClockDay(props.isClockBased, selectedInfo)}
             employeeBranch={props.employeeBranch}
+            now={props.now}
             onInspectDay={() => props.onInspectDay(selectedKey)}
           />
         </div>
