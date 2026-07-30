@@ -63,7 +63,6 @@ export {
 } from './use-mutations'
 
 export { useSyncCancel } from './use-users'
-export { useProcessPhoto } from './use-photo'
 export { useUserSyncAggregate, userSyncAggregateKeys } from './use-user-sync-aggregate'
 export { getGlobalCancel, setGlobalCancel } from '@/services/user-service'
 
@@ -77,5 +76,4 @@ export * from './use-attendance-logs'
 export * from './use-attlog-closure'
 export * from './use-device-status'
 export * from './use-connection-status'
-export * from './use-photo'
 export * from './use-user-photo'

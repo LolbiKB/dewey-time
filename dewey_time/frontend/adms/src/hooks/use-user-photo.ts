@@ -1,6 +1,4 @@
 import { useState, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { PhotoService } from '@/services/photo-service'
 import { getPhotoToken } from '@/lib/photo-token'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -57,13 +55,4 @@ export function useUserPhoto({ hasCachedPhoto, frappeEmployeeId, userId, enabled
   }
 
   return { photoUrl: null, isLoading: false, error: null, isCached: false }
-}
-
-export function usePhotoCacheStatus(userIds: string[]) {
-  return useQuery({
-    queryKey: ['photo-cache-status', userIds],
-    queryFn: () => PhotoService.getPhotoCacheStatus(userIds),
-    enabled: userIds.length > 0,
-    staleTime: 5 * 60 * 1000,
-  })
 }

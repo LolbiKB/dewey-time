@@ -574,7 +574,8 @@ export function useUpdateDevice() {
   })
 }
 
-// Photo processing: see use-photo.ts (canonical implementation)
+// Photo processing has no mutation hook: UserPhotoTab drives PhotoService
+// directly (process / verify / push), holding its own request state.
 
 // =====================================================
 // DEVICE COMMAND MUTATIONS
