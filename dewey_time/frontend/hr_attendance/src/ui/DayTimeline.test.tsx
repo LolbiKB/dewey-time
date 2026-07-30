@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { format } from "date-fns";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { DayCell } from "./DayTimeline";
 import { WeekDayView } from "./WeekDayView";
 import { WeekView } from "./WeekView";
 import type { Day } from "../types/calendar";
@@ -19,10 +18,6 @@ const NEUTRAL_GAP =
   'class="absolute inset-x-2 rounded-sm border border-muted-foreground/40 bg-muted/40"';
 const EXCEPTION_GAP =
   'class="absolute inset-x-2 rounded-sm border border-destructive/40 bg-destructive/15"';
-const DENSE_WORKED_SPAN =
-  'class="absolute left-1/2 w-[12px] -translate-x-1/2 rounded-sm bg-primary"';
-const DENSE_OFF_SHIFT_SPAN =
-  'class="absolute left-1/2 w-[12px] -translate-x-1/2 rounded-sm border border-dashed border-brand-accent/50 bg-brand-accent/25"';
 
 /** Every day unscheduled, worked 08:00–12:00 + 12:42–16:24 at one branch (42m away gap). */
 function unscheduledWeek(): Map<string, Day> {
@@ -108,39 +103,6 @@ test("an away gap stays an exception when the employee is not clock-based", () =
 test("a clock day with no punches is still a day off", () => {
   const html = renderWeek(silentWeek(), true);
   assert.match(html, />Day off</, "clocking in is optional; not clocking in means not working");
-});
-
-/**
- * DayCell's compact variant (no call site passes dense today) falls back to a single
- * span when no punch carries a branch. Pin its tone too — otherwise the fix only
- * holds for the full-height timeline.
- */
-function renderDenseDay(isClockDay: boolean): string {
-  const date = "2026-07-13";
-  return renderToStaticMarkup(
-    <TooltipProvider>
-      <DayCell
-        date={new Date(`${date}T00:00:00`)}
-        outside={false}
-        today={false}
-        info={{
-          date,
-          shift: { shift_assigned: false },
-          checkins: [{ time: `${date} 08:00:00` }, { time: `${date} 16:00:00` }],
-          first_in: `${date} 08:00:00`,
-          last_out: `${date} 16:00:00`,
-        }}
-        dense
-        isClockDay={isClockDay}
-        onInspectDay={() => {}}
-      />
-    </TooltipProvider>,
-  );
-}
-
-test("the dense span follows the same rule as the full timeline", () => {
-  assert.ok(renderDenseDay(true).includes(DENSE_WORKED_SPAN), "clock day: worked");
-  assert.ok(renderDenseDay(false).includes(DENSE_OFF_SHIFT_SPAN), "otherwise: off shift");
 });
 
 test("the phone day view paints a clock day with the same worked tone", () => {

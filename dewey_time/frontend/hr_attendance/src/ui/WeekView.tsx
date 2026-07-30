@@ -185,7 +185,6 @@ export function WeekView(props: WeekViewProps) {
                 outside={false}
                 today={isToday}
                 info={info}
-                dense={false}
                 timelineStartMin={weekWindow.startMin}
                 timelineEndMin={weekWindow.endMin}
                 deviceSync={props.syncByDate.get(key) ?? []}

@@ -152,7 +152,6 @@ export function WeekDayView(props: WeekDayViewProps) {
             outside={false}
             today={isSameDay(selectedDate, new Date())}
             info={selectedInfo}
-            dense={false}
             timelineStartMin={weekWindow.startMin}
             timelineEndMin={weekWindow.endMin}
             deviceSync={props.syncByDate.get(selectedKey) ?? []}
