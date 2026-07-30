@@ -352,6 +352,24 @@ function DayDayTrack(props: {
         })}
 
         {openSessions.map((row, idx) => {
+          if (row.confirmedEndMin <= row.startMin) {
+            // No time has accrued to draw as a band — e.g. an unpaired punch
+            // after shift end, capped to zero length by `capEnd`. openSession
+            // is the only presentation kind with no other fallback marker, so
+            // dropping this silently (as the zero-height guard in
+            // renderTimelineBand would) makes a real punch vanish. Reuse the
+            // off-shift tick: this is an informational point, not a worked
+            // span, so it gets the same visual treatment.
+            const topPct = pctFromMinute(row.startMin);
+            return (
+              <AppTooltip key={`open-tick-${idx}`} side="right" content={openSessionLabel(row)}>
+                <div
+                  className="absolute inset-x-2 h-1 rounded-full border border-brand-accent/60 bg-brand-accent/40 shadow-sm"
+                  style={{ top: `calc(${topPct}% - 2px)` }}
+                />
+              </AppTooltip>
+            );
+          }
           const confirmed = renderTimelineBand(
             `open-${idx}`,
             {

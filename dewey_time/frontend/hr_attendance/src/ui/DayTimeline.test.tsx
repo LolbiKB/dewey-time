@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { WeekDayView } from "./WeekDayView";
@@ -18,6 +18,10 @@ const NEUTRAL_GAP =
   'class="absolute inset-x-2 rounded-sm border border-muted-foreground/40 bg-muted/40"';
 const EXCEPTION_GAP =
   'class="absolute inset-x-2 rounded-sm border border-destructive/40 bg-destructive/15"';
+const MISSING_EXPECTED_BAND =
+  'class="absolute inset-x-2 rounded-sm border border-dashed border-destructive/75 bg-destructive/5"';
+const OPEN_SESSION_TICK =
+  'class="absolute inset-x-2 h-1 rounded-full border border-brand-accent/60 bg-brand-accent/40 shadow-sm"';
 
 /** Every day unscheduled, worked 08:00–12:00 + 12:42–16:24 at one branch (42m away gap). */
 function unscheduledWeek(): Map<string, Day> {
@@ -148,30 +152,20 @@ function shortMissingWeek(): Map<string, Day> {
   );
 }
 
-function renderShortMissing(): string {
-  return renderToStaticMarkup(
-    <TooltipProvider>
-      <WeekView
-        weekDates={WEEK}
-        daysByDate={shortMissingWeek()}
-        alertsByDate={new Map()}
-        syncByDate={new Map()}
-        onInspectDay={() => {}}
-        onInspectFlag={() => {}}
-      />
-    </TooltipProvider>,
-  );
-}
-
 test("a short band renders at its true height, not inflated to 2% of the window", () => {
   // 16:50-17:00 is 10 minutes of a 660-minute axis = 1.515%. The old
   // Math.max(2, …) floor drew it at exactly 2% — a confident claim of 13
   // minutes. Harmless while the axis was unreadable; a visible lie once the
   // hours beside it are labelled.
-  const html = renderShortMissing();
-  assert.match(html, /height:\s*1\.51/, "the 10-minute band must render at its true 1.51%");
-  assert.doesNotMatch(html, /height:\s*2%/, "an exactly-2% band means the old floor survives");
-  assert.match(html, /min-height:\s*3px/, "…and keeps a pixel floor so it stays visible");
+  const html = renderWeek(shortMissingWeek());
+  const band = html.match(
+    new RegExp(`${MISSING_EXPECTED_BAND.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")} style="([^"]*)"`),
+  );
+  assert.ok(band, "expected a missingExpected band in the markup");
+  const style = band![1]!;
+  assert.match(style, /height:\s*1\.51/, "the 10-minute band must render at its true 1.51%");
+  assert.doesNotMatch(style, /height:\s*2%/, "an exactly-2% band means the old floor survives");
+  assert.match(style, /min-height:\s*3px/, "…and keeps a pixel floor so it stays visible");
 });
 
 /**
@@ -213,11 +207,62 @@ test("every segment renders — there is no silent truncation at six", () => {
   // On a labelled axis a dropped 7th segment reads as an unexplained absence
   // rather than as truncation, which is why the cap went rather than gaining
   // a "+N more" marker.
+  const html = renderWeek(manySegmentDay(8));
+  const bands = html.match(new RegExp(WORKED_SEGMENT.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"), "g")) ?? [];
+  assert.equal(bands.length, 8, `expected 8 worked segments, found ${bands.length}`);
+});
+
+/**
+ * A shift on "today" worked cleanly 08:00–12:00 and 12:30–17:00, plus one
+ * more unpaired punch at 17:30 — after shift end. `classifyUnpairedPresentations`
+ * caps an open session's `confirmedEndMin` at `min(now, shiftEndMin)`, so for
+ * a punch already past shift end that cap equals `startMin`, producing a
+ * zero-length open session with no `uncertainEndMin` fallback either. This
+ * is deterministic regardless of the real wall-clock time the test runs at:
+ * `capEnd` can never exceed shiftEndMin (17:00), which is before the 17:30
+ * punch, so `confirmedEndMin` always collapses to `startMin`.
+ */
+function todayZeroLengthOpenSessionWeek(): Map<string, Day> {
+  const today = new Date();
+  const date = format(today, "yyyy-MM-dd");
+  const punch = (time: string) => ({ time: `${date} ${time}`, custom_device_branch: "HQ" });
+  return new Map([
+    [
+      date,
+      {
+        date,
+        shift: {
+          shift_assigned: true,
+          shift_type: "FT",
+          start_time: "08:00:00",
+          end_time: "17:00:00",
+        },
+        checkins: [
+          punch("08:00:00"),
+          punch("12:00:00"),
+          punch("12:30:00"),
+          punch("17:00:00"),
+          punch("17:30:00"),
+        ],
+        first_in: `${date} 08:00:00`,
+        last_out: `${date} 17:30:00`,
+        gross_minutes: 480,
+      } satisfies Day,
+    ],
+  ]);
+}
+
+test("an open session with no time left to accrue still renders a marker, not nothing", () => {
+  // openSession is the only presentation kind with no other fallback marker
+  // (errorPresentations and offShiftPresentations both draw an h-1 tick
+  // regardless). Before this fix, a zero-length open session band returned
+  // null from renderTimelineBand and the punch vanished from the timeline.
+  const todayWeek = Array.from({ length: 7 }, (_, i) => addDays(new Date(), i));
   const html = renderToStaticMarkup(
     <TooltipProvider>
       <WeekView
-        weekDates={WEEK}
-        daysByDate={manySegmentDay(8)}
+        weekDates={todayWeek}
+        daysByDate={todayZeroLengthOpenSessionWeek()}
         alertsByDate={new Map()}
         syncByDate={new Map()}
         onInspectDay={() => {}}
@@ -225,8 +270,7 @@ test("every segment renders — there is no silent truncation at six", () => {
       />
     </TooltipProvider>,
   );
-  const bands = html.match(new RegExp(WORKED_SEGMENT.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"), "g")) ?? [];
-  assert.equal(bands.length, 8, `expected 8 worked segments, found ${bands.length}`);
+  assert.ok(html.includes(OPEN_SESSION_TICK), "the after-shift-end punch must render a visible marker");
 });
 
 test("the phone day view paints a clock day with the same worked tone", () => {
