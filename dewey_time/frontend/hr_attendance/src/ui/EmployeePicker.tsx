@@ -23,7 +23,7 @@ import type { CalendarEmployee, Day } from "@/types/calendar";
 
 import { AppTooltip } from "@/ui/AppTooltip";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
-import { WeeklyScheduleSheet } from "@/ui/WeeklyScheduleSheet";
+import { WeeklyScheduleSummary } from "@/ui/WeeklyScheduleSummary";
 
 export type EmployeePickerProps = {
   employees: CalendarEmployee[];
@@ -130,13 +130,7 @@ export function EmployeePicker(props: EmployeePickerProps) {
 
       <div className="w-px shrink-0 self-stretch bg-border" aria-hidden="true" />
 
-      <ScheduleAccessButton
-        weekAssignedShiftDays={props.weekAssignedShiftDays}
-        disabled={!selected || disabled}
-        onClick={() => setScheduleOpen(true)}
-      />
-
-      <WeeklyScheduleSheet
+      <WeeklyScheduleSummary
         open={scheduleOpen}
         onOpenChange={setScheduleOpen}
         employee={selected}
@@ -144,34 +138,39 @@ export function EmployeePicker(props: EmployeePickerProps) {
         daysByDate={props.daysByDate}
         weekAssignedShiftDays={props.weekAssignedShiftDays}
         showWeekDetail={props.showWeekScheduleHint === true}
-      />
+      >
+        <ScheduleAccessButton
+          weekAssignedShiftDays={props.weekAssignedShiftDays}
+          disabled={!selected || disabled}
+        />
+      </WeeklyScheduleSummary>
     </div>
   );
 }
 
-function ScheduleAccessButton(props: {
-  weekAssignedShiftDays: number;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
+function ScheduleAccessButton(props: { weekAssignedShiftDays: number; disabled?: boolean }) {
   const detail =
     props.weekAssignedShiftDays > 0
       ? `${props.weekAssignedShiftDays} scheduled this week`
       : "View expected shifts";
 
   return (
+    // Tooltip outside, popover trigger inside: both are `asChild` slots, and
+    // only this order lets each merge onto the button. Reversed, the popover's
+    // props land on the tooltip's Root and its click handler is dropped.
     <AppTooltip content={detail} side="bottom">
-      <Button
-        type="button"
-        variant="ghost"
-        disabled={props.disabled}
-        onClick={props.onClick}
-        aria-label="View weekly schedule"
-        className="h-auto min-h-14 w-11 shrink-0 rounded-none border-0 px-0 shadow-none hover:bg-muted/50"
-      >
-        <CalendarDaysIcon className="size-4" strokeWidth={2} />
-        <span className="sr-only">Weekly schedule</span>
-      </Button>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={props.disabled}
+          aria-label="View weekly schedule"
+          className="h-auto min-h-14 w-11 shrink-0 rounded-none border-0 px-0 shadow-none hover:bg-muted/50"
+        >
+          <CalendarDaysIcon className="size-4" strokeWidth={2} />
+          <span className="sr-only">Weekly schedule</span>
+        </Button>
+      </PopoverTrigger>
     </AppTooltip>
   );
 }
