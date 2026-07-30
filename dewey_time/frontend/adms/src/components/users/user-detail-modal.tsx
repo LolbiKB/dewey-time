@@ -407,7 +407,7 @@ function EnrollContent({ user, onSuccess, onClose, open, onPhaseChange }: Enroll
     () => enrichSyncStatusWithPresence(syncData?.data || [], presenceMap),
     [syncData, presenceMap]
   )
-  const biometricsList = useMemo(() => bioData?.data || [], [bioData])
+  const biometricsList = useMemo(() => bioData || [], [bioData])
   const registrarDevices = useMemo(
     () => syncStatus.filter((s) => s.is_online && s.devices?.is_registrar),
     [syncStatus]
@@ -1024,7 +1024,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
     () => enrichSyncStatusWithPresence(syncData?.data || [], presenceMap),
     [syncData, presenceMap]
   )
-  const biometrics = biometricsData?.data || []
+  const biometrics = useMemo(() => biometricsData || [], [biometricsData])
 
   const fingerprints = useMemo(() => biometrics.filter(b => b.type === 'fingerprint'), [biometrics])
   const faces = useMemo(() => biometrics.filter(b => b.type === 'face'), [biometrics])

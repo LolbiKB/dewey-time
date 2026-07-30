@@ -181,10 +181,6 @@ export interface BiometricEntry {
   enrolled_device_sn: string | null
 }
 
-export interface BiometricsResponse {
-  success: boolean
-  data: BiometricEntry[]
-}
 
 const API_URL = import.meta.env.VITE_API_URL || '' // Empty string uses Vite proxy in dev
 
@@ -340,10 +336,13 @@ export class UserService {
     )
   }
 
-  static async getUserBiometrics(userId: string): Promise<BiometricsResponse> {
+  // Returns a BARE array: the biometrics query key is shared with
+  // use-core-data's direct-supabase hook, so both must cache the same shape
+  // (wrapper objects here made the cached shape flip and broke consumers).
+  static async getUserBiometrics(userId: string): Promise<BiometricEntry[]> {
     const { data, error } = await supabase.from('user_biometrics').select('*').eq('user_id', userId)
     if (error) throw error
-    return { success: true, data: (data || []) as BiometricEntry[] }
+    return (data || []) as BiometricEntry[]
   }
 
   static async deleteBiometric(userId: string, type: 'fingerprint' | 'face', fingerId?: number): Promise<{ success: boolean; commandsQueued: number }> {

@@ -10,6 +10,7 @@ import {
   notifyUserOperationLocked,
 } from '@/lib/toast'
 import { queryKeys } from '@/lib/query-keys'
+import { removeBiometricFromCache } from '@/lib/biometrics-cache'
 import { UserService, UserOperationLockedError } from '@/services/user-service'
 import { DeviceService } from '@/services/device-service'
 import { supabase } from '@/lib/supabase'
@@ -331,15 +332,12 @@ export function useDeleteBiometric() {
       
       const previousBiometrics = queryClient.getQueryData(queryKeys.users.biometrics(userId))
       
-      // Optimistically remove the biometric
-      queryClient.setQueryData(
-        queryKeys.users.biometrics(userId),
-        (old: any) => {
-          if (!old) return old
-          return old.filter((bio: any) => 
-            !(bio.type === type && (fingerId === undefined || bio.finger_id === fingerId))
-          )
-        }
+      // Optimistically remove the biometric. removeBiometricFromCache is
+      // shape-tolerant — a non-array cache value is returned unchanged rather
+      // than crashing the mutation before the DELETE fires ("i.filter is not
+      // a function").
+      queryClient.setQueryData(queryKeys.users.biometrics(userId), (old: unknown) =>
+        removeBiometricFromCache(old, type, fingerId)
       )
       
       return { previousBiometrics }
