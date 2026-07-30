@@ -4,6 +4,8 @@ import { format } from "date-fns";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { TooltipProvider } from "../components/ui/tooltip";
+import { plannedDaysFromSchedule } from "../lib/plannedDays";
+import { resolveWeekTimelineWindow } from "../lib/weekTimelineWindow";
 import { PlannedWeekCanvas } from "./PlannedWeekCanvas";
 import type { Day } from "../types/calendar";
 
@@ -46,9 +48,13 @@ function week(specs: Spec[]): Map<string, Day> {
 }
 
 function render(specs: Spec[]): string {
+  const daysByDate = week(specs);
   return renderToStaticMarkup(
     <TooltipProvider>
-      <PlannedWeekCanvas weekDates={WEEK} daysByDate={week(specs)} />
+      <PlannedWeekCanvas
+        days={plannedDaysFromSchedule(WEEK, daysByDate)}
+        window={resolveWeekTimelineWindow(WEEK, daysByDate)}
+      />
     </TooltipProvider>,
   );
 }

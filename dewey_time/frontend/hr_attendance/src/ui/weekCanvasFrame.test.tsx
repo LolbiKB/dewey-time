@@ -7,6 +7,8 @@ import { format } from "date-fns";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { TooltipProvider } from "../components/ui/tooltip";
+import { plannedDaysFromSchedule } from "../lib/plannedDays";
+import { resolveWeekTimelineWindow } from "../lib/weekTimelineWindow";
 import { WeekView } from "./WeekView";
 import { PlannedWeekCanvas } from "./PlannedWeekCanvas";
 import type { Day } from "../types/calendar";
@@ -56,7 +58,10 @@ test("both week surfaces put the same hours on the axis", () => {
   );
   const schedule = renderToStaticMarkup(
     <TooltipProvider>
-      <PlannedWeekCanvas weekDates={WEEK} daysByDate={days} />
+      <PlannedWeekCanvas
+        days={plannedDaysFromSchedule(WEEK, days)}
+        window={resolveWeekTimelineWindow(WEEK, days)}
+      />
     </TooltipProvider>,
   );
 

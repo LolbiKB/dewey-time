@@ -1,34 +1,47 @@
-import { plannedBlocks } from "@/lib/plannedBlocks";
+import { plannedBlocksForDay, type PlannedDay } from "@/lib/plannedDays";
 import { pctOfWindow, type AxisWindow } from "@/lib/timelineAxis";
-import { formatScheduleDuration, shortShiftTypeCode, type WeekDaySchedule } from "@/lib/weekSchedule";
-import { cn } from "@/lib/utils";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { AppTooltip } from "@/ui/AppTooltip";
 import { HourGrid } from "@/ui/TimelineAxis";
 
+/**
+ * "8:00 AM" from a minute-of-day.
+ *
+ * `PlannedDay` carries only minutes, not the `"HH:MM:SS"` strings
+ * `formatShiftTime12h` (weekSchedule.ts) expects, so this formats directly
+ * off the number rather than round-tripping through a fabricated time string.
+ */
+function minuteLabel(min: number): string {
+  const hh = Math.floor(min / 60) % 24;
+  const mm = min % 60;
+  const period = hh >= 12 ? "PM" : "AM";
+  const h12 = hh % 12 || 12;
+  return `${h12}:${String(mm).padStart(2, "0")} ${period}`;
+}
+
 /** One day of the planned week. Mirrors DayCell's shape without its punch machinery. */
-export function PlannedDayColumn(props: {
-  day: WeekDaySchedule;
-  window: AxisWindow | null;
-  isToday: boolean;
-}) {
+export function PlannedDayColumn(props: { day: PlannedDay; window: AxisWindow | null }) {
   const { day } = props;
-  const blocks = props.window ? plannedBlocks(day) : [];
+  const blocks = props.window ? plannedBlocksForDay(day) : [];
+  const timeLabel =
+    day.startMin != null && day.endMin != null
+      ? `${minuteLabel(day.startMin)} – ${minuteLabel(day.endMin)}`
+      : null;
+  const lunchLabel =
+    day.lunchStartMin != null && day.lunchEndMin != null
+      ? `${minuteLabel(day.lunchStartMin)} – ${minuteLabel(day.lunchEndMin)}`
+      : null;
   const tip = [
-    shortShiftTypeCode(day.shiftType),
-    day.timeLabel,
-    day.lunchLabel ? `lunch ${day.lunchLabel}` : null,
+    day.shiftCode,
+    timeLabel,
+    lunchLabel ? `lunch ${lunchLabel}` : null,
     day.durationMin ? `${formatScheduleDuration(day.durationMin)} net` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
   return (
-    <div
-      className={cn(
-        "relative min-h-0 border-b border-r border-border/60 p-3 pl-5",
-        props.isToday && "bg-primary/3 ring-1 ring-primary/20",
-      )}
-    >
+    <div className="relative min-h-0 border-b border-r border-border/60 p-3 pl-5">
       <div className="relative h-full rounded-xl bg-muted/25">
         <HourGrid window={props.window} />
 
@@ -38,7 +51,7 @@ export function PlannedDayColumn(props: {
               {day.leaveType ?? "On leave"}
             </span>
           </div>
-        ) : !day.assigned ? (
+        ) : !day.works ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <span className="text-xs text-muted-foreground">Day off</span>
           </div>

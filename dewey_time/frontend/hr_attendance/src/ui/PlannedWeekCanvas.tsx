@@ -1,35 +1,50 @@
-import { format, isSameDay } from "date-fns";
-
-import { buildWeekSchedule, formatScheduleDuration } from "@/lib/weekSchedule";
-import { resolveWeekTimelineWindow } from "@/lib/weekTimelineWindow";
-import type { Day } from "@/types/calendar";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
+import type { AxisWindow } from "@/lib/timelineAxis";
+import type { PlannedDay } from "@/lib/plannedDays";
 import { PlannedDayColumn } from "@/ui/PlannedDayColumn";
 import { WeekCanvasFrame } from "@/ui/WeekCanvasFrame";
 
 /**
- * The scheduled week, on the same canvas as the attendance timeline.
+ * Seven distinct, otherwise-unused dates, purely so `WeekCanvasFrame` — which
+ * keys and iterates by `Date` — has something to key on.
  *
- * The window comes from resolveWeekTimelineWindow, which already derives from
- * assigned shift bounds — exactly what a planned view wants, and the reason the
- * two surfaces cannot land on different scales.
+ * `PlannedWeekCanvas` is source-agnostic: `days` may come from a dated
+ * calendar week or the schedule editor's undated `WeekPattern`, neither of
+ * which is a real `Date` by the time it reaches here. Content is looked up
+ * by array position (reference-equal to the placeholder the frame hands
+ * back), never by the placeholder's date value.
  */
-export function PlannedWeekCanvas(props: { weekDates: Date[]; daysByDate: Map<string, Day> }) {
-  const week = buildWeekSchedule(props.weekDates, props.daysByDate);
-  const window = resolveWeekTimelineWindow(props.weekDates, props.daysByDate);
-  const byDate = new Map(week.map((d) => [d.date, d]));
+function placeholderWeek(length: number): Date[] {
+  return Array.from({ length }, (_, i) => new Date(2000, 0, i + 3)); // Mon 3 Jan 2000 onward
+}
+
+/**
+ * The planned week, on the same canvas as the attendance timeline.
+ *
+ * Source-agnostic on purpose: `days` is the normalised `PlannedDay[]`
+ * (plannedDays.ts), and `window` is supplied by the caller rather than
+ * derived here. A dated calendar week reaches this shape through
+ * `plannedDaysFromSchedule` + `resolveWeekTimelineWindow`; the schedule
+ * editor's undated `WeekPattern` has its own adapter. Neither `Day` nor a
+ * real date is imported by this component.
+ */
+export function PlannedWeekCanvas(props: { days: PlannedDay[]; window: AxisWindow | null }) {
+  const placeholders = placeholderWeek(props.days.length);
 
   return (
     <WeekCanvasFrame
-      weekDates={props.weekDates}
-      window={window}
+      weekDates={placeholders}
+      window={props.window}
       ariaLabel="Weekly expected schedule"
       renderHeader={(d) => {
-        const day = byDate.get(format(d, "yyyy-MM-dd"));
+        const day = props.days[placeholders.indexOf(d)];
         return (
           <div className="px-3 py-2">
             <div className="flex items-baseline gap-2">
-              <span className="text-xs font-medium text-muted-foreground">{day?.weekday}</span>
-              <span className="text-sm font-semibold">{day?.dayNum}</span>
+              <span className="text-xs font-medium text-muted-foreground">{day?.label}</span>
+              {day?.sublabel ? (
+                <span className="text-sm font-semibold">{day.sublabel}</span>
+              ) : null}
             </div>
             <div className="mt-0.5 truncate text-[10px] tabular-nums text-muted-foreground">
               {day?.durationMin ? `${formatScheduleDuration(day.durationMin)} net` : " "}
@@ -38,11 +53,9 @@ export function PlannedWeekCanvas(props: { weekDates: Date[]; daysByDate: Map<st
         );
       }}
       renderDay={(d) => {
-        const day = byDate.get(format(d, "yyyy-MM-dd"));
-        if (!day) return null;
-        return (
-          <PlannedDayColumn day={day} window={window} isToday={isSameDay(d, new Date())} />
-        );
+        const day = props.days[placeholders.indexOf(d)];
+        if (!day) return <div className="border-b border-r border-border/60" />;
+        return <PlannedDayColumn day={day} window={props.window} />;
       }}
     />
   );
