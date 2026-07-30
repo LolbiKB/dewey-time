@@ -8,7 +8,7 @@ import { clockDayMinutes, formatClockDayTotal, isClockDay } from "@/lib/clockDay
 import { deriveSegments } from "@/lib/segmentInspector";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
-import { HourGutter } from "@/ui/TimelineAxis";
+import { WeekCanvasFrame } from "@/ui/WeekCanvasFrame";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
 
 function WeekDayDateBadge(props: {
@@ -77,131 +77,123 @@ export type WeekViewProps = {
 export function WeekView(props: WeekViewProps) {
   const weekWindow = useWeekTimelineWindow(props.weekDates, props.daysByDate);
 
-  return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-auto">
-      <div className="grid shrink-0 grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))] border-b border-border/60">
-        <div aria-hidden="true" />
-        {props.weekDates.map((d) => {
-          const key = format(d, "yyyy-MM-dd");
-          const info = props.daysByDate.get(key);
-          const isToday = isSameDay(d, new Date());
-          const holiday = info?.holiday ?? null;
-          const clockDay = isClockDay(props.isClockBased, info);
-          // Holiday wins: treat as off-day in UI even if a Shift Assignment exists.
-          const isOffDay = holiday != null || (!clockDay && info?.shift?.shift_assigned !== true);
-          const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
-          const offShiftFlag = dayOffShiftPunchFlag(info);
-          const timeRange = formatDayCheckinTimeRange(info);
-          const clockTotal = clockDay
-            ? formatClockDayTotal(
-                clockDayMinutes(deriveSegments(info?.checkins ?? []), info?.gross_minutes ?? null)
-              )
-            : null;
-          return (
+  const renderHeader = (d: Date) => {
+    const key = format(d, "yyyy-MM-dd");
+    const info = props.daysByDate.get(key);
+    const isToday = isSameDay(d, new Date());
+    const holiday = info?.holiday ?? null;
+    const clockDay = isClockDay(props.isClockBased, info);
+    // Holiday wins: treat as off-day in UI even if a Shift Assignment exists.
+    const isOffDay = holiday != null || (!clockDay && info?.shift?.shift_assigned !== true);
+    const isTodayOff = isToday && isOffDay && !info?.leave?.on_leave;
+    const offShiftFlag = dayOffShiftPunchFlag(info);
+    const timeRange = formatDayCheckinTimeRange(info);
+    const clockTotal = clockDay
+      ? formatClockDayTotal(
+          clockDayMinutes(deriveSegments(info?.checkins ?? []), info?.gross_minutes ?? null)
+        )
+      : null;
+    return (
+      <div
+        className={cn(
+          "px-3 py-2",
+          holiday ? "bg-muted/40" : isOffDay && "bg-destructive/[0.06]"
+        )}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-baseline gap-2">
             <div
-              key={key}
               className={cn(
-                "px-3 py-2",
-                holiday ? "bg-muted/40" : isOffDay && "bg-destructive/[0.06]"
+                "text-xs font-medium",
+                holiday
+                  ? "text-brand-accent/80"
+                  : isOffDay
+                    ? "text-destructive/60"
+                    : "text-muted-foreground"
               )}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-baseline gap-2">
-                  <div
-                    className={cn(
-                      "text-xs font-medium",
-                      holiday
-                        ? "text-brand-accent/80"
-                        : isOffDay
-                          ? "text-destructive/60"
-                          : "text-muted-foreground"
-                    )}
-                  >
-                    {format(d, "EEE")}
-                  </div>
-                  <WeekDayDateBadge
-                    dayNum={format(d, "d")}
-                    isToday={isToday}
-                    isOffDay={isOffDay}
-                    hasOffShiftPunch={offShiftFlag != null}
-                  />
-                </div>
-                {isToday ? (
-                  <span
-                    className={cn(
-                      "text-[11px] font-medium",
-                      isTodayOff ? "text-destructive/75" : "text-primary/80"
-                    )}
-                  >
-                    Today
-                  </span>
-                ) : null}
-              </div>
-
-              {holiday ? (
-                <div className="mt-0.5 truncate text-[10px] font-semibold text-brand-accent/80">
-                  Holiday
-                </div>
-              ) : null}
-
-              {clockTotal ? (
-                <div className="mt-0.5 truncate text-[10px] font-semibold tabular-nums text-foreground">
-                  {clockTotal}
-                </div>
-              ) : null}
-
-              <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                {timeRange ? (
-                  <AppTooltip content="Actual punches" side="bottom">
-                    <span className="truncate">{timeRange}</span>
-                  </AppTooltip>
-                ) : null}
-              </div>
-
-              <div className="mt-1">
-                <DayChips
-                  day={info}
-                  alerts={props.alertsByDate.get(key) ?? []}
-                  isClockDay={clockDay}
-                  onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
-                />
-              </div>
+              {format(d, "EEE")}
             </div>
-          );
-        })}
-      </div>
+            <WeekDayDateBadge
+              dayNum={format(d, "d")}
+              isToday={isToday}
+              isOffDay={isOffDay}
+              hasOffShiftPunch={offShiftFlag != null}
+            />
+          </div>
+          {isToday ? (
+            <span
+              className={cn(
+                "text-[11px] font-medium",
+                isTodayOff ? "text-destructive/75" : "text-primary/80"
+              )}
+            >
+              Today
+            </span>
+          ) : null}
+        </div>
 
-      {/* No vertical scroll: the axis is scaled to fit this box, so a week with a
-          wide span compresses rather than overflowing. See resolveWeekTimelineWindow. */}
-      <div className="relative min-h-0 flex-1 overflow-hidden" aria-label="Week attendance timeline">
-        <div className="grid h-full grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))]">
-          <HourGutter window={weekWindow} />
-          {props.weekDates.map((d) => {
-            const key = format(d, "yyyy-MM-dd");
-            const info = props.daysByDate.get(key);
-            const isToday = isSameDay(d, new Date());
-            const clockDay = isClockDay(props.isClockBased, info);
-            return (
-              <DayCell
-                key={key}
-                date={d}
-                outside={false}
-                today={isToday}
-                info={info}
-                timelineStartMin={weekWindow.startMin}
-                timelineEndMin={weekWindow.endMin}
-                deviceSync={props.syncByDate.get(key) ?? []}
-                isClockDay={clockDay}
-                employeeBranch={props.employeeBranch}
-                now={props.now}
-                onInspectDay={() => props.onInspectDay(key)}
-              />
-            );
-          })}
+        {holiday ? (
+          <div className="mt-0.5 truncate text-[10px] font-semibold text-brand-accent/80">
+            Holiday
+          </div>
+        ) : null}
+
+        {clockTotal ? (
+          <div className="mt-0.5 truncate text-[10px] font-semibold tabular-nums text-foreground">
+            {clockTotal}
+          </div>
+        ) : null}
+
+        <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+          {timeRange ? (
+            <AppTooltip content="Actual punches" side="bottom">
+              <span className="truncate">{timeRange}</span>
+            </AppTooltip>
+          ) : null}
+        </div>
+
+        <div className="mt-1">
+          <DayChips
+            day={info}
+            alerts={props.alertsByDate.get(key) ?? []}
+            isClockDay={clockDay}
+            onInspectFlag={(flag) => props.onInspectFlag(key, flag)}
+          />
         </div>
       </div>
-      </div>
-    </div>
+    );
+  };
+
+  const renderDay = (d: Date) => {
+    const key = format(d, "yyyy-MM-dd");
+    const info = props.daysByDate.get(key);
+    const isToday = isSameDay(d, new Date());
+    const clockDay = isClockDay(props.isClockBased, info);
+    return (
+      <DayCell
+        date={d}
+        outside={false}
+        today={isToday}
+        info={info}
+        timelineStartMin={weekWindow.startMin}
+        timelineEndMin={weekWindow.endMin}
+        deviceSync={props.syncByDate.get(key) ?? []}
+        isClockDay={clockDay}
+        employeeBranch={props.employeeBranch}
+        now={props.now}
+        onInspectDay={() => props.onInspectDay(key)}
+      />
+    );
+  };
+
+  return (
+    <WeekCanvasFrame
+      weekDates={props.weekDates}
+      window={weekWindow}
+      renderHeader={renderHeader}
+      renderDay={renderDay}
+      ariaLabel="Week attendance timeline"
+    />
   );
 }
