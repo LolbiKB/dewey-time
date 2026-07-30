@@ -50,28 +50,6 @@ export function shortShiftTypeCode(shiftType: string | undefined): string {
   return stripped || raw;
 }
 
-export type DayShiftHeaderLabel = {
-  assigned: boolean;
-  /** Shift type code, or "Off" when no Shift Assignment for the date. */
-  primary: string;
-  /** Expected window from Shift Type linked to the assignment. */
-  time?: string;
-};
-
-/** Week column header: sourced from calendar day.shift (Shift Assignment per date). */
-export function formatDayShiftHeaderLabel(shift: ShiftContext | undefined): DayShiftHeaderLabel {
-  const ctx = shift ?? { shift_assigned: false };
-  if (ctx.shift_assigned !== true) {
-    return { assigned: false, primary: "Off" };
-  }
-
-  const primary = shortShiftTypeCode(ctx.shift_type);
-  const start = formatShiftTime12h(ctx.start_time);
-  const end = formatShiftTime12h(ctx.end_time);
-  const time = start && end ? `${start} – ${end}` : undefined;
-  return { assigned: true, primary, time };
-}
-
 export function buildWeekSchedule(
   weekDates: Date[],
   daysByDate: Map<string, Day>

@@ -1,49 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ShiftContext } from "@/types/calendar";
-
 import {
   describeWeekSchedulePattern,
-  formatDayShiftHeaderLabel,
   shortShiftTypeCode,
   type WeekDaySchedule,
 } from "@/lib/weekSchedule";
-
-test("formatDayShiftHeaderLabel shows Off when shift is not assigned", () => {
-  assert.deepEqual(formatDayShiftHeaderLabel({ shift_assigned: false }), {
-    assigned: false,
-    primary: "Off",
-  });
-  assert.deepEqual(formatDayShiftHeaderLabel(undefined), {
-    assigned: false,
-    primary: "Off",
-  });
-});
-
-test("formatDayShiftHeaderLabel shows shift type and expected window", () => {
-  const shift: ShiftContext = {
-    shift_assigned: true,
-    shift_type: "FT_Standard",
-    start_time: "08:00:00",
-    end_time: "17:00:00",
-  };
-  assert.deepEqual(formatDayShiftHeaderLabel(shift), {
-    assigned: true,
-    primary: "Standard",
-    time: "8:00 AM – 5:00 PM",
-  });
-});
-
-test("formatDayShiftHeaderLabel does not invent shift when assignment flag is false", () => {
-  const shift: ShiftContext = {
-    shift_assigned: false,
-    shift_type: "FT_Standard",
-    start_time: "08:00:00",
-    end_time: "17:00:00",
-  };
-  assert.equal(formatDayShiftHeaderLabel(shift).primary, "Off");
-});
 
 test("shortShiftTypeCode strips FT_ prefix and underscores", () => {
   assert.equal(shortShiftTypeCode("FT_Early_Bird"), "Early Bird");
