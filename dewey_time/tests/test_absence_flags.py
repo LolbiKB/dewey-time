@@ -92,3 +92,92 @@ class TestOffShiftGate(unittest.TestCase):
 
         flag_codes = [call.kwargs["flag_code"] for call in insert_flag.call_args_list]
         self.assertEqual(flag_codes, ["OFF_SHIFT_PUNCH"])
+
+
+class TestOvernightIntervalDatetimes(unittest.TestCase):
+    """Overnight intervals run past minute 1440 and must not crash or wrap.
+
+    `absence_intervals` expresses an overnight shift by adding 1440 to the end
+    minute, so a 22:00->06:00 shift produces intervals like {1740, 1800}.
+    `_interval_datetimes` used to build `datetime.time(hour=1800 // 60)`, which
+    raises `ValueError: hour must be in 0..23` — and because no batch loop in
+    closeout.py wraps the per-employee call, one night worker aborted flag
+    generation for every employee sorted after them while the device still
+    reported healthy. Every closeout test in test_overnight_shifts.py patches
+    `evaluate_missing_time_flags` out, so CI could not see it.
+    """
+
+    def test_an_interval_past_midnight_rolls_into_the_next_day(self):
+        from dewey_time.attendance_engine.absence_flags import _interval_datetimes
+
+        start_dt, end_dt = _interval_datetimes(date(2026, 7, 1), 1740, 1800)
+        self.assertEqual(start_dt, datetime(2026, 7, 2, 5, 0))
+        self.assertEqual(end_dt, datetime(2026, 7, 2, 6, 0))
+
+    def test_an_interval_crossing_midnight_keeps_both_sides(self):
+        from dewey_time.attendance_engine.absence_flags import _interval_datetimes
+
+        start_dt, end_dt = _interval_datetimes(date(2026, 7, 1), 1380, 1470)
+        self.assertEqual(start_dt, datetime(2026, 7, 1, 23, 0))
+        self.assertEqual(end_dt, datetime(2026, 7, 2, 0, 30))
+
+    def test_a_same_day_interval_is_unchanged(self):
+        from dewey_time.attendance_engine.absence_flags import _interval_datetimes
+
+        start_dt, end_dt = _interval_datetimes(date(2026, 7, 1), 540, 660)
+        self.assertEqual(start_dt, datetime(2026, 7, 1, 9, 0))
+        self.assertEqual(end_dt, datetime(2026, 7, 1, 11, 0))
+
+    def test_the_end_is_not_wrapped_back_onto_the_same_day(self):
+        """Guards the tempting wrong fix.
+
+        `combine_date_time` accepts a timedelta but modulos it by 24h, so
+        routing minute 1800 through it yields 06:00 on the SAME day — no crash,
+        but a flag dated a day early, which is harder to notice than a
+        traceback.
+        """
+        from dewey_time.attendance_engine.absence_flags import _interval_datetimes
+
+        _, end_dt = _interval_datetimes(date(2026, 7, 1), 1740, 1800)
+        self.assertNotEqual(end_dt.date(), date(2026, 7, 1))
+
+
+class TestBatchFailureIsolation(unittest.TestCase):
+    """One employee's bad data must not cost everyone else their flags.
+
+    The overnight ValueError above was only catastrophic because no batch loop
+    in closeout.py wrapped the per-employee call: the first night worker aborted
+    generate_auto_flags_for_device_date, and every employee sorted after them
+    got no flags while the Device Closeout Alert still reported the branch
+    healthy. Fixing the arithmetic is not enough on its own — the next
+    unanticipated failure would do the same thing.
+    """
+
+    def test_a_raising_employee_does_not_abort_the_batch(self):
+        from dewey_time.attendance_engine import closeout
+
+        processed = []
+
+        def _fake(employee, attendance_date, **kwargs):
+            if employee == "EMP-B":
+                raise ValueError("hour must be in 0..23")
+            processed.append(employee)
+
+        with patch.object(closeout, "_generate_for_employee_date", side_effect=_fake), patch.object(
+            closeout.frappe, "get_all", return_value=["EMP-A", "EMP-B", "EMP-C"]
+        ), patch.object(closeout.frappe, "log_error") as log_error:
+            closeout.generate_auto_flags_for_date(date(2026, 7, 1))
+
+        self.assertEqual(processed, ["EMP-A", "EMP-C"], "employees after the failure must still run")
+        self.assertEqual(log_error.call_count, 1, "the failure must reach the Error Log, not vanish")
+
+    def test_the_isolating_runner_reports_failure_rather_than_raising(self):
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(
+            closeout, "_generate_for_employee_date", side_effect=RuntimeError("boom")
+        ), patch.object(closeout.frappe, "log_error"):
+            ok = closeout._generate_for_employee_date_isolated(
+                employee="EMP-A", attendance_date=date(2026, 7, 1)
+            )
+        self.assertFalse(ok)

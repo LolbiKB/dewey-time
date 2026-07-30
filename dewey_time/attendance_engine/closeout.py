@@ -220,7 +220,7 @@ def generate_auto_flags_for_device_date(device_sn, local_date, undelivered=None)
             for item in undelivered_items
             if (item.get("frappe_employee_id") or item.get("employee")) == employee
         ]
-        _generate_for_employee_date(
+        _generate_for_employee_date_isolated(
             employee=employee,
             attendance_date=local_date,
             include_unnotified_absence=True,
@@ -237,7 +237,7 @@ def generate_auto_flags_for_date(attendance_date):
     attendance_date = getdate(attendance_date)
     employees = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name") or []
     for employee in employees:
-        _generate_for_employee_date(
+        _generate_for_employee_date_isolated(
             employee=employee,
             attendance_date=attendance_date,
             include_unnotified_absence=True,
@@ -265,7 +265,7 @@ def _generate_company_fallback_for_date(*, company: str, attendance_date):
             # silently never receive LATE_START/LEFT_EARLY/MISSING_TIME. Run the full closeout
             # ourselves. Idempotent (AUTO flags are delete/recreated), so a late device webhook
             # simply regenerates the same flags.
-            _generate_for_employee_date(
+            _generate_for_employee_date_isolated(
                 employee=employee,
                 attendance_date=attendance_date,
                 include_unnotified_absence=False,
@@ -416,6 +416,31 @@ def _non_primary_site_punch_flag(
             "non_primary_checkins": non_primary_hits,
         },
     )
+
+
+def _generate_for_employee_date_isolated(**kwargs) -> bool:
+    """Run one employee's flag generation, containing any failure to that employee.
+
+    A single employee's data must never abort a whole device or company batch.
+    Before this existed, an overnight interval running past minute 1440 raised
+    inside evaluate_missing_time_flags and every employee sorted after the night
+    worker silently got no flags at all — while the Device Closeout Alert still
+    reported the branch healthy, so nothing surfaced the gap.
+
+    Failures go to the Error Log rather than being swallowed; the batch
+    continues. Returns True when the employee was processed.
+    """
+    try:
+        _generate_for_employee_date(**kwargs)
+        return True
+    except Exception:
+        frappe.log_error(
+            title="Attendance flag generation failed",
+            message="employee={0} date={1}\n{2}".format(
+                kwargs.get("employee"), kwargs.get("attendance_date"), frappe.get_traceback()
+            ),
+        )
+        return False
 
 
 def _generate_for_employee_date(
