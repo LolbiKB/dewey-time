@@ -269,7 +269,9 @@ class TestCompanyFallbackSchedule(unittest.TestCase):
     """
 
     def test_the_job_is_registered_hourly_so_its_gate_can_match(self):
-        hooks = pathlib.Path("dewey_time/hooks.py").read_text()
+        # resolve from this file, not the CWD: bench run-tests runs from the
+        # bench directory, where a repo-relative path does not exist
+        hooks = (pathlib.Path(__file__).resolve().parents[1] / "hooks.py").read_text()
         job = "closeout.run_company_fallback_closeout"
         self.assertIn(job, hooks)
         hourly = hooks.split('"hourly"', 1)
