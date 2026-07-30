@@ -7,7 +7,6 @@ import {
   buildShiftExemptIntervals,
   checkDeviceSyncStaleness,
   classifyUnpairedPresentations,
-  computeWeekTimelineWindow,
   deriveSegments,
   deriveTimelineGaps,
   deriveUnpairedPunches,
@@ -209,21 +208,6 @@ test("deriveTimelineGaps prefers observed lunch over away", () => {
   assert.equal(lunch[0]!.source, "observed");
   assert.equal(lunch[0]!.minutes, 45);
   assert.equal(away.length, 0);
-});
-
-test("week timeline window is an axis range only — a wide span widens it, it does not overflow", () => {
-  // These two spans used to be rendered differently: the narrow one fitted the
-  // viewport, the wide one grew a taller canvas and scrolled. The window now
-  // reports only the axis, and both are scaled to fit by the views.
-  const narrow = computeWeekTimelineWindow([9 * 60, 17 * 60]);
-  assert.equal(narrow.spanMinutes, 8 * 60 + 60, "09:00-17:00 plus 30m margins");
-
-  const wide = computeWeekTimelineWindow([6 * 60, 20 * 60]);
-  assert.equal(wide.spanMinutes, 14 * 60 + 60, "06:00-20:00 plus 30m margins");
-
-  // Nothing in the window says how tall to draw it, so nothing can differ per employee.
-  assert.deepEqual(Object.keys(narrow).sort(), ["endMin", "spanMinutes", "startMin"]);
-  assert.deepEqual(Object.keys(wide).sort(), ["endMin", "spanMinutes", "startMin"]);
 });
 
 test("missing branch punches never pair with each other", () => {

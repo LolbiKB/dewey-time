@@ -602,29 +602,6 @@ export function deriveTimelineGaps(
   return results;
 }
 
-export const DEFAULT_TIMELINE_FALLBACK_WINDOW = {
-  startMin: 8 * 60,
-  endMin: 18 * 60,
-};
-
-export function computeWeekTimelineWindow(
-  minuteValues: number[],
-  marginMinutes = 30,
-  fallback: { startMin: number; endMin: number } = DEFAULT_TIMELINE_FALLBACK_WINDOW
-): { startMin: number; endMin: number; spanMinutes: number } {
-  if (!minuteValues.length) {
-    const spanMinutes = fallback.endMin - fallback.startMin;
-    return { startMin: fallback.startMin, endMin: fallback.endMin, spanMinutes };
-  }
-
-  const min = Math.min(...minuteValues);
-  const max = Math.max(...minuteValues);
-  const startMin = Math.max(0, min - marginMinutes);
-  const endMin = Math.min(24 * 60, max + marginMinutes);
-  const spanMinutes = Math.max(60, endMin - startMin);
-  return { startMin, endMin, spanMinutes };
-}
-
 export function computeDayTimeWindow(
   checkins: Checkin[],
   minutesFromDateTime: (value: string | null | undefined) => number | null,
