@@ -276,10 +276,8 @@ function DayDayTrack(props: {
   ) {
     const topPct = pctFromMinute(interval.startMin);
     const bottomPct = pctFromMinute(interval.endMin);
-    const heightPct = Math.max(2, bottomPct - topPct);
+    const heightPct = bottomPct - topPct;
     if (heightPct <= 0) return null;
-    const topStyle = `${topPct}%`;
-    const heightStyle = `${heightPct}%`;
     return (
       <AppTooltip
         key={key}
@@ -288,7 +286,7 @@ function DayDayTrack(props: {
       >
         <div
           className={cn("absolute inset-x-2 rounded-sm", className)}
-          style={{ top: topStyle, height: heightStyle }}
+          style={{ top: `${topPct}%`, height: `${heightPct}%`, minHeight: 3 }}
         />
       </AppTooltip>
     );
@@ -442,7 +440,7 @@ function DayDayTrack(props: {
         })}
 
         {segments.length === 0 ? null : (
-          segments.slice(0, 6).map((s, idx) => {
+          segments.map((s, idx) => {
             if (s.startMin == null || s.endMin == null) return null;
             const topPct = pctFromMinute(s.startMin);
             const endPct = pctFromMinute(s.endMin);
