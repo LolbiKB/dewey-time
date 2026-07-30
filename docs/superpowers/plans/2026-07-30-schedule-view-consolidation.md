@@ -660,10 +660,70 @@ wired to the editor's live pattern.
 
 - [ ] **Step 1: Write the adapter's failing tests**
 
-Create `src/lib/plannedDays.test.ts`. Cover: a working weekday with lunch maps to a `PlannedDay`
-with the right minute fields; a non-working weekday maps to `works: false` with no bounds;
-malformed times map to `works: true` with undefined bounds rather than throwing. Read
-`WeekPatternDay`'s real field names first and use them verbatim.
+Create `src/lib/plannedDays.test.ts`:
+
+```ts
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { plannedDaysFromWeekPattern } from "./plannedDays";
+import type { WeekPattern, WeekPatternDay } from "../types/schedule";
+
+const H = (h: number) => h * 60;
+
+function pattern(...days: Partial<WeekPatternDay>[]): WeekPattern {
+  return {
+    frequency: "Weekly",
+    days: days.map((d, i) => ({
+      weekday: (["Monday", "Tuesday", "Wednesday"] as const)[i]!,
+      works: true,
+      ...d,
+    })) as WeekPatternDay[],
+  };
+}
+
+test("a working weekday carries its minute bounds", () => {
+  const [day] = plannedDaysFromWeekPattern(
+    pattern({
+      start_time: "08:00:00",
+      end_time: "17:00:00",
+      lunch_start: "12:00:00",
+      lunch_end: "13:00:00",
+    }),
+  );
+  assert.equal(day!.works, true);
+  assert.equal(day!.startMin, H(8));
+  assert.equal(day!.endMin, H(17));
+  assert.equal(day!.lunchStartMin, H(12));
+  assert.equal(day!.lunchEndMin, H(13));
+  assert.equal(day!.label, "Mon", "three-letter label for an undated pattern");
+  assert.equal(day!.sublabel, undefined, "an undated pattern has no day number");
+});
+
+test("a non-working weekday has no bounds", () => {
+  const [day] = plannedDaysFromWeekPattern(pattern({ works: false, start_time: "08:00:00" }));
+  assert.equal(day!.works, false);
+  assert.equal(day!.startMin, undefined);
+});
+
+test("unparseable or absent times degrade to no bounds rather than throwing", () => {
+  const [a, b] = plannedDaysFromWeekPattern(
+    pattern({ start_time: "not a time", end_time: null }, { start_time: null, end_time: null }),
+  );
+  assert.equal(a!.works, true);
+  assert.equal(a!.startMin, undefined);
+  assert.equal(b!.startMin, undefined);
+});
+
+test("every weekday in the pattern produces exactly one day, in order", () => {
+  const days = plannedDaysFromWeekPattern(pattern({}, {}, {}));
+  assert.equal(days.length, 3);
+  assert.deepEqual(days.map((d) => d.label), ["Mon", "Tue", "Wed"]);
+});
+```
+
+`WeekPatternDay` is `{ weekday, works, start_time?, end_time?, lunch_start?, lunch_end?,
+grace_minutes? }` (`src/types/schedule.ts:13-21`); `WeekPattern` is `{ frequency, days }`.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -720,13 +780,30 @@ git commit -m "feat(hr-schedule): the weekly preview draws on the shared canvas"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `src/ui/weeklyScheduleSummary.test.tsx` rendering `WeeklyScheduleSummary` with `open` true for an employee with an 08:00–17:00 five-day week. Assert:
+Create `src/ui/weeklyScheduleSummary.test.tsx`, following `offSiteSegment.test.tsx`'s fixture and
+`renderToStaticMarkup` idiom. Build a five-day 08:00–17:00 week with a one-hour lunch (so the
+expected total is a round 40h) plus one off day and one leave day, render
+`<WeeklyScheduleSummary open … />`, and assert:
 
-- the expected-hours total appears;
-- the work/off/leave counts appear;
-- `assert.doesNotMatch(html, /border-primary\/45|VerticalShiftTrack|h-\[4\.5rem\]/)` — **no shift blocks of any kind**. This is the guard against the chart creeping back in.
+```tsx
+test("the summary states what the calendar cannot show", () => {
+  const html = render();
+  assert.match(html, /40h/, "expected-hours total");
+  assert.match(html, /5/, "working days");
+});
 
-Follow `offSiteSegment.test.tsx`'s idiom for fixtures and `renderToStaticMarkup`.
+test("the summary renders no shift blocks — the chart lives on the canvas now", () => {
+  // The guard against the chart creeping back in. These three patterns are the
+  // block treatments used by the canvas and by the two retired strips.
+  const html = render();
+  assert.doesNotMatch(html, /border-primary\/45/, "canvas block");
+  assert.doesNotMatch(html, /h-\[4\.5rem\]/, "old Gantt pill");
+  assert.doesNotMatch(html, /h-14 w-2/, "old preview mini-track");
+});
+```
+
+Adapt the exact expected-hours string to whatever `formatScheduleDuration` produces for 2400
+minutes — run it once and use the real output rather than guessing.
 
 - [ ] **Step 2: Build the summary**
 
