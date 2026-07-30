@@ -58,10 +58,36 @@ test("an inverted or zero-length lunch is ignored", () => {
   );
 });
 
+test("a lunch that fully engulfs the shift is ignored, not clipped to nothing", () => {
+  assert.deepEqual(
+    plannedBlocks(day({ startMin: H(8), endMin: H(17), lunchStartMin: H(7), lunchEndMin: H(18) })),
+    [{ startMin: H(8), endMin: H(17) }],
+  );
+});
+
+test("a lunch entirely outside the shift is ignored", () => {
+  assert.deepEqual(
+    plannedBlocks(day({ startMin: H(8), endMin: H(17), lunchStartMin: H(18), lunchEndMin: H(19) })),
+    [{ startMin: H(8), endMin: H(17) }],
+  );
+});
+
 test("an unassigned day has no blocks", () => {
   assert.deepEqual(plannedBlocks(day({ assigned: false })), []);
 });
 
 test("a day missing its bounds has no blocks", () => {
   assert.deepEqual(plannedBlocks(day({ startMin: undefined, endMin: undefined })), []);
+});
+
+test("an overnight-style inverted shift has no blocks", () => {
+  // Minute-of-day cannot express 22:00->06:00 as a range; parseShiftTimeToMinutes
+  // (weekSchedule.ts) has no midnight wrap, so this is a real, reachable input —
+  // not a theoretical one. Same overnight exclusion as weekTimelineWindow.ts's
+  // collectShiftBounds (end <= start), which drops rather than clips it.
+  assert.deepEqual(plannedBlocks(day({ startMin: H(22), endMin: H(6) })), []);
+});
+
+test("a zero-length shift has no blocks", () => {
+  assert.deepEqual(plannedBlocks(day({ startMin: H(9), endMin: H(9) })), []);
 });
