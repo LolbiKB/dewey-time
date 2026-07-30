@@ -99,6 +99,7 @@ after_migrate = [
     "dewey_time.utils.sync_hr_attendance_assets.sync_hr_attendance_assets",
     "dewey_time.utils.sync_adms_assets.sync_adms_assets",
     "dewey_time.attendance_engine.dashboard_auth.ensure_adms_roles",
+    "dewey_time.attendance_engine.bridge_auth.ensure_bridge_role",
     "dewey_time.webpush.ensure_vapid_keys",
 ]
 
