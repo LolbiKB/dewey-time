@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give the schedule week view the same calendar canvas as the attendance timeline, move it to the page where schedules are authored, and delete the duplicate chart that no longer earns its place in Attendance.
+**Goal:** Collapse three different week visualisations into one. The attendance calendar's canvas becomes the single week view; the schedule sheet's chart and the preview dialog's pattern strip — two copies of the same self-scaled-bar defect — are both replaced by it.
 
-**Architecture:** A shared `WeekCanvasFrame` owns the header row, hour gutter, grid template and window; each surface renders its own day column into it. Attendance keeps `DayCell` unchanged. The Schedule page gains `PlannedWeekCanvas`. The Attendance schedule sheet loses its chart and becomes a facts popover.
+**Architecture:** A shared `WeekCanvasFrame` owns the header row, hour gutter, grid template and window; each surface renders its own day column into it. Attendance keeps `DayCell` unchanged. `PlannedWeekCanvas` takes a normalised `PlannedDay[]`, so it serves both a dated week and the editor's undated Mon–Sun pattern. It replaces `WeekPatternStrip` in the existing preview dialog. The Attendance schedule sheet loses its chart entirely and becomes a facts popover.
 
 **Tech Stack:** React 19, TypeScript, Vite, TailwindCSS v4, `tsx --test` + `node:assert/strict`, `renderToStaticMarkup`.
 
