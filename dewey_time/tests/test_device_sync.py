@@ -79,6 +79,37 @@ class TestDeviceSyncWebhook(unittest.TestCase):
     @patch("dewey_time.attendance_engine.device_sync.merge_device_sync_duplicates")
     @patch("dewey_time.attendance_engine.device_sync.frappe.db.exists")
     @patch("dewey_time.attendance_engine.device_sync.frappe.get_doc")
+    def test_notify_accepts_missing_last_delivered_at(self, get_doc, exists, merge, _auth):
+        """Nothing delivered yet is a real state, not an error.
+
+        Requiring last_delivered_at forced the bridge to substitute a value it
+        did not have (it sent last_device_log_at), so an outage looked like
+        delivery was current and the stalled-bridge banner could never fire.
+        """
+        from dewey_time.attendance_engine.device_sync import notify_device_sync_status
+
+        exists.return_value = True
+        merge.return_value = "DSS-dev1-2026-06-03"
+        doc = MagicMock()
+        doc.name = "DSS-dev1-2026-06-03"
+        get_doc.return_value = doc
+
+        result = notify_device_sync_status(
+            device_sn="dev1",
+            local_date="2026-06-03",
+            device_branch="BRANCH-A",
+            last_device_log_at="2026-06-03 14:02:00",
+            last_delivered_at=None,
+            pending_count=3,
+        )
+
+        self.assertTrue(result["ok"])
+        doc.save.assert_called_once_with(ignore_permissions=True)
+
+    @patch("dewey_time.attendance_engine.bridge_auth.validate_bridge_request")
+    @patch("dewey_time.attendance_engine.device_sync.merge_device_sync_duplicates")
+    @patch("dewey_time.attendance_engine.device_sync.frappe.db.exists")
+    @patch("dewey_time.attendance_engine.device_sync.frappe.get_doc")
     def test_notify_inserts_when_missing(self, get_doc, exists, merge, _auth):
         from dewey_time.attendance_engine.device_sync import notify_device_sync_status
 

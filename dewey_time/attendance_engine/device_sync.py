@@ -177,13 +177,20 @@ def notify_device_sync_status(
         frappe.throw("local_date is required")
     if not last_device_log_at:
         frappe.throw("last_device_log_at is required")
-    if not last_delivered_at:
-        frappe.throw("last_delivered_at is required")
+
+    # last_delivered_at is deliberately OPTIONAL.
+    #
+    # "no punch has been delivered yet for this device-day" is a real and
+    # important state — it is exactly what the stalled-bridge banner exists to
+    # show. Requiring the field forced the bridge to substitute a value it did
+    # not have (it sent last_device_log_at), which made an outage look like
+    # delivery was current: the banner could never fire when it mattered most.
+    # The doctype and upsert_device_sync_status already store None fine.
 
     device_branch = _validate_device_branch(device_branch)
 
     local_date = getdate(local_date)
-    delivered_dt = get_datetime(last_delivered_at)
+    delivered_dt = get_datetime(last_delivered_at) if last_delivered_at else None
     device_log_dt = get_datetime(last_device_log_at)
     if delivered_dt and device_log_dt and delivered_dt > device_log_dt:
         frappe.throw("last_delivered_at must not be after last_device_log_at")
