@@ -343,7 +343,7 @@ def get_holiday_preview(employee: str, start_date: str, end_date: str):
     return {"holidays": holidays}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def apply_weekly_schedule(
     employee: str,
     week_pattern=None,
@@ -438,12 +438,6 @@ def apply_weekly_schedule(
     if (plan.get("needs_create") or (is_edit and edit_changes)) and not confirm:
         return {"needs_confirm": True, "plan": plan, "reconcile": reconcile}
 
-    # Persist the derived employment type only now that the row is committed to
-    # apply — never mutate the Employee record for a schedule that won't be created.
-    if employment_to_set:
-        frappe.db.set_value("Employee", employee, "employment_type", employment_to_set)
-        employee_info["employment_type"] = employment_to_set
-
     unchanged = set(reconcile.get("unchanged_identities") or [])
 
     # The whole apply is one transaction, retried on transient lock errors. Accumulators
@@ -455,6 +449,17 @@ def apply_weekly_schedule(
         ssas_out: list[dict] = []
         generated_any = False
         try:
+            # Persist the derived employment type only now that we are committed to
+            # applying — never mutate the Employee record for a schedule that will
+            # not be created.
+            #
+            # Inside the loop deliberately: a transient conflict rolls the whole
+            # transaction back, and this write used to sit outside, so a retried
+            # apply silently dropped the employment type while reporting success.
+            if employment_to_set:
+                frappe.db.set_value("Employee", employee, "employment_type", employment_to_set)
+                employee_info["employment_type"] = employment_to_set
+
             # Retire leaving schedules + their future assignments FIRST (overlap-safe).
             reconciled = reconcile_orphan_ssas(
                 employee=employee, plan=plan, effective_from=effective, preview=reconcile

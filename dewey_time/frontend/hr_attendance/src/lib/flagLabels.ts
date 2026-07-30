@@ -59,6 +59,14 @@ export function formatFlagLabel(flagCode: string, evidence?: FlagEvidence | null
   if (flagCode === "MISSING_TIME" && evidence?.minutes != null && evidence.minutes > 0) {
     return formatMissingDuration(evidence.minutes);
   }
+  // The backend emits OFF_SHIFT_PUNCH with two distinct reasons
+  // (closeout.py:481 holiday_has_checkins, :516 off_shift_has_checkins). Calling
+  // a public holiday a "day off" tells HR the wrong story about why the punch
+  // was flagged.
+  if (flagCode === "OFF_SHIFT_PUNCH" && evidence?.reason === "holiday_has_checkins") {
+    return "Punched on a holiday";
+  }
+
   if (flagCode === "ATTENDANCE_ISSUE" && evidence?.reason) {
     const sub = RECORD_ISSUE_SUBLABELS[evidence.reason];
     if (sub) return `Attendance record issue · ${sub}`;

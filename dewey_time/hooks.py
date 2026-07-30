@@ -99,12 +99,16 @@ after_migrate = [
     "dewey_time.utils.sync_hr_attendance_assets.sync_hr_attendance_assets",
     "dewey_time.utils.sync_adms_assets.sync_adms_assets",
     "dewey_time.attendance_engine.dashboard_auth.ensure_adms_roles",
+    "dewey_time.attendance_engine.bridge_auth.ensure_bridge_role",
     "dewey_time.webpush.ensure_vapid_keys",
 ]
 
-# Scheduled job: company fallback UNNOTIFIED_ABSENCE (~03:00 per company timezone)
+# Scheduled job: company fallback UNNOTIFIED_ABSENCE (~03:00 per company timezone).
+# Registered HOURLY, not daily: the job gates itself on each company's local hour
+# being 03:00, and "daily" fires once around site midnight, so under "daily" the
+# gate could essentially never match and the fallback never ran.
 scheduler_events = {
-    "daily": [
+    "hourly": [
         "dewey_time.attendance_engine.closeout.run_company_fallback_closeout",
     ],
     "cron": {

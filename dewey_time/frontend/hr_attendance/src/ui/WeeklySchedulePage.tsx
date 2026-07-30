@@ -200,6 +200,25 @@ export function WeeklySchedulePage() {
       match === "manual" ? null : blocksFingerprint(shiftBlocks);
   }, [employee, shiftBlocks, templateOptions]);
 
+  /** Pull the server's fresh defaults back into the editor.
+   *
+   * The seeding effect below keys on context?.employee, so a refetched context
+   * for the SAME employee never re-fires it. Every path that changes the
+   * server's idea of this employee's schedule must therefore reseed by hand —
+   * saving did, clearing did not, which left the page claiming the employee had
+   * no schedule while still displaying the one just deleted, with Save enabled
+   * to recreate it.
+   */
+  async function reseedFormFromServer() {
+    const refetched = await refetchContext();
+    if (!refetched.data) return;
+    const seeded = scheduleFormStateFromContext(refetched.data);
+    setShiftBlocks(seeded.shiftBlocks);
+    setEffectiveFrom(seeded.effectiveFrom);
+    setGenerateThrough(seeded.generateThrough);
+    setLimitGenerateThrough(seeded.limitGenerateThrough);
+  }
+
   async function handleSave(confirmCreate = false): Promise<boolean> {
     if (!scheduleEmployeeId || !effectiveFrom) return false;
     if (limitGenerateThrough && !generateThrough) return false;
@@ -259,14 +278,7 @@ export function WeeklySchedulePage() {
       // doesn't change that string, so it wouldn't otherwise re-fire, leaving
       // stale pre-save values in the form (e.g. effectiveFrom falling below
       // the "Effective from" min once isEditing flips true on this refetch).
-      const refetched = await refetchContext();
-      if (refetched.data) {
-        const seeded = scheduleFormStateFromContext(refetched.data);
-        setShiftBlocks(seeded.shiftBlocks);
-        setEffectiveFrom(seeded.effectiveFrom);
-        setGenerateThrough(seeded.generateThrough);
-        setLimitGenerateThrough(seeded.limitGenerateThrough);
-      }
+      await reseedFormFromServer();
 
       return true;
     }
@@ -377,6 +389,7 @@ export function WeeklySchedulePage() {
               employeeLabel={employeeLabel}
               triggerClassName="h-9 w-full shrink-0 sm:w-auto"
               disabled={!scheduleEmployeeId}
+              onSuccess={() => void reseedFormFromServer()}
             />
             <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
             <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />

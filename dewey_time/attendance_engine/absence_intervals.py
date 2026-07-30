@@ -6,7 +6,10 @@ from zoneinfo import ZoneInfo
 import frappe
 from frappe.utils import getdate, now_datetime
 
-from dewey_time.attendance_engine.attendance_segments import derive_segments
+from dewey_time.attendance_engine.attendance_segments import (
+    derive_segments,
+    minutes_from_checkin_time,
+)
 from dewey_time.attendance_engine.lunch_detection import detect_observed_lunch
 from dewey_time.attendance_engine.shift_grace import (
     effective_lunch_return_grace,
@@ -222,6 +225,51 @@ def _merge_intervals(intervals: list[dict]) -> list[dict]:
     return merged
 
 
+def derive_presence_intervals(
+    checkins: list[dict], attendance_date, *, session_end_min: int | None
+) -> list[dict]:
+    """Intervals during which the employee was demonstrably present.
+
+    Deliberately NOT derive_segments. That function pairs punches only within a
+    same-branch run and drops anything else on the floor, which is right for
+    branch-attribution flags and catastrophically wrong for absence: a day
+    worked 09:00-17:00 with the OUT punch recorded at another site produced
+    zero segments, so closeout billed the entire shift as MISSING_TIME on top
+    of the NON_PRIMARY_SITE_PUNCH it already raised. Same for a blank
+    custom_device_branch, and same for a forgotten evening punch.
+
+    Presence is branch-agnostic on purpose. Where the punches went is a
+    separate question with its own flags (NON_PRIMARY_SITE_PUNCH,
+    ATTENDANCE_ISSUE/unknown_device_branch); charging the anomaly twice — once
+    as a branch flag and again as hours of absence — is what made HR distrust
+    the numbers.
+
+    A trailing unpaired punch opens a session running to `session_end_min`:
+    the current time intraday, the shift end at closeout. Without it, every
+    employee currently at work was flagged as missing the whole elapsed shift
+    at each 30-minute tick.
+    """
+    ordered = sorted(checkins, key=lambda row: row.get("time") or "")
+    mins = [
+        m
+        for m in (minutes_from_checkin_time(c.get("time"), attendance_date) for c in ordered)
+        if m is not None
+    ]
+
+    intervals: list[dict] = []
+    for i in range(0, len(mins) - 1, 2):
+        start, end = mins[i], mins[i + 1]
+        if end > start:
+            intervals.append({"start_min": start, "end_min": end})
+
+    if len(mins) % 2 == 1 and session_end_min is not None:
+        start = mins[-1]
+        if session_end_min > start:
+            intervals.append({"start_min": start, "end_min": session_end_min})
+
+    return intervals
+
+
 def compute_missing_time_intervals(
     *,
     checkins: list[dict],
@@ -260,9 +308,22 @@ def compute_missing_time_intervals(
     )
     away_for_exclude = [{"startMin": a["startMin"], "endMin": a["endMin"]} for a in away_intervals]
 
+    # Absence is measured against PRESENCE, not against branch-attributed
+    # segments: a cross-branch, branch-blank or unclosed pair yields no segment
+    # and would otherwise bill the whole shift as missing. Away-gap detection
+    # above deliberately keeps using real segments — a gap between two
+    # same-branch stints is a different question from "were they here at all".
+    shift_end_min = _parse_shift_time_to_minutes(shift_meta.get("end_time"))
+    shift_start_min = _parse_shift_time_to_minutes(shift_meta.get("start_time"))
+    if shift_end_min is not None and shift_start_min is not None and shift_end_min <= shift_start_min:
+        shift_end_min += 1440
     missing_expected = derive_missing_expected_intervals(
         shift_meta=shift_meta,
-        segments=segments,
+        segments=derive_presence_intervals(
+            checkins,
+            attendance_date,
+            session_end_min=max_end_min if max_end_min is not None else shift_end_min,
+        ),
         exclude_intervals=away_for_exclude,
         max_end_min=max_end_min,
     )

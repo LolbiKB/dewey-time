@@ -34,6 +34,7 @@ import {
   deriveScheduledFutureIntervals,
   missingExpectedMaxEndMin,
 } from "@/lib/shiftTimeline";
+import { dayCellAccessibleName } from "@/lib/dayCellLabel";
 import { cn } from "@/lib/utils";
 import type { Day, ObservedLunch, ShiftContext } from "@/types/calendar";
 
@@ -71,6 +72,11 @@ export function DayCell(props: {
     <button
       type="button"
       onClick={props.onInspectDay}
+      // The column's entire contents are aria-hidden (grid lines, now-line) or
+      // described only by hover tooltips, so without this every day in the week
+      // announces as a bare "button" — including a scheduled day with zero
+      // punches, which is the one HR most needs to notice.
+      aria-label={dayCellAccessibleName(props.date, props.info)}
       // A whole day column is one button, so the global press-scale (see
       // brand/base.css) would shrink a ~500px-tall surface on every tap. Opt out
       // and press with colour, matching the hover/focus tint already used here.
@@ -496,7 +502,11 @@ function DayDayTrack(props: {
               `${startLabel}–${endLabel}`,
               s.minutes != null ? formatDurationMinutes(s.minutes) : null,
               branchLabel,
-              lateness?.isLate && lateness.deltaMinutes != null
+              // Lateness is derived from the day's FIRST punch, so it belongs to
+              // the first segment only. Stamped on every segment it read as
+              // "late again after lunch", which is not a thing the engine
+              // measures.
+              idx === 0 && lateness?.isLate && lateness.deltaMinutes != null
                 ? `Late ${formatDurationMinutes(lateness.deltaMinutes, { signed: true })}`
                 : null,
             ]
@@ -528,7 +538,10 @@ function DayDayTrack(props: {
                           {formatDurationMinutes(s.minutes)}
                         </div>
                       ) : null}
-                      {heightPct >= 22 && lateness?.isLate && lateness.deltaMinutes != null ? (
+                      {idx === 0 &&
+                      heightPct >= 22 &&
+                      lateness?.isLate &&
+                      lateness.deltaMinutes != null ? (
                         <div className="absolute right-2 bottom-1.5 text-[10px] font-medium text-white/85">
                           {formatDurationMinutes(lateness.deltaMinutes, { signed: true })}
                         </div>

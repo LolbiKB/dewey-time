@@ -1,3 +1,4 @@
+import { parseDateKey } from "@/lib/attendanceTime";
 import { format } from "date-fns";
 
 import type { CalendarEmployee } from "@/types/calendar";
@@ -141,9 +142,9 @@ export function employeeCommandFilter(
 
 export function formatScheduleCoverage(employee: CalendarEmployee): string | null {
   if (!employee.has_shift_assignment || !employee.schedule_min_date) return null;
-  const min = format(new Date(employee.schedule_min_date), "MMM yyyy");
+  const min = format(parseDateKey(employee.schedule_min_date), "MMM yyyy");
   const max = employee.schedule_max_date
-    ? format(new Date(employee.schedule_max_date), "MMM yyyy")
+    ? format(parseDateKey(employee.schedule_max_date), "MMM yyyy")
     : "ongoing";
   return `Shifts: ${min} – ${max}`;
 }

@@ -8,10 +8,21 @@ import { readFileSync } from "node:fs";
 const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 
 test("the no-schedule card is skipped for clock-based employees", () => {
+  // Intervening conditions are allowed — the gate gained one — but both
+  // clauses must remain part of the same expression.
   assert.match(
     app,
-    /selectedEmployee\?\.has_shift_assignment === false &&\s*!selectedEmployee\?\.is_clock_based/
+    /selectedEmployee\?\.has_shift_assignment === false &&[\s\S]{0,200}?!selectedEmployee\?\.is_clock_based/
   );
+});
+
+test("the no-schedule card is skipped when the employee has real Shift Assignment rows", () => {
+  // `has_shift_assignment` means two different doctypes in two payloads: a
+  // Shift SCHEDULE Assignment in the employees list, and actual Shift
+  // Assignment rows in the calendar payload (has_shift_assignment_rows).
+  // Gating on the list value alone told employees who DO have assignments
+  // that no schedule was configured.
+  assert.match(app, /payload\.has_shift_assignment_rows !== true/);
 });
 
 test("WeekView and WeekDayView both receive isClockBased", () => {

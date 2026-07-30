@@ -24,7 +24,7 @@ VALID_MODES = frozenset({"intraday", "closeout", "both"})
 MAX_RANGE_DAYS = 31
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode: str = "both"):
     """Dev-only: recompute AUTO Attendance Flag rows for one employee over a date range."""
     _require_hr_role()
@@ -147,7 +147,7 @@ def preview_clear_employee_schedule_api(employee: str | None = None):
     return preview_clear_employee_schedule(employee)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def clear_employee_schedule_api(employee: str | None = None, confirm=None):
     """Dev-only: delete all SSA, SA, and Attendance Flags for one employee."""
     _require_hr_role()
@@ -188,7 +188,7 @@ def preview_clear_all_employee_schedules_api(include_all_active=None):
     return preview_clear_all_employee_schedules(include_all_active=include_all_active)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def clear_all_employee_schedules_api(confirm=None, confirm_phrase=None, include_all_active=None):
     """Dev-only: delete all SSA, SA, and Attendance Flags for every affected employee."""
     _require_system_manager_for_clear()
@@ -230,7 +230,7 @@ def preview_clear_site_schedule_patterns_api(clear_employee_data=None):
     return preview_clear_site_schedule_patterns(clear_employee_data=clear_first)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def clear_site_schedule_patterns_api(confirm=None, confirm_phrase=None, clear_employee_data=None):
     """Dev-only: delete all Shift Schedules and Shift Types (optionally employee data first)."""
     _require_system_manager_for_clear()
@@ -262,7 +262,7 @@ def clear_site_schedule_patterns_api(confirm=None, confirm_phrase=None, clear_em
         raise
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def clear_site_patterns_step_api(confirm_phrase=None, clear_employee_data=None):
     """Dev-only: one bounded, committed step of the site wipe. The client calls this
     repeatedly (showing progress) until ``done`` — each call stays well under the

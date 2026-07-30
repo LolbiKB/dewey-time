@@ -59,7 +59,18 @@ def refresh_intraday_flags_for_date(attendance_date):
 
     employees = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name") or []
     for employee in employees:
-        refresh_intraday_flags_for_employee_date(employee, attendance_date)
+        # Contained per employee: this runs every 30 minutes across every active
+        # employee, so one bad shift or punch sequence must not cost everyone
+        # sorted after them their provisional flags.
+        try:
+            refresh_intraday_flags_for_employee_date(employee, attendance_date)
+        except Exception:
+            frappe.log_error(
+                title="Intraday flag refresh failed",
+                message="employee={0} date={1}\n{2}".format(
+                    employee, attendance_date, frappe.get_traceback()
+                ),
+            )
 
 
 def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):

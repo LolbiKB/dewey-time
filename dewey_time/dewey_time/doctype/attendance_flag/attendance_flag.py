@@ -50,10 +50,22 @@ class AttendanceFlag(Document):
                 if issue_key:
                     suffix = f"attendance-issue-{issue_key}"
 
-            key = "AUTO-{0}-{1}-{2}".format(
+            # day_closed is part of the identity. Without it a provisional
+            # (day_closed=0) and a final (day_closed=1) row for the same
+            # employee/date/code share a name: intraday deletes only its own
+            # provisional rows, so refreshing a past date that closeout had
+            # already finalized collided with the existing final instead of
+            # writing a flag.
+            #
+            # Only provisionals take the marker, so finalized names are
+            # byte-identical to what already exists in the database and no
+            # historical row is orphaned by this change.
+            state = "" if int(self.day_closed or 0) else "-prov"
+            key = "AUTO-{0}-{1}-{2}{3}".format(
                 frappe.scrub(self.employee),
                 str(self.attendance_date),
                 suffix,
+                state,
             )
             # Frappe name length constraints vary by backend; keep it reasonable.
             self.name = key[:140]

@@ -9,9 +9,9 @@ Policy: [`docs/FRAPPE_ATTENDANCE_RULES.md`](../../../docs/FRAPPE_ATTENDANCE_RULE
 | Source | Used for | Filter rule |
 |--------|----------|-------------|
 | **Shift Assignment** | Expected shift per date (`day.shift`), on-shift rules, ghost band | Submitted row in range (`docstatus == 1`); **Active** for today/future, **Active then Inactive** for past. **No row = pattern off** (e.g. weekly off). Lookup uses the SA table only (not HRMS `get_shifts_for_date` alone). |
-| **Shift Assignment (bounds)** | Picker `schedule_min/max`, `has_shift_assignment` | Submitted **Active only** (live schedule window — not retired slices). |
+| **Shift Assignment (bounds)** | Picker `schedule_min/max`; calendar payload `has_shift_assignment_rows` | Submitted **Active only** (live schedule window — not retired slices). |
 | **Shift Schedule** (`PAT_*`) | Pattern metadata when resolving SSA | Optional strict: linked schedule `docstatus == 1`; log if draft. |
-| **Shift Schedule Assignment** | Picker `has_shift_assignment`, SSA id, date bounds fallback | No docstatus. `enabled == 1`, not expired. Dated calendar still from **Shift Assignment**. |
+| **Shift Schedule Assignment** | Picker `has_shift_assignment` (SSA — NOT the same field as the calendar payload's `has_shift_assignment_rows`), SSA id, date bounds fallback | No docstatus. `enabled == 1`, not expired. Dated calendar still from **Shift Assignment**. |
 | **Leave Application** | `day.leave` badge | `docstatus == 1`, `status == "Approved"`, `from_date <= D <= to_date`. Leave does not remove shift ghost if a Shift Assignment exists. |
 | **Holiday List** | `day.holiday`, off-day UI, flag engine holiday wins | Via `Company.default_holiday_list` → `holiday_by_date_for_company`. Flag engine treats holiday as off-shift even if SSA created a Shift Assignment. |
 | **Attendance Flag** | Day flags in UI / closeout | Filter by flag `status` / `day_closed`, not ERP docstatus. |

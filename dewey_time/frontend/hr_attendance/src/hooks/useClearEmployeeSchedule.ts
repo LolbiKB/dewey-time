@@ -28,6 +28,12 @@ export function useClearEmployeeSchedule() {
       // served stale data.
       void queryClient.invalidateQueries({ queryKey: queryKeys.calendar.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.coverage.all });
+      // list_calendar_employees carries has_shift_assignment,
+      // schedule_min/max_date and shift_schedule_assignment, all of which this
+      // mutation changes. staleTime:0 hides it across a route change but not
+      // within a mount: the schedule and import pages keep the picker mounted,
+      // so it kept sorting a just-cleared employee under "assigned".
+      void queryClient.invalidateQueries({ queryKey: queryKeys.employees.all });
     },
   });
 
