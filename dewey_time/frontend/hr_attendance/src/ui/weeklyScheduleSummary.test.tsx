@@ -144,6 +144,11 @@ test("a scheduled day taken as leave is counted once, not twice", () => {
   assert.equal(shown["Days off"], "1");
   assert.equal(shown["Leave"], "2");
   assertDaysPartitionTheWeek(shown);
+  // Four 8h days, not five. Carrying Monday's hours here would show a 40h
+  // expectation against ~32h of punches — a phantom shortfall on a day the
+  // employee was legitimately absent, and a 10-hour day implied by the row
+  // directly above it.
+  assert.equal(shown["Expected hours"], "32h", "a leave day is not expected either");
 });
 
 test("the summary renders no shift blocks — the chart lives on the canvas now", () => {

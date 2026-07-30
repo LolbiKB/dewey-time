@@ -37,6 +37,10 @@ export type WeeklyScheduleSummaryProps = {
  * the days behind, on an axis derived from the assigned shift bounds — so this
  * panel carries only the facts that no drawing of a week can carry: the
  * pattern, the totals, and the ERP assignment behind them.
+ *
+ * Leave wins over an assigned shift for every number here, because a leave day
+ * is neither worked nor expected. The day cards this panel replaced encoded
+ * that precedence in their JSX and nowhere else, which is how it got lost.
  */
 export function WeeklyScheduleSummary(props: WeeklyScheduleSummaryProps) {
   return (
@@ -88,9 +92,10 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
   // `shift_assigned` true on a day with approved leave), and
   // `summarizeWeekSchedule` counts each without reference to the other — so a
   // leave day falls into two buckets and the rows add to more than seven.
-  // Leave wins, as it did in the day cards this panel replaced.
-  const workDays = week.filter((d) => d.assigned && d.onLeave !== true).length;
+  // Applying the precedence here keeps every number below off the same set.
+  const workedDays = week.filter((d) => d.assigned && d.onLeave !== true);
   const offDays = week.filter((d) => !d.assigned && d.onLeave !== true).length;
+  const expectedMin = workedDays.reduce((total, d) => total + (d.durationMin ?? 0), 0);
   const supersededDays = week.filter((d) => d.shift.schedule_superseded === true).length;
 
   return (
@@ -111,8 +116,8 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
         ) : null}
 
         <dl className="text-sm">
-          <Fact label="Expected hours">{formatScheduleDuration(summary.totalWorkMin)}</Fact>
-          <Fact label="Working days">{workDays}</Fact>
+          <Fact label="Expected hours">{formatScheduleDuration(expectedMin)}</Fact>
+          <Fact label="Working days">{workedDays.length}</Fact>
           <Fact label="Days off">{offDays}</Fact>
           <Fact label="Leave">{summary.leaveDays}</Fact>
           {assignmentId || scheduleCoverage ? (
