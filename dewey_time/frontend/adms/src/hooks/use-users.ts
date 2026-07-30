@@ -2,11 +2,19 @@ import { useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { UserService, getGlobalCancel, setGlobalCancel, getSyncState, setSyncState, type UserFilters, UserOperationLockedError } from '@/services/user-service'
 import {
+  notifyError,
   notifyInfo,
   notifyOperationFailed,
   notifySuccess,
   notifyUserOperationLocked,
+  notifyWarning,
 } from '@/lib/toast'
+import {
+  summarizeDeviceSyncResults,
+  type DeviceSyncResult,
+  type DeviceSyncStage,
+  type DeviceSyncOutcome,
+} from '@/lib/sync-outcome'
 
 export function useSyncCancel() {
   return {
@@ -107,19 +115,30 @@ export function useSyncUser() {
       }
       
       // Step 2: Run sync for each device in PARALLEL
-      const syncPromises = deviceSns.map(async (deviceSn) => {
+      const syncPromises = deviceSns.map(async (deviceSn): Promise<DeviceSyncResult> => {
+        // Worst outcome seen for this device; the first non-success wins so the
+        // notification names the root cause rather than a downstream symptom.
+        let outcome: DeviceSyncOutcome = 'success'
+        let stage: DeviceSyncStage | undefined
+
         const parentId = parentCommands[deviceSn]
-        if (!parentId) return
-        
+        if (!parentId) return { deviceSn, outcome: 'failed', stage: 'queue' }
+
         // Wait for sync_user to complete
         const result = await UserService.waitForCommand(parentId, 30000)
         console.log('[useSyncUser] sync_user completed:', result, 'for device:', deviceSn)
-        
+
         if (result === 'cancelled' || getGlobalCancel().value) {
           await UserService.clearPendingCommandsForDevice(deviceSn, userId)
-          return 'cancelled'
+          return { deviceSn, outcome: 'cancelled' }
         }
-        
+
+        if (result !== 'success') {
+          // 'timeout' means the wait gave up, not that the device applied it.
+          outcome = result
+          stage = 'user'
+        }
+
         // Invalidate after sync_user completes
         queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
         queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
@@ -129,9 +148,9 @@ export function useSyncUser() {
         
         if (getGlobalCancel().value) {
           await UserService.clearPendingCommandsForDevice(deviceSn, userId)
-          return 'cancelled'
+          return { deviceSn, outcome: 'cancelled' }
         }
-        
+
         // Invalidate after biometrics queued
         queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
         queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
@@ -144,32 +163,46 @@ export function useSyncUser() {
           const bioResult = await UserService.waitForCommand(lastCmd.id, 30000)
           if (bioResult === 'cancelled' || getGlobalCancel().value) {
             await UserService.clearPendingCommandsForDevice(deviceSn, userId)
-            return 'cancelled'
+            return { deviceSn, outcome: 'cancelled' }
+          }
+          if (bioResult !== 'success' && outcome === 'success') {
+            outcome = bioResult
+            stage = 'biometrics'
           }
         }
-        
+
         // Final invalidate
         queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(userId) })
         queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(userId) })
-        
-        return 'success'
+
+        return { deviceSn, outcome, ...(stage ? { stage } : {}) }
       })
-      
+
       const results = await Promise.all(syncPromises)
-      
-      if (results.some(r => r === 'cancelled')) {
+
+      if (results.some(r => r.outcome === 'cancelled')) {
         throw new Error('Sync cancelled')
       }
-      
-      return { success: true }
+
+      return { results }
     },
-    onSuccess: (_, variables) => {
-      console.log('[useSyncUser] onSuccess triggered')
+    onSuccess: ({ results }, variables) => {
+      console.log('[useSyncUser] onSuccess triggered', results)
       setSyncState({ active: false, lastSyncTriggered: null })
       queryClient.invalidateQueries({ queryKey: userKeys.syncStatus(variables.userId) })
       queryClient.invalidateQueries({ queryKey: userKeys.commandQueue(variables.userId) })
       queryClient.invalidateQueries({ queryKey: ['user-sync-aggregate', variables.userId] })
-      notifySuccess('Sync completed')
+
+      // The 30s waits above can end in 'timeout' or 'failed'; only a confirmed
+      // command may be reported as success.
+      const notice = summarizeDeviceSyncResults(results)
+      if (notice.level === 'success') {
+        notifySuccess(notice.title, notice.description)
+      } else if (notice.level === 'warning') {
+        notifyWarning(notice.title, notice.description)
+      } else {
+        notifyError(notice.title, notice.description)
+      }
     },
     onError: (error: Error) => {
       console.error('[useSyncUser] onError triggered:', error.message)
