@@ -913,12 +913,15 @@ Run: `git status --porcelain dewey_time/public/hr_attendance dewey_time/www`
 Then prove the new feature is in the bundle:
 
 ```bash
-grep -c "expects a 7-day week" dewey_time/public/hr_attendance/assets/index.js
+grep -c "PlannedWeekCanvas expects a" dewey_time/public/hr_attendance/assets/index.js
 grep -c "minmax(3rem" dewey_time/public/hr_attendance/assets/index.css
 ```
 
-Expected: ≥ 1 for **both**. The first is `PlannedWeekCanvas`'s throw message, new on this
-branch and surviving minification. The second proves the preview dialog's narrower grid template
+Expected: ≥ 1 for **both**. The first is a fragment of `PlannedWeekCanvas`'s throw message, new on this branch. Match only
+that fragment: the source reads `` `PlannedWeekCanvas expects a ${WEEK_LENGTH}-day week…` ``, so
+the literal string "expects a 7-day week" never exists in any build — esbuild does not
+constant-fold the interpolation. This probe has now been wrong twice; grep for text that is
+literal in the *source*, never for text you expect the bundler to have assembled. The second proves the preview dialog's narrower grid template
 actually reached the built CSS — Tailwind cannot see runtime-constructed class names, so this is
 the check that the canvas renders seven columns in the dialog rather than collapsing to one.
 
