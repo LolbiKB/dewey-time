@@ -261,7 +261,9 @@ export function WeekCanvasFrame(props: {
         <div className={`grid shrink-0 ${cols} border-b border-border/60`}>
           <div aria-hidden="true" />
           {props.weekDates.map((d) => (
-            <div key={format(d, "yyyy-MM-dd")}>{props.renderHeader(d)}</div>
+            <div key={format(d, "yyyy-MM-dd")} className="contents">
+              {props.renderHeader(d)}
+            </div>
           ))}
         </div>
 
@@ -282,7 +284,19 @@ export function WeekCanvasFrame(props: {
 }
 ```
 
-Note `className="contents"` on the day wrapper: it keeps each rendered day as a direct grid item, so `DayCell`'s stretch behaviour is unchanged (the issue-#71 collapse this avoids is documented at `WeekDayView.tsx:141`).
+**Both wrappers carry `className="contents"`, and for two different reasons.** `display: contents`
+generates no box, so the rendered cell — not the wrapper — stays the direct grid item.
+
+- **Day row:** `DayCell`'s root is a `<button>`, inline-level, which collapses to a narrow sliver
+  unless it is itself the grid item. That was issue #71, documented at `WeekDayView.tsx:141`.
+- **Header row:** the header cell relies on `align-self: stretch` to make its off-day
+  (`bg-destructive/[0.06]`) and holiday (`bg-muted/40`) tint fill the full row height. Header cells
+  differ in height — a holiday line, a clock total, 0–N chips — so with a plain wrapper the tint on
+  short columns like Sat/Sun stops short of the row bottom.
+
+Neither failure is catchable by the test suite: jsdom has no layout engine, so all four `WeekView`
+test files stay green through both. This note exists because the first draft of this plan omitted
+the header wrapper's `contents` and the implementer caught it before writing any code.
 
 - [ ] **Step 2: Render `WeekView` through it**
 
