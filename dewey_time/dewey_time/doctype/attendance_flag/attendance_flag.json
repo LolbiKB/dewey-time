@@ -191,7 +191,7 @@
   "issingle": 0,
   "istable": 0,
   "links": [],
-  "modified": "2026-05-28 00:00:00.000000",
+  "modified": "2026-07-30 18:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Attendance Flag",
@@ -219,6 +219,18 @@
       "read": 1,
       "report": 1,
       "role": "HR User",
+      "share": 0,
+      "write": 1
+    },
+    {
+      "create": 0,
+      "delete": 1,
+      "email": 1,
+      "export": 0,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "HR Manager",
       "share": 0,
       "write": 1
     }

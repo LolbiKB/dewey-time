@@ -761,6 +761,15 @@ def _get_shift_meta(shift_type: str):
     try:
         doc = frappe.get_doc("Shift Type", shift_type)
     except Exception:
+        # Returning None here makes the day look UNSCHEDULED to every caller,
+        # which silently downgrades a real shift to an off day and suppresses
+        # the flags that depend on it. A missing Shift Type is a configuration
+        # error and an infra fault is transient; neither should be indistinguishable
+        # from "this employee was not rostered", so leave a trace.
+        frappe.log_error(
+            title="Shift Type lookup failed",
+            message="shift_type={0}\n{1}".format(shift_type, frappe.get_traceback()),
+        )
         return None
 
     meta = {
