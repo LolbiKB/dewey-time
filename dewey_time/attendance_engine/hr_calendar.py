@@ -440,7 +440,12 @@ def _employee_nav_meta(employee: str) -> dict:
     return {
         "first_checkin_date": checkin.get("first_checkin_date"),
         "schedule_max_date": bounds.get("schedule_max_date"),
-        "has_shift_assignment": bool(bounds.get("has_shift_assignment")),
+        # Deliberately NOT "has_shift_assignment": list_calendar_employees uses
+        # that name for "has a Shift SCHEDULE Assignment", a different doctype.
+        # One name meaning two things across two payloads the same SPA consumes
+        # is how the week grid ended up hidden for employees who do have
+        # concrete Shift Assignment rows.
+        "has_shift_assignment_rows": bool(bounds.get("has_shift_assignment")),
         "is_clock_based": is_clock_based(employment_type),
     }
 

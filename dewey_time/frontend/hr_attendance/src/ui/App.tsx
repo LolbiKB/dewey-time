@@ -148,11 +148,11 @@ export function App() {
         firstCheckinDate,
         scheduleMaxDate: payload.schedule_max_date ?? selectedEmployee?.schedule_max_date,
         hasShiftAssignment:
-          payload.has_shift_assignment ?? selectedEmployee?.has_shift_assignment,
+          payload.has_shift_assignment_rows ?? selectedEmployee?.has_shift_assignment,
       }),
     [
       firstCheckinDate,
-      payload.has_shift_assignment,
+      payload.has_shift_assignment_rows,
       payload.schedule_max_date,
       selectedEmployee,
     ]
@@ -352,6 +352,7 @@ export function App() {
                       </CardContent>
                     </Card>
                   ) : selectedEmployee?.has_shift_assignment === false &&
+                    payload.has_shift_assignment_rows !== true &&
                     !selectedEmployee?.is_clock_based ? (
                     <EmptyState
                       className="min-h-0 flex-1 animate-in fade-in"

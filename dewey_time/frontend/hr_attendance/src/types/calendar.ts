@@ -98,6 +98,14 @@ export type CalendarPayload = {
   first_checkin_date?: string | null;
   schedule_max_date?: string | null;
   has_shift_assignment?: boolean;
+  /**
+   * Calendar payload only: the employee has concrete Shift Assignment ROWS.
+   * Distinct from `has_shift_assignment` on CalendarEmployee, which means
+   * "has a Shift SCHEDULE Assignment" — a different doctype. The two used to
+   * share a name across two payloads, which is how the week grid got hidden
+   * for employees who did have assignments.
+   */
+  has_shift_assignment_rows?: boolean;
   is_clock_based?: boolean;
   /** The employee's primary site (Employee.branch). Null/absent for the many
    *  employees who have none — consumers must treat that as "do not judge". */
