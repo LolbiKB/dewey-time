@@ -59,6 +59,7 @@ export function DayCell(props: {
   deviceSync?: DeviceSyncStatus[];
   isClockDay?: boolean;
   employeeBranch?: string | null;
+  now?: Date;
   onInspectDay: () => void;
 }) {
   const checkins = props.info?.checkins ?? [];
@@ -101,6 +102,8 @@ export function DayCell(props: {
               employeeBranch={props.employeeBranch}
               windowStartMin={props.timelineStartMin}
               windowEndMin={props.timelineEndMin}
+              today={props.today}
+              now={props.now}
             />
           )}
         </div>
@@ -134,6 +137,8 @@ function DayDayTrack(props: {
   employeeBranch?: string | null;
   windowStartMin?: number;
   windowEndMin?: number;
+  today?: boolean;
+  now?: Date;
 }) {
   const onShift = props.shift?.shift_assigned === true;
   /**
@@ -264,6 +269,11 @@ function DayDayTrack(props: {
     return computeDayTimeWindow(props.checkins ?? [], minutesFromDateTime);
   }, [props.checkins, props.windowEndMin, props.windowStartMin]);
 
+  const nowMin = useMemo(() => {
+    const d = props.now ?? new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  }, [props.now]);
+
   function pctFromMinute(min: number) {
     if (!window) return clamp((min / (24 * 60)) * 100, 0, 100);
     return clamp(((min - window.startMin) / window.span) * 100, 0, 100);
@@ -305,6 +315,19 @@ function DayDayTrack(props: {
     <div className="flex h-full flex-col gap-2">
       <div className="relative rounded-xl bg-muted/25 min-h-0 flex-1">
         <HourGrid window={window} />
+        {/* Explicit bounds check, not a consequence of the pct maths: pctFromMinute
+            clamps to [0,100], so omitting this renders a plausible line pinned to an
+            edge — a confident 07:00 reading at 03:00 — instead of nothing. */}
+        {props.today && window && nowMin >= window.startMin && nowMin <= window.endMin ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-10"
+            style={{ top: `${pctFromMinute(nowMin)}%` }}
+            aria-hidden="true"
+          >
+            <div className="absolute -left-0.5 -top-[3px] size-1.5 rounded-full bg-destructive" />
+            <div className="h-px bg-destructive/70" />
+          </div>
+        ) : null}
         {!onShift && props.checkins.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center px-3">
             <span className="text-xs text-muted-foreground">Day off</span>

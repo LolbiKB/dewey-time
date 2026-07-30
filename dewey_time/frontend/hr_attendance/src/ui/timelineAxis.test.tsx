@@ -88,3 +88,73 @@ test("axis chrome is hidden from assistive tech", () => {
   // It is decoration duplicating information the bands' tooltips already carry.
   assert.ok(desktop().includes('aria-hidden="true"'));
 });
+
+/**
+ * A week containing the real today, because `isToday` is still
+ * `isSameDay(d, new Date())` — deliberately not rewritten to consume `now`
+ * (see the spec's §5.3). Only the *position* of the line is injected.
+ *
+ * This is not date-dependent: every day of the fixture carries the same
+ * 08:00–17:00 shift, so the window is 07:00–18:00 whatever today happens to be.
+ */
+const TODAY = new Date();
+const LIVE_WEEK = Array.from(
+  { length: 7 },
+  (_, i) => new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() - 3 + i),
+);
+
+function liveWeekDays(): Map<string, Day> {
+  return new Map(
+    LIVE_WEEK.map((d) => {
+      const date = format(d, "yyyy-MM-dd");
+      return [
+        date,
+        {
+          date,
+          shift: {
+            shift_assigned: true,
+            shift_type: "FT",
+            start_time: "08:00:00",
+            end_time: "17:00:00",
+          },
+          checkins: [
+            { time: `${date} 08:00:00`, custom_device_branch: "HQ" },
+            { time: `${date} 17:00:00`, custom_device_branch: "HQ" },
+          ],
+        } satisfies Day,
+      ];
+    }),
+  );
+}
+
+const AT = (h: number, m: number) =>
+  new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate(), h, m);
+
+function desktopAt(now: Date): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <WeekView
+        weekDates={LIVE_WEEK}
+        daysByDate={liveWeekDays()}
+        alertsByDate={new Map()}
+        syncByDate={new Map()}
+        now={now}
+        onInspectDay={() => {}}
+        onInspectFlag={() => {}}
+      />
+    </TooltipProvider>,
+  );
+}
+
+test("the now-line renders once, on today's column only", () => {
+  const marks = desktopAt(AT(13, 20)).match(/bg-destructive\/70/g) ?? [];
+  assert.equal(marks.length, 1, "one column is today, so exactly one line");
+});
+
+test("no now-line when the clock is outside the window", () => {
+  // The silent-failure case: pctFromMinute clamps to [0,100], so forgetting the
+  // suppression check yields a plausible line pinned to the top edge — a
+  // confident 07:00 reading at 03:00 — rather than anything visibly broken.
+  assert.ok(!/bg-destructive\/70/.test(desktopAt(AT(3, 0))), "03:00 is before a 07:00 window");
+  assert.ok(!/bg-destructive\/70/.test(desktopAt(AT(22, 0))), "22:00 is after an 18:00 window");
+});
