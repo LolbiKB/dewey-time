@@ -400,36 +400,53 @@ export class DeviceService {
     if (options.limit) params.append('limit', String(options.limit))
     if (options.search) params.append('search', options.search)
 
-    const response = await fetch(`${API_URL}/admin/devices/${deviceSn}/users?${params}`, {
-      headers: await this.authHeaders(),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to fetch device users')
-    }
-
-    return response.json()
+    return this.fetchApi(
+      `/admin/devices/${encodeURIComponent(deviceSn)}/users?${params}`,
+      {},
+      'Failed to fetch device users'
+    )
   }
 
   /**
    * Get sync summary for a device
    */
   static async getDeviceSyncSummary(deviceSn: string): Promise<{ total: number; synced: number; syncing: number; failed: number }> {
-    const response = await fetch(`${API_URL}/admin/devices/${deviceSn}/sync-summary`, {
-      headers: await this.authHeaders(),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to fetch sync summary')
-    }
-
-    return response.json()
+    return this.fetchApi(
+      `/admin/devices/${encodeURIComponent(deviceSn)}/sync-summary`,
+      {},
+      'Failed to fetch sync summary'
+    )
   }
 
-  private static async authHeaders(): Promise<HeadersInit> {
-    return getAuthHeaders()
+  /**
+   * Single entry point for bridge `/admin/*` calls.
+   *
+   * Fastify rejects a request carrying `Content-Type: application/json` with an
+   * empty body as 400 FST_ERR_CTP_EMPTY_JSON_BODY *before* the route handler
+   * runs, so the header must be attached only when there is actually a body.
+   * getAuthHeaders() always sets it, hence the split here — keep this rule in
+   * one place rather than per call site.
+   */
+  private static async fetchApi<T>(
+    path: string,
+    options: RequestInit = {},
+    failureMessage = 'Request failed'
+  ): Promise<T> {
+    const authHeaders = (await getAuthHeaders()) as Record<string, string>
+    const hasBody = options.body != null
+    const response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        ...(authHeaders.Authorization ? { Authorization: authHeaders.Authorization } : {}),
+        ...options.headers,
+      },
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: failureMessage }))
+      throw new Error(err.error || failureMessage)
+    }
+    return response.json()
   }
 
   /** Super Admin: set comm_key or connection_status via bridge API */
@@ -440,34 +457,24 @@ export class DeviceService {
       connection_status?: 'pending' | 'approved' | 'rejected'
     }
   ): Promise<DeviceEntry> {
-    const response = await fetch(
-      `${API_URL}/admin/devices/${encodeURIComponent(serialNumber)}/security`,
-      {
-        method: 'PATCH',
-        headers: await this.authHeaders(),
-        body: JSON.stringify(updates),
-      }
+    const json = await this.fetchApi<{ success: boolean; data: DeviceEntry }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/security`,
+      { method: 'PATCH', body: JSON.stringify(updates) },
+      'Failed to update device security'
     )
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Request failed' }))
-      throw new Error(err.error || 'Failed to update device security')
-    }
-    const json = await response.json()
     const d = json.data
     const presence = getDevicePresence(d.last_seen)
     return { ...d, status: presence.status, last_seen_minutes: presence.lastSeenMinutes }
   }
 
   static async approveDevice(serialNumber: string): Promise<DeviceEntry> {
-    const response = await fetch(
-      `${API_URL}/admin/devices/${encodeURIComponent(serialNumber)}/approve`,
-      { method: 'POST', headers: await this.authHeaders() }
+    const json = await this.fetchApi<{ success: boolean; data: DeviceEntry }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/approve`,
+      // The route takes no fields, but an empty JSON object is still required:
+      // a bodiless POST would leave Fastify's JSON parser with nothing to read.
+      { method: 'POST', body: JSON.stringify({}) },
+      'Failed to approve device'
     )
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Request failed' }))
-      throw new Error(err.error || 'Failed to approve device')
-    }
-    const json = await response.json()
     const d = json.data
     const presence = getDevicePresence(d.last_seen)
     return { ...d, status: presence.status, last_seen_minutes: presence.lastSeenMinutes }
