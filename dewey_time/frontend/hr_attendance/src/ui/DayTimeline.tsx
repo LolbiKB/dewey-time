@@ -34,6 +34,7 @@ import {
   deriveScheduledFutureIntervals,
   missingExpectedMaxEndMin,
 } from "@/lib/shiftTimeline";
+import { dayCellAccessibleName } from "@/lib/dayCellLabel";
 import { cn } from "@/lib/utils";
 import type { Day, ObservedLunch, ShiftContext } from "@/types/calendar";
 
@@ -71,6 +72,11 @@ export function DayCell(props: {
     <button
       type="button"
       onClick={props.onInspectDay}
+      // The column's entire contents are aria-hidden (grid lines, now-line) or
+      // described only by hover tooltips, so without this every day in the week
+      // announces as a bare "button" — including a scheduled day with zero
+      // punches, which is the one HR most needs to notice.
+      aria-label={dayCellAccessibleName(props.date, props.info)}
       // A whole day column is one button, so the global press-scale (see
       // brand/base.css) would shrink a ~500px-tall surface on every tap. Opt out
       // and press with colour, matching the hover/focus tint already used here.
