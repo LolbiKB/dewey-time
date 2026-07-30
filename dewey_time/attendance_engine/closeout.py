@@ -102,8 +102,26 @@ def _is_company_closeout_hour(company: str) -> bool:
     except Exception:
         tz = ZoneInfo("UTC")
 
-    local_now = now_datetime().astimezone(tz)
-    return local_now.hour == 3
+    return _company_local_now(tz).hour == 3
+
+
+def _site_timezone() -> ZoneInfo:
+    try:
+        return ZoneInfo(frappe.defaults.get_global_default("time_zone") or "UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _company_local_now(tz: ZoneInfo):
+    """Now, in the company's timezone.
+
+    now_datetime() returns a NAIVE site-local datetime. Calling .astimezone() on
+    it makes Python assume the datetime is in the CONTAINER's local zone and
+    convert from there — a second, silent conversion that skews the hour by the
+    container/site offset (on Frappe Cloud the container is UTC). Attaching the
+    site zone first makes the conversion mean what it reads as.
+    """
+    return now_datetime().replace(tzinfo=_site_timezone()).astimezone(tz)
 
 
 def _yesterday_for_company(company: str):

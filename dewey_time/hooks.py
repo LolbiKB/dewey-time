@@ -103,9 +103,12 @@ after_migrate = [
     "dewey_time.webpush.ensure_vapid_keys",
 ]
 
-# Scheduled job: company fallback UNNOTIFIED_ABSENCE (~03:00 per company timezone)
+# Scheduled job: company fallback UNNOTIFIED_ABSENCE (~03:00 per company timezone).
+# Registered HOURLY, not daily: the job gates itself on each company's local hour
+# being 03:00, and "daily" fires once around site midnight, so under "daily" the
+# gate could essentially never match and the fallback never ran.
 scheduler_events = {
-    "daily": [
+    "hourly": [
         "dewey_time.attendance_engine.closeout.run_company_fallback_closeout",
     ],
     "cron": {

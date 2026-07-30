@@ -1,3 +1,4 @@
+import pathlib
 import unittest
 from datetime import date, datetime, time as dt_time
 from unittest.mock import MagicMock, patch
@@ -254,3 +255,41 @@ class TestPresenceCoverage(unittest.TestCase):
         )
         self.assertEqual(len(flags), 1)
         self.assertEqual(flags[0][1]["minutes"], 120)
+
+
+class TestCompanyFallbackSchedule(unittest.TestCase):
+    """The company fallback closeout had two independent reasons never to run.
+
+    It gates on each company's local hour being 03:00, but hooks.py registered
+    it under scheduler_events["daily"], which Frappe fires once around site
+    midnight — so the gate could essentially never match. And it computed the
+    local hour by calling .astimezone() on now_datetime(), which is NAIVE
+    site-local: Python then assumes the container's zone and converts a second
+    time, skewing the hour by the container/site offset.
+    """
+
+    def test_the_job_is_registered_hourly_so_its_gate_can_match(self):
+        hooks = pathlib.Path("dewey_time/hooks.py").read_text()
+        job = "closeout.run_company_fallback_closeout"
+        self.assertIn(job, hooks)
+        hourly = hooks.split('"hourly"', 1)
+        self.assertEqual(len(hourly), 2, "expected an hourly scheduler bucket")
+        # the job must appear inside the hourly list, before the next bucket
+        after = hourly[1].split("]", 1)[0]
+        self.assertIn(job, after, "the fallback must be hourly, not daily")
+
+    def test_local_now_is_not_double_converted(self):
+        from zoneinfo import ZoneInfo
+
+        from dewey_time.attendance_engine import closeout
+
+        site = ZoneInfo("Africa/Nairobi")   # UTC+3, no DST
+        target = ZoneInfo("Africa/Nairobi")
+        naive_site_local = datetime(2026, 7, 1, 3, 30)
+
+        with patch.object(closeout, "now_datetime", return_value=naive_site_local), patch.object(
+            closeout, "_site_timezone", return_value=site
+        ):
+            local = closeout._company_local_now(target)
+
+        self.assertEqual(local.hour, 3, "same zone in and out must not shift the hour")
