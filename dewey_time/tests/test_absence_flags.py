@@ -181,3 +181,76 @@ class TestBatchFailureIsolation(unittest.TestCase):
                 employee="EMP-A", attendance_date=date(2026, 7, 1)
             )
         self.assertFalse(ok)
+
+
+class TestPresenceCoverage(unittest.TestCase):
+    """Absence is measured against presence, not against branch-attributed segments.
+
+    derive_segments only pairs punches inside a same-branch run, so a worked day
+    whose OUT punch landed at another site, or whose device had no branch
+    mapping, or whose evening punch was forgotten, produced ZERO segments — and
+    zero coverage was billed as absence. HR saw seven hours of MISSING_TIME for
+    someone who worked all day, on top of the branch flag the same punches
+    already raised.
+    """
+
+    SHIFT = {
+        "start_time": dt_time(9, 0),
+        "end_time": dt_time(17, 0),
+        "custom_grace_minutes": 0,
+        "custom_lunch_start": None,
+        "custom_lunch_end": None,
+    }
+
+    def _flags(self, checkins, max_end_min=None):
+        from dewey_time.attendance_engine.absence_flags import evaluate_missing_time_flags
+
+        return evaluate_missing_time_flags(
+            checkins=checkins,
+            shift_meta=self.SHIFT,
+            attendance_date=date(2026, 7, 1),
+            max_end_min=max_end_min,
+        )
+
+    @staticmethod
+    def _punch(hhmm, branch="B1"):
+        # Real datetimes: the suite's frappe mock makes get_datetime the identity
+        # function, so a string would never be parsed.
+        hh, mm = (int(part) for part in hhmm.split(":"))
+        return {"time": datetime(2026, 7, 1, hh, mm), "custom_device_branch": branch}
+
+    def test_a_cross_branch_pair_is_not_billed_as_absence(self):
+        flags = self._flags([self._punch("09:00", "B1"), self._punch("17:00", "B2")])
+        self.assertEqual(flags, [], "worked 09-17; the branch mismatch has its own flag")
+
+    def test_a_branchless_pair_is_not_billed_as_absence(self):
+        flags = self._flags([self._punch("09:00", None), self._punch("17:00", None)])
+        self.assertEqual(flags, [], "unknown device branch has its own flag")
+
+    def test_a_forgotten_out_punch_opens_a_session_to_shift_end(self):
+        flags = self._flags([self._punch("09:00")])
+        self.assertEqual(flags, [], "present since 09:00; the unpaired punch has its own flag")
+
+    def test_an_employee_currently_at_work_is_not_flagged_intraday(self):
+        """The 30-minute scheduler used to flag every present employee.
+
+        One IN punch and no OUT yet is the normal state of everyone at work.
+        Before the open-session rule this produced a CRITICAL provisional
+        MISSING_TIME for the whole elapsed shift, at every tick, every morning.
+        """
+        flags = self._flags([self._punch("09:00")], max_end_min=11 * 60)
+        self.assertEqual(flags, [])
+
+    def test_genuine_absence_still_flags(self):
+        """The guard against over-correcting: arriving late is still absence."""
+        flags = self._flags([self._punch("10:30"), self._punch("17:00")])
+        self.assertEqual(len(flags), 1)
+        self.assertEqual(flags[0][1]["minutes"], 90)
+        self.assertEqual(flags[0][1]["kind"], "leading")
+
+    def test_a_real_mid_day_gap_still_flags(self):
+        flags = self._flags(
+            [self._punch("09:00"), self._punch("12:00"), self._punch("14:00"), self._punch("17:00")]
+        )
+        self.assertEqual(len(flags), 1)
+        self.assertEqual(flags[0][1]["minutes"], 120)
