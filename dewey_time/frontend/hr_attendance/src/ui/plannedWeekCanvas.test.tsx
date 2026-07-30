@@ -82,11 +82,16 @@ test("a late shift starts lower on the axis than an early one", () => {
     { start: "08:00:00", end: "16:00:00" },
     { start: "13:00:00", end: "21:00:00" },
   ]);
-  const tops = [...html.matchAll(/top:\s*([\d.]+)%/g)].map((m) => Number(m[1]));
-  const blockTops = tops.filter((t) => t > 0);
-  assert.ok(blockTops.length >= 2, "expected two positioned blocks");
+  // Blocks are the only elements whose style attribute carries `top` and
+  // `height` together — HourGrid/HourGutter each emit their own `top:N%`
+  // ticks (one per hour, per day column), so a bare `top:` scan matches
+  // those too and can pass against a canvas rendering zero blocks.
+  const blockTops = [...html.matchAll(/top:\s*([\d.]+)%;height:/g)].map((m) => Number(m[1]));
+  assert.equal(blockTops.length, 2, "expected exactly two positioned blocks");
+  // Asserted in source order (Mon 08:00 then Tue 13:00), not max > min —
+  // the ordered form also catches an inverted axis, which max > min cannot.
   assert.ok(
-    Math.max(...blockTops) > Math.min(...blockTops),
+    blockTops[1]! > blockTops[0]!,
     "the 13:00 shift must sit below the 08:00 one",
   );
 });

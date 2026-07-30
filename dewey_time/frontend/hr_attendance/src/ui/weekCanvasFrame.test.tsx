@@ -80,9 +80,11 @@ test("WeekCanvasFrame keeps both per-day wrappers as `className=\"contents\"`", 
   //   without `contents` it shrinks to a sliver instead of filling its grid
   //   cell — issue #71 recurring.
   const src = readFileSync(resolve(PKG, "src/ui/WeekCanvasFrame.tsx"), "utf8");
-  // Matches the closing `>` of the real JSX wrappers, not the doc comment
-  // above them that also mentions the string `className="contents"`.
-  const occurrences = src.match(/className="contents">/g) ?? [];
+  // Matches the real JSX wrappers (whitespace or `>` after the closing
+  // quote, robust to attribute reordering or line wrapping), not the doc
+  // comment above them that also mentions the string `className="contents"`
+  // — there a backtick follows the closing quote instead.
+  const occurrences = src.match(/className="contents"[\s>]/g) ?? [];
   assert.equal(
     occurrences.length,
     2,

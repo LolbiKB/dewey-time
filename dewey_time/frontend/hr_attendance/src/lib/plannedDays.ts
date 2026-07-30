@@ -1,5 +1,5 @@
-import type { PlannedBlock } from "./plannedBlocks";
-import { buildWeekSchedule, shortShiftTypeCode } from "./weekSchedule";
+import { plannedBlocks, type PlannedBlock } from "./plannedBlocks";
+import { buildWeekSchedule, shortShiftTypeCode, type WeekDaySchedule } from "./weekSchedule";
 import type { Day } from "@/types/calendar";
 
 /**
@@ -52,26 +52,17 @@ export function plannedDaysFromSchedule(
 }
 
 /**
- * `plannedBlocks` (plannedBlocks.ts), operating directly on a `PlannedDay`'s
- * minute fields.
+ * `plannedBlocks` (plannedBlocks.ts), for a `PlannedDay`.
  *
- * Deliberately a second function rather than converting a `PlannedDay` back
- * into a `WeekDaySchedule` to reuse `plannedBlocks` — the two types already
- * carry the same minute fields under the same names, so a round trip would
- * only be indirection. `plannedBlocks.ts` itself is untouched; its own tests
- * pin its behaviour against `WeekDaySchedule`, and this mirrors that logic
- * exactly against `PlannedDay`.
+ * `PlannedDay` already carries the same minute fields under the same names
+ * as `WeekDaySchedule` — the only mismatch is `works` vs. `assigned` — so
+ * this delegates through a spread with that one field renamed, rather than
+ * duplicating `plannedBlocks`'s guard/interior-lunch logic a second time.
+ * That keeps the one live call path (`PlannedDayColumn` calls this, not
+ * `plannedBlocks` directly) covered by `plannedBlocks.test.ts`'s edge cases
+ * instead of leaving them pinned against a function nothing calls.
+ * `plannedBlocks.ts` itself is untouched.
  */
 export function plannedBlocksForDay(day: PlannedDay): PlannedBlock[] {
-  if (!day.works || day.startMin == null || day.endMin == null) return [];
-  const { startMin, endMin, lunchStartMin: ls, lunchEndMin: le } = day;
-  if (endMin <= startMin) return [];
-
-  const interior = ls != null && le != null && le > ls && ls > startMin && le < endMin;
-  if (!interior) return [{ startMin, endMin }];
-
-  return [
-    { startMin, endMin: ls },
-    { startMin: le, endMin },
-  ];
+  return plannedBlocks({ ...day, assigned: day.works } as WeekDaySchedule);
 }

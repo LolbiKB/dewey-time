@@ -4,6 +4,11 @@ import type { PlannedDay } from "@/lib/plannedDays";
 import { PlannedDayColumn } from "@/ui/PlannedDayColumn";
 import { WeekCanvasFrame } from "@/ui/WeekCanvasFrame";
 
+/** The one week length WeekCanvasFrame's grid supports (`grid-cols-[3.5rem_repeat(7,...)]`,
+ * WeekCanvasFrame.tsx:36) — a `days` array of any other length would silently
+ * wrap into a broken second row rather than fail loudly. */
+const WEEK_LENGTH = 7;
+
 /**
  * Seven distinct, otherwise-unused dates, purely so `WeekCanvasFrame` — which
  * keys and iterates by `Date` — has something to key on.
@@ -14,8 +19,8 @@ import { WeekCanvasFrame } from "@/ui/WeekCanvasFrame";
  * by array position (reference-equal to the placeholder the frame hands
  * back), never by the placeholder's date value.
  */
-function placeholderWeek(length: number): Date[] {
-  return Array.from({ length }, (_, i) => new Date(2000, 0, i + 3)); // Mon 3 Jan 2000 onward
+function placeholderWeek(): Date[] {
+  return Array.from({ length: WEEK_LENGTH }, (_, i) => new Date(2000, 0, i + 3)); // Mon 3 Jan 2000 onward
 }
 
 /**
@@ -29,7 +34,12 @@ function placeholderWeek(length: number): Date[] {
  * real date is imported by this component.
  */
 export function PlannedWeekCanvas(props: { days: PlannedDay[]; window: AxisWindow | null }) {
-  const placeholders = placeholderWeek(props.days.length);
+  if (props.days.length !== WEEK_LENGTH) {
+    throw new Error(
+      `PlannedWeekCanvas expects a ${WEEK_LENGTH}-day week, got ${props.days.length}`,
+    );
+  }
+  const placeholders = placeholderWeek();
 
   return (
     <WeekCanvasFrame
