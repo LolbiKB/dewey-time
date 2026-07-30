@@ -3,6 +3,7 @@ import {
   deviceAlertsByDate,
   deviceAlertsForWeek,
   deviceSyncByDate,
+  formatAttendanceLoadError,
   useCalendarEmployees,
   useEmployeeCalendar,
 } from "@/hooks/useHrAttendanceData";
@@ -189,6 +190,7 @@ export function App() {
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
   const loadError = employeesError ?? calendarError;
+  const loadErrorDetail = loadError ? formatAttendanceLoadError(loadError) : null;
 
   async function refetchPage() {
     setIsRefreshing(true);
@@ -272,6 +274,13 @@ export function App() {
                 {hrStaff
                   ? "Confirm you have HR User access and try again."
                   : "Confirm your user is linked to an active Employee record."}
+                {/* The guidance above is a guess; the server usually knows exactly
+                    what went wrong. Without this, a 500 and a bad date range both
+                    read as a permission problem and send HR chasing access they
+                    already have. */}
+                {loadErrorDetail ? (
+                  <span className="mt-1 block text-xs opacity-90">{loadErrorDetail}</span>
+                ) : null}
               </AlertDescription>
               <Button
                 size="sm"

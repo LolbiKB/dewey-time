@@ -496,7 +496,11 @@ function DayDayTrack(props: {
               `${startLabel}–${endLabel}`,
               s.minutes != null ? formatDurationMinutes(s.minutes) : null,
               branchLabel,
-              lateness?.isLate && lateness.deltaMinutes != null
+              // Lateness is derived from the day's FIRST punch, so it belongs to
+              // the first segment only. Stamped on every segment it read as
+              // "late again after lunch", which is not a thing the engine
+              // measures.
+              idx === 0 && lateness?.isLate && lateness.deltaMinutes != null
                 ? `Late ${formatDurationMinutes(lateness.deltaMinutes, { signed: true })}`
                 : null,
             ]
@@ -528,7 +532,10 @@ function DayDayTrack(props: {
                           {formatDurationMinutes(s.minutes)}
                         </div>
                       ) : null}
-                      {heightPct >= 22 && lateness?.isLate && lateness.deltaMinutes != null ? (
+                      {idx === 0 &&
+                      heightPct >= 22 &&
+                      lateness?.isLate &&
+                      lateness.deltaMinutes != null ? (
                         <div className="absolute right-2 bottom-1.5 text-[10px] font-medium text-white/85">
                           {formatDurationMinutes(lateness.deltaMinutes, { signed: true })}
                         </div>

@@ -229,7 +229,7 @@ export function ReviewStep(props: {
           {c.step === "applying" ? (
             <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Loader2Icon className="size-3 animate-spin" />
-              Groups apply in parallel; members of a group save in sequence.
+              Applying one group at a time; members of a group save in sequence.
             </p>
           ) : null}
 
