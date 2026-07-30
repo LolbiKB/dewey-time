@@ -56,7 +56,7 @@ export function useUserSyncAggregate(
     return computeUserSyncAggregate({
       syncStatus: syncData.data,
       commands: commandData?.data ?? [],
-      fingerprints: bioData?.data ?? [],
+      fingerprints: bioData ?? [],
       hasActiveEnrollment,
       enrollmentSession: session
         ? {
@@ -66,7 +66,7 @@ export function useUserSyncAggregate(
           }
         : null,
     })
-  }, [userId, syncData?.data, commandData?.data, bioData?.data, enrollmentData?.data])
+  }, [userId, syncData?.data, commandData?.data, bioData, enrollmentData?.data])
 
   const [globalSyncActive, setGlobalSyncActive] = useState(
     () => getSyncState().active && getSyncState().userId === userId
