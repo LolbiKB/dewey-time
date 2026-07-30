@@ -11,9 +11,11 @@ import {
 } from '@/components/ui/table'
 import {
   useDeviceAttlogClosureHistory,
+  useDeviceAttlogMeta,
   useRetryAttlogClosure,
 } from '@/hooks/use-attlog-closure'
 import { attlogClosureLabel } from '@/lib/attlog-closure-display'
+import { DEFAULT_DEVICE_TZ, deviceDayWindowIso } from '@/lib/attendance-log-display'
 import { AttlogClosureBadge } from '@/components/shared/status-badges'
 import { AttlogSection } from '@/components/devices/attlog-section'
 import { toast } from 'sonner'
@@ -31,6 +33,7 @@ export function DeviceAttlogDailyCloseoutTab({
     deviceSn,
     enabled
   )
+  const { data: meta } = useDeviceAttlogMeta(deviceSn, enabled)
   const retryMutation = useRetryAttlogClosure(deviceSn)
 
   const handleRetry = async (localDate: string) => {
@@ -42,12 +45,12 @@ export function DeviceAttlogDailyCloseoutTab({
     }
   }
 
+  // local_date is a device-LOCAL calendar date, so the punch window has to be
+  // built in the device's timezone — a UTC window shows a shifted day and the
+  // device/bridge counts on this row can never be checked by eye.
   const openAttendanceLogsUrl = (localDate: string) => {
-    const params = new URLSearchParams({
-      device_sn: deviceSn,
-      dateFrom: `${localDate}T00:00:00.000Z`,
-      dateTo: `${localDate}T23:59:59.999Z`,
-    })
+    const { dateFrom, dateTo } = deviceDayWindowIso(localDate, meta?.timezone)
+    const params = new URLSearchParams({ device_sn: deviceSn, dateFrom, dateTo })
     return `/attendance-logs?${params.toString()}`
   }
 
@@ -55,7 +58,7 @@ export function DeviceAttlogDailyCloseoutTab({
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-4">
       <AttlogSection
         title="Daily closeout"
-        description="Per-day device vs bridge counts. View logs on the Attendance Logs page."
+        description={`Per-day device vs bridge counts, dated in device-local time (${meta?.timezone || DEFAULT_DEVICE_TZ}). View logs on the Attendance Logs page.`}
         contentClassName="min-h-0"
       >
         {closureLoading ? (

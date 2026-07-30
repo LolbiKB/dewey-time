@@ -17,6 +17,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { QueryErrorCard } from '@/components/shared/query-error-card'
 import { Page } from '@lolbikb/dewey-ui'
 import { AlertCircle, AlertTriangle } from 'lucide-react'
 import { signalAlert, signalText } from '@/lib/signal'
@@ -29,7 +30,7 @@ export function Users() {
   const [selectedUser, setSelectedUser] = useState<UserEntry | null>(null)
   const [registerEmployee, setRegisterEmployee] = useState<UserEntry | null>(null)
 
-  const { data, isLoading, refetch } = useUsersList({
+  const { data, isLoading, isError, error, refetch } = useUsersList({
     page: filters.page,
     limit: filters.limit,
     search: filters.search,
@@ -55,8 +56,43 @@ export function Users() {
     setRegisterEmployee(user)
   }
 
+  // Nothing to show and the query failed: an outage must not read as an empty
+  // database, so name the reason instead of falling through to "No users found".
+  if (isError && !data) {
+    return (
+      <QueryErrorCard
+        title="Error loading users"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    )
+  }
+
   return (
     <Page>
+      {/* Rows are still on screen (kept from the last good fetch) but the latest
+          fetch failed — say so rather than showing silently stale data. */}
+      {isError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Could not refresh users</AlertTitle>
+          <AlertDescription className="flex items-center justify-between">
+            <span>
+              Showing the last loaded list.{' '}
+              {error instanceof Error ? error.message : 'An unknown error occurred'}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-4 bg-background hover:bg-background/80"
+              onClick={() => void refetch()}
+            >
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {!showingCompromised && compromisedCount > 0 && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />

@@ -1,7 +1,8 @@
 import { parseISO } from 'date-fns'
 import type { AttendanceLogEntry } from '@/services/attendance-log-service'
 
-const DEFAULT_DEVICE_TZ = 'Asia/Phnom_Penh'
+/** Timezone assumed for a device row with no `timezone` (mirrors the bridge default). */
+export const DEFAULT_DEVICE_TZ = 'Asia/Phnom_Penh'
 
 /** Local calendar date (YYYY-MM-DD) for a UTC instant in device timezone. */
 export function getLocalDateStringFromUtc(iso: string, timeZone: string = DEFAULT_DEVICE_TZ): string {
@@ -11,6 +12,81 @@ export function getLocalDateStringFromUtc(iso: string, timeZone: string = DEFAUL
     month: '2-digit',
     day: '2-digit',
   }).format(new Date(iso))
+}
+
+/** The device timezone to assume when a device row carries none (bridge default). */
+function resolveDeviceTimeZone(timeZone?: string | null): string {
+  if (!timeZone) return DEFAULT_DEVICE_TZ
+  try {
+    // Throws RangeError for anything Intl does not accept (e.g. a raw "GMT+7").
+    new Intl.DateTimeFormat('en-US', { timeZone })
+    return timeZone
+  } catch {
+    return DEFAULT_DEVICE_TZ
+  }
+}
+
+/** Offset of `timeZone` from UTC, in ms, at the instant `date`. */
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date)
+  const num = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((p) => p.type === type)?.value)
+  const wallAsUtc = Date.UTC(
+    num('year'),
+    num('month') - 1,
+    num('day'),
+    num('hour'),
+    num('minute'),
+    num('second')
+  )
+  // Compare whole seconds: formatToParts has no ms field.
+  return wallAsUtc - Math.floor(date.getTime() / 1000) * 1000
+}
+
+/** UTC epoch ms for a wall-clock time in `timeZone`. */
+function zonedWallTimeToUtcMs(
+  y: number,
+  m: number,
+  d: number,
+  h: number,
+  min: number,
+  s: number,
+  ms: number,
+  timeZone: string
+): number {
+  const naive = Date.UTC(y, m - 1, d, h, min, s, ms)
+  // Two passes: the first offset is read at the wrong instant when the guess
+  // lands on the other side of a DST transition; the second settles it.
+  let utc = naive - timeZoneOffsetMs(new Date(naive), timeZone)
+  utc = naive - timeZoneOffsetMs(new Date(utc), timeZone)
+  return utc
+}
+
+/**
+ * UTC instant bounds of one device-LOCAL calendar day (YYYY-MM-DD), for
+ * filtering `check_time` (timestamptz) on the Attendance Logs page.
+ * Closure rows (`device_attlog_closure.local_date`) are device-local dates, so
+ * a UTC-built window would show a shifted set of punches and never reconcile.
+ */
+export function deviceDayWindowIso(
+  localDate: string,
+  timeZone?: string | null
+): { dateFrom: string; dateTo: string } {
+  const tz = resolveDeviceTimeZone(timeZone)
+  const [y, m, d] = localDate.split('-').map(Number)
+  return {
+    dateFrom: new Date(zonedWallTimeToUtcMs(y, m, d, 0, 0, 0, 0, tz)).toISOString(),
+    dateTo: new Date(zonedWallTimeToUtcMs(y, m, d, 23, 59, 59, 999, tz)).toISOString(),
+  }
 }
 
 /** Format a UTC instant in a specific IANA timezone (device site time). */

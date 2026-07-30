@@ -1,19 +1,8 @@
-import { supabase } from '@/lib/supabase'
 import { getAuthHeaders } from '@/lib/auth-token'
-
-export interface PhotoCacheEntry {
-  userId: string
-  photoUrl: string | null
-  photoHash: string | null
-  photoStoragePath: string | null
-  photoSyncedAt: string | null
-}
 
 export interface ProcessPhotoResult {
   success: boolean
   message: string
-  errors?: string[]
-  processedImage?: any // Kept for compatibility
 }
 
 const API_URL = import.meta.env.VITE_API_URL || '' // Empty uses Vite proxy in dev
@@ -48,8 +37,10 @@ export class PhotoService {
         }
       }
 
+      // The bridge returns photo_storage_path (plus processedImage dimensions);
+      // there is no photo_url in the response.
       const result = await response.json()
-      console.log(`[PhotoService] Success: ${result.photo_url}`)
+      console.log(`[PhotoService] Success: ${result.photo_storage_path}`)
 
       return {
         success: true,
@@ -68,126 +59,6 @@ export class PhotoService {
         success: false,
         message: userMessage,
       }
-    }
-  }
-
-  /**
-   * Get public URL for a cached photo
-   */
-  static async getPhotoUrl(userId: string): Promise<string | null> {
-    try {
-      const { data: user, error } = await supabase
-        .from('users')
-        .select('photo_storage_path, photo_synced_at')
-        .eq('id', userId)
-        .single()
-
-      if (error || !user?.photo_storage_path) {
-        return null
-      }
-
-      const { data } = supabase
-        .storage
-        .from('user-photos')
-        .getPublicUrl(user.photo_storage_path)
-
-      return data?.publicUrl || null
-    } catch (error) {
-      console.error('[PhotoService] Failed to get photo URL:', error)
-      return null
-    }
-  }
-
-  /**
-   * Check if user has a cached photo
-   */
-  static async hasCachedPhoto(userId: string): Promise<boolean> {
-    try {
-      const { data: user, error } = await supabase
-        .from('users')
-        .select('photo_storage_path')
-        .eq('id', userId)
-        .single()
-
-      if (error) {
-        console.error('[PhotoService] Error checking photo cache:', error)
-        return false
-      }
-
-      return !!user?.photo_storage_path
-    } catch (error) {
-      console.error('[PhotoService] Failed to check photo cache:', error)
-      return false
-    }
-  }
-
-  /**
-   * Fetch photo cache status for multiple users
-   */
-  static async getPhotoCacheStatus(userIds: string[]): Promise<Map<string, PhotoCacheEntry>> {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, photo_url, photo_hash, photo_storage_path, photo_synced_at')
-      .in('id', userIds)
-
-    if (error || !data) {
-      console.error('[PhotoService] Failed to fetch photo cache status:', error)
-      return new Map()
-    }
-
-    const result = new Map<string, PhotoCacheEntry>()
-    for (const user of data) {
-      result.set(user.id, {
-        userId: user.id,
-        photoUrl: user.photo_url,
-        photoHash: user.photo_hash,
-        photoStoragePath: user.photo_storage_path,
-        photoSyncedAt: user.photo_synced_at,
-      })
-    }
-
-    return result
-  }
-
-  /**
-   * Get the raw base64 photo for device sync
-   */
-  static async getPhotoBase64ForDeviceSync(userId: string): Promise<string | null> {
-    try {
-      const { data: user, error } = await supabase
-        .from('users')
-        .select('photo_storage_path')
-        .eq('id', userId)
-        .single()
-
-      if (error || !user?.photo_storage_path) {
-        return null
-      }
-
-      const { data: blob, error: downloadError } = await supabase
-        .storage
-        .from('user-photos')
-        .download(user.photo_storage_path)
-
-      if (downloadError || !blob) {
-        console.error('[PhotoService] Failed to download photo:', downloadError)
-        return null
-      }
-
-      const base64 = await new Promise<string>((resolve) => {
-        const reader = new FileReader()
-        reader.onloadend = () => {
-          const result = reader.result as string
-          resolve(result.split(',')[1])
-        }
-        reader.onerror = () => resolve('')
-        reader.readAsDataURL(blob)
-      })
-
-      return base64
-    } catch (error) {
-      console.error('[PhotoService] Failed to get photo base64:', error)
-      return null
     }
   }
 

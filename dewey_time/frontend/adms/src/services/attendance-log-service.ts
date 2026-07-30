@@ -253,17 +253,41 @@ export async function fetchAttendanceLogSummary(): Promise<AttendanceLogSummary>
   }
 }
 
+/** PostgREST caps a single response; page through it rather than trusting one call. */
+const EXPORT_PAGE_SIZE = 1000
+/** Ceiling so a mis-filtered export cannot try to pull the entire table into memory. */
+const EXPORT_MAX_ROWS = 50_000
+
 export async function exportAttendanceLogs(filters: AttendanceLogFilters): Promise<Blob> {
-  let query = supabase.from('attendance_logs').select('*, devices(serial_number, name, location)')
-  query = applyFiltersToQuery(query, applyPresetToFilters(filters))
+  // This used to issue a single unpaginated select, so PostgREST's default
+  // max-rows silently capped the CSV at 1000 records: an export of a busy month
+  // looked complete and simply had the rest of the month missing — the worst
+  // possible failure for a payroll artefact.
+  const rows: AttendanceLogEntry[] = []
+  for (let from = 0; from < EXPORT_MAX_ROWS; from += EXPORT_PAGE_SIZE) {
+    let query = supabase.from('attendance_logs').select('*, devices(serial_number, name, location)')
+    query = applyFiltersToQuery(query, applyPresetToFilters(filters))
 
-  const { data, error } = await query.order('check_time', { ascending: false })
+    const { data, error } = await query
+      .order('check_time', { ascending: false })
+      .range(from, from + EXPORT_PAGE_SIZE - 1)
 
-  if (error) {
-    throw new Error(`Failed to export attendance logs: ${error.message}`)
+    if (error) {
+      throw new Error(`Failed to export attendance logs: ${error.message}`)
+    }
+
+    rows.push(...((data || []) as AttendanceLogEntry[]))
+    if (!data || data.length < EXPORT_PAGE_SIZE) break
+
+    if (from + EXPORT_PAGE_SIZE >= EXPORT_MAX_ROWS) {
+      // Refuse rather than hand over a file that is quietly incomplete.
+      throw new Error(
+        `Export exceeds ${EXPORT_MAX_ROWS.toLocaleString()} rows — narrow the date range or filters and try again.`
+      )
+    }
   }
 
-  let logs = await attachUsers((data || []) as AttendanceLogEntry[])
+  let logs = await attachUsers(rows)
   if (filters.preset === 'unknown_pin') {
     logs = logs.filter((log) => !log.users)
   }

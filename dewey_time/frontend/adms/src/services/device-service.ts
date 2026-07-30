@@ -5,6 +5,7 @@
 import { supabase } from '@/lib/supabase'
 import { getAuthHeaders } from '@/lib/auth-token'
 import { getDevicePresence } from '@/lib/device-status'
+import { DEVICE_PUBLIC_COLUMNS } from '@/lib/column-allowlists'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -141,31 +142,42 @@ export class DeviceService {
     commandType: string,
     commandBody: string
   ): Promise<{ id: number; command: string }> {
-    // Get next command ID (use max existing ID + 1 for this device)
-    const { data: lastCmd } = await supabase
-      .from('command_queue')
-      .select('id')
-      .eq('device_sn', deviceSn)
-      .order('id', { ascending: false })
-      .limit(1)
-      .single()
-
-    const nextId = (lastCmd?.id || 0) + 1
-    const command = `C:${nextId}:${commandBody}`
-
-    const { data, error } = await supabase
+    // Insert first, then stamp the prefix with the REAL row id — the same
+    // two-step the bridge's queueCommandWithDbId uses.
+    //
+    // This used to derive the id as max(id)+1 for the device, which is wrong the
+    // moment anything else queues concurrently (another admin, or the bridge's
+    // own sync/reconciliation): two rows get the same C:{n}: prefix, the device
+    // ACKs one id, and the other command can never be matched to its ACK — it
+    // stays undeliverable forever. The prefix must be the row's own primary key.
+    const { data: inserted, error: insertError } = await supabase
       .from('command_queue')
       .insert({
         device_sn: deviceSn,
-        command,
+        command: commandBody,
         command_type: commandType,
         status: 'pending',
+        // Keep it out of the delivery window until the prefix is stamped; the
+        // bridge honours next_retry_at and repairs any missed stamp anyway.
+        next_retry_at: new Date(Date.now() + 10_000).toISOString(),
       })
+      .select('id')
+      .single()
+
+    if (insertError || !inserted) {
+      throw new Error(`Failed to queue command: ${insertError?.message ?? 'no row returned'}`)
+    }
+
+    const command = `C:${inserted.id}:${commandBody}`
+    const { data, error } = await supabase
+      .from('command_queue')
+      .update({ command, next_retry_at: new Date().toISOString() })
+      .eq('id', inserted.id)
       .select('id, command')
       .single()
 
     if (error) {
-      throw new Error(`Failed to queue command: ${error.message}`)
+      throw new Error(`Failed to stamp queued command: ${error.message}`)
     }
 
     return data!
@@ -260,9 +272,12 @@ export class DeviceService {
    * Get a single device by serial number
    */
   static async getDevice(serialNumber: string): Promise<DeviceEntry | null> {
+    // Explicit columns: select('*') shipped devices.comm_key — the device
+    // authentication secret — to the browser. Nothing renders it; the Super
+    // Admin flow that SETS it goes through the bridge API, not this read.
     const { data, error } = await supabase
       .from('devices')
-      .select('*')
+      .select(DEVICE_PUBLIC_COLUMNS)
       .eq('serial_number', serialNumber)
       .single()
 
@@ -400,36 +415,53 @@ export class DeviceService {
     if (options.limit) params.append('limit', String(options.limit))
     if (options.search) params.append('search', options.search)
 
-    const response = await fetch(`${API_URL}/admin/devices/${deviceSn}/users?${params}`, {
-      headers: await this.authHeaders(),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to fetch device users')
-    }
-
-    return response.json()
+    return this.fetchApi(
+      `/admin/devices/${encodeURIComponent(deviceSn)}/users?${params}`,
+      {},
+      'Failed to fetch device users'
+    )
   }
 
   /**
    * Get sync summary for a device
    */
   static async getDeviceSyncSummary(deviceSn: string): Promise<{ total: number; synced: number; syncing: number; failed: number }> {
-    const response = await fetch(`${API_URL}/admin/devices/${deviceSn}/sync-summary`, {
-      headers: await this.authHeaders(),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to fetch sync summary')
-    }
-
-    return response.json()
+    return this.fetchApi(
+      `/admin/devices/${encodeURIComponent(deviceSn)}/sync-summary`,
+      {},
+      'Failed to fetch sync summary'
+    )
   }
 
-  private static async authHeaders(): Promise<HeadersInit> {
-    return getAuthHeaders()
+  /**
+   * Single entry point for bridge `/admin/*` calls.
+   *
+   * Fastify rejects a request carrying `Content-Type: application/json` with an
+   * empty body as 400 FST_ERR_CTP_EMPTY_JSON_BODY *before* the route handler
+   * runs, so the header must be attached only when there is actually a body.
+   * getAuthHeaders() always sets it, hence the split here — keep this rule in
+   * one place rather than per call site.
+   */
+  private static async fetchApi<T>(
+    path: string,
+    options: RequestInit = {},
+    failureMessage = 'Request failed'
+  ): Promise<T> {
+    const authHeaders = (await getAuthHeaders()) as Record<string, string>
+    const hasBody = options.body != null
+    const response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        ...(authHeaders.Authorization ? { Authorization: authHeaders.Authorization } : {}),
+        ...options.headers,
+      },
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: failureMessage }))
+      throw new Error(err.error || failureMessage)
+    }
+    return response.json()
   }
 
   /** Super Admin: set comm_key or connection_status via bridge API */
@@ -440,34 +472,24 @@ export class DeviceService {
       connection_status?: 'pending' | 'approved' | 'rejected'
     }
   ): Promise<DeviceEntry> {
-    const response = await fetch(
-      `${API_URL}/admin/devices/${encodeURIComponent(serialNumber)}/security`,
-      {
-        method: 'PATCH',
-        headers: await this.authHeaders(),
-        body: JSON.stringify(updates),
-      }
+    const json = await this.fetchApi<{ success: boolean; data: DeviceEntry }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/security`,
+      { method: 'PATCH', body: JSON.stringify(updates) },
+      'Failed to update device security'
     )
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Request failed' }))
-      throw new Error(err.error || 'Failed to update device security')
-    }
-    const json = await response.json()
     const d = json.data
     const presence = getDevicePresence(d.last_seen)
     return { ...d, status: presence.status, last_seen_minutes: presence.lastSeenMinutes }
   }
 
   static async approveDevice(serialNumber: string): Promise<DeviceEntry> {
-    const response = await fetch(
-      `${API_URL}/admin/devices/${encodeURIComponent(serialNumber)}/approve`,
-      { method: 'POST', headers: await this.authHeaders() }
+    const json = await this.fetchApi<{ success: boolean; data: DeviceEntry }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/approve`,
+      // The route takes no fields, but an empty JSON object is still required:
+      // a bodiless POST would leave Fastify's JSON parser with nothing to read.
+      { method: 'POST', body: JSON.stringify({}) },
+      'Failed to approve device'
     )
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Request failed' }))
-      throw new Error(err.error || 'Failed to approve device')
-    }
-    const json = await response.json()
     const d = json.data
     const presence = getDevicePresence(d.last_seen)
     return { ...d, status: presence.status, last_seen_minutes: presence.lastSeenMinutes }

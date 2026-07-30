@@ -11,6 +11,7 @@ import {
 } from '@/lib/toast'
 import { queryKeys } from '@/lib/query-keys'
 import { removeBiometricFromCache } from '@/lib/biometrics-cache'
+import { mapSyncStatusCache } from '@/lib/sync-status-cache'
 import { UserService, UserOperationLockedError } from '@/services/user-service'
 import { DeviceService } from '@/services/device-service'
 import { supabase } from '@/lib/supabase'
@@ -57,17 +58,16 @@ export function useForceSync() {
         photo_synced: false,
       }
       
-      // Update user-specific sync status
-      queryClient.setQueryData(
-        queryKeys.users.syncStatus(userId),
-        (old: any) => {
-          if (!old || !Array.isArray(old)) return old
-          return old.map((status: any) =>
-            deviceSns.includes(status.device_sn)
-              ? { ...status, ...optimisticSync }
-              : status
-          )
-        }
+      // Update user-specific sync status.
+      // This key caches the bridge's { success, data: [...] } response, not a
+      // bare array, so the previous Array.isArray guard bailed every time and
+      // the optimistic "syncing" state never rendered.
+      queryClient.setQueryData(queryKeys.users.syncStatus(userId), (old: unknown) =>
+        mapSyncStatusCache(old, (status) =>
+          deviceSns.includes(status.device_sn as string)
+            ? { ...status, ...optimisticSync }
+            : status
+        )
       )
       
       // Update global sync status
@@ -122,17 +122,14 @@ export function useForceSync() {
         photo_synced: false,
       }
 
-      // Update user-specific sync status with component reset
-      queryClient.setQueryData(
-        queryKeys.users.syncStatus(userId),
-        (old: any) => {
-          if (!old || !Array.isArray(old)) return old
-          return old.map((status: any) =>
-            deviceSns.includes(status.device_sn)
-              ? { ...status, ...componentReset, actual_state: 'syncing' }
-              : status
-          )
-        }
+      // Update user-specific sync status with component reset (same wrapper
+      // shape as above — the Array.isArray guard made this a no-op too).
+      queryClient.setQueryData(queryKeys.users.syncStatus(userId), (old: unknown) =>
+        mapSyncStatusCache(old, (status) =>
+          deviceSns.includes(status.device_sn as string)
+            ? { ...status, ...componentReset, actual_state: 'syncing' }
+            : status
+        )
       )
 
       // Update global sync status with component reset
@@ -574,7 +571,8 @@ export function useUpdateDevice() {
   })
 }
 
-// Photo processing: see use-photo.ts (canonical implementation)
+// Photo processing has no mutation hook: UserPhotoTab drives PhotoService
+// directly (process / verify / push), holding its own request state.
 
 // =====================================================
 // DEVICE COMMAND MUTATIONS
