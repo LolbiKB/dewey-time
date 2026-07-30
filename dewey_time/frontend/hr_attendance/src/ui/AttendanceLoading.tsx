@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { DEFAULT_COL_TEMPLATE } from "@/ui/WeekCanvasFrame";
 
 export function LoadingIndicator(props: { label?: string; className?: string }) {
   return (
@@ -63,7 +64,7 @@ export function WeekViewSkeleton() {
 
       {/* Desktop: the 7-column grid */}
       <div className="hidden min-h-0 flex-1 flex-col overflow-x-auto md:flex">
-        <div className="grid shrink-0 grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))] border-b border-border/60">
+        <div className={`grid shrink-0 ${DEFAULT_COL_TEMPLATE} border-b border-border/60`}>
           <div aria-hidden="true" />
           {Array.from({ length: 7 }).map((_, idx) => (
             <div key={idx} className="space-y-2 px-3 py-2">
@@ -79,7 +80,7 @@ export function WeekViewSkeleton() {
             </div>
           ))}
         </div>
-        <div className="grid min-h-[420px] flex-1 grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))] gap-px bg-border/40 p-px">
+        <div className={`grid min-h-[420px] flex-1 ${DEFAULT_COL_TEMPLATE} gap-px bg-border/40 p-px`}>
           <div aria-hidden="true" className="bg-card" />
           {Array.from({ length: 7 }).map((_, idx) => (
             <div key={idx} className="flex flex-col gap-2 bg-card p-2">
