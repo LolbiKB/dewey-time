@@ -21,6 +21,7 @@ import {
   formatCheckinTime,
   formatDurationMinutes,
   formatMinuteOnDay,
+  parseDateKey,
 } from "@/lib/attendanceTime";
 import { directionForCheckin, type Segment as AttendanceSegment } from "@/lib/attendancePunches";
 import {
@@ -136,7 +137,7 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
           ) : (
             <>
               <SheetTitle>
-                {props.inspectingDate ? format(new Date(props.inspectingDate), "EEE, MMM d") : "Day"}
+                {props.inspectingDate ? format(parseDateKey(props.inspectingDate), "EEE, MMM d") : "Day"}
               </SheetTitle>
               <SheetDescription asChild>
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
