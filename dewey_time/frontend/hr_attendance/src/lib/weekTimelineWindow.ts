@@ -74,6 +74,30 @@ export function collectWideningMinutes(
 }
 
 /**
+ * Pad, hour-quantize and clamp a set of bare bound minutes into a window —
+ * the "shift bounds to window" step shared by every axis on this canvas.
+ *
+ * Falls back to `FALLBACK_START_MIN`/`FALLBACK_END_MIN` when `bounds` is
+ * empty. Exported so `resolveWeekTimelineWindow` (widened further by observed
+ * punches below) and `plannedDays.ts`'s `resolveWeekPatternWindow` (which has
+ * no punches to widen by) derive their windows through the same pad/rounding
+ * rule instead of each re-declaring it — the whole point of one shared axis
+ * is that this step can't drift between the two surfaces that use it.
+ */
+export function quantizePaddedWindow(bounds: number[]): WeekTimelineWindow {
+  let startMin = FALLBACK_START_MIN;
+  let endMin = FALLBACK_END_MIN;
+  if (bounds.length) {
+    startMin = Math.floor((Math.min(...bounds) - PAD_MIN) / 60) * 60;
+    endMin = Math.ceil((Math.max(...bounds) + PAD_MIN) / 60) * 60;
+  }
+
+  startMin = Math.max(0, startMin);
+  endMin = Math.min(24 * 60, endMin);
+  return { startMin, endMin, spanMinutes: endMin - startMin };
+}
+
+/**
  * The shared vertical axis, used by both the week grid and the phone day view.
  *
  * Derived from the week's assigned shifts, not its punches. Punches still widen
@@ -92,13 +116,7 @@ export function resolveWeekTimelineWindow(
   daysByDate: Map<string, Day>,
 ): WeekTimelineWindow {
   const bounds = collectShiftBounds(weekDates, daysByDate);
-
-  let startMin = FALLBACK_START_MIN;
-  let endMin = FALLBACK_END_MIN;
-  if (bounds.length) {
-    startMin = Math.floor((Math.min(...bounds) - PAD_MIN) / 60) * 60;
-    endMin = Math.ceil((Math.max(...bounds) + PAD_MIN) / 60) * 60;
-  }
+  let { startMin, endMin } = quantizePaddedWindow(bounds);
 
   for (const m of collectWideningMinutes(weekDates, daysByDate)) {
     if (m < startMin) startMin = Math.floor(m / 60) * 60;

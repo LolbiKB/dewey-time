@@ -32,8 +32,16 @@ export function WeekCanvasFrame(props: {
   renderHeader: (date: Date) => ReactNode;
   renderDay: (date: Date) => ReactNode;
   ariaLabel?: string;
+  /**
+   * Minimum width of each day column before `1fr` grows it to fill remaining
+   * space. Defaults to `"8rem"` — the attendance grid's cells carry chips, a
+   * clock total and a time range, and need the room. A caller whose cells are
+   * lighter (a duration bar and two small labels) can pass something smaller
+   * so all seven columns fit a narrower container without horizontal scroll.
+   */
+  minDayWidth?: string;
 }) {
-  const cols = "grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))]";
+  const cols = `grid-cols-[3.5rem_repeat(7,minmax(${props.minDayWidth ?? "8rem"},1fr))]`;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">

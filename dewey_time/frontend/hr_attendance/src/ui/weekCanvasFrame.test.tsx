@@ -11,6 +11,7 @@ import { plannedDaysFromSchedule } from "../lib/plannedDays";
 import { resolveWeekTimelineWindow } from "../lib/weekTimelineWindow";
 import { WeekView } from "./WeekView";
 import { PlannedWeekCanvas } from "./PlannedWeekCanvas";
+import { WeekCanvasFrame } from "./WeekCanvasFrame";
 import type { Day } from "../types/calendar";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -92,4 +93,49 @@ test("WeekCanvasFrame keeps both per-day wrappers as `className=\"contents\"`", 
       "(its loss lets a tint stop short of the row) and one around renderDay (its loss " +
       "collapses DayCell's <button> to a sliver, issue #71)",
   );
+});
+
+function colsTemplate(html: string): string | undefined {
+  return html.match(/grid-cols-\[3\.5rem_repeat\(7,minmax\([^)]*\)\)\]/)?.[0];
+}
+
+function renderFrame(minDayWidth?: string): string {
+  return renderToStaticMarkup(
+    <WeekCanvasFrame
+      weekDates={WEEK}
+      window={null}
+      renderHeader={() => <div />}
+      renderDay={() => <div />}
+      minDayWidth={minDayWidth}
+    />,
+  );
+}
+
+test("omitting minDayWidth keeps the attendance grid's original 8rem template, byte-identical", () => {
+  // The literal string WeekCanvasFrame hardcoded before minDayWidth existed.
+  // WeekView never passes minDayWidth, so this is what it still renders.
+  assert.equal(colsTemplate(renderFrame()), "grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))]");
+});
+
+test("both week surfaces' actual render output carries the unchanged 8rem template", () => {
+  // Not just the isolated WeekCanvasFrame case above — the real WeekView call
+  // site, so a stray minDayWidth added there would be caught here too.
+  const days = scheduledWeek();
+  const attendance = renderToStaticMarkup(
+    <TooltipProvider>
+      <WeekView
+        weekDates={WEEK}
+        daysByDate={days}
+        alertsByDate={new Map()}
+        syncByDate={new Map()}
+        onInspectDay={() => {}}
+        onInspectFlag={() => {}}
+      />
+    </TooltipProvider>,
+  );
+  assert.equal(colsTemplate(attendance), "grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))]");
+});
+
+test("minDayWidth narrows the day-column minimum — the mechanism the schedule preview dialog relies on to fit seven columns", () => {
+  assert.equal(colsTemplate(renderFrame("3rem")), "grid-cols-[3.5rem_repeat(7,minmax(3rem,1fr))]");
 });

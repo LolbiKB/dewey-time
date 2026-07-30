@@ -1,4 +1,4 @@
-import { CalendarRangeIcon, Loader2Icon } from "lucide-react";
+import { Loader2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ResponsiveModal";
@@ -53,6 +53,7 @@ export function SchedulePlanPreviewDialog(props: SchedulePlanPreviewDialogProps)
           <PlannedWeekCanvas
             days={plannedDaysFromWeekPattern(props.weekPattern)}
             window={resolveWeekPatternWindow(props.weekPattern)}
+            minDayWidth="3rem"
           />
         </div>
 

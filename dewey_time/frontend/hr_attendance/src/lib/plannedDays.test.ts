@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { format } from "date-fns";
 
 import { plannedDaysFromSchedule, plannedDaysFromWeekPattern, resolveWeekPatternWindow } from "./plannedDays";
+import { resolveWeekTimelineWindow } from "./weekTimelineWindow";
 import type { Day } from "@/types/calendar";
+import { emptyWeekPattern } from "../types/schedule";
 import type { WeekPattern, WeekPatternDay } from "../types/schedule";
 
 const WEEK = Array.from({ length: 7 }, (_, i) => new Date(`2026-07-${13 + i}T00:00:00`));
@@ -127,6 +129,15 @@ test("every weekday in the pattern produces exactly one day, in order", () => {
   assert.deepEqual(days.map((d) => d.label), ["Mon", "Tue", "Wed"]);
 });
 
+test("plannedDaysFromWeekPattern produces all seven days for the pattern shape the app actually builds", () => {
+  // Every adapter test above uses a 3-day pattern for brevity — a shape the
+  // app never produces. `emptyWeekPattern` (and `weekPatternFromBlocks`,
+  // `week_pattern_from_ssas` server-side) always build all seven WEEKDAYS;
+  // `PlannedWeekCanvas` throws on anything else. This is the pin that would
+  // catch a regression there before it reaches that throw.
+  assert.equal(plannedDaysFromWeekPattern(emptyWeekPattern()).length, 7);
+});
+
 test("resolveWeekPatternWindow falls back to 06:00-20:00 with no working days", () => {
   const w = resolveWeekPatternWindow(pattern({ works: false }));
   assert.equal(w.startMin, H(6));
@@ -158,4 +169,30 @@ test("resolveWeekPatternWindow excludes an overnight day (end <= start) from its
   );
   assert.equal(w.startMin, H(6), "falls back — no valid same-day bound to derive from");
   assert.equal(w.endMin, H(20));
+});
+
+test("resolveWeekPatternWindow and resolveWeekTimelineWindow agree on the same bounds — the shared-scale guarantee", () => {
+  // Not two fixtures separately pinned to the same literals: this compares
+  // the two functions' outputs directly, so changing either's pad/rounding
+  // alone — without touching the other — fails this test. That is the
+  // property `quantizePaddedWindow` (weekTimelineWindow.ts) exists to
+  // guarantee.
+  const patternWindow = resolveWeekPatternWindow(
+    pattern({ start_time: "08:00:00", end_time: "17:00:00" }),
+  );
+
+  const date = "2026-07-13";
+  const datedDay = {
+    date,
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+  } as unknown as Day;
+  const timelineWindow = resolveWeekTimelineWindow(
+    [new Date(`${date}T00:00:00`)],
+    new Map([[date, datedDay]]),
+  );
+
+  assert.deepEqual(
+    { startMin: patternWindow.startMin, endMin: patternWindow.endMin },
+    { startMin: timelineWindow.startMin, endMin: timelineWindow.endMin },
+  );
 });

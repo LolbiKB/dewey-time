@@ -1,6 +1,6 @@
 import { plannedBlocks, type PlannedBlock } from "./plannedBlocks";
 import { buildWeekSchedule, shortShiftTypeCode, type WeekDaySchedule } from "./weekSchedule";
-import { FALLBACK_END_MIN, FALLBACK_START_MIN } from "./weekTimelineWindow";
+import { quantizePaddedWindow } from "./weekTimelineWindow";
 import type { AxisWindow } from "./timelineAxis";
 import { toApiTime, weekPatternDayNetMinutes, type WeekPattern } from "@/types/schedule";
 import type { Day } from "@/types/calendar";
@@ -105,23 +105,21 @@ export function plannedDaysFromWeekPattern(pattern: WeekPattern): PlannedDay[] {
   });
 }
 
-/** Padding either side of the pattern's own bounds, before hour-quantization —
- * matches `PAD_MIN` in weekTimelineWindow.ts so a dated week and an undated
- * pattern land on the same scale. */
-const PATTERN_PAD_MIN = 60;
-
 /**
- * The axis window for an undated `WeekPattern`, derived and quantized the
- * same way `resolveWeekTimelineWindow` derives one from a dated week, so the
- * schedule preview canvas and the calendar's week grid share one scale.
+ * The axis window for an undated `WeekPattern`, padded and hour-quantized by
+ * `quantizePaddedWindow` — the same shared step `resolveWeekTimelineWindow`
+ * derives its window through — so the schedule preview canvas and the
+ * calendar's week grid can't drift onto different scales.
  *
  * There is no punch data to widen by here — an undated pattern has no
- * checkins — so this is only the shift-bounds half of that function. Lunch
- * times are validated to fall inside the shift window (`validateWeekPattern`)
- * and never extend it, so they do not need to widen the window either.
- * Overnight days (`end <= start`) are excluded from the bounds for the same
- * reason `collectShiftBounds` excludes them: minute-of-day cannot express
- * 22:00->06:00 as a range.
+ * checkins — so this is only the shift-bounds half of
+ * `resolveWeekTimelineWindow`. Lunch times can't push past the shift window
+ * either: `plannedBlocks.ts`'s `interior` guard only draws a lunch break that
+ * falls strictly inside `[startMin, endMin]`, so no drawable geometry can
+ * fall outside these bounds regardless of what a not-yet-saved pattern
+ * contains. Overnight days (`end <= start`) are excluded from the bounds for
+ * the same reason `collectShiftBounds` excludes them: minute-of-day cannot
+ * express 22:00->06:00 as a range.
  */
 export function resolveWeekPatternWindow(pattern: WeekPattern): AxisWindow {
   const bounds: number[] = [];
@@ -133,11 +131,5 @@ export function resolveWeekPatternWindow(pattern: WeekPattern): AxisWindow {
     bounds.push(start, end);
   }
 
-  if (!bounds.length) {
-    return { startMin: FALLBACK_START_MIN, endMin: FALLBACK_END_MIN };
-  }
-
-  const startMin = Math.max(0, Math.floor((Math.min(...bounds) - PATTERN_PAD_MIN) / 60) * 60);
-  const endMin = Math.min(24 * 60, Math.ceil((Math.max(...bounds) + PATTERN_PAD_MIN) / 60) * 60);
-  return { startMin, endMin };
+  return quantizePaddedWindow(bounds);
 }

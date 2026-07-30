@@ -33,7 +33,14 @@ function placeholderWeek(): Date[] {
  * editor's undated `WeekPattern` has its own adapter. Neither `Day` nor a
  * real date is imported by this component.
  */
-export function PlannedWeekCanvas(props: { days: PlannedDay[]; window: AxisWindow | null }) {
+export function PlannedWeekCanvas(props: {
+  days: PlannedDay[];
+  window: AxisWindow | null;
+  /** Forwarded to `WeekCanvasFrame` — see its doc comment. Omit for the
+   * default 8rem (the attendance grid's width); narrower callers such as the
+   * schedule preview dialog pass something smaller. */
+  minDayWidth?: string;
+}) {
   if (props.days.length !== WEEK_LENGTH) {
     throw new Error(
       `PlannedWeekCanvas expects a ${WEEK_LENGTH}-day week, got ${props.days.length}`,
@@ -45,6 +52,7 @@ export function PlannedWeekCanvas(props: { days: PlannedDay[]; window: AxisWindo
     <WeekCanvasFrame
       weekDates={placeholders}
       window={props.window}
+      minDayWidth={props.minDayWidth}
       ariaLabel="Weekly expected schedule"
       renderHeader={(d) => {
         const day = props.days[placeholders.indexOf(d)];
