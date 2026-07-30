@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { useMemo } from "react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
+import { HourGrid } from "@/ui/TimelineAxis";
 import {
   clamp,
   formatBranchLabel,
@@ -303,15 +304,12 @@ function DayDayTrack(props: {
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="relative rounded-xl bg-muted/25 min-h-0 flex-1">
+        <HourGrid window={window} />
         {!onShift && props.checkins.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center px-3">
             <span className="text-xs text-muted-foreground">Day off</span>
           </div>
         ) : null}
-        <div
-          className="absolute inset-y-2 w-px bg-border/60"
-          style={{ left: "calc(50% - 0.5px)" }}
-        />
 
         {errorPresentations.map((row, idx) => {
           const m = row.startMin;

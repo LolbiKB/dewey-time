@@ -8,6 +8,7 @@ import { clockDayMinutes, formatClockDayTotal, isClockDay } from "@/lib/clockDay
 import { deriveSegments } from "@/lib/segmentInspector";
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
+import { HourGutter } from "@/ui/TimelineAxis";
 import { useWeekTimelineWindow } from "@/hooks/useWeekTimelineWindow";
 
 function WeekDayDateBadge(props: {
@@ -78,7 +79,8 @@ export function WeekView(props: WeekViewProps) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card">
       <div className="flex min-h-0 flex-1 flex-col overflow-x-auto">
-      <div className="grid shrink-0 grid-cols-[repeat(7,minmax(8rem,1fr))] border-b border-border/60">
+      <div className="grid shrink-0 grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))] border-b border-border/60">
+        <div aria-hidden="true" />
         {props.weekDates.map((d) => {
           const key = format(d, "yyyy-MM-dd");
           const info = props.daysByDate.get(key);
@@ -172,7 +174,8 @@ export function WeekView(props: WeekViewProps) {
       {/* No vertical scroll: the axis is scaled to fit this box, so a week with a
           wide span compresses rather than overflowing. See resolveWeekTimelineWindow. */}
       <div className="relative min-h-0 flex-1 overflow-hidden" aria-label="Week attendance timeline">
-        <div className="grid h-full grid-cols-[repeat(7,minmax(8rem,1fr))]">
+        <div className="grid h-full grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))]">
+          <HourGutter window={weekWindow} />
           {props.weekDates.map((d) => {
             const key = format(d, "yyyy-MM-dd");
             const info = props.daysByDate.get(key);
