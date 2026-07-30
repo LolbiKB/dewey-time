@@ -293,3 +293,46 @@ class TestCompanyFallbackSchedule(unittest.TestCase):
             local = closeout._company_local_now(target)
 
         self.assertEqual(local.hour, 3, "same zone in and out must not shift the hour")
+
+
+class TestAutoFlagIdentity(unittest.TestCase):
+    """day_closed is part of an AUTO flag's identity.
+
+    Without it, a provisional (day_closed=0) and a final (day_closed=1) row for
+    the same employee/date/code share a name. Intraday deletes only its own
+    provisional rows, so refreshing a past date that closeout had already
+    finalized collided with the existing final rather than writing a flag.
+
+    Only provisionals carry the marker, so every finalized name is unchanged and
+    no historical row is orphaned.
+    """
+
+    def _name_for(self, day_closed):
+        from dewey_time.dewey_time.doctype.attendance_flag.attendance_flag import (
+            AttendanceFlag,
+        )
+
+        doc = AttendanceFlag.__new__(AttendanceFlag)
+        doc.employee = "EMP-001"
+        doc.attendance_date = "2026-07-01"
+        doc.flag_code = "LATE_START"
+        doc.source = "AUTO"
+        doc.severity = None
+        doc.company = "ACME"
+        doc.day_closed = day_closed
+        doc.before_insert()
+        return doc.name
+
+    def test_provisional_and_final_do_not_share_a_name(self):
+        self.assertNotEqual(self._name_for(0), self._name_for(1))
+
+    def test_only_the_provisional_carries_the_marker(self):
+        """Finalized names must be byte-identical to what is already stored.
+
+        Asserted as a relationship rather than a literal: frappe.scrub differs
+        between the suite's mock and real Frappe, so a hard-coded string would
+        pin the mock instead of the property that matters.
+        """
+        final = self._name_for(1)
+        self.assertFalse(final.endswith("-prov"), "finalized rows must keep their existing names")
+        self.assertEqual(self._name_for(0), f"{final}-prov")
