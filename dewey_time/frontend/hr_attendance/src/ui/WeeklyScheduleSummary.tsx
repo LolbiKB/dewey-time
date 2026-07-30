@@ -25,10 +25,8 @@ export type WeeklyScheduleSummaryProps = {
   weekAssignedShiftDays: number;
   showWeekDetail: boolean;
   /**
-   * The trigger, rendered inside this component's `Popover` root. It must
-   * contain a `PopoverTrigger`; the caller keeps ownership so its tooltip can
-   * wrap the trigger from the outside, which is the only nesting order where
-   * both Radix `asChild` slots land on the same button.
+   * The trigger, rendered inside this component's `Popover` root. The caller
+   * owns the `PopoverTrigger` so its tooltip can wrap it from the outside.
    */
   children?: ReactNode;
 };
@@ -47,7 +45,7 @@ export function WeeklyScheduleSummary(props: WeeklyScheduleSummaryProps) {
       <PopoverContent
         align="end"
         aria-label="Weekly schedule"
-        className="w-[min(21rem,calc(100vw-2rem))] p-0"
+        className="max-h-[min(70dvh,32rem)] w-[min(21rem,calc(100vw-2rem))] overflow-y-auto p-0"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
         <WeeklyScheduleFacts
@@ -86,8 +84,12 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
     props.employee?.has_shift_assignment === true ||
     props.employee?.has_shift_schedule_assignment === true;
 
-  // `summarizeWeekSchedule` counts every unassigned day as off, so a leave day
-  // lands in both buckets and the rows would add to more than seven.
+  // `assigned` and `onLeave` are set independently upstream (an SSA row keeps
+  // `shift_assigned` true on a day with approved leave), and
+  // `summarizeWeekSchedule` counts each without reference to the other — so a
+  // leave day falls into two buckets and the rows add to more than seven.
+  // Leave wins, as it did in the day cards this panel replaced.
+  const workDays = week.filter((d) => d.assigned && d.onLeave !== true).length;
   const offDays = week.filter((d) => !d.assigned && d.onLeave !== true).length;
   const supersededDays = week.filter((d) => d.shift.schedule_superseded === true).length;
 
@@ -110,7 +112,7 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
 
         <dl className="text-sm">
           <Fact label="Expected hours">{formatScheduleDuration(summary.totalWorkMin)}</Fact>
-          <Fact label="Working days">{summary.workDays}</Fact>
+          <Fact label="Working days">{workDays}</Fact>
           <Fact label="Days off">{offDays}</Fact>
           <Fact label="Leave">{summary.leaveDays}</Fact>
           {assignmentId || scheduleCoverage ? (

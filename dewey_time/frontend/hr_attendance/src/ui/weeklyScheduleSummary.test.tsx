@@ -26,7 +26,8 @@ const ADA: CalendarEmployee = {
   schedule_max_date: null,
 };
 
-type Spec = { superseded?: boolean } | "off" | "leave";
+/** A worked day, optionally also taken as leave; or an unassigned off/leave day. */
+type Spec = { superseded?: boolean; onLeave?: boolean } | "off" | "leave";
 
 /** Mon–Fri 08:00–17:00 with a one-hour lunch (5 × 8h = a round 40h), Sat off, Sun leave. */
 function week(specs: Spec[] = [{}, {}, {}, {}, {}, "off", "leave"]): Map<string, Day> {
@@ -58,6 +59,11 @@ function week(specs: Spec[] = [{}, {}, {}, {}, {}, "off", "leave"]): Map<string,
             lunch_end: "13:00:00",
             schedule_superseded: spec.superseded,
           },
+          // CALENDAR_DATA_CONTRACT.md:105 — `shift_assigned` stays true on a day
+          // covered by an SSA row even when leave is approved on it, and
+          // hr_calendar.py merges leave in under its own key. Approved leave on a
+          // scheduled day is this shape, and it is the common one.
+          ...(spec.onLeave ? { leave: { on_leave: true, leave_type: "Annual Leave" } } : {}),
         } satisfies Day,
       ];
     }),
@@ -103,23 +109,51 @@ function facts(html: string): Record<string, string> {
   return out;
 }
 
+/** The three day-count rows claim to partition the week; hold them to it. */
+function assertDaysPartitionTheWeek(shown: Record<string, string>) {
+  const rows = ["Working days", "Days off", "Leave"] as const;
+  const total = rows.reduce((sum, row) => sum + Number(shown[row]), 0);
+  assert.equal(
+    total,
+    7,
+    `the day rows must add to seven — got ${rows.map((r) => `${r} ${shown[r]}`).join(" · ")}`,
+  );
+}
+
 test("the summary states what the calendar cannot show", () => {
   const shown = facts(render());
   assert.equal(shown["Expected hours"], "40h");
   assert.equal(shown["Working days"], "5");
-  // 7 = 5 working + 1 off + 1 leave. `summarizeWeekSchedule` counts an
-  // unassigned leave day as "off" too, so a raw offDays here would read 2 and
-  // the three rows would add to eight.
+  // `summarizeWeekSchedule` counts an unassigned leave day as "off" too, so a
+  // raw offDays here would read 2 and the rows would add to eight.
   assert.equal(shown["Days off"], "1");
   assert.equal(shown["Leave"], "1");
+  assertDaysPartitionTheWeek(shown);
   assert.match(shown["Assignment"] ?? "", /HR-SSA-00007/, "Shift Schedule Assignment id");
   assert.match(shown["Assignment"] ?? "", /Jan 2025/, "coverage range");
+});
+
+test("a scheduled day taken as leave is counted once, not twice", () => {
+  // `assigned` and `onLeave` are set independently upstream, so approved leave
+  // on a scheduled Monday is both — and lands in Working days *and* Leave
+  // unless the component picks one. The retired Gantt picked leave
+  // (`day.onLeave ? <LeaveBody/> : day.assigned ? <ShiftBody/> : <OffBody/>`);
+  // the definition list has to do the same or it reports eight days in a week.
+  const shown = facts(render({ days: week([{ onLeave: true }, {}, {}, {}, {}, "off", "leave"]) }));
+  assert.equal(shown["Working days"], "4", "Monday is leave, not work");
+  assert.equal(shown["Days off"], "1");
+  assert.equal(shown["Leave"], "2");
+  assertDaysPartitionTheWeek(shown);
 });
 
 test("the summary renders no shift blocks — the chart lives on the canvas now", () => {
   // The guard against the chart creeping back in. These three patterns are the
   // block treatments used by the canvas and by the two retired strips.
   const html = render();
+  // Anchor first: every `doesNotMatch` below also passes against an empty
+  // string, so without this the test goes permanently green the moment the
+  // body stops rendering.
+  assert.match(html, /Expected hours/, "the body must actually be rendering");
   assert.doesNotMatch(html, /border-primary\/45/, "canvas block");
   assert.doesNotMatch(html, /h-\[4\.5rem\]/, "old Gantt pill");
   assert.doesNotMatch(html, /h-14 w-2/, "old preview mini-track");
