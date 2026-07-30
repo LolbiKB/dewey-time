@@ -2,10 +2,6 @@ import { format } from "date-fns";
 
 import type { Day, ShiftContext } from "@/types/calendar";
 
-export const SCHEDULE_DAY_START_MIN = 6 * 60;
-export const SCHEDULE_DAY_END_MIN = 20 * 60;
-export const SCHEDULE_DAY_SPAN = SCHEDULE_DAY_END_MIN - SCHEDULE_DAY_START_MIN;
-
 export type WeekDaySchedule = {
   date: string;
   weekday: string;
@@ -130,14 +126,6 @@ export function buildWeekSchedule(
   });
 }
 
-export function summarizeWeekSchedule(week: WeekDaySchedule[]) {
-  const workDays = week.filter((d) => d.assigned).length;
-  const leaveDays = week.filter((d) => d.onLeave).length;
-  const offDays = week.filter((d) => !d.assigned).length;
-  const totalWorkMin = week.reduce((sum, d) => sum + (d.durationMin ?? 0), 0);
-  return { workDays, offDays, leaveDays, totalWorkMin };
-}
-
 export function formatScheduleDuration(totalMinutes: number): string {
   if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return "—";
   const h = Math.floor(totalMinutes / 60);
@@ -145,45 +133,6 @@ export function formatScheduleDuration(totalMinutes: number): string {
   if (h > 0 && m > 0) return `${h}h ${m}m`;
   if (h > 0) return `${h}h`;
   return `${m}m`;
-}
-
-export function minuteToSchedulePct(min: number): number {
-  return ((min - SCHEDULE_DAY_START_MIN) / SCHEDULE_DAY_SPAN) * 100;
-}
-
-export type WeekGanttWindow = {
-  startMin: number;
-  endMin: number;
-  span: number;
-};
-
-/** Time scale for the week schedule Gantt (padded around assigned shifts). */
-export function computeWeekGanttWindow(week: WeekDaySchedule[]): WeekGanttWindow {
-  let startMin = SCHEDULE_DAY_START_MIN;
-  let endMin = SCHEDULE_DAY_END_MIN;
-
-  for (const day of week) {
-    if (day.startMin != null) startMin = Math.min(startMin, day.startMin);
-    if (day.endMin != null) endMin = Math.max(endMin, day.endMin);
-    if (day.lunchStartMin != null) startMin = Math.min(startMin, day.lunchStartMin);
-    if (day.lunchEndMin != null) endMin = Math.max(endMin, day.lunchEndMin);
-  }
-
-  startMin = Math.max(0, startMin - 30);
-  endMin = Math.min(24 * 60, endMin + 30);
-  const span = Math.max(60, endMin - startMin);
-  return { startMin, endMin, span };
-}
-
-export function minuteToWeekGanttPct(min: number, window: WeekGanttWindow): number {
-  return ((min - window.startMin) / window.span) * 100;
-}
-
-export function formatGanttAxisHour(min: number): string {
-  const hh = Math.floor(min / 60) % 24;
-  if (hh === 0) return "12a";
-  if (hh === 12) return "12p";
-  return hh > 12 ? `${hh - 12}p` : `${hh}a`;
 }
 
 /** When every working day shares the same shift window, return one subtitle line. */

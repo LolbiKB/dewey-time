@@ -12,7 +12,6 @@ import {
   describeWeekSchedulePattern,
   formatScheduleDuration,
   formatWeekRangeLabel,
-  summarizeWeekSchedule,
 } from "@/lib/weekSchedule";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
@@ -72,7 +71,6 @@ export type WeeklyScheduleFactsProps = Omit<
 /** The popover body. Exported so its rendering can be tested directly. */
 export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
   const week = buildWeekSchedule(props.weekDates, props.daysByDate);
-  const summary = summarizeWeekSchedule(week);
   const patternLabel = describeWeekSchedulePattern(week);
   const status = shiftScheduleStatus(
     props.employee,
@@ -89,12 +87,13 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
     props.employee?.has_shift_schedule_assignment === true;
 
   // `assigned` and `onLeave` are set independently upstream (an SSA row keeps
-  // `shift_assigned` true on a day with approved leave), and
-  // `summarizeWeekSchedule` counts each without reference to the other — so a
-  // leave day falls into two buckets and the rows add to more than seven.
-  // Applying the precedence here keeps every number below off the same set.
+  // `shift_assigned` true on a day with approved leave), so counting each
+  // without reference to the other would put a leave day in two buckets and
+  // the rows would add to more than seven. Applying the precedence here keeps
+  // every number below off the same set.
   const workedDays = week.filter((d) => d.assigned && d.onLeave !== true);
   const offDays = week.filter((d) => !d.assigned && d.onLeave !== true).length;
+  const leaveDays = week.filter((d) => d.onLeave).length;
   const expectedMin = workedDays.reduce((total, d) => total + (d.durationMin ?? 0), 0);
   const supersededDays = week.filter((d) => d.shift.schedule_superseded === true).length;
 
@@ -119,7 +118,7 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
           <Fact label="Expected hours">{formatScheduleDuration(expectedMin)}</Fact>
           <Fact label="Working days">{workedDays.length}</Fact>
           <Fact label="Days off">{offDays}</Fact>
-          <Fact label="Leave">{summary.leaveDays}</Fact>
+          <Fact label="Leave">{leaveDays}</Fact>
           {assignmentId || scheduleCoverage ? (
             <Fact label="Assignment">
               {assignmentId ? (

@@ -124,8 +124,8 @@ test("the summary states what the calendar cannot show", () => {
   const shown = facts(render());
   assert.equal(shown["Expected hours"], "40h");
   assert.equal(shown["Working days"], "5");
-  // `summarizeWeekSchedule` counts an unassigned leave day as "off" too, so a
-  // raw offDays here would read 2 and the rows would add to eight.
+  // A naive `!d.assigned` count treats an unassigned leave day as "off" too,
+  // so a raw offDays here would read 2 and the rows would add to eight.
   assert.equal(shown["Days off"], "1");
   assert.equal(shown["Leave"], "1");
   assertDaysPartitionTheWeek(shown);
