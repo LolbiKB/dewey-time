@@ -272,7 +272,11 @@ Two consequences to state rather than discover:
 
 - The `if (heightPct <= 0) return null` guard at `:331` is **dead today** because `Math.max(2,…)`
   precedes it. Removing the 2% floor makes it live again. That is intended — it legitimately
-  drops zero-length and inverted intervals.
+  drops zero-length and inverted intervals. One caller needed a fallback rather than a silent
+  drop: `openSession` is the only presentation kind with no other fallback marker, so a
+  zero-length open session (e.g. an unpaired punch after shift end, capped to `startMin` by
+  `capEnd`) rendered nothing at all. Fixed in `895a9a56` by short-circuiting `openSessions.map`
+  before it reaches `renderTimelineBand`, drawing the same `h-1` tick used for off-shift punches.
 - `gaps.map` (`:480-481`) and `segments.map` (`:520-521`) compute height inline and have **no
   floor at all**, so after this change the canvas has two floor policies. Deliberate: those
   bands are derived from real punch pairs and should be free to render sub-1%. Do not "unify"

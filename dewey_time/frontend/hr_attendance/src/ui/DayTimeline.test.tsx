@@ -221,6 +221,14 @@ test("every segment renders — there is no silent truncation at six", () => {
  * is deterministic regardless of the real wall-clock time the test runs at:
  * `capEnd` can never exceed shiftEndMin (17:00), which is before the 17:30
  * punch, so `confirmedEndMin` always collapses to `startMin`.
+ *
+ * The test below passes an explicit `now` so `DayDayTrack`'s now-line does not
+ * draw itself into the markup depending on the wall clock the suite happens to
+ * run at. `scheduledFuture` and `missingExpected` are not similarly pinned —
+ * they read the real clock by design (the spec's §5.4 deliberately does not
+ * thread `now` into them) — so this fixture's markup is still wall-clock
+ * dependent outside the one exact-class assertion this test makes. Any new
+ * assertion added here must stay as narrowly scoped as the existing one.
  */
 function todayZeroLengthOpenSessionWeek(): Map<string, Day> {
   const today = new Date();
@@ -258,6 +266,12 @@ test("an open session with no time left to accrue still renders a marker, not no
   // regardless). Before this fix, a zero-length open session band returned
   // null from renderTimelineBand and the punch vanished from the timeline.
   const todayWeek = Array.from({ length: 7 }, (_, i) => addDays(new Date(), i));
+  // Explicit `now`: the now-line is otherwise drawn from `new Date()` inside
+  // DayDayTrack, and this fixture's day is always today, so an unpinned run
+  // between 07:00 and 18:00 local would inject a real now-line into markup
+  // this test does not otherwise assert on.
+  const now = new Date();
+  now.setHours(12, 0, 0, 0);
   const html = renderToStaticMarkup(
     <TooltipProvider>
       <WeekView
@@ -265,6 +279,7 @@ test("an open session with no time left to accrue still renders a marker, not no
         daysByDate={todayZeroLengthOpenSessionWeek()}
         alertsByDate={new Map()}
         syncByDate={new Map()}
+        now={now}
         onInspectDay={() => {}}
         onInspectFlag={() => {}}
       />

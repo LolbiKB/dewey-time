@@ -146,6 +146,22 @@ function desktopAt(now: Date): string {
   );
 }
 
+function phoneAt(now: Date): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <WeekDayView
+        weekDates={LIVE_WEEK}
+        daysByDate={liveWeekDays()}
+        alertsByDate={new Map()}
+        syncByDate={new Map()}
+        now={now}
+        onInspectDay={() => {}}
+        onInspectFlag={() => {}}
+      />
+    </TooltipProvider>,
+  );
+}
+
 test("the now-line renders once, on today's column only", () => {
   const marks = desktopAt(AT(13, 20)).match(/bg-destructive\/70/g) ?? [];
   assert.equal(marks.length, 1, "one column is today, so exactly one line");
@@ -157,4 +173,29 @@ test("no now-line when the clock is outside the window", () => {
   // confident 07:00 reading at 03:00 — rather than anything visibly broken.
   assert.ok(!/bg-destructive\/70/.test(desktopAt(AT(3, 0))), "03:00 is before a 07:00 window");
   assert.ok(!/bg-destructive\/70/.test(desktopAt(AT(22, 0))), "22:00 is after an 18:00 window");
+});
+
+test("the now-line also renders on the phone surface, at the position implied by `now`", () => {
+  // Same fixture and `now` as the desktop test above, but through WeekDayView:
+  // TypeScript catches a missing prop declaration, not a forgotten pass-down to
+  // DayCell, which is exactly how `now` could stop reaching the phone surface
+  // (see offSiteSegment.test.tsx:120-125 for the same hazard on `employeeBranch`).
+  // WeekDayView shows one selected day at a time and defaults selection to
+  // today, so LIVE_WEEK's today column is the one rendered.
+  //
+  // Asserting mere presence of the `bg-destructive/70` class would not catch a
+  // forgotten pass-down: DayDayTrack's `now` prop falls back to a live
+  // `new Date()`, and during a working-hours test run that live clock also
+  // falls inside this fixture's 07:00-18:00 window, drawing *a* line by
+  // coincidence (confirmed while writing this test — removing the pass-down
+  // still rendered a line, just at the wrong position). Asserting the line's
+  // computed position instead, which only matches 13:20 in a 07:00-18:00
+  // window, catches the regression regardless of the wall clock the suite
+  // happens to run at.
+  const html = phoneAt(AT(13, 20));
+  assert.match(
+    html,
+    /top:57\.57\d*%"\s*aria-hidden="true"/,
+    "the phone now-line must sit at 13:20's position (57.57…%) in the 07:00-18:00 window",
+  );
 });

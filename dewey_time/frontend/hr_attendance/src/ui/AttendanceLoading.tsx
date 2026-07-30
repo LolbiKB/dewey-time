@@ -42,7 +42,8 @@ export function AttendanceHeaderSkeleton() {
 export function WeekViewSkeleton() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card animate-in fade-in">
-      {/* Mobile: day switcher + pip strip + one tall timeline (matches WeekDayView) */}
+      {/* Mobile: day switcher + pip strip + one tall timeline, gutter column
+          included (matches WeekDayView's grid-cols-[3.5rem_1fr]) */}
       <div className="flex min-h-0 flex-1 flex-col md:hidden">
         <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
           <Skeleton className="size-8 shrink-0 rounded-md" />
@@ -54,7 +55,8 @@ export function WeekViewSkeleton() {
             <Skeleton key={idx} className="h-9 flex-1 rounded-lg" />
           ))}
         </div>
-        <div className="min-h-0 flex-1 p-3">
+        <div className="grid min-h-0 flex-1 grid-cols-[3.5rem_1fr] p-3">
+          <div aria-hidden="true" />
           <Skeleton className="h-full min-h-[320px] w-full rounded-xl" />
         </div>
       </div>
@@ -78,7 +80,7 @@ export function WeekViewSkeleton() {
           ))}
         </div>
         <div className="grid min-h-[420px] flex-1 grid-cols-[3.5rem_repeat(7,minmax(8rem,1fr))] gap-px bg-border/40 p-px">
-          <div aria-hidden="true" />
+          <div aria-hidden="true" className="bg-card" />
           {Array.from({ length: 7 }).map((_, idx) => (
             <div key={idx} className="flex flex-col gap-2 bg-card p-2">
               <Skeleton className="h-[18%] w-full rounded-sm" />
