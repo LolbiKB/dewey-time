@@ -7,6 +7,7 @@ import { queryKeys } from '@/lib/query-keys'
 import { UserService } from '@/services/user-service'
 import { useEffect, useMemo } from 'react'
 import { isDeviceOnline } from '@/lib/device-status'
+import { DEVICE_PUBLIC_COLUMNS, BIOMETRIC_METADATA_COLUMNS } from '@/lib/column-allowlists'
 
 export interface DeviceFilters {
   page?: number
@@ -139,10 +140,18 @@ export function useRealtimeDevices() {
           schema: 'public',
           table: 'devices',
         },
-        () => {
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.devices.all,
-          })
+        (payload) => {
+          // Invalidate the LISTS (which derive isOnline from last_seen) and the
+          // one device that changed — not queryKeys.devices.all, which is the
+          // prefix for every device-scoped key including bridge-backed ones
+          // (commands, sync details, closeout). A device row updates on every
+          // poll of every terminal, so the broad key turned routine heartbeats
+          // into a refetch storm across unrelated queries.
+          queryClient.invalidateQueries({ queryKey: queryKeys.devices.lists() })
+          const serial = (payload?.new as { serial_number?: string } | undefined)?.serial_number
+          if (serial) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.devices.detail(serial) })
+          }
         }
       )
       .subscribe()
@@ -324,9 +333,12 @@ export function useDevice(deviceSn: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.devices.detail(deviceSn),
     queryFn: async () => {
+      // Explicit columns: select('*') shipped devices.comm_key — the device
+      // authentication secret — into every admin's browser and React Query
+      // cache. Nothing in the UI renders it.
       const { data, error } = await supabase
         .from('devices')
-        .select('*')
+        .select(DEVICE_PUBLIC_COLUMNS)
         .eq('serial_number', deviceSn)
         .single()
       
@@ -373,9 +385,13 @@ export function useUserBiometrics(userId: string, options?: { enabled?: boolean 
   return useQuery({
     queryKey: queryKeys.users.biometrics(userId),
     queryFn: async () => {
+      // Explicit columns: select('*') shipped template_data — the raw
+      // fingerprint/face templates — to the browser on every load of this hook.
+      // Nothing here renders them; the biometric detail dialog fetches the row
+      // it needs when an admin explicitly opens it.
       const { data, error } = await supabase
         .from('user_biometrics')
-        .select('*')
+        .select(BIOMETRIC_METADATA_COLUMNS)
         .eq('user_id', userId)
       
       if (error) throw error

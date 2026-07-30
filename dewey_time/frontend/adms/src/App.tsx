@@ -39,8 +39,12 @@ const queryClient = new QueryClient({
     },
     mutations: {
       // Retry mutations once on network errors
-      retry: 1,
-      retryDelay: 1000,
+      // Mutations here are NOT idempotent: they queue device commands
+      // (CLEAR LOG, reboot, delete user, photo push). An automatic retry after
+      // an ambiguous failure — a timeout on a request the bridge actually
+      // processed — queues the destructive command a second time. A mutation
+      // that genuinely wants a retry can set one locally.
+      retry: 0,
     },
   },
 })

@@ -5,6 +5,7 @@
 import { supabase } from '@/lib/supabase'
 import { getAuthHeaders } from '@/lib/auth-token'
 import { getDevicePresence } from '@/lib/device-status'
+import { DEVICE_PUBLIC_COLUMNS } from '@/lib/column-allowlists'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -141,31 +142,42 @@ export class DeviceService {
     commandType: string,
     commandBody: string
   ): Promise<{ id: number; command: string }> {
-    // Get next command ID (use max existing ID + 1 for this device)
-    const { data: lastCmd } = await supabase
-      .from('command_queue')
-      .select('id')
-      .eq('device_sn', deviceSn)
-      .order('id', { ascending: false })
-      .limit(1)
-      .single()
-
-    const nextId = (lastCmd?.id || 0) + 1
-    const command = `C:${nextId}:${commandBody}`
-
-    const { data, error } = await supabase
+    // Insert first, then stamp the prefix with the REAL row id — the same
+    // two-step the bridge's queueCommandWithDbId uses.
+    //
+    // This used to derive the id as max(id)+1 for the device, which is wrong the
+    // moment anything else queues concurrently (another admin, or the bridge's
+    // own sync/reconciliation): two rows get the same C:{n}: prefix, the device
+    // ACKs one id, and the other command can never be matched to its ACK — it
+    // stays undeliverable forever. The prefix must be the row's own primary key.
+    const { data: inserted, error: insertError } = await supabase
       .from('command_queue')
       .insert({
         device_sn: deviceSn,
-        command,
+        command: commandBody,
         command_type: commandType,
         status: 'pending',
+        // Keep it out of the delivery window until the prefix is stamped; the
+        // bridge honours next_retry_at and repairs any missed stamp anyway.
+        next_retry_at: new Date(Date.now() + 10_000).toISOString(),
       })
+      .select('id')
+      .single()
+
+    if (insertError || !inserted) {
+      throw new Error(`Failed to queue command: ${insertError?.message ?? 'no row returned'}`)
+    }
+
+    const command = `C:${inserted.id}:${commandBody}`
+    const { data, error } = await supabase
+      .from('command_queue')
+      .update({ command, next_retry_at: new Date().toISOString() })
+      .eq('id', inserted.id)
       .select('id, command')
       .single()
 
     if (error) {
-      throw new Error(`Failed to queue command: ${error.message}`)
+      throw new Error(`Failed to stamp queued command: ${error.message}`)
     }
 
     return data!
@@ -260,9 +272,12 @@ export class DeviceService {
    * Get a single device by serial number
    */
   static async getDevice(serialNumber: string): Promise<DeviceEntry | null> {
+    // Explicit columns: select('*') shipped devices.comm_key — the device
+    // authentication secret — to the browser. Nothing renders it; the Super
+    // Admin flow that SETS it goes through the bridge API, not this read.
     const { data, error } = await supabase
       .from('devices')
-      .select('*')
+      .select(DEVICE_PUBLIC_COLUMNS)
       .eq('serial_number', serialNumber)
       .single()
 
