@@ -913,10 +913,17 @@ Run: `git status --porcelain dewey_time/public/hr_attendance dewey_time/www`
 Then prove the new feature is in the bundle:
 
 ```bash
-grep -c "Resulting week" dewey_time/public/hr_attendance/assets/index.js
+grep -c "expects a 7-day week" dewey_time/public/hr_attendance/assets/index.js
+grep -c "minmax(3rem" dewey_time/public/hr_attendance/assets/index.css
 ```
 
-Expected: ≥ 1. If the only changes are `build-id.txt` and `?v=` query strings, revert with `git checkout -- dewey_time/public/hr_attendance dewey_time/www` and report it — that would mean the source changes never took effect.
+Expected: ≥ 1 for **both**. The first is `PlannedWeekCanvas`'s throw message, new on this
+branch and surviving minification. The second proves the preview dialog's narrower grid template
+actually reached the built CSS — Tailwind cannot see runtime-constructed class names, so this is
+the check that the canvas renders seven columns in the dialog rather than collapsing to one.
+
+(An earlier draft of this plan grepped for `"Resulting week"`, a string that never existed in
+`src/`. Run as written it would have reported the build as a no-op and reverted a correct bundle.) If the only changes are `build-id.txt` and `?v=` query strings, revert with `git checkout -- dewey_time/public/hr_attendance dewey_time/www` and report it — that would mean the source changes never took effect.
 
 - [ ] **Step 4: Commit**
 
