@@ -57,7 +57,19 @@ test("AttentionStrip omits the count slot when no count is given", () => {
       Device data may be stale
     </AttentionStrip>
   );
-  assert.doesNotMatch(html, /tabular-nums/);
+  assert.doesNotMatch(html, />\d+</);
+});
+
+// The collapsed branch (no `detail`) has its own count slot, independent of
+// the one inside <summary> — this covers it directly instead of only via the
+// disclosure branch.
+test("AttentionStrip renders the count in the collapsed branch too", () => {
+  const html = renderToStaticMarkup(
+    <AttentionStrip tone="amber" icon={<svg />} count={3}>
+      Device data may be stale
+    </AttentionStrip>
+  );
+  assert.match(html, />3</);
 });
 
 // Role 3 is the one place role="alert" is correct — the user asked for
@@ -81,13 +93,17 @@ test("FailureBlock renders a retry button when given a handler", () => {
   );
   assert.match(html, /<button/);
   assert.match(html, /Retry/);
+  // `Button`'s base class string always contains "disabled:pointer-events-none",
+  // so a plain /disabled/ match can't tell a disabled button from an enabled
+  // one — assert the actual rendered boolean attribute is absent instead.
+  assert.doesNotMatch(html, /disabled=""/);
 });
 
 test("FailureBlock disables the button while retrying", () => {
   const html = renderToStaticMarkup(
     <FailureBlock title="Attendance data didn't load" onRetry={() => {}} retrying />
   );
-  assert.match(html, /disabled/);
+  assert.match(html, /disabled=""/);
   assert.doesNotMatch(html, />Retry</);
 });
 

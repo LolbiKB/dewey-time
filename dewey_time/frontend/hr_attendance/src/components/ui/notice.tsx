@@ -52,8 +52,8 @@ export function AttentionStrip(props: {
   }
 
   return (
-    <details role="status" className={`group rounded-md border animate-in fade-in ${tone}`}>
-      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3 py-2 text-sm">
+    <details role="status" className={`group rounded-md border text-sm animate-in fade-in ${tone}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3 py-2 [&::-webkit-details-marker]:hidden">
         {head}
         <ChevronRightIcon
           className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
