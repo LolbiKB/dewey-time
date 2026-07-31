@@ -15,7 +15,9 @@
 - Work from `dewey_time/frontend/hr_attendance/`. All paths below are relative to it unless stated.
 - **Tests must live inside the `test:web` glob:** `src/lib`, `src/brand`, `src/pwa`, `src/components`, `src/ui`. It is a per-directory list, **not recursive**. A test placed elsewhere is silently never run and the suite still reports green. Baseline is **316 passing**; every task that adds tests must show the printed `# tests` total rise.
 - **Never resolve a path from the CWD in a test.** Anchor on `import.meta.url`.
-- Do **not** run `npm install`. Do **not** edit `package.json` or `package-lock.json`.
+- Do **not** run `npm install`. Do **not** edit `package-lock.json`. The **only** authorised
+  `package.json` change in this plan is the one-glob addition in Task 1, Step 1 — no dependency
+  changes, no other script edits.
 - `git add` only the files named in the task. Never `git add -A`, `.`, or `-u`.
 - Do not checkout, switch, branch, stash, reset, rebase, merge, clean, or push.
 - Exact ARIA roles: `AttentionStrip` → `role="status"`. `FailureBlock` → `role="alert"`. Role 1 context → **no role**.
@@ -57,6 +59,33 @@ Found while planning; both are additive and required by real call sites.
 - Produces:
   - `AttentionStrip(props: { tone: "amber" | "accent"; icon: React.ReactNode; children: React.ReactNode; detail?: React.ReactNode; count?: number }): React.JSX.Element`
   - `FailureBlock(props: { title: string; cause?: React.ReactNode; onRetry?: () => void; retrying?: boolean }): React.JSX.Element`
+
+- [ ] **Step 1a: Extend the `test:web` glob to cover `src/components/ui/`**
+
+The glob is an explicit per-directory list and is **not** recursive. `src/components/*.test.tsx`
+matches only files directly in `src/components/` — so a test in `src/components/ui/` is silently
+never collected. That directory holds **30 components and zero tests** today, so this is a trap
+for the whole directory, not just this task.
+
+In `package.json`, add one entry to `scripts["test:web"]`, immediately after
+`src/components/*.test.tsx`:
+
+```
+src/components/ui/*.test.tsx
+```
+
+The full script becomes:
+
+```
+tsx --test src/lib/*.test.ts src/brand/*.test.ts src/brand/*.test.tsx src/pwa/*.test.ts src/pwa/*.test.tsx src/components/*.test.tsx src/components/ui/*.test.tsx src/ui/*.test.tsx
+```
+
+This is the only authorised `package.json` edit in the plan. It cannot surface pre-existing
+failures, because no test file exists under `src/components/ui/` yet. Do not touch
+`package-lock.json`.
+
+Run: `npm run test:web`
+Expected: still **316** passing — the new glob matches nothing yet.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -286,7 +315,7 @@ Expected: PASS. `# tests` must read **325** (316 baseline + 9 new). If it still 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/components/ui/notice.tsx src/components/ui/notice.test.tsx
+git add package.json src/components/ui/notice.tsx src/components/ui/notice.test.tsx
 git commit -m "feat(ui): AttentionStrip and FailureBlock notice primitives"
 ```
 
