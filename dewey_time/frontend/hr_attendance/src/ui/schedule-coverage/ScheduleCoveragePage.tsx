@@ -3,7 +3,7 @@ import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { ArrowLeftIcon, LayoutListIcon, UsersIcon } from "lucide-react";
 import { Link, Navigate, useOutletContext } from "react-router-dom";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
@@ -99,9 +99,7 @@ export function ScheduleCoveragePage() {
             {isLoading ? (
               <EmptyState icon={Spinner} title="Loading coverage…" />
             ) : error ? (
-              <Alert variant="destructive">
-                <AlertDescription>Couldn’t load coverage. Try refreshing.</AlertDescription>
-              </Alert>
+              <FailureBlock title="Coverage didn't load" cause="Try refreshing the page." />
             ) : view === "needs" ? (
               <UnassignedList employees={unassigned} />
             ) : (

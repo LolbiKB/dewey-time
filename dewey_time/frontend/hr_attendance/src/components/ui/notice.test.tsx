@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
@@ -116,4 +118,26 @@ test("FailureBlock renders a ReactNode cause", () => {
   );
   assert.match(html, /Confirm you have HR User access\./);
   assert.match(html, /Detail line\./);
+});
+
+// Resolve from this file, never the CWD — a repo-relative path passes locally
+// and fails wherever the runner starts somewhere else.
+const SRC = fileURLToPath(new URL("../../", import.meta.url));
+
+// These three pages reported persistent conditions through <Alert>, whose root
+// hardcodes role="alert" — an assertive live region that interrupts a screen
+// reader. After the migration none of them should reach for it again.
+test("migrated pages no longer import the Alert primitive", () => {
+  for (const rel of [
+    "ui/App.tsx",
+    "ui/DeviceAlerts.tsx",
+    "ui/schedule-coverage/ScheduleCoveragePage.tsx",
+  ]) {
+    const source = readFileSync(SRC + rel, "utf8");
+    assert.doesNotMatch(
+      source,
+      /from "@\/components\/ui\/alert"/,
+      `${rel} still imports Alert — use AttentionStrip or FailureBlock`
+    );
+  }
 });

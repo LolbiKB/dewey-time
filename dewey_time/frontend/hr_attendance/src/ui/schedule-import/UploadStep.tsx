@@ -114,7 +114,7 @@ export function UploadStep(props: {
   return (
     <div className="mx-auto w-full max-w-2xl space-y-5 px-5 py-6">
       {props.parseError ? (
-        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        <p className="rounded-lg border border-destructive/25 bg-destructive/[0.035] px-3 py-2 text-sm text-destructive">
           {props.parseError}
         </p>
       ) : null}
