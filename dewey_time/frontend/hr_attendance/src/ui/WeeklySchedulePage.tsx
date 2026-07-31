@@ -1,6 +1,6 @@
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { addDays, parseISO } from "date-fns";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, PencilLineIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
@@ -351,12 +351,33 @@ export function WeeklySchedulePage() {
     setShiftBlocks(blocks);
   }
 
+  // PageHeader.description is a ReactNode and the page always renders one, so
+  // the editing notice costs no extra height — it replaces the generic line
+  // rather than adding a row. The effective date is deliberately absent: the
+  // "Effective from" picker below owns it, and formats it properly.
+  //
+  // PageHeader already wraps `description` in its own <p>, so this uses a
+  // <span> rather than a <p> for the icon+text wrapper — nesting a <p> here
+  // is invalid HTML and triggers a hydration warning.
+  const headerDescription =
+    isEditing && scheduleEmployeeId && !ineligibleMessage ? (
+      <span className="flex items-start gap-1.5 text-sm text-muted-foreground">
+        <PencilLineIcon className="mt-[3px] size-3.5 shrink-0" aria-hidden="true" />
+        <span>
+          Editing {employeeLabel ?? "this employee"}&rsquo;s existing schedule — changes apply from
+          the effective date.
+        </span>
+      </span>
+    ) : (
+      "Configure shared shift patterns for an employee."
+    );
+
   return (
     <>
       <Page>
         <PageHeader
           title="Weekly Schedule"
-          description="Configure shared shift patterns for an employee."
+          description={headerDescription}
           // PageHeader's title/actions row never stacks (unlike the old
           // lg:flex-row header), so only the compact picker lives in `actions` —
           // it alone stays narrow enough to sit beside the title down to phone
@@ -394,26 +415,6 @@ export function WeeklySchedulePage() {
             <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
             <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
           </div>
-
-          {ineligibleMessage ? (
-            <Alert className="border-brand-accent/30 bg-brand-accent/10">
-              <AlertDescription className="text-foreground">
-                {ineligibleMessage} Pick an eligible employee above to continue.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          {isEditing && scheduleEmployeeId && !ineligibleMessage ? (
-            <Alert className="border-brand-accent/40 bg-brand-accent/10">
-              <AlertDescription className="text-foreground">
-                <span className="font-medium">
-                  Editing {employeeLabel ?? "this employee"}'s schedule.
-                </span>{" "}
-                Changes take effect {effectiveFrom || "the effective date"}. Existing future
-                shifts will be replaced.
-              </AlertDescription>
-            </Alert>
-          ) : null}
         </PageHeader>
 
         <Section grow>

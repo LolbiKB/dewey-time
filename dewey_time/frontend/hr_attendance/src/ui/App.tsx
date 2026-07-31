@@ -14,10 +14,10 @@ import { addDays, format, startOfWeek } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
+import { FailureBlock } from "@/components/ui/notice";
+import { gridLoadError } from "@/lib/attendanceLoadError";
 import { checkDeviceSyncStaleness } from "@/lib/attendancePunches";
 import {
   clampDateToNavBounds,
@@ -189,7 +189,11 @@ export function App() {
 
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
-  const loadError = employeesError ?? calendarError;
+  const loadError = gridLoadError({
+    employeesError,
+    calendarError,
+    employeeCount: employees.length,
+  });
   const loadErrorDetail = loadError ? formatAttendanceLoadError(loadError) : null;
 
   async function refetchPage() {
@@ -262,38 +266,6 @@ export function App() {
     <>
       <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
         <Page>
-          {loadError ? (
-            // Alert's own grid puts non-description children in a 0-width column,
-            // so the row with the Retry button is laid out as flex instead.
-            <Alert
-              variant="destructive"
-              className="flex items-start justify-between gap-3 animate-in fade-in"
-            >
-              <AlertDescription>
-                Could not load attendance data.{" "}
-                {hrStaff
-                  ? "Confirm you have HR User access and try again."
-                  : "Confirm your user is linked to an active Employee record."}
-                {/* The guidance above is a guess; the server usually knows exactly
-                    what went wrong. Without this, a 500 and a bad date range both
-                    read as a permission problem and send HR chasing access they
-                    already have. */}
-                {loadErrorDetail ? (
-                  <span className="mt-1 block text-xs opacity-90">{loadErrorDetail}</span>
-                ) : null}
-              </AlertDescription>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => void refetchPage()}
-                disabled={isRefreshing}
-              >
-                {isRefreshing ? <Spinner className="size-3.5" /> : "Retry"}
-              </Button>
-            </Alert>
-          ) : null}
-
           {/* No PageHeader here, unlike the other three routes — this is the one
               screen that never had a heading to convert. Its nav tab already
               reads "Attendance" (top strip on desktop, bottom bar on phone), so
@@ -351,15 +323,31 @@ export function App() {
                   loading={isCalendarLoading}
                   weekKey={weekKey}
                 >
-                  {calendarError ? (
-                    <Card className="flex min-h-0 flex-1 items-center justify-center border-destructive/20 bg-destructive/5 animate-in fade-in">
-                      <CardContent className="py-12 text-center">
-                        <p className="font-medium text-destructive">Attendance data unavailable</p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Use Retry above to reload.
-                        </p>
-                      </CardContent>
-                    </Card>
+                  {loadError ? (
+                    <FailureBlock
+                      // Three nested clippers above this slot (the shell's
+                      // overflow-hidden, AppShell's content, Section grow) do
+                      // not scroll, so the block's default 13rem minimum would
+                      // cut off Retry on a landscape phone.
+                      className="min-h-0"
+                      title="Attendance data didn't load"
+                      cause={
+                        <>
+                          {hrStaff
+                            ? "Confirm you have HR User access and try again."
+                            : "Confirm your user is linked to an active Employee record."}
+                          {/* The guidance above is a guess; the server usually knows
+                              exactly what went wrong. Without this, a 500 and a bad
+                              date range both read as a permission problem and send
+                              HR chasing access they already have. */}
+                          {loadErrorDetail ? (
+                            <span className="mt-1 block text-xs opacity-90">{loadErrorDetail}</span>
+                          ) : null}
+                        </>
+                      }
+                      onRetry={() => void refetchPage()}
+                      retrying={isRefreshing}
+                    />
                   ) : selectedEmployee?.has_shift_assignment === false &&
                     payload.has_shift_assignment_rows !== true &&
                     !selectedEmployee?.is_clock_based ? (

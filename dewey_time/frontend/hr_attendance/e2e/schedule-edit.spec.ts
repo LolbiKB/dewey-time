@@ -7,7 +7,8 @@ test.describe("schedule edit", () => {
     await stubFrappe(page);
     await page.goto("/hr-schedule?employee=EMP-001");
 
-    await expect(page.getByText(/Editing Jane Doe.s schedule/)).toBeVisible();
+    await expect(page.getByText(/Editing Jane Doe.s existing schedule/)).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
 
     const save = page.getByRole("button", { name: /Review changes|Save schedule/ });
     await expect(save).toBeVisible();
