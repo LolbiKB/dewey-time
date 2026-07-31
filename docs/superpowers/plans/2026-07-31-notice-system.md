@@ -310,7 +310,7 @@ export function FailureBlock(props: {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npm run test:web`
-Expected: PASS. `# tests` must read **325** (316 baseline + 9 new). If it still reads 316, the file is outside the glob — stop and fix that before continuing.
+Expected: PASS. `# tests` must read **325** (316 baseline + 9 new). A later fix round added a tenth test, so the running total from Task 2 onward is one higher than 325 + N. If it still reads 316, the file is outside the glob — stop and fix that before continuing.
 
 - [ ] **Step 5: Commit**
 
@@ -444,7 +444,7 @@ Then check whether `Card`/`CardContent` are still used further down the file (by
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npm run test:web`
-Expected: PASS, `# tests` **328** (325 + 3).
+Expected: PASS, `# tests` **329** (326 after Task 1's fix round, + 3).
 
 - [ ] **Step 5: Commit**
 
@@ -517,7 +517,7 @@ Expected: no new errors. (`TS5101 baseUrl is deprecated` is a pre-existing, acce
 - [ ] **Step 4: Verify the suite and the rendered result**
 
 Run: `npm run test:web`
-Expected: PASS, `# tests` still **328** (this task adds no unit tests; the behaviour is covered by e2e).
+Expected: PASS, `# tests` still **329** (this task adds no unit tests; the behaviour is covered by e2e).
 
 Then confirm visually that one failure now produces one surface:
 
@@ -565,13 +565,13 @@ Immediately before the `return (` at `src/ui/WeeklySchedulePage.tsx:354`, add:
   // "Effective from" picker below owns it, and formats it properly.
   const headerDescription =
     isEditing && scheduleEmployeeId && !ineligibleMessage ? (
-      <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
+      <span className="flex items-start gap-1.5 text-sm text-muted-foreground">
         <PencilLineIcon className="mt-[3px] size-3.5 shrink-0" aria-hidden="true" />
         <span>
           Editing {employeeLabel ?? "this employee"}&rsquo;s existing schedule — changes apply from
           the effective date.
         </span>
-      </p>
+      </span>
     ) : (
       "Configure shared shift patterns for an employee."
     );
@@ -606,7 +606,7 @@ Run: `npx tsc --noEmit 2>&1 | grep -v TS5101`
 Expected: no new errors.
 
 Run: `npm run test:web`
-Expected: PASS, `# tests` **328**.
+Expected: PASS, `# tests` **329** (this task adds no unit tests).
 
 Run: `npx playwright test e2e/schedule-edit.spec.ts e2e/schedule.spec.ts --project=desktop`
 Expected: PASS. Both reconcile-review assertions in `schedule-edit.spec.ts` must still pass — the confirm modal is untouched, and it is where the accurate warning lives.
@@ -712,7 +712,7 @@ Run: `npx tsc --noEmit 2>&1 | grep -v TS5101`
 Expected: no new errors.
 
 Run: `npm run test:web`
-Expected: PASS, `# tests` **329** (328 + 1).
+Expected: PASS, `# tests` **330** (329 + 1).
 
 Run: `npx playwright test e2e/coverage.spec.ts --project=desktop`
 Expected: PASS.
@@ -743,7 +743,7 @@ a verification artifact.**
 - [ ] **Step 1: Run the full suite one last time**
 
 Run: `npm run test:web`
-Expected: PASS, `# tests` **329**.
+Expected: PASS, `# tests` **330**.
 
 Run: `npx playwright test --project=desktop`
 Expected: PASS.
@@ -773,7 +773,7 @@ git commit -m "build(hr-attendance): rebuild bundle with the notice system"
 
 ## Verification checklist
 
-- [ ] `npm run test:web` reports **329** passing, 0 failing.
+- [ ] `npm run test:web` reports **330** passing, 0 failing.
 - [ ] `npx playwright test` passes on both projects.
 - [ ] `npx tsc --noEmit` shows no errors other than the pre-existing `TS5101`.
 - [ ] No `role="alert"` outside `components/ui/alert.tsx` and `components/ui/notice.tsx`.
