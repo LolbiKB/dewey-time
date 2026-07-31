@@ -17,6 +17,7 @@ import { useOutletContext } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FailureBlock } from "@/components/ui/notice";
+import { gridLoadError } from "@/lib/attendanceLoadError";
 import { checkDeviceSyncStaleness } from "@/lib/attendancePunches";
 import {
   clampDateToNavBounds,
@@ -188,7 +189,11 @@ export function App() {
 
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isCalendarLoading = calendarLoading && !!employee;
-  const loadError = employeesError ?? calendarError;
+  const loadError = gridLoadError({
+    employeesError,
+    calendarError,
+    employeeCount: employees.length,
+  });
   const loadErrorDetail = loadError ? formatAttendanceLoadError(loadError) : null;
 
   async function refetchPage() {
@@ -320,6 +325,11 @@ export function App() {
                 >
                   {loadError ? (
                     <FailureBlock
+                      // Three nested clippers above this slot (the shell's
+                      // overflow-hidden, AppShell's content, Section grow) do
+                      // not scroll, so the block's default 13rem minimum would
+                      // cut off Retry on a landscape phone.
+                      className="min-h-0"
                       title="Attendance data didn't load"
                       cause={
                         <>

@@ -2,6 +2,7 @@ import { ChevronRightIcon, CloudOffIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 
 /**
  * Role 2 — attention. The data may be stale or incomplete; you might want to
@@ -77,11 +78,20 @@ export function FailureBlock(props: {
   cause?: React.ReactNode;
   onRetry?: () => void;
   retrying?: boolean;
+  /**
+   * Merged onto the root. The 13rem minimum below assumes a container that can
+   * scroll; a call site nested in clippers that cannot must be able to override
+   * it with `min-h-0`, or the block's bottom — the Retry button — is cut off.
+   */
+  className?: string;
 }) {
   return (
     <div
       role="alert"
-      className="flex min-h-[13rem] flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-destructive/25 bg-destructive/[0.035] p-8 text-center animate-in fade-in"
+      className={cn(
+        "flex min-h-[13rem] flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-destructive/25 bg-destructive/[0.035] p-8 text-center animate-in fade-in",
+        props.className
+      )}
     >
       <CloudOffIcon className="size-6 text-destructive/70" aria-hidden="true" />
       <div className="space-y-1">

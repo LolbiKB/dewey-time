@@ -42,10 +42,10 @@ test("week navigation moves to a different week", async ({ page }, testInfo) => 
 // Regression guard for the duplicate this app used to render: a top Alert
 // banner *and* a Card replacing the week grid for the same failure. App.tsx
 // now renders a single FailureBlock (role="alert") in the grid slot, keyed on
-// loadError = employeesError ?? calendarError. These two cases pin both
-// halves of that union — the calendar failing, and the *employees* list
-// failing, which the grid slot used to miss entirely when it was keyed on
-// calendarError alone.
+// gridLoadError() (src/lib/attendanceLoadError.ts). These two cases pin both
+// halves of that predicate at load time — the calendar failing, and the
+// *employees* list failing, which the grid slot used to miss entirely when it
+// was keyed on calendarError alone.
 test("calendar failure renders exactly one failure surface", async ({ page }) => {
   // Registered after stubFrappe's beforeEach route, so it wins for
   // get_employee_calendar and falls through to the happy path for everything
@@ -80,6 +80,9 @@ test("employees-only failure is still reported", async ({ page }) => {
   // With the grid slot keyed on calendarError alone (the pre-fix behaviour),
   // this failure would have shown the old top banner and nothing else — the
   // grid slot would have rendered the (empty) week grid instead of a failure.
+  // The employees list never loaded here, so employeeCount is 0 and
+  // gridLoadError still reports it; the row-count carve-out only suppresses a
+  // failed *background refetch* over rows that are already on screen.
   await page.route("**/api/method/**", async (route) => {
     const url = new URL(route.request().url());
     if (!url.pathname.includes("list_calendar_employees")) return route.fallback();

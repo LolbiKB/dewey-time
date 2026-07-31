@@ -120,6 +120,21 @@ test("FailureBlock renders a ReactNode cause", () => {
   assert.match(html, /Detail line\./);
 });
 
+// The block's 13rem minimum is right where it can scroll, but App.tsx renders
+// it inside three nested non-scrolling clippers — on a landscape phone that
+// minimum pushes the Retry button, the surface's only action, out of view. The
+// call site needs to be able to hand down `min-h-0`.
+test("FailureBlock merges a caller className onto its root", () => {
+  const html = renderToStaticMarkup(
+    <FailureBlock title="Attendance data didn't load" className="min-h-0" />
+  );
+  const root = html.slice(0, html.indexOf(">"));
+  assert.match(root, /role="alert"/);
+  assert.match(root, /\bmin-h-0\b/);
+  // tailwind-merge keeps the caller's min-height, not both.
+  assert.doesNotMatch(root, /min-h-\[13rem\]/);
+});
+
 // Resolve from this file, never the CWD — a repo-relative path passes locally
 // and fails wherever the runner starts somewhere else.
 const SRC = fileURLToPath(new URL("../../", import.meta.url));
