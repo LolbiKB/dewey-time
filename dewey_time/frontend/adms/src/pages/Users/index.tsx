@@ -30,7 +30,8 @@ export function Users() {
   const [selectedUser, setSelectedUser] = useState<UserEntry | null>(null)
   const [registerEmployee, setRegisterEmployee] = useState<UserEntry | null>(null)
 
-  const { data, isLoading, isError, error, refetch } = useUsersList({
+  // isFetching (not isLoading) is what a manual refetch flips once rows exist.
+  const { data, isLoading, isFetching, isError, error, refetch } = useUsersList({
     page: filters.page,
     limit: filters.limit,
     search: filters.search,
@@ -132,6 +133,7 @@ export function Users() {
         filters={filters}
         onFiltersChange={setFilters}
         onRefresh={() => refetch()}
+        refreshing={isFetching}
         toolbarActions={
           <div className="flex items-center gap-3">
             <Label htmlFor="registration-filter" className="text-sm font-medium">

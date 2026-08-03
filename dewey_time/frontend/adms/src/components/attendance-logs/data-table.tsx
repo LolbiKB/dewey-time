@@ -4,6 +4,7 @@ import {
   type BaseTableMeta,
 } from '@/components/ui/generic-data-table'
 import { AttendanceLogStatFilters } from '@/components/attendance-logs/attendance-log-stat-filters'
+import { RefreshButton } from '@/components/shared/refresh-button'
 import type {
   AttendanceLogEntry,
   AttendanceLogFilters,
@@ -21,6 +22,8 @@ interface AttendanceLogDataTableProps {
   onFiltersChange: (filters: AttendanceLogFilters) => void
   onStatToggle: (stat: AttendanceLogStatFilter) => void
   onRefresh?: () => void
+  /** TanStack `isFetching` — drives the refresh spinner. See RefreshButton. */
+  refreshing?: boolean
 }
 
 export function AttendanceLogDataTable({
@@ -33,6 +36,7 @@ export function AttendanceLogDataTable({
   onFiltersChange,
   onStatToggle,
   onRefresh,
+  refreshing,
 }: AttendanceLogDataTableProps) {
   return (
     <GenericDataTable
@@ -47,9 +51,12 @@ export function AttendanceLogDataTable({
         entityNameSingular: 'punch',
         searchPlaceholder: 'Search by PIN or device SN...',
       }}
-      actions={{
-        onRefresh,
-      }}
+      // onRefresh is deliberately NOT handed to the primitive: its built-in
+      // refresh button keys its spinner off `loading`, which is `isLoading` and
+      // therefore never true on a refetch of an already-populated table.
+      toolbarLeading={
+        onRefresh ? <RefreshButton onRefresh={onRefresh} refreshing={refreshing} /> : undefined
+      }
       toolbarActions={
         <AttendanceLogStatFilters
           filters={filters}

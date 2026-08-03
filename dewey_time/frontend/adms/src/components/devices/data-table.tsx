@@ -4,6 +4,7 @@ import {
   GenericDataTable,
   type BaseTableMeta,
 } from '@/components/ui/generic-data-table'
+import { RefreshButton } from '@/components/shared/refresh-button'
 import type {
   DeviceEntry,
   DeviceFilters,
@@ -17,6 +18,8 @@ interface DeviceDataTableProps {
   filters: DeviceFilters
   onFiltersChange: (filters: DeviceFilters) => void
   onRefresh?: () => void
+  /** TanStack `isFetching` — drives the refresh spinner. See RefreshButton. */
+  refreshing?: boolean
   toolbarLeading?: ReactNode
 }
 
@@ -28,6 +31,7 @@ export function DeviceDataTable({
   filters,
   onFiltersChange,
   onRefresh,
+  refreshing,
   toolbarLeading,
 }: DeviceDataTableProps) {
   return (
@@ -43,10 +47,15 @@ export function DeviceDataTable({
         entityNameSingular: 'device',
         searchPlaceholder: 'Search by serial number, name, or location...',
       }}
-      toolbarLeading={toolbarLeading}
-      actions={{
-        onRefresh,
-      }}
+      // onRefresh is deliberately NOT handed to the primitive: its built-in
+      // refresh button keys its spinner off `loading`, which is `isLoading` and
+      // therefore never true on a refetch of an already-populated table.
+      toolbarLeading={
+        <>
+          {onRefresh && <RefreshButton onRefresh={onRefresh} refreshing={refreshing} />}
+          {toolbarLeading}
+        </>
+      }
     />
   )
 }

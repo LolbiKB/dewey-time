@@ -30,7 +30,8 @@ export function Devices() {
   })
 
   // Fetch devices for table
-  const { data, isLoading, isError, error, refetch } = useDevices(filters)
+  // isFetching (not isLoading) is what a manual refetch flips once rows exist.
+  const { data, isLoading, isFetching, isError, error, refetch } = useDevices(filters)
   const { data: yesterdayClosure } = useYesterdayAttlogClosure()
   const { data: catchUpDepth } = useAttlogCatchUpDepthMap()
 
@@ -154,6 +155,7 @@ export function Devices() {
           filters={filters}
           onFiltersChange={setFilters}
           onRefresh={refetch}
+          refreshing={isFetching}
         />
       </div>
 
