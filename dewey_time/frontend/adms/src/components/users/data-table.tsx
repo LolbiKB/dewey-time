@@ -3,6 +3,7 @@ import {
   GenericDataTable,
   type BaseTableMeta,
 } from '@/components/ui/generic-data-table'
+import { RefreshButton } from '@/components/shared/refresh-button'
 import type {
   UserEntry,
   UserFilters,
@@ -22,6 +23,8 @@ interface UserDataTableProps {
   filters: UserFilters
   onFiltersChange: (filters: UserFilters) => void
   onRefresh?: () => void
+  /** TanStack `isFetching` — drives the refresh spinner. See RefreshButton. */
+  refreshing?: boolean
   toolbarActions?: React.ReactNode
 }
 
@@ -34,6 +37,7 @@ export function UserDataTable({
   filters,
   onFiltersChange,
   onRefresh,
+  refreshing,
   toolbarActions,
 }: UserDataTableProps) {
   return (
@@ -50,8 +54,13 @@ export function UserDataTable({
         entityNameSingular: 'user',
         searchPlaceholder: 'Search by PIN, name, or employee ID...',
       }}
+      // onRefresh is deliberately NOT handed to the primitive: its built-in
+      // refresh button keys its spinner off `loading`, which is `isLoading` and
+      // therefore never true on a refetch of an already-populated table.
+      toolbarLeading={
+        onRefresh ? <RefreshButton onRefresh={onRefresh} refreshing={refreshing} /> : undefined
+      }
       actions={{
-        onRefresh,
         ...meta,
       }}
     />

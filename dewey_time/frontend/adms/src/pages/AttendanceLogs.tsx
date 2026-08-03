@@ -55,7 +55,8 @@ export function AttendanceLogs() {
     }))
   }, [searchParams])
 
-  const { data, meta, isLoading, isError, error, refetchAttendanceLogs } =
+  // isFetching (not isLoading) is what a manual refetch flips once rows exist.
+  const { data, meta, isLoading, isFetching, isError, error, refetchAttendanceLogs } =
     useAttendanceLogs(filters)
 
   const { data: summary } = useAttendanceLogSummary()
@@ -194,6 +195,7 @@ export function AttendanceLogs() {
           onFiltersChange={setFilters}
           onStatToggle={toggleStatFilter}
           onRefresh={() => void refetchAttendanceLogs()}
+          refreshing={isFetching}
         />
       </div>
     </Page>
