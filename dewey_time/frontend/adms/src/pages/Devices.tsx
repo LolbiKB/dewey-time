@@ -8,7 +8,6 @@ import { createDeviceColumns } from '@/components/devices/columns'
 import { DeviceDataTable } from '@/components/devices/data-table'
 import { 
   useDevices, 
-  useSendDeviceCommand, 
   useUpdateDevice,
   useYesterdayAttlogClosure,
   useAttlogCatchUpDepthMap,
@@ -35,9 +34,6 @@ export function Devices() {
   const { data: yesterdayClosure } = useYesterdayAttlogClosure()
   const { data: catchUpDepth } = useAttlogCatchUpDepthMap()
 
-  // Device command mutation
-  const deviceCommandMutation = useSendDeviceCommand()
-
   // Update device mutation
   const updateDeviceMutation = useUpdateDevice()
 
@@ -46,19 +42,6 @@ export function Devices() {
   const [detailDevice, setDetailDevice] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailInitialTab, setDetailInitialTab] = useState<DeviceDetailTab>('users')
-
-  // Handle device command
-  const handleDeviceCommand = async (
-    serialNumber: string,
-    commandType: string,
-    commandBody: string
-  ) => {
-    await deviceCommandMutation.mutateAsync({
-      deviceSn: serialNumber,
-      commandType,
-      command: commandBody,
-    })
-  }
 
   // Handle edit device
   const handleEditDevice = (device: DeviceEntry) => {
@@ -97,7 +80,6 @@ export function Devices() {
             page: 1,
           })),
         currentStatusFilter: filters.status,
-        onDeviceCommand: handleDeviceCommand,
         onEdit: handleEditDevice,
         onShowDetail: handleShowDetail,
         yesterdayClosureBySn: yesterdayClosure,

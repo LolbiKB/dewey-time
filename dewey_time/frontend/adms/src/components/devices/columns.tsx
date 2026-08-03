@@ -20,11 +20,6 @@ import { signalBadge } from '@/lib/signal'
 interface CreateDeviceColumnsProps {
   onFilterByStatus?: (status: string) => void
   currentStatusFilter?: string
-  onDeviceCommand?: (
-    serialNumber: string,
-    commandType: string,
-    commandBody: string
-  ) => void | Promise<void>
   onEdit?: (device: DeviceEntry) => void
   onShowDetail?: (serialNumber: string, tab?: DeviceDetailTab) => void
   yesterdayClosureBySn?: Map<string, DeviceAttlogClosureRow>
@@ -40,7 +35,6 @@ const STATUS_OPTIONS = [
 export function createDeviceColumns({
   onFilterByStatus,
   currentStatusFilter,
-  onDeviceCommand,
   onEdit,
   onShowDetail,
   yesterdayClosureBySn,
@@ -192,7 +186,6 @@ export function createDeviceColumns({
       cell: ({ row }) => (
         <DeviceRowActions
           device={row.original}
-          onDeviceCommand={onDeviceCommand}
           onEdit={onEdit}
           onShowDetail={onShowDetail}
         />

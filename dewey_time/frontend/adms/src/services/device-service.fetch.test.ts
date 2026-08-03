@@ -77,3 +77,45 @@ describe('DeviceService bridge requests without a body', () => {
     expect(headers.Authorization).toBe('Bearer test-token')
   })
 })
+
+/**
+ * REBOOT must go through the bridge, never command_queue.
+ *
+ * The dashboard used to INSERT 'REBOOT' straight into command_queue under the
+ * user's JWT (device-service.ts queueDeviceCommand, reached from the "Reboot
+ * Device" row action). getrequest ships command text to the terminal verbatim
+ * and command_admin_full is role-blind, so any admin could reboot a device.
+ * The allowlist trigger will reject that write; this is its replacement.
+ */
+describe('DeviceService.rebootDevice', () => {
+  it('POSTs to the bridge reboot endpoint rather than writing command_queue', async () => {
+    fetchMock.mockResolvedValue(jsonOk({ success: true, commandId: 7 }))
+
+    const result = await DeviceService.rebootDevice('PYA8254100003')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/admin/devices/PYA8254100003/reboot')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(result.commandId).toBe(7)
+  })
+
+  it('percent-encodes the serial number', async () => {
+    fetchMock.mockResolvedValue(jsonOk({ success: true, commandId: 1 }))
+
+    await DeviceService.rebootDevice('SN/WITH SLASH')
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('SN%2FWITH%20SLASH')
+    expect(url).not.toContain('SN/WITH SLASH')
+  })
+
+  it('surfaces the bridge error message so a 403 reads as Super Admin only', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'Super Admin required' }),
+    })
+
+    await expect(DeviceService.rebootDevice('SN-1')).rejects.toThrow('Super Admin required')
+  })
+})

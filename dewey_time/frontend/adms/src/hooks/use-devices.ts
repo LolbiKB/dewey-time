@@ -1,4 +1,4 @@
-import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { DeviceService, type DeviceFilters } from '@/services/device-service'
 
 // Query key factory
@@ -24,22 +24,6 @@ export function useDevices(filters: DeviceFilters = {}) {
   })
 }
 
-/**
- * Hook to queue a device command (REBOOT, INFO, CHECK, LOG, etc.)
- */
-export function useDeviceCommand() {
-  return useMutation({
-    mutationFn: ({
-      deviceSn,
-      commandType,
-      commandBody,
-    }: {
-      deviceSn: string
-      commandType: string
-      commandBody: string
-    }) => DeviceService.queueDeviceCommand(deviceSn, commandType, commandBody),
-  })
-}
 
 export interface CommandFilters {
   page?: number
