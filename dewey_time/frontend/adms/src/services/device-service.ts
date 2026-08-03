@@ -362,45 +362,22 @@ export class DeviceService {
   }
 
   /**
-   * Query device fingerprint algorithm version
-   * Queues a GET OPTION ~ZKFPVersion command to the device
+   * Super Admin: queue a REBOOT via the bridge.
+   *
+   * Never writes command_queue directly. getrequest ships command text to the
+   * terminal verbatim and command_admin_full authorises on role-blind
+   * is_admin(), so the old direct write let any admin reboot a device — and
+   * the allowlist trigger rejects that path.
    */
-  static async queryFingerprintVersion(serialNumber: string): Promise<{ 
-    success: boolean
-    message: string
-    command_id: number
-  }> {
-    // Query FP version via command queue (device will respond in getrequest)
-    const { data: lastCmd } = await supabase
-      .from('command_queue')
-      .select('id')
-      .eq('device_sn', serialNumber)
-      .order('id', { ascending: false })
-      .limit(1)
-      .single()
-
-    const nextId = (lastCmd?.id || 0) + 1
-    const command = `C:${nextId}:GETOption,ZKFPVersion`
-
-    const { data, error } = await supabase
-      .from('command_queue')
-      .insert({
-        device_sn: serialNumber,
-        command,
-        command_type: 'info',
-        status: 'pending',
-        initiated_by: 'api',
-      })
-      .select('id')
-      .single()
-
-    if (error) throw new Error(error.message)
-
-    return {
-      success: true,
-      message: 'Query command queued',
-      command_id: data?.id,
-    }
+  static async rebootDevice(
+    serialNumber: string
+  ): Promise<{ success: boolean; commandId: number }> {
+    return this.fetchApi<{ success: boolean; commandId: number }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/reboot`,
+      // A bodiless POST leaves Fastify's JSON parser with nothing to read.
+      { method: 'POST', body: JSON.stringify({}) },
+      'Failed to reboot device'
+    )
   }
 
   /**

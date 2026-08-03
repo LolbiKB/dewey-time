@@ -18,16 +18,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ConfirmationDialog } from '@/components/ui/base-modal'
 import { signalText } from '@/lib/signal'
+import { DeviceService } from '@/services/device-service'
+import { notifyError, notifySuccess } from '@/lib/toast'
 import type { DeviceEntry } from '@/services/device-service'
 import type { DeviceDetailTab } from '@/components/devices/device-detail-tabs'
 
 interface DeviceRowActionsProps {
   device: DeviceEntry
-  onDeviceCommand?: (
-    serialNumber: string,
-    commandType: string,
-    commandBody: string
-  ) => void | Promise<void>
   onEdit?: (device: DeviceEntry) => void
   onShowDetail?: (serialNumber: string, tab?: DeviceDetailTab) => void
 }
@@ -39,7 +36,6 @@ interface DeviceRowActionsProps {
  */
 export function DeviceRowActions({
   device,
-  onDeviceCommand,
   onEdit,
   onShowDetail,
 }: DeviceRowActionsProps) {
@@ -52,10 +48,12 @@ export function DeviceRowActions({
   const handleConfirmReboot = async () => {
     setIsRebooting(true)
     try {
-      // Failures are surfaced by the command mutation's own error toast.
-      await onDeviceCommand?.(serialNumber, 'reboot', 'REBOOT')
-    } catch {
-      /* already reported */
+      await DeviceService.rebootDevice(serialNumber)
+      notifySuccess('Reboot queued', `${serialNumber} will reboot on its next poll.`)
+    } catch (e) {
+      // Super Admin gate lives on the bridge, so a 403 arrives here as a
+      // readable message rather than a raw Postgres error.
+      notifyError('Reboot failed', e instanceof Error ? e.message : 'Unknown error')
     } finally {
       setIsRebooting(false)
       setConfirmRebootOpen(false)

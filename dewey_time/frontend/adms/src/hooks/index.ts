@@ -54,7 +54,6 @@ export {
   useCreateUser,
   useUpdateUser,
   useDeleteUser,
-  useSendDeviceCommand,
   useUpdateDevice,
   useRetryCommand,
   useClearDeviceCommands,

@@ -502,36 +502,11 @@ export function useDeleteUser() {
 // DEVICE MUTATIONS
 // =====================================================
 
-export function useSendDeviceCommand() {
-  const queryClient = useQueryClient()
-  
-  return useMutation({
-    mutationFn: async ({
-      deviceSn,
-      command,
-      commandType,
-    }: {
-      deviceSn: string
-      command: string
-      commandType: string
-    }) => {
-      return DeviceService.queueDeviceCommand(deviceSn, commandType, command)
-    },
-    
-    onSuccess: (_, variables) => {
-      notifySuccess('Command queued', `Sent to ${variables.deviceSn}. Executes on next device poll.`)
-    },
-
-    onError: (error) => {
-      notifyOperationFailed('send command', error)
-    },
-    
-    onSettled: (_data, _error, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
-      queryClient.invalidateQueries({ queryKey: queryKeys.commands.byDevice(variables.deviceSn) })
-    },
-  })
-}
+// useSendDeviceCommand was removed here. It took a free-text `command` and
+// wrote it straight to command_queue, which getrequest ships to the terminal
+// verbatim — the injection vector, with a UI attached. Its only real caller was
+// the Reboot row action, now served by DeviceService.rebootDevice() against the
+// Super-Admin-gated bridge endpoint.
 
 export function useUpdateDevice() {
   const queryClient = useQueryClient()
