@@ -27,6 +27,7 @@ import { ConfirmationDialog } from '@/components/ui/base-modal'
 import { useAuth } from '@/contexts/auth-context'
 import { notifyError, notifySuccess } from '@/lib/toast'
 import { signalAlert, signalText } from '@/lib/signal'
+import { buildDeviceUpdates } from '@/lib/device-updates'
 
 interface EditDeviceDialogProps {
   device: DeviceEntry | null
@@ -52,7 +53,10 @@ function getChanges(
   name: string,
   location: string,
   isRegistrar: boolean,
-  capabilities: string[]
+  capabilities: string[],
+  // Keeps the confirmation list honest: never show a change that
+  // buildDeviceUpdates will suppress before the request is sent.
+  canEditRegistrar: boolean
 ): Record<string, { from: string; to: string }> {
   if (!device) return {}
   const changes: Record<string, { from: string; to: string }> = {}
@@ -63,7 +67,7 @@ function getChanges(
   if (location !== (device.location || '')) {
     changes['Location'] = { from: device.location || '(empty)', to: location || '(empty)' }
   }
-  if (isRegistrar !== (device.is_registrar || false)) {
+  if (canEditRegistrar && isRegistrar !== (device.is_registrar || false)) {
     changes['Registrar'] = {
       from: device.is_registrar ? 'Enabled' : 'Disabled',
       to: isRegistrar ? 'Enabled' : 'Disabled',
@@ -107,20 +111,14 @@ export function EditDeviceDialog({
     }
   }, [device, open, branches])
 
-  const changes = getChanges(device, name, location, isRegistrar, capabilities)
+  const changes = getChanges(device, name, location, isRegistrar, capabilities, isSuperAdmin)
   const hasChanges = Object.keys(changes).length > 0
 
-  const pendingUpdates = (() => {
-    if (!device) return {}
-    const updates: Record<string, unknown> = {}
-    if (name !== (device.name || '')) updates.name = name || undefined
-    if (location !== (device.location || '')) updates.location = location || undefined
-    if (isRegistrar !== (device.is_registrar || false)) updates.is_registrar = isRegistrar
-    if (JSON.stringify(capabilities) !== JSON.stringify(device.registrar_capabilities || [])) {
-      updates.registrar_capabilities = capabilities
-    }
-    return updates
-  })()
+  const pendingUpdates = buildDeviceUpdates(
+    device,
+    { name, location, isRegistrar, capabilities },
+    { canEditRegistrar: isSuperAdmin }
+  )
 
   const handleApproveSn = async () => {
     if (!device) return
@@ -138,12 +136,7 @@ export function EditDeviceDialog({
   const handleConfirmSave = async () => {
     if (!device || Object.keys(pendingUpdates).length === 0) return
     if (Object.keys(pendingUpdates).length > 0) {
-      await onSave(device.serial_number, pendingUpdates as {
-        name?: string
-        location?: string
-        is_registrar?: boolean
-        registrar_capabilities?: string[]
-      })
+      await onSave(device.serial_number, pendingUpdates)
     }
     setConfirmOpen(false)
     onOpenChange(false)
@@ -241,17 +234,28 @@ export function EditDeviceDialog({
               </div>
             )}
 
+            {/*
+              is_registrar is a device security setting: the DB trigger
+              guard_device_security_columns rejects a change from anyone who is
+              not a Super Admin with 42501, and updateDevice writes straight to
+              PostgREST. Left enabled, this toggle's only possible outcome for an
+              IT Admin was a raw Postgres error. Shown read-only instead of
+              hidden — knowing whether a device is a registrar is useful even
+              when you cannot change it.
+            */}
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
                 <Label htmlFor="registrar">Registrar Device</Label>
                 <p className="text-xs text-muted-foreground">
                   Can enroll users and capture biometrics
+                  {!isSuperAdmin && ' — only a Super Admin can change this'}
                 </p>
               </div>
               <Switch
                 id="registrar"
                 checked={isRegistrar}
                 onCheckedChange={setIsRegistrar}
+                disabled={!isSuperAdmin}
               />
             </div>
 
