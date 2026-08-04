@@ -6,6 +6,7 @@ import { UserDataTable } from '@/components/users/data-table'
 import { columns } from './columns'
 import { RegisterDialog } from '@/components/users/register-dialog'
 import { UserDetailModal } from '@/components/users/user-detail-modal'
+import { FlaggedCountIndicator } from '@/components/users/flagged-count-indicator'
 import type { UserFilters, UserEntry } from '@/services/user-service'
 import {
   Select,
@@ -19,8 +20,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { QueryErrorCard } from '@/components/shared/query-error-card'
 import { Page } from '@lolbikb/dewey-ui'
-import { AlertCircle, AlertTriangle } from 'lucide-react'
-import { signalAlert, signalText } from '@/lib/signal'
+import { AlertCircle } from 'lucide-react'
 
 export function Users() {
   const [filters, setFilters] = useState<UserFilters>({
@@ -133,15 +133,8 @@ export function Users() {
         </Alert>
       )}
 
-      {flaggedCount > 0 && (
-        <Alert className={signalAlert.attention}>
-          <AlertTriangle className={`h-4 w-4 ${signalText.attention}`} />
-          <AlertTitle>Suspicious Attendance</AlertTitle>
-          <AlertDescription>
-            {flaggedCount} user{flaggedCount !== 1 ? 's' : ''} with suspicious attendance patterns
-          </AlertDescription>
-        </Alert>
-      )}
+      {/* The attendance flag is deliberately NOT in this alert stack — see
+          FlaggedCountIndicator. It rides the toolbar instead. */}
 
       <UserDataTable
         columns={columns}
@@ -154,6 +147,7 @@ export function Users() {
         refreshing={isFetching}
         toolbarActions={
           <div className="flex items-center gap-3">
+            <FlaggedCountIndicator count={flaggedCount} />
             <Label htmlFor="registration-filter" className="text-sm font-medium">
               Status:
             </Label>
