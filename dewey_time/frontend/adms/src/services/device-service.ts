@@ -168,6 +168,15 @@ export class DeviceService {
       throw new Error(`Failed to queue command: ${insertError?.message ?? 'no row returned'}`)
     }
 
+    // Best-effort stamp. `authenticated` no longer holds UPDATE on
+    // command_queue — that grant was what let an admin replay a Super Admin's
+    // REBOOT at any terminal, so it was revoked outright rather than policed.
+    //
+    // Failing here is NOT a failure of the operation: the row is already
+    // inserted, and the bridge repairs a missing C:{id}: prefix on its next
+    // maintenance pass (command-maintenance.ts:114-127). Throwing would tell
+    // the user their request failed when the command is queued and will be
+    // delivered.
     const command = `C:${inserted.id}:${commandBody}`
     const { data, error } = await supabase
       .from('command_queue')
@@ -177,7 +186,11 @@ export class DeviceService {
       .single()
 
     if (error) {
-      throw new Error(`Failed to stamp queued command: ${error.message}`)
+      console.warn(
+        `[device-service] could not stamp command ${inserted.id}; the bridge will repair the prefix`,
+        error.message
+      )
+      return { id: inserted.id, command: commandBody }
     }
 
     return data!
@@ -294,25 +307,6 @@ export class DeviceService {
       status: presence.status,
       last_seen_minutes: presence.lastSeenMinutes,
     } as DeviceEntry
-  }
-
-  /**
-   * Retry a failed command by resetting it to pending
-   */
-  static async retryCommand(commandId: number): Promise<void> {
-    const { error } = await supabase
-      .from('command_queue')
-      .update({
-        status: 'pending',
-        retry_count: 0,
-        next_retry_at: null,
-      })
-      .eq('id', commandId)
-      .eq('status', 'failed')
-
-    if (error) {
-      throw new Error(`Failed to retry command: ${error.message}`)
-    }
   }
 
   /**

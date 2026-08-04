@@ -58,4 +58,4 @@ export function useDevice(serialNumber: string) {
 }
 
 /** Canonical implementations with notifications — see use-mutations.ts */
-export { useRetryCommand, useClearDeviceCommands } from './use-mutations'
+export { useClearDeviceCommands } from './use-mutations'
