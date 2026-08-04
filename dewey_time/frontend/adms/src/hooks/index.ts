@@ -55,7 +55,6 @@ export {
   useUpdateUser,
   useDeleteUser,
   useUpdateDevice,
-  useRetryCommand,
   useClearDeviceCommands,
   useForceUserSync,
   useRetryUserSync,

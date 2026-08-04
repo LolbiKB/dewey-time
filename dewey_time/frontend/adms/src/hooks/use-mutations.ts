@@ -554,23 +554,11 @@ export function useUpdateDevice() {
 // DEVICE COMMAND MUTATIONS
 // =====================================================
 
-/**
- * Retry a failed command
- */
-export function useRetryCommand() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (commandId: number) => DeviceService.retryCommand(commandId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.commands.all })
-      notifySuccess('Command retry queued')
-    },
-    onError: (error) => {
-      notifyOperationFailed('retry command', error)
-    },
-  })
-}
+// useRetryCommand was removed here. It had ZERO call sites — no retry button
+// exists in the UI — and it wrote command_queue.status directly, which is the
+// capability that let an admin replay a Super Admin's REBOOT at any terminal
+// (20260804000003 revoked UPDATE from `authenticated`). Dead code that would
+// only ever have failed.
 
 /**
  * Clear a single command from a device queue
