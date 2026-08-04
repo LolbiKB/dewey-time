@@ -235,10 +235,15 @@ export function useUsersList(filters?: {
         sortBy: filters?.sortBy,
         sortOrder: filters?.sortOrder,
       })
-      // Return same structure as legacy useUsers for compatibility
+      // Return same structure as legacy useUsers for compatibility.
+      // `degraded` MUST survive this rebuild: reconstructing the object
+      // field-by-field is exactly how audit #18 lost attendance_flagged_at, and
+      // dropping it here puts us back to silently showing a substituted list
+      // with no indication to the user.
       return {
         data: result.data || [],
         meta: result.meta,
+        degraded: result.degraded,
       }
     },
     staleTime: 1000 * 60 * 2, // 2 min
