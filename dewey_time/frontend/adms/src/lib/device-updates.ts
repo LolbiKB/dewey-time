@@ -21,8 +21,9 @@ export interface DeviceUpdatePermissions {
 }
 
 export interface DeviceUpdatePayload {
-  name?: string
-  location?: string
+  /** null clears the column; the key is absent when unchanged. */
+  name?: string | null
+  location?: string | null
   is_registrar?: boolean
   registrar_capabilities?: string[]
 }
@@ -44,11 +45,16 @@ export function buildDeviceUpdates(
 
   const updates: DeviceUpdatePayload = {}
 
+  // null, not undefined. JSON.stringify DROPS undefined keys, so clearing a
+  // field produced a PATCH body of {} — PostgREST updated nothing, the
+  // `.select().single()` that follows returned no row, and the user got a
+  // "Failed to update device" toast with the value unchanged. null reaches the
+  // wire and actually clears the column.
   if (fields.name !== (device.name || '')) {
-    updates.name = fields.name || undefined
+    updates.name = fields.name || null
   }
   if (fields.location !== (device.location || '')) {
-    updates.location = fields.location || undefined
+    updates.location = fields.location || null
   }
   if (
     permissions.canEditRegistrar &&

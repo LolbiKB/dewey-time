@@ -15,6 +15,7 @@ import { mapSyncStatusCache } from '@/lib/sync-status-cache'
 import { UserService, UserOperationLockedError } from '@/services/user-service'
 import { DeviceService } from '@/services/device-service'
 import { supabase } from '@/lib/supabase'
+import type { DeviceUpdatePayload } from '@/lib/device-updates'
 
 // =====================================================
 // USER SYNC MUTATIONS
@@ -517,7 +518,7 @@ export function useUpdateDevice() {
       updates,
     }: {
       deviceSn: string
-      updates: Record<string, unknown>
+      updates: DeviceUpdatePayload
     }) => {
       const { data, error } = await supabase
         .from('devices')
