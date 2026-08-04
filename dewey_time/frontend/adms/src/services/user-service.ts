@@ -331,6 +331,28 @@ export class UserService {
     return { message: result.message, commandsQueued: result.commandsQueued }
   }
 
+  /**
+   * Dismiss a user's attendance flag.
+   *
+   * The flag had no clearing path at all until the bridge grew this endpoint —
+   * it was raised by ordinary events (a double tap, two terminals with skewed
+   * clocks) and never came down, so the flagged set only ever grew.
+   *
+   * `cleared: false` is a success, not a failure: it means the flag was already
+   * down, so the call was a no-op. The bridge writes nothing in that case.
+   */
+  static async clearAttendanceFlag(
+    userId: string
+  ): Promise<{ cleared: boolean; clearedBy?: string }> {
+    const result = await this.fetchApi<{
+      success: boolean
+      cleared: boolean
+      clearedAt?: string
+      clearedBy?: string
+    }>(`/admin/users/${userId}/clear-attendance-flag`, { method: 'POST' })
+    return { cleared: result.cleared, clearedBy: result.clearedBy }
+  }
+
   static async enrichUserDevicesForDevice(
     userId: string,
     deviceSn: string,
