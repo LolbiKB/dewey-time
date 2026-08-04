@@ -34,6 +34,9 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
   const [refreshing, setRefreshing] = useState(false)
   const [deviceInfo, setDeviceInfo] = useState<DeviceEntry | null>(null)
   const [commandResult, setCommandResult] = useState<InfoCommandResult | null>(null)
+  const [options, setOptions] = useState<
+    Array<{ key: string; value: string | null; reported_at: string }>
+  >([])
 
   const fetchDeviceInfo = useCallback(async () => {
     if (!deviceSn) return
@@ -52,6 +55,16 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
     }
   }, [deviceSn])
 
+  const fetchOptions = useCallback(async () => {
+    if (!deviceSn) return
+    try {
+      setOptions(await DeviceService.getDeviceOptions(deviceSn))
+    } catch {
+      // Non-fatal: the rest of the dialog still renders.
+      setOptions([])
+    }
+  }, [deviceSn])
+
   const requestInfo = async () => {
     if (!deviceSn) return
     
@@ -59,15 +72,18 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
     setCommandResult(null)
     
     try {
-      const result = await DeviceService.queueDeviceCommand(deviceSn, 'info', 'INFO')
+      // Bridge endpoint, not a direct command_queue INSERT — this was the
+      // dashboard's last write to that table.
+      const result = await DeviceService.refreshDeviceOptions(deviceSn)
       
       setCommandResult({
-        id: result.id,
+        id: result.commandId,
         status: 'pending',
         created_at: new Date().toISOString(),
       })
       
       await fetchDeviceInfo()
+      await fetchOptions()
     } catch (err) {
       console.error('Error requesting info:', err)
     } finally {
@@ -91,15 +107,17 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
       
       if (data.status === 'success') {
         await fetchDeviceInfo()
+        await fetchOptions()
       }
     }
-  }, [commandResult, fetchDeviceInfo])
+  }, [commandResult, fetchDeviceInfo, fetchOptions])
 
   useEffect(() => {
     if (open && deviceSn) {
       fetchDeviceInfo()
+      fetchOptions()
     }
-  }, [open, deviceSn, fetchDeviceInfo])
+  }, [open, deviceSn, fetchDeviceInfo, fetchOptions])
 
   useEffect(() => {
     if (!open || !commandResult || commandResult.status === 'success' || commandResult.status === 'failed') {
@@ -251,6 +269,36 @@ export function DeviceInfoDialog({ deviceSn, open, onOpenChange }: DeviceInfoDia
             Device not found
           </div>
         )}
+
+        {/*
+          What the terminal reports about ITSELF. The ZKTeco spec does not
+          enumerate these keys (§12.4.1 calls them "specific customer
+          configuration information"), so this list is the only way to learn
+          what a given model actually exposes.
+        */}
+        <div className="grid gap-2">
+          <h4 className="text-sm font-medium">Reported configuration</h4>
+          {options.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing reported yet — press Request Info to ask the device.
+            </p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto rounded-md border">
+              <table className="w-full text-sm">
+                <tbody>
+                  {options.map((o) => (
+                    <tr key={o.key} className="border-b last:border-0">
+                      <td className="px-3 py-1.5 font-mono text-xs align-top whitespace-nowrap">
+                        {o.key}
+                      </td>
+                      <td className="px-3 py-1.5 break-all">{o.value ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
         <DialogFooter variant="bar">
           <Button variant="outline" onClick={() => onOpenChange(false)}>

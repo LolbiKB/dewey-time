@@ -119,3 +119,55 @@ describe('DeviceService.rebootDevice', () => {
     await expect(DeviceService.rebootDevice('SN-1')).rejects.toThrow('Super Admin required')
   })
 })
+
+/**
+ * Option discovery goes through the bridge, not command_queue.
+ *
+ * Repointing "Request info" at POST /admin/devices/:sn/options/refresh removes
+ * the dashboard's LAST direct INSERT into command_queue — after this,
+ * `authenticated` needs no write access to that table at all.
+ */
+describe('DeviceService option discovery', () => {
+  it('requests a refresh through the bridge endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonOk({ success: true, commandId: 77 }))
+
+    const result = await DeviceService.refreshDeviceOptions('PYA8254100003')
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/admin/devices/PYA8254100003/options/refresh')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(result.commandId).toBe(77)
+  })
+
+  it('percent-encodes the serial on refresh', async () => {
+    fetchMock.mockResolvedValue(jsonOk({ success: true, commandId: 1 }))
+    await DeviceService.refreshDeviceOptions('SN/ODD')
+    expect(fetchMock.mock.calls[0][0]).toContain('SN%2FODD')
+  })
+
+  it('reads observed options for one device', async () => {
+    const rows = [{ key: 'VOLUME', value: '67', reported_at: '2026-08-04T00:00:00Z' }]
+    fetchMock.mockResolvedValue(jsonOk({ success: true, data: rows }))
+
+    const out = await DeviceService.getDeviceOptions('PYA8254100003')
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/admin/device-options?sn=PYA8254100003')
+    expect(out).toEqual(rows)
+  })
+
+  it('returns an empty list rather than undefined when nothing is known', async () => {
+    fetchMock.mockResolvedValue(jsonOk({ success: true, data: [] }))
+    expect(await DeviceService.getDeviceOptions('SN-1')).toEqual([])
+  })
+
+  it('surfaces a bridge error on refresh', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Device is pending, not approved' }),
+    })
+    await expect(DeviceService.refreshDeviceOptions('SN-1')).rejects.toThrow(
+      'Device is pending, not approved'
+    )
+  })
+})

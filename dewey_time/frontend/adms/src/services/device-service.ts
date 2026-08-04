@@ -133,68 +133,15 @@ export class DeviceService {
     }
   }
 
-  /**
-   * Queue a command for a device (REBOOT, INFO, CHECK, LOG, SET OPTION, etc.)
-   * The device picks it up on its next getrequest poll.
-   */
-  static async queueDeviceCommand(
-    deviceSn: string,
-    commandType: string,
-    commandBody: string
-  ): Promise<{ id: number; command: string }> {
-    // Insert first, then stamp the prefix with the REAL row id — the same
-    // two-step the bridge's queueCommandWithDbId uses.
-    //
-    // This used to derive the id as max(id)+1 for the device, which is wrong the
-    // moment anything else queues concurrently (another admin, or the bridge's
-    // own sync/reconciliation): two rows get the same C:{n}: prefix, the device
-    // ACKs one id, and the other command can never be matched to its ACK — it
-    // stays undeliverable forever. The prefix must be the row's own primary key.
-    const { data: inserted, error: insertError } = await supabase
-      .from('command_queue')
-      .insert({
-        device_sn: deviceSn,
-        command: commandBody,
-        command_type: commandType,
-        status: 'pending',
-        // Keep it out of the delivery window until the prefix is stamped; the
-        // bridge honours next_retry_at and repairs any missed stamp anyway.
-        next_retry_at: new Date(Date.now() + 10_000).toISOString(),
-      })
-      .select('id')
-      .single()
-
-    if (insertError || !inserted) {
-      throw new Error(`Failed to queue command: ${insertError?.message ?? 'no row returned'}`)
-    }
-
-    // Best-effort stamp. `authenticated` no longer holds UPDATE on
-    // command_queue — that grant was what let an admin replay a Super Admin's
-    // REBOOT at any terminal, so it was revoked outright rather than policed.
-    //
-    // Failing here is NOT a failure of the operation: the row is already
-    // inserted, and the bridge repairs a missing C:{id}: prefix on its next
-    // maintenance pass (command-maintenance.ts:114-127). Throwing would tell
-    // the user their request failed when the command is queued and will be
-    // delivered.
-    const command = `C:${inserted.id}:${commandBody}`
-    const { data, error } = await supabase
-      .from('command_queue')
-      .update({ command, next_retry_at: new Date().toISOString() })
-      .eq('id', inserted.id)
-      .select('id, command')
-      .single()
-
-    if (error) {
-      console.warn(
-        `[device-service] could not stamp command ${inserted.id}; the bridge will repair the prefix`,
-        error.message
-      )
-      return { id: inserted.id, command: commandBody }
-    }
-
-    return data!
-  }
+  // queueDeviceCommand was removed here. It INSERTed into command_queue under
+  // the user's JWT and then UPDATEd the row to stamp the C:{id}: prefix. Its
+  // last caller was the "Request Info" button, now served by
+  // refreshDeviceOptions() against the Super-Admin-gated bridge endpoint.
+  //
+  // With it gone the dashboard makes NO writes to command_queue except
+  // clearCommand's DELETE — so `authenticated` needs neither INSERT nor UPDATE
+  // on that table. getrequest ships command text to terminals verbatim, so the
+  // less that table can be written from a browser, the better.
 
   // Command filters interface
   static async getDeviceCommands(
@@ -353,6 +300,39 @@ export class DeviceService {
       status: presence.status,
       last_seen_minutes: presence.lastSeenMinutes,
     } as DeviceEntry
+  }
+
+  /** What a terminal last reported about its own configuration. */
+  static async getDeviceOptions(
+    serialNumber: string
+  ): Promise<Array<{ key: string; value: string | null; reported_at: string }>> {
+    const json = await this.fetchApi<{
+      success: boolean
+      data: Array<{ key: string; value: string | null; reported_at: string }>
+    }>(
+      `/admin/device-options?sn=${encodeURIComponent(serialNumber)}`,
+      {},
+      'Failed to load device options'
+    )
+    return json.data ?? []
+  }
+
+  /**
+   * Super Admin: ask a terminal what configuration it exposes (INFO, §12.4.3).
+   *
+   * The reply is persisted into device_option_observed by the bridge. This is
+   * the bootstrap channel — §5's PushOptions= needs an explicit key list, which
+   * cannot exist until INFO has reported one.
+   */
+  static async refreshDeviceOptions(
+    serialNumber: string
+  ): Promise<{ success: boolean; commandId: number }> {
+    return this.fetchApi<{ success: boolean; commandId: number }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/options/refresh`,
+      // A bodiless POST leaves Fastify's JSON parser with nothing to read.
+      { method: 'POST', body: JSON.stringify({}) },
+      'Failed to request device options'
+    )
   }
 
   /**
