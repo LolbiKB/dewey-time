@@ -27,18 +27,13 @@ import { ConfirmationDialog } from '@/components/ui/base-modal'
 import { useAuth } from '@/contexts/auth-context'
 import { notifyError, notifySuccess } from '@/lib/toast'
 import { signalAlert, signalText } from '@/lib/signal'
-import { buildDeviceUpdates } from '@/lib/device-updates'
+import { buildDeviceUpdates, type DeviceUpdatePayload } from '@/lib/device-updates'
 
 interface EditDeviceDialogProps {
   device: DeviceEntry | null
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSave: (serialNumber: string, updates: {
-    name?: string
-    location?: string
-    is_registrar?: boolean
-    registrar_capabilities?: string[]
-  }) => Promise<void>
+  onSave: (serialNumber: string, updates: DeviceUpdatePayload) => Promise<void>
   isSaving?: boolean
 }
 

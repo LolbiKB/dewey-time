@@ -45,9 +45,20 @@ describe('buildDeviceUpdates', () => {
     expect(updates).toEqual({ name: 'Side Door' })
   })
 
-  test('sends undefined for a cleared name rather than an empty string', () => {
+  // Was: asserted `name: undefined`, which cemented a bug. JSON.stringify drops
+  // undefined keys, so the PATCH body became {} — PostgREST updated nothing,
+  // `.select().single()` returned no row, and the user got a "Failed to update
+  // device" toast with the name unchanged. Clearing a name must actually clear
+  // it, so send null (SQL NULL) rather than a key that vanishes in transit.
+  test('sends null for a cleared name, so the PATCH body is not empty', () => {
     const updates = buildDeviceUpdates(DEVICE, { ...UNCHANGED, name: '' }, { canEditRegistrar: true })
-    expect(updates).toHaveProperty('name', undefined)
+    expect(updates).toEqual({ name: null })
+    expect(JSON.stringify(updates)).toBe('{"name":null}')
+  })
+
+  test('sends null for a cleared location too', () => {
+    const updates = buildDeviceUpdates(DEVICE, { ...UNCHANGED, location: '' }, { canEditRegistrar: true })
+    expect(updates).toEqual({ location: null })
   })
 
   test('sends a changed location', () => {

@@ -17,6 +17,7 @@ import { DeviceSecuritySetupHint } from '@/components/devices/device-security-ba
 import { DeviceDetailDialog } from '@/components/devices/device-detail-dialog'
 import type { DeviceDetailTab } from '@/components/devices/device-detail-tabs'
 import type { DeviceFilters, DeviceEntry } from '@/services/device-service'
+import type { DeviceUpdatePayload } from '@/lib/device-updates'
 
 import { Page } from '@lolbikb/dewey-ui'
 
@@ -52,12 +53,7 @@ export function Devices() {
   // Handle update device
   const handleUpdateDevice = async (
     serialNumber: string,
-    updates: {
-      name?: string
-      location?: string
-      is_registrar?: boolean
-      registrar_capabilities?: string[]
-    }
+    updates: DeviceUpdatePayload
   ) => {
     await updateDeviceMutation.mutateAsync({ deviceSn: serialNumber, updates })
   }
