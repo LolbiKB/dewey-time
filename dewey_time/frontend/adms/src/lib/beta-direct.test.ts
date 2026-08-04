@@ -114,3 +114,73 @@ describe('betaEmployeeRead', () => {
     ).rejects.toThrow('direct down')
   })
 })
+
+/**
+ * Flag semantics.
+ *
+ * Before 2026-08-04 this read `localStorage.getItem('adms_beta_direct') !== '0'`
+ * — default ON in embedded mode — while the file's own docstring described it
+ * as opt-IN via '1'. The code and the documentation disagreed, and the code
+ * won: an unproven read path was in front of every embedded admin. One of them
+ * had Frappe permissions that returned no employees, and saw every registered
+ * colleague badged "Compromised User Detected".
+ *
+ * It is opt-IN now, and a storage failure resolves to the TRUSTED path rather
+ * than the experimental one. There is no cost to defaulting off: betaEmployeeRead
+ * awaits BOTH paths (Promise.allSettled), so the direct read never saved a
+ * round-trip — and post-fix its result is discarded unless it matches the
+ * bridge anyway.
+ */
+describe('isBetaDirectReads', () => {
+  const store: Record<string, string> = {}
+
+  beforeEach(() => {
+    for (const k of Object.keys(store)) delete store[k]
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k in store ? store[k] : null),
+      setItem: (k: string, v: string) => {
+        store[k] = v
+      },
+      removeItem: (k: string) => {
+        delete store[k]
+      },
+    })
+  })
+
+  it('is OFF when the flag is absent — the trusted path is the default', async () => {
+    const { isBetaDirectReads } = await import('./beta-direct')
+    expect(isBetaDirectReads()).toBe(false)
+  })
+
+  it("is ON only for the documented opt-in value '1'", async () => {
+    const { isBetaDirectReads } = await import('./beta-direct')
+    store.adms_beta_direct = '1'
+    expect(isBetaDirectReads()).toBe(true)
+  })
+
+  it("stays OFF for '0', the previous kill-switch value", async () => {
+    const { isBetaDirectReads } = await import('./beta-direct')
+    store.adms_beta_direct = '0'
+    expect(isBetaDirectReads()).toBe(false)
+  })
+
+  it('stays OFF for any other value rather than treating it as truthy', async () => {
+    const { isBetaDirectReads } = await import('./beta-direct')
+    for (const v of ['true', 'yes', 'on', '2', '']) {
+      store.adms_beta_direct = v
+      expect(isBetaDirectReads()).toBe(false)
+    }
+  })
+
+  it('falls back to the TRUSTED path when localStorage throws', async () => {
+    // Previously `catch { return true }` — a storage failure silently enrolled
+    // the user in the experiment.
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('SecurityError: storage disabled')
+      },
+    })
+    const { isBetaDirectReads } = await import('./beta-direct')
+    expect(isBetaDirectReads()).toBe(false)
+  })
+})
