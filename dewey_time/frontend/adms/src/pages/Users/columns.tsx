@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SyncStatusSummary } from '@/components/users/sync-status-summary'
+import { describeFlagReason } from '@/components/users/attendance-flag-notice'
 import { UserCell } from '@/components/ui/table-components'
 import type { UserEntry } from '@/services/user-service'
 import { signalBadge, signalText } from '@/lib/signal'
@@ -95,8 +96,16 @@ export const columns: ColumnDef<UserEntry>[] = [
 
       if (!isFlagged) return null
 
+      // Name the rule that fired rather than "suspicious attendance detected",
+      // which told an admin nothing they could act on. The reason is only
+      // trustworthy for flags raised after 2026-08-04 — describeFlagReason says
+      // so for the older ones instead of inventing a cause.
       return (
-        <Badge variant="secondary" className={`gap-1 ${signalBadge.danger}`} title="Suspicious attendance detected">
+        <Badge
+          variant="secondary"
+          className={`gap-1 ${signalBadge.danger}`}
+          title={`Attendance flagged. ${describeFlagReason(user.attendance_flag_reason)}`}
+        >
           <AlertTriangle className="h-3 w-3" />
         </Badge>
       )

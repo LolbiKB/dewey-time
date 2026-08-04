@@ -76,6 +76,7 @@ import {
   userKeys,
 } from '@/hooks/use-users'
 import { UserService, type UserEntry, type SyncStatusEntry } from '@/services/user-service'
+import { AttendanceFlagNotice } from '@/components/users/attendance-flag-notice'
 import {
   deriveEnrollPhase,
   shouldShowSlowHint,
@@ -945,6 +946,7 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
   const [enrollCancelConfirmOpen, setEnrollCancelConfirmOpen] = useState(false)
   const cancelEnrollment = useCancelEnrollment()
   const [copiedPin, setCopiedPin] = useState(false)
+  const [dismissingFlag, setDismissingFlag] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; bioId?: string; type?: 'fingerprint' | 'face'; fingerId?: number }>({ open: false })
   const lastEnrollmentPhaseRef = useRef<string | null>(null)
   const enrollPhaseRef = useRef<EnrollPhase>('idle')
@@ -1128,6 +1130,25 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
     }
   }
 
+  // Dismiss the attendance flag. Deliberately a plain async handler rather than
+  // a mutation: there is no cache entry for the flag itself — it rides the users
+  // list — so the only follow-up needed is a list refresh.
+  const handleDismissAttendanceFlag = async () => {
+    if (!user?.id) return
+    setDismissingFlag(true)
+    try {
+      const result = await UserService.clearAttendanceFlag(user.id)
+      // cleared: false means it was already down. Saying "dismissed" there would
+      // claim an effect that did not happen.
+      notifySuccess(result.cleared ? 'Attendance flag dismissed' : 'No attendance flag to dismiss')
+      onRefreshList?.()
+    } catch (err: unknown) {
+      notifyError('Could not dismiss flag', err instanceof Error ? err.message : undefined)
+    } finally {
+      setDismissingFlag(false)
+    }
+  }
+
   const handleDeleteBiometric = (bioId: string, type: 'fingerprint' | 'face', fingerId?: number) => {
     setDeleteConfirm({ open: true, bioId, type, fingerId })
   }
@@ -1199,6 +1220,13 @@ export function UserDetailModal({ user, open, onOpenChange, onRefreshList }: Use
               </div>
             </div>
           </DialogHeader>
+
+          <AttendanceFlagNotice
+            flaggedAt={user.attendance_flagged_at}
+            reason={user.attendance_flag_reason}
+            onDismiss={handleDismissAttendanceFlag}
+            dismissing={dismissingFlag}
+          />
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
             <TabsList className="grid w-full grid-cols-3">
