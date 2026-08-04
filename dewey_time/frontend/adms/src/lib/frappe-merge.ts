@@ -224,8 +224,23 @@ export function mergeFrappeEmployees(input: MergeInput): MergeResult {
       }
     })
 
+  // "Frappe returned nothing" is NOT the same fact as "every employee was
+  // deleted". On this path the Employee fetch uses the LOGGED-IN USER's Frappe
+  // session (frappe-direct.ts, credentials: 'include'), so a User Permission or
+  // a missing role silently yields zero rows — and every registered user gets
+  // badged "Compromised User Detected". Observed in the field 2026-08-04: one
+  // admin saw 49 rows, all compromised, while the bridge — using its own API
+  // key — saw 504 employees with correct statuses.
+  //
+  // Suppress the derivation when the fetch returned no employees at all while
+  // bridge users reference Frappe ids. Genuine deletions are still detected
+  // whenever Frappe answers with ANY data.
+  const frappeReturnedNothing =
+    frappeEmployees.length === 0 &&
+    (bridgeUsers || []).some((u: any) => u.frappe_employee_id)
+
   // Derived compromised: bridge users whose Frappe employee no longer exists.
-  const compromisedRows = (bridgeUsers || [])
+  const compromisedRows = (frappeReturnedNothing ? [] : bridgeUsers || [])
     .filter((u: any) => missingInFrappeIds.has(u.id))
     .map((bridgeUser: any) => {
       const { fingerprintCount, faceCount } = biometricCounts(bridgeUser)

@@ -160,6 +160,18 @@ export interface UsersResponse {
     hasNext: boolean
     hasPrev: boolean
   }
+  /**
+   * Present when the list shown is NOT what this session's own reads produced —
+   * currently when the direct-read path disagreed with the bridge and the
+   * bridge's (trusted) result was served instead. The UI MUST surface this:
+   * silently substituting data is how a permissions problem masquerades as
+   * "all your employees were deleted".
+   */
+  degraded?: {
+    reason: 'direct-read-mismatch'
+    diffCount: number
+    message: string
+  }
 }
 
 export interface SyncStatusResponse {

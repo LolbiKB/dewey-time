@@ -71,6 +71,24 @@ export function Users() {
 
   return (
     <Page>
+      {/* The direct-read path disagreed with the server, so the server's list is
+          shown instead. Say so: the failure this replaces was every registered
+          employee silently appearing as "Compromised User Detected" because the
+          signed-in account's Frappe permissions returned no employees. */}
+      {data?.degraded && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Showing the server&apos;s employee list</AlertTitle>
+          <AlertDescription>
+            {data.degraded.message}
+            <span className="ml-1 opacity-70">
+              ({data.degraded.diffCount} difference
+              {data.degraded.diffCount === 1 ? '' : 's'} detected)
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Rows are still on screen (kept from the last good fetch) but the latest
           fetch failed — say so rather than showing silently stale data. */}
       {isError && (

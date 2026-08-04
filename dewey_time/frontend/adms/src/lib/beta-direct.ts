@@ -45,7 +45,7 @@ const SHADOW_FIELDS = [
 
 const rowKey = (r: any) => r?.frappe_employee_id || r?.id || r?.pin || JSON.stringify(r)
 
-function logShadowDiff(direct: UsersResponse, bridge: UsersResponse, filters: UserFilters) {
+export function shadowDiffs(direct: UsersResponse, bridge: UsersResponse): string[] {
   const d = (direct.data as any[]) || []
   const b = (bridge.data as any[]) || []
   const diffs: string[] = []
@@ -72,20 +72,28 @@ function logShadowDiff(direct: UsersResponse, bridge: UsersResponse, filters: Us
     if (!dKeys.has(rowKey(br))) diffs.push(`row only in bridge: ${rowKey(br)}`)
   }
 
-  // Quiet on match (proven path); only surface discrepancies.
-  if (diffs.length > 0) {
-    const page = filters.page ?? 1
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[beta-direct] ✗ ${diffs.length} discrepancy(ies) — page ${page}:\n` + diffs.slice(0, 40).join('\n')
-    )
-  }
+  return diffs
 }
 
 /**
- * Run the direct path with the bridge path in shadow. Returns the direct
- * result; falls back to bridge if the direct path throws (so the beta can
- * never harm the user — worst case it's the current behavior).
+ * Run the direct path with the bridge path in shadow.
+ *
+ * The bridge is the TRUSTED path. The direct result is served only when it
+ * AGREES with the bridge — any discrepancy means the direct path is wrong about
+ * something, and we cannot know which fields are safe, so the whole result is
+ * discarded in favour of the bridge's.
+ *
+ * This previously logged discrepancies and returned the direct result anyway.
+ * On 2026-08-04 that served a real admin a list of 49 rows with every
+ * registered employee badged "Compromised User Detected", while the bridge — in
+ * the very same call — had 504 employees with correct statuses. The direct path
+ * reads Employee with the LOGGED-IN USER's Frappe session
+ * (frappe-direct.ts, credentials: 'include'), and that user's permissions
+ * returned nothing. The comparator detected all 46 discrepancies and served the
+ * broken data regardless.
+ *
+ * A comparator that notices the new path disagreeing with the trusted one and
+ * then returns the new path's answer is not a safety net.
  */
 export async function betaEmployeeRead(
   filters: UserFilters,
@@ -103,11 +111,32 @@ export async function betaEmployeeRead(
     throw directRes.reason
   }
 
-  if (bridgeRes.status === 'fulfilled') {
-    logShadowDiff(directRes.value, bridgeRes.value, filters)
-  } else {
+  if (bridgeRes.status !== 'fulfilled') {
+    // No baseline to compare against. Serve direct — this is the only path on
+    // which an unverified direct result reaches the user.
     // eslint-disable-next-line no-console
     console.warn('[beta-direct] bridge read failed (side-effects skipped this cycle):', bridgeRes.reason)
+    return directRes.value
   }
-  return directRes.value
+
+  const diffs = shadowDiffs(directRes.value, bridgeRes.value)
+  if (diffs.length === 0) return directRes.value
+
+  const page = filters.page ?? 1
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[beta-direct] ✗ ${diffs.length} discrepancy(ies) — page ${page}: serving the BRIDGE result\n` +
+      diffs.slice(0, 40).join('\n')
+  )
+
+  return {
+    ...bridgeRes.value,
+    degraded: {
+      reason: 'direct-read-mismatch',
+      diffCount: diffs.length,
+      message:
+        'Your Frappe account returned different employee data than the server, so the server result is being shown. ' +
+        'Ask an administrator to check your Frappe roles and User Permissions for the Employee doctype.',
+    },
+  }
 }
