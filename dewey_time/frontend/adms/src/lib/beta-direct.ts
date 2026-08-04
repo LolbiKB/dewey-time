@@ -2,9 +2,16 @@
  * Tier-2 beta orchestration: opt-in, reversible, self-checking.
  *
  * Flag: localStorage `adms_beta_direct` === '1' (and only in embedded/frappe
- * mode). Flip it in the browser console — no rebuild, instant rollback:
+ * mode). OPT-IN — anything else, including absent or unreadable, means
+ * bridge-only. Flip it in the browser console — no rebuild, instant rollback:
  *     localStorage.adms_beta_direct = '1'   // on
  *     delete localStorage.adms_beta_direct  // off
+ *
+ * It was briefly default-on. That is what put an unproven read path in front of
+ * a real admin on 2026-08-04 — see isBetaDirectReads below. Do not promote it
+ * again on the strength of a clean shadow-compare from one account: the direct
+ * path reads Employee with the SIGNED-IN USER's Frappe session, so parity
+ * proven for you proves nothing for a colleague with different permissions.
  *
  * When on, the employee list runs BOTH the new direct path and the bridge
  * path, returns the direct result (so we're truly exercising it), and the
@@ -20,11 +27,25 @@ import type { UserFilters, UsersResponse } from '@/services/user-service'
 export function isBetaDirectReads(): boolean {
   if (!isFrappeMode) return false
   try {
-    // Promoted to the default in embedded mode after the shadow-compare proved
-    // parity. `adms_beta_direct === '0'` is the kill-switch back to bridge-only.
-    return localStorage.getItem('adms_beta_direct') !== '0'
+    // Opt-IN, exactly as the docstring above says.
+    //
+    // This previously read `!== '0'` — default ON in embedded mode — while the
+    // docstring described it as opt-in via '1'. The code and the documentation
+    // disagreed and the code won, so an unproven read path was in front of
+    // every embedded admin. On 2026-08-04 one of them had Frappe permissions
+    // that returned no employees and saw every registered colleague badged
+    // "Compromised User Detected".
+    //
+    // Defaulting off costs nothing: betaEmployeeRead awaits BOTH paths
+    // (Promise.allSettled), so the direct read never saved a round-trip, and
+    // its result is now discarded unless it matches the bridge anyway. The
+    // parity claim that justified promoting it was also never true for every
+    // user — the direct path reads Employee with the SIGNED-IN USER's Frappe
+    // session, so it is only ever as correct as that account's permissions.
+    return localStorage.getItem('adms_beta_direct') === '1'
   } catch {
-    return true
+    // A storage failure must not silently enrol someone in the experiment.
+    return false
   }
 }
 
