@@ -27,6 +27,13 @@ export interface DeviceFilters extends BaseFilters {
 }
 
 // Device Entry (matches database schema)
+
+/**
+ * What KIND of thing an option key is — classified by the BRIDGE, the
+ * enforcement point for write eligibility. Never re-derived here.
+ */
+export type KeyKind = 'setting' | 'identity' | 'counter'
+
 /** One option a terminal reported about itself in an INFO reply. */
 export interface DeviceOptionEntry {
   device_sn: string
@@ -40,6 +47,8 @@ export interface DeviceOptionEntry {
    */
   redacted: boolean
   reported_at: string
+  /** Classified by the BRIDGE — the enforcement point. Never re-derived here. */
+  kind: KeyKind
 }
 
 export interface DeviceEntry {
