@@ -680,7 +680,7 @@ export function DeviceDetailDialog({
               </div>
 
               {/* Registrar Capabilities */}
-              {device?.registrar_capabilities?.length > 0 && (
+              {device?.registrar_capabilities?.length ? (
                 <div>
                   <div className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wide">Registrar Capabilities</div>
                   <div className="flex gap-2 flex-wrap">
@@ -691,7 +691,7 @@ export function DeviceDetailDialog({
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Provisioning (MVP: approved SN only) */}
               <div className="rounded-xl border border-border bg-card p-4 space-y-3">

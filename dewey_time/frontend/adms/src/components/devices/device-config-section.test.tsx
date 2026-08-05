@@ -1,102 +1,91 @@
 import { test, expect, describe } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { DeviceConfigPanel, formatReportedAt } from './device-config-section'
+import { DeviceFactStrip, formatReportedAt } from './device-config-section'
 import type { DeviceOptionEntry } from '@/services/device-service'
 
 /**
- * The terminal-reported configuration panel.
+ * The per-device configuration summary.
  *
- * Presentational only — the caller owns the query and the mutations, which is
- * what keeps this renderable without a QueryClientProvider and therefore
- * testable under this package's renderToStaticMarkup-only harness.
+ * This card used to render the terminal's whole reported list — 78 rows inside
+ * a modal tab. That is reference data in a container built for a summary, and
+ * the comparison it was really serving (device vs device) could not be made
+ * there at all. The full list moved to the fleet page; what stays is the four
+ * facts that answer "what am I looking at".
  *
- * The load-bearing rule: a REDACTED option must never render like an unset one.
- * The bridge stores the key of every option a terminal reports but the value
- * only for allowlisted keys, because anything written to device_option_observed
- * is also in every later backup. Showing a withheld credential as "not set"
- * would tell an admin the device is unconfigured when it is not.
+ * The load-bearing rule survives the move: a REDACTED option must never render
+ * like an unset one. The bridge stores the key of every option a terminal
+ * reports but the value only for allowlisted keys, because anything written is
+ * also in every later backup. Showing a withheld credential as blank would tell
+ * an admin the device is unconfigured when it is not.
  */
-const opt = (over: Partial<DeviceOptionEntry> = {}): DeviceOptionEntry => ({
+const opt = (key: string, value: string | null, redacted = false): DeviceOptionEntry => ({
   device_sn: 'PYA8254100003',
-  key: '~ZKFPVersion',
-  value: '10',
-  redacted: false,
-  reported_at: '2026-08-05T02:00:00.000Z',
-  ...over,
+  key,
+  value,
+  redacted,
+  reported_at: '2026-08-05T08:05:03.000Z',
 })
 
-describe('DeviceConfigPanel', () => {
-  test('says nothing has been reported yet when the list is empty', () => {
-    const html = renderToStaticMarkup(<DeviceConfigPanel options={[]} />)
-    expect(html).toMatch(/not reported|no configuration|never/i)
-  })
+const REAL = [
+  opt('~DeviceName', 'SenseFace 4A'),
+  opt('FWVersion', 'ZAM70-NF43VA-Ver3.3.13'),
+  opt('IPAddress', '192.168.1.218'),
+  opt('PushVersion', 'Ver 3.1.2S-20250616'),
+]
 
-  test('renders a stored key and its value', () => {
-    const html = renderToStaticMarkup(<DeviceConfigPanel options={[opt()]} />)
-    expect(html).toContain('~ZKFPVersion')
-    expect(html).toContain('10')
+describe('DeviceFactStrip', () => {
+  test('renders the four facts from a real dump', () => {
+    const html = renderToStaticMarkup(<DeviceFactStrip options={REAL} />)
+    expect(html).toContain('SenseFace 4A')
+    expect(html).toContain('ZAM70-NF43VA-Ver3.3.13')
+    expect(html).toContain('192.168.1.218')
+    expect(html).toContain('Ver 3.1.2S-20250616')
   })
 
   test('marks a withheld value as withheld, NOT as empty or unset', () => {
     const html = renderToStaticMarkup(
-      <DeviceConfigPanel options={[opt({ key: 'ComKey', value: null, redacted: true })]} />
+      <DeviceFactStrip options={[opt('IPAddress', null, true)]} />
     )
-    expect(html).toContain('ComKey')
-    expect(html).toMatch(/not stored|withheld/i)
-    // The failure this guards: presenting a withheld credential as an option
-    // the device has not configured.
-    expect(html).not.toMatch(/not set|unset|empty/i)
+    expect(html).toContain('Not stored')
+    for (const wrong of ['not set', 'unset', 'empty']) {
+      expect(html.toLowerCase()).not.toContain(wrong)
+    }
   })
 
-  test('explains WHY a value was withheld, so the state is actionable', () => {
-    const html = renderToStaticMarkup(
-      <DeviceConfigPanel options={[opt({ key: 'ComKey', value: null, redacted: true })]} />
-    )
-    expect(html).toMatch(/allowlist|not yet reviewed|review/i)
+  test('says a key was not reported rather than rendering a blank row', () => {
+    const html = renderToStaticMarkup(<DeviceFactStrip options={[]} />)
+    expect(html).toMatch(/not reported/i)
   })
 
-  test('never renders a null value as the string "null"', () => {
-    const html = renderToStaticMarkup(
-      <DeviceConfigPanel options={[opt({ key: 'ComKey', value: null, redacted: true })]} />
-    )
-    expect(html).not.toMatch(/>null</)
+  test('always lists every fact label, so an omission never reads as absent', () => {
+    const html = renderToStaticMarkup(<DeviceFactStrip options={[]} />)
+    for (const label of ['Model', 'Firmware', 'Network', 'Protocol']) {
+      expect(html).toContain(label)
+    }
   })
 
-  test('shows both stored and withheld options together', () => {
-    const html = renderToStaticMarkup(
-      <DeviceConfigPanel
-        options={[opt(), opt({ key: 'ComKey', value: null, redacted: true })]}
-      />
-    )
-    expect(html).toContain('~ZKFPVersion')
-    expect(html).toContain('ComKey')
+  test('is case-insensitive about firmware key casing', () => {
+    // The bridge allowlist matches case-insensitively for the same reason:
+    // firmware casing is not guaranteed across models.
+    const html = renderToStaticMarkup(<DeviceFactStrip options={[opt('fwversion', '3.3.13')]} />)
+    expect(html).toContain('3.3.13')
   })
 
-  test('counts how many values are withheld, so the scale is visible', () => {
-    const html = renderToStaticMarkup(
-      <DeviceConfigPanel
-        options={[
-          opt(),
-          opt({ key: 'A', value: null, redacted: true }),
-          opt({ key: 'B', value: null, redacted: true }),
-        ]}
-      />
-    )
-    expect(html).toMatch(/2/)
+  test('treats an empty string as not reported, not as a value', () => {
+    // Ten keys in the real dump came back with no value at all.
+    const html = renderToStaticMarkup(<DeviceFactStrip options={[opt('IPAddress', '')]} />)
+    expect(html).toMatch(/not reported/i)
   })
 })
 
 describe('formatReportedAt', () => {
-  test('says never for a missing timestamp rather than printing a bad date', () => {
-    expect(formatReportedAt(undefined)).toMatch(/never/i)
-    expect(formatReportedAt(null)).toMatch(/never/i)
+  test('never invents a date it does not have', () => {
+    expect(formatReportedAt(null)).toBe('Never reported')
+    expect(formatReportedAt(undefined)).toBe('Never reported')
+    expect(formatReportedAt('not-a-date')).toBe('Never reported')
   })
 
-  test('renders a real timestamp', () => {
-    expect(formatReportedAt('2026-08-05T02:00:00.000Z')).not.toMatch(/never|invalid/i)
-  })
-
-  test('does not print "Invalid Date" for junk', () => {
-    expect(formatReportedAt('not-a-date')).not.toMatch(/invalid date/i)
+  test('formats a real timestamp', () => {
+    expect(formatReportedAt('2026-08-05T08:05:03.000Z')).not.toBe('Never reported')
   })
 })
