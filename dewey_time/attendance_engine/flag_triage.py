@@ -1,0 +1,97 @@
+"""Additive triage ranking for Attendance Flag rows, computed on read.
+
+Pure arithmetic over a `flag_code` string and an `evidence` dict — no I/O, and no
+`import frappe` anywhere in this file. That is deliberate, not incidental: Global
+Constraint 4 of this plan forbids changing `severity`, either `FLAG_SEVERITY` dict, or
+any of their existing consumers (`attendance_flag.py:6-20`, `closeout.py:61-75`, pinned
+equal by `test_the_two_severity_maps_agree` in `test_closeout.py`). `triage_rank` is a
+*second*, additive dimension that the queue API computes fresh on every read and never
+persists anywhere — it exists precisely because `severity` cannot express some
+orderings HR needs: LATE_START and OFF_SHIFT_PUNCH are both `WARNING`, yet the spec
+ranks a device-outage punch above a routine late start (see
+`test_off_shift_punch_outranks_late_start_despite_equal_severity` in the test module).
+Keeping this module frappe-free means it is trivially unit-testable with zero mocking
+and cannot, even by accident, touch a doctype or the database.
+
+Table transcribed verbatim from
+docs/superpowers/specs/2026-08-05-hr-flag-management-design.md,
+"Triage ranking — additive, computed on read".
+"""
+
+from __future__ import annotations
+
+TIER_ACT = "act"
+TIER_REVIEW = "review"
+TIER_ROUTINE = "routine"
+
+# Flag codes whose rank doesn't depend on evidence at all.
+_FIXED_RANKS = {
+    "UNNOTIFIED_ABSENCE": 150,
+    "ATTENDANCE_ISSUE": 140,
+    "MISSING_IN_OR_OUT": 140,
+    "OFF_SHIFT_PUNCH": 50,
+    "DELIVERY_FAILED": 50,
+    "UNKNOWN_DEVICE_BRANCH": 50,
+    "NON_PRIMARY_SITE_PUNCH": 10,
+    "MISSING_LUNCH": 5,
+}
+
+
+def _minutes(evidence) -> int | None:
+    """Best-effort int `minutes` out of an evidence dict, else None.
+
+    None covers every way the spec's "missing or unparseable" can show up: `evidence`
+    isn't a dict at all (e.g. None, or a raw JSON string `flag_identity.parse_evidence`
+    hasn't touched yet), the "minutes" key is absent, or its value isn't numeric.
+    Every caller below treats None the same as "below the lowest threshold" — never a
+    top band — because a value we cannot read is not evidence of urgency.
+    """
+    if not isinstance(evidence, dict):
+        return None
+    value = evidence.get("minutes")
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
+def triage_rank(flag_code: str, evidence) -> int:
+    """Additive rank, computed on read. Never stored. Unknown code -> 5."""
+    if flag_code in _FIXED_RANKS:
+        return _FIXED_RANKS[flag_code]
+
+    minutes = _minutes(evidence)
+
+    if flag_code == "MISSING_TIME":
+        # Two bands total: >=120 min scales up through Act (130-139 via
+        # 130 + min(minutes // 60, 9)); everything else — 0-119 min, and a
+        # missing/unparseable `minutes` — collapses into the single Review band
+        # (60). 60 already *is* "the lowest band for this code": there is no
+        # separate below-30 band to fall to, so 29 min lands here too.
+        if minutes is not None and minutes >= 120:
+            return 130 + min(minutes // 60, 9)
+        return 60
+
+    if flag_code == "LEFT_EARLY":
+        return 70 if minutes is not None and minutes >= 60 else 25
+
+    if flag_code == "LATE_START":
+        return 65 if minutes is not None and minutes >= 60 else 20
+
+    if flag_code == "LATE_FROM_LUNCH":
+        return 55 if minutes is not None and minutes >= 30 else 15
+
+    return 5
+
+
+def tier_for_rank(rank: int) -> str:
+    """rank >= 100 -> "act"; rank >= 50 -> "review"; else "routine"."""
+    if rank >= 100:
+        return TIER_ACT
+    if rank >= 50:
+        return TIER_REVIEW
+    return TIER_ROUTINE
