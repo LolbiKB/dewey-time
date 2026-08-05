@@ -40,6 +40,7 @@ import { signalText, signalBadge, signalAlert } from '@/lib/signal'
 import { supabase } from '@/lib/supabase'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/contexts/auth-context'
+import { DeviceCapacitySection } from '@/components/devices/device-capacity-section'
 import { DeviceConfigSection } from '@/components/devices/device-config-section'
 import { DeviceService } from '@/services/device-service'
 import { notifySuccess, notifyInfo, notifyError } from '@/lib/toast'
@@ -734,6 +735,8 @@ export function DeviceDetailDialog({
                   ADMS.
                 </p>
               </div>
+
+              <DeviceCapacitySection options={optionRows} loading={deviceOptions.isLoading} />
 
               <DeviceConfigSection
                 options={optionRows}
