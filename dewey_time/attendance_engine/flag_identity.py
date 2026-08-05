@@ -77,7 +77,35 @@ def parse_evidence(evidence) -> dict:
     return {}
 
 
+def date_key(value) -> str:
+    """A date column as "YYYY-MM-DD", for keys that must compare equal.
+
+    The ONE normaliser for every date that is compared, grouped or hashed on
+    across the flag queue: `flag_queue_api` builds the outage `(branch, date)`
+    tuples and the decision code keys with it, and `flag_grouping` looks those
+    tuples up with a raw membership test (`flag_grouping.py:191`) and compares
+    the decision code keys in `_orphans`. Two implementations that drifted
+    would produce zero outage groups and mis-classified orphans with no
+    exception and no failing test, so both modules delegate here rather than
+    each keeping their own copy.
+
+    Slices rather than str()s so a datetime-typed column normalises to the same
+    key its date-typed sibling would. `None` becomes "" (never "None"): an
+    absent date must not collide with a real one under a plausible-looking key.
+    """
+    if value is None:
+        return ""
+    return str(value)[:10]
+
+
 def _format_date(attendance_date) -> str:
+    # Deliberately NOT date_key(): identity formatting strftimes date/datetime
+    # objects, which is what lets `date(2026, 8, 3)`, `datetime(2026, 8, 3)` and
+    # "2026-08-03" all produce one identity. It is a third normaliser in this
+    # chain on purpose -- do not merge it into date_key(). The one input it
+    # cannot rescue is a datetime-*shaped* string ("2026-08-03 00:00:00"), which
+    # is precisely why callers that read dates off the driver run them through
+    # date_key() before handing them to flag_identity().
     if hasattr(attendance_date, "strftime"):
         return attendance_date.strftime("%Y-%m-%d")
     return str(attendance_date)

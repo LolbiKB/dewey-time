@@ -12,7 +12,11 @@ Spec: docs/superpowers/specs/2026-08-05-hr-flag-management-design.md, sections
 
 from __future__ import annotations
 
-from dewey_time.attendance_engine.flag_identity import evidence_fingerprint, parse_evidence
+from dewey_time.attendance_engine.flag_identity import (
+    date_key,
+    evidence_fingerprint,
+    parse_evidence,
+)
 from dewey_time.attendance_engine.flag_triage import TIER_ROUTINE, tier_for_rank, triage_rank
 
 GROUP_BRANCH_NO_DEVICE_DATA = "BRANCH_NO_DEVICE_DATA"
@@ -107,10 +111,15 @@ def build_queue(
 
 def _date_str(value) -> str:
     """Frappe returns dates as datetime.date from get_all but as str from the
-    client, and both must land in the same group key and outage lookup."""
-    if value is None:
-        return ""
-    return str(value)[:10]
+    client, and both must land in the same group key and outage lookup.
+
+    Thin alias for flag_identity.date_key so this module and flag_queue_api --
+    which builds the `outage_branch_dates` tuples :191 tests membership of, and
+    the decision code keys _orphans compares -- cannot normalise differently.
+    Both failures are silent (zero groups, everything orphaned_flag_gone), so
+    there is exactly one implementation, not two identical ones.
+    """
+    return date_key(value)
 
 
 def _flag_out(flag: dict, decisions_by_identity: dict[str, dict]) -> dict:

@@ -20,7 +20,7 @@ import frappe
 from frappe.utils import getdate
 
 from dewey_time.attendance_engine.flag_grouping import build_queue
-from dewey_time.attendance_engine.flag_identity import flag_identity, parse_evidence
+from dewey_time.attendance_engine.flag_identity import date_key, flag_identity, parse_evidence
 from dewey_time.attendance_engine.flag_triage import TIER_ACT, TIER_REVIEW, TIER_ROUTINE
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 
@@ -52,19 +52,14 @@ _QUEUE_CACHE_TTL_SECONDS = 60
 def _date_key(value) -> str:
     """A date column as "YYYY-MM-DD", whatever shape the driver handed back.
 
-    Every date this module compares, groups or hashes on goes through here, because
-    three separate things have to agree on the same string or the feature fails
-    silently: flag_identity (flag_identity._format_date, which strftimes a date/datetime
-    and str()s anything else — so it must never be handed a datetime-shaped string, or
-    the identity stops matching the one flag_decision_api stores), the outage
-    (branch, date) tuples (flag_grouping.py:191 tests raw tuple membership), and
-    flag_grouping._date_str (flag_grouping.py:108-113), which slices to 10 exactly like
-    this. Slicing rather than plain str() means a datetime column normalises to the same
-    key its date-typed sibling would.
+    Thin alias for flag_identity.date_key, which flag_grouping._date_str also delegates
+    to — one implementation, because three separate things have to agree on the same
+    string or the feature fails silently: the identity handed to flag_identity() (whose
+    _format_date str()s a string as given, so a datetime-shaped one would stop matching
+    what flag_decision_api stores), the outage (branch, date) tuples (flag_grouping.py:191
+    tests raw tuple membership), and the decision code keys _orphans compares.
     """
-    if value is None:
-        return ""
-    return str(value)[:10]
+    return date_key(value)
 
 
 def _queue_cache_key(start_date: str, end_date: str, tier: str | None) -> str:

@@ -29,7 +29,12 @@ if "requests" not in sys.modules:
     sys.modules["requests"] = _requests_stub
 
 import dewey_time.hooks as hooks  # noqa: E402
-from dewey_time.attendance_engine import flag_decision_api, flag_queue_api  # noqa: E402
+from dewey_time.attendance_engine import (  # noqa: E402
+    flag_decision_api,
+    flag_grouping,
+    flag_identity,
+    flag_queue_api,
+)
 
 INVALIDATOR = "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache"
 
@@ -574,16 +579,63 @@ class TestOrphanClassificationInputs(unittest.TestCase):
         self.assertEqual(decision["attendance_date"], "2026-08-03")
 
 
-class TestHooksWiring(unittest.TestCase):
-    def test_flag_writes_invalidate_the_queue_cache(self):
-        events = hooks.doc_events["Attendance Flag"]
-        for event in ("after_insert", "on_update", "on_trash"):
-            self.assertEqual(events[event], INVALIDATOR)
+class TestSharedDateNormaliser(unittest.TestCase):
+    """The outage tuples this module builds are looked up by flag_grouping with a raw
+    membership test (flag_grouping.py:191), and the decision code keys it builds are
+    compared in flag_grouping._orphans. If the two modules ever normalise a date
+    differently the result is zero outage groups and everything classified
+    orphaned_flag_gone — no exception, no failing test. Pin them to one implementation.
+    """
 
+    SHAPES = (
+        None,
+        "",
+        date(2026, 8, 3),
+        datetime(2026, 8, 3, 14, 30),
+        "2026-08-03",
+        "2026-08-03 00:00:00",
+    )
+
+    def test_both_modules_delegate_to_the_same_normaliser(self):
+        self.assertIs(flag_queue_api.date_key, flag_identity.date_key)
+        self.assertIs(flag_grouping.date_key, flag_identity.date_key)
+
+    def test_every_date_shape_normalises_identically_in_both_modules(self):
+        for value in self.SHAPES:
+            with self.subTest(repr(value)):
+                self.assertEqual(flag_queue_api._date_key(value), flag_grouping._date_str(value))
+
+    def test_date_key_yields_one_iso_key_per_calendar_day(self):
+        for value in (date(2026, 8, 3), datetime(2026, 8, 3, 14, 30), "2026-08-03", "2026-08-03 00:00:00"):
+            with self.subTest(repr(value)):
+                self.assertEqual(flag_identity.date_key(value), "2026-08-03")
+        # Never "None": an absent date must not collide with a real one.
+        self.assertEqual(flag_identity.date_key(None), "")
+
+    def test_identity_formatting_is_left_alone(self):
+        # flag_identity._format_date is a THIRD normaliser with deliberately different
+        # behaviour (it strftimes objects). It must not be folded into date_key: the
+        # identity string is what flag_decision_api matches on, and this test is here so
+        # a later "finish the job" refactor of the two into one fails.
+        self.assertEqual(flag_identity._format_date(datetime(2026, 8, 3, 14, 30)), "2026-08-03")
+        self.assertEqual(flag_identity._format_date("2026-08-03 00:00:00"), "2026-08-03 00:00:00")
+
+
+class TestHooksWiring(unittest.TestCase):
     def test_decision_writes_invalidate_the_queue_cache(self):
         events = hooks.doc_events["Attendance Flag Decision"]
         for event in ("after_insert", "on_update", "on_trash"):
             self.assertEqual(events[event], INVALIDATOR)
+
+    def test_engine_flag_writes_are_deliberately_not_hooked(self):
+        # invalidate_flag_queue_cache is a delete_keys() prefix scan — a blocking Redis
+        # KEYS over the whole keyspace — and intraday re-inserts flags on every checkin
+        # (intraday.py:132,153), so hooking Attendance Flag would run that scan on the
+        # engine's hottest write path all day for freshness the 60s TTL already provides.
+        # It could not have made the cache correct either: the engine's deletes go through
+        # raw frappe.db.delete() and fire no hooks. Pinned so a well-meaning re-add fails
+        # loudly instead of silently reintroducing the scan.
+        self.assertNotIn("Attendance Flag", hooks.doc_events)
 
 
 if __name__ == "__main__":
