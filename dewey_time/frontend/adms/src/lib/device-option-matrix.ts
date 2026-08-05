@@ -30,6 +30,62 @@ export type DriftVerdict =
   | 'missing'
   /** Not enough is visible to say — withheld values, or only one reporter. */
   | 'unknown'
+  /** Unique to each terminal by nature. Differing is CORRECT. */
+  | 'per-device'
+  /** Live telemetry. Differing is meaningless. */
+  | 'volatile'
+
+/**
+ * What KIND of thing a key is — the difference between drift and normality.
+ *
+ * The first version of this matrix compared everything and reported "10
+ * differ" on a healthy fleet: serial numbers, MAC addresses, IP addresses and
+ * live counters were all flagged as configuration drift. Eight of the ten were
+ * keys that MUST differ. Only firmware version and volume were real.
+ *
+ * Same failure as the capacity view before it — a confident claim on data that
+ * does not support one — so keys are classified explicitly here.
+ */
+export type KeyKind =
+  /** Should be uniform across the fleet. Drift here is actionable. */
+  | 'setting'
+  /** Unique per terminal: serial, MAC, IP. */
+  | 'identity'
+  /** Changes with use: counters, free space, the clock. */
+  | 'counter'
+
+/** Unique to each unit. Comparing these produces noise, never a finding. */
+const IDENTITY_KEYS = new Set(
+  ['~SerialNumber', 'IPAddress', 'MAC'].map((k) => k.toLowerCase())
+)
+
+/**
+ * Changes as the terminal is used, so a difference says nothing about
+ * configuration. FreeFlashSize shrinks with data; FlashSize is the hardware
+ * total and stays a setting. MainTime is a clock and differs by the second.
+ */
+const COUNTER_KEYS = new Set(
+  [
+    'UserCount', 'FPCount', 'FaceCount', 'FvCount', 'PvCount',
+    'UserPhotoCount', 'UserCardCount', 'ATTPhotoCount', 'TransactionCount',
+    'FreeFlashSize', 'MainTime',
+  ].map((k) => k.toLowerCase())
+)
+
+/**
+ * Anything unclassified is treated as a SETTING, so it gets compared.
+ *
+ * Deliberate direction to fail in: an unknown key that differs shows up as a
+ * finding someone can classify away, whereas defaulting to 'counter' would
+ * silently hide real drift on every key nobody has thought about yet. Noise is
+ * recoverable; silence is not.
+ */
+export function classifyKey(key: string): KeyKind {
+  const k = key.trim().toLowerCase()
+  if (IDENTITY_KEYS.has(k)) return 'identity'
+  if (COUNTER_KEYS.has(k)) return 'counter'
+  return 'setting'
+}
 
 export interface MatrixCell {
   /** The device reported this key at all. */
@@ -43,6 +99,7 @@ export interface MatrixRow {
   key: string
   /** Keyed by device serial. Every column is present, so the grid is dense. */
   cells: Record<string, MatrixCell>
+  kind: KeyKind
   verdict: DriftVerdict
 }
 
@@ -94,14 +151,24 @@ export function buildOptionMatrix(
       const cells: Record<string, MatrixCell> = {}
       for (const sn of deviceSns) cells[sn] = partial[sn] ?? ABSENT
 
-      return { key, cells, verdict: verdictFor(cells, reportingDevices) }
+      const kind = classifyKey(key)
+      return { key, cells, kind, verdict: verdictFor(cells, reportingDevices, kind) }
     })
     .sort((a, b) => a.key.localeCompare(b.key))
 
   return { rows, reportingDevices, silentDevices, truncated }
 }
 
-function verdictFor(cells: Record<string, MatrixCell>, reportingDevices: string[]): DriftVerdict {
+function verdictFor(
+  cells: Record<string, MatrixCell>,
+  reportingDevices: string[],
+  kind: KeyKind
+): DriftVerdict {
+  // Identity and telemetry are expected to differ. Comparing them at all is
+  // what produced "10 differ" on a fleet with two real problems.
+  if (kind === 'identity') return 'per-device'
+  if (kind === 'counter') return 'volatile'
+
   // Only devices that have reported SOMETHING can disagree. A silent terminal
   // is missing every key, which is a fact about the terminal, not about drift.
   if (reportingDevices.length < 2) return 'unknown'
@@ -119,8 +186,12 @@ function verdictFor(cells: Record<string, MatrixCell>, reportingDevices: string[
   return distinct.size > 1 ? 'differ' : 'agree'
 }
 
-/** Rows worth an operator's attention: a genuine, knowable disagreement. */
+/**
+ * Rows worth an operator's attention: a genuine, knowable disagreement on
+ * something that is SUPPOSED to match. Identity and counters can never qualify.
+ */
 export function hasDrift(row: MatrixRow): boolean {
+  if (row.kind !== 'setting') return false
   return row.verdict === 'differ' || row.verdict === 'missing'
 }
 

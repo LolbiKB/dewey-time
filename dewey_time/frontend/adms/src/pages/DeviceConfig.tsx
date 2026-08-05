@@ -35,6 +35,11 @@ const VERDICT_TEXT: Record<DriftVerdict, string> = {
   differ: 'Values differ',
   missing: 'Not on every device',
   unknown: 'Cannot compare',
+  // Not findings. Serial numbers, MACs and IPs are unique by definition, and
+  // counters move with use — comparing either produced eight false alarms on a
+  // fleet whose only real problems were firmware version and volume.
+  'per-device': 'Per device',
+  volatile: 'Live counter',
 }
 
 function CellValue({ row, sn }: { row: MatrixRow; sn: string }) {
@@ -107,11 +112,16 @@ export function DeviceConfig() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium">
           <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-          {matrix.rows.length} setting{matrix.rows.length === 1 ? '' : 's'} across{' '}
+          {matrix.rows.length} key{matrix.rows.length === 1 ? '' : 's'} across{' '}
           {matrix.reportingDevices.length} terminal
           {matrix.reportingDevices.length === 1 ? '' : 's'}
-          {driftCount > 0 && (
-            <span className={cn('ml-2', signalText.attention)}>· {driftCount} differ</span>
+          {driftCount > 0 ? (
+            <span className={cn('ml-2', signalText.attention)}>
+              · {driftCount} setting{driftCount === 1 ? '' : 's'} differ
+              {driftCount === 1 ? 's' : ''}
+            </span>
+          ) : (
+            <span className={cn('ml-2', signalText.success)}>· settings match</span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -172,7 +182,16 @@ export function DeviceConfig() {
             <tbody className="divide-y divide-border">
               {visibleRows.map((row) => (
                 <tr key={row.key} className={cn(hasDrift(row) && 'bg-attention/5')}>
-                  <td className="px-3 py-2 font-mono text-xs break-all">{row.key}</td>
+                  <td
+                    className={cn(
+                      'px-3 py-2 font-mono text-xs break-all',
+                      // Identity and counters are context, not candidates for
+                      // action. Muting them keeps the eye on what can be fixed.
+                      row.kind !== 'setting' && 'text-muted-foreground'
+                    )}
+                  >
+                    {row.key}
+                  </td>
                   {deviceSns.map((sn) => (
                     <td key={sn} className="px-3 py-2">
                       <CellValue row={row} sn={sn} />
