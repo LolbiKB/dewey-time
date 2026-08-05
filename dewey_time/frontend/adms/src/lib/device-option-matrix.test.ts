@@ -6,6 +6,7 @@ import {
   classifyKey,
   groupRowValues,
   deviceDeviations,
+  deviceLabel,
 } from './device-option-matrix'
 import type { DeviceOptionEntry } from '@/services/device-service'
 
@@ -348,5 +349,35 @@ describe('deviceDeviations', () => {
     const dev = deviceDeviations(m.rows, m.reportingDevices)
     // FWVersion: three agree, D1 alone. VOLUME: 60 is the majority, D3 and D4 differ.
     expect(dev.map((d) => d.deviceSn).sort()).toEqual([D1, D3, D4].sort())
+  })
+})
+
+describe('deviceLabel', () => {
+  const devices = [
+    { serial_number: 'SN1', name: 'Front Door', location: 'Lobby' },
+    { serial_number: 'SN2', name: 'Back Door', location: 'Back Door' },
+    { serial_number: 'SN3', name: null, location: 'Warehouse' },
+    { serial_number: 'SN4', name: null, location: null },
+  ]
+
+  test('leads with name and location, since operators know boxes by place', () => {
+    expect(deviceLabel('SN1', devices)).toBe('Front Door · Lobby')
+  })
+
+  test('does not repeat itself when name and location match', () => {
+    expect(deviceLabel('SN2', devices)).toBe('Back Door')
+  })
+
+  test('falls back through location to the serial', () => {
+    expect(deviceLabel('SN3', devices)).toBe('Warehouse')
+    expect(deviceLabel('SN4', devices)).toBe('SN4')
+  })
+
+  test('falls back to the serial for a device it does not know', () => {
+    expect(deviceLabel('SN9', devices)).toBe('SN9')
+  })
+
+  test('ignores whitespace-only names', () => {
+    expect(deviceLabel('SN5', [{ serial_number: 'SN5', name: '   ', location: null }])).toBe('SN5')
   })
 })

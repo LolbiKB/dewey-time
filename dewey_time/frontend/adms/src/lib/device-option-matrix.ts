@@ -281,3 +281,22 @@ export function deviceDeviations(
     .filter((d) => d.count > 0)
     .sort((a, b) => b.count - a.count || a.deviceSn.localeCompare(b.deviceSn))
 }
+
+/**
+ * A terminal's display name, falling back to its serial.
+ *
+ * At four terminals a grid of raw serials is merely ugly; at twenty it is
+ * unreadable — `PYA8261900039` and `PYA8261900038` differ in one character.
+ * Operators know these boxes by where they are, so name and location lead and
+ * the serial becomes the subtitle.
+ */
+export function deviceLabel(
+  sn: string,
+  devices: { serial_number: string; name?: string | null; location?: string | null }[]
+): string {
+  const d = devices.find((x) => x.serial_number === sn)
+  const name = d?.name?.trim()
+  const location = d?.location?.trim()
+  if (name && location && name !== location) return `${name} · ${location}`
+  return name || location || sn
+}
