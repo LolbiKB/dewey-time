@@ -17,6 +17,7 @@ from dewey_time.attendance_engine.shift_assignment import (
     get_shift_assignment as _get_shift_assignment,
     shift_assignment_bounds_by_employee,
 )
+from dewey_time.attendance_engine.flag_identity import evidence_fingerprint, flag_identity
 
 
 HR_STAFF_ROLES = frozenset({"System Manager", "HR User", "HR Manager"})
@@ -450,6 +451,47 @@ def _employee_nav_meta(employee: str) -> dict:
     }
 
 
+def _live_decisions_by_identity(*, employee: str, start, end) -> dict[str, dict]:
+    """Live (superseded=0) Attendance Flag Decision rows for one employee's date
+    range, as ONE batched query keyed by flag_identity — never per-day, never
+    per-flag (Global Constraint 5). Called exactly once per get_employee_calendar
+    request, regardless of how many days or flags are in range; the per-flag
+    attach below this is an in-memory dict lookup, not a query."""
+    if not frappe.db.table_exists("Attendance Flag Decision"):
+        return {}
+
+    rows = (
+        frappe.get_all(
+            "Attendance Flag Decision",
+            filters={
+                "employee": employee,
+                "attendance_date": ["between", [start, end]],
+                "superseded": 0,
+            },
+            fields=[
+                "name",
+                "flag_identity",
+                "outcome",
+                "reason",
+                "note",
+                "decided_by",
+                "decided_at",
+                "group_key",
+                "evidence_fingerprint",
+            ],
+        )
+        or []
+    )
+
+    by_identity: dict[str, dict] = {}
+    for row in rows:
+        row["decided_at"] = _format_datetime(row.get("decided_at"))
+        identity = row.get("flag_identity")
+        if identity:
+            by_identity[identity] = row
+    return by_identity
+
+
 @frappe.whitelist()
 def get_employee_calendar(employee: str, start_date: str, end_date: str):
     """
@@ -568,6 +610,8 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             }
         )
 
+    decisions_by_identity = _live_decisions_by_identity(employee=employee, start=start, end=end)
+
     flags_by_day_raw: dict[str, list[dict]] = defaultdict(list)
     for f in flags:
         d = f.get("attendance_date")
@@ -581,10 +625,32 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             except Exception:
                 f["evidence"] = None
         day_closed = f.get("day_closed")
+        # Attach the live decision (if any) by flag_identity, computed from the
+        # flag's own fields — never from `name`, which is unstable across the
+        # provisional/final rename (attendance_flag.py:53-71, Global Constraint 2).
+        identity = flag_identity(
+            employee=employee,
+            attendance_date=key,
+            flag_code=f.get("flag_code"),
+            evidence=f.get("evidence"),
+        )
+        decision = decisions_by_identity.get(identity)
+        if decision is None:
+            decision_state = "undecided"
+        elif evidence_fingerprint(f.get("evidence")) == decision.get("evidence_fingerprint"):
+            decision_state = "matched"
+        else:
+            # Evidence moved under the decision (e.g. HR corrected the punch that
+            # produced it). Same match/mismatch rule flag_grouping.build_queue
+            # uses for the triage queue, so this surface and that one can never
+            # disagree about the same flag_identity.
+            decision_state = "needs_re_review"
         flags_by_day_raw[key].append(
             {
                 **f,
                 "is_provisional": day_closed == 0,
+                "decision": decision,
+                "decision_state": decision_state,
             }
         )
 

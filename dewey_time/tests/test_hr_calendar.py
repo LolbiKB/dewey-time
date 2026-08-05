@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -309,6 +310,122 @@ class TestCalendarPayloadEmployeeBranch(unittest.TestCase):
         payload = self._call(None)
         self.assertIn("employee_branch", payload)
         self.assertIsNone(payload["employee_branch"])
+
+
+class TestCalendarDecisions(unittest.TestCase):
+    """get_employee_calendar attaches a `decision` + `decision_state` to each flag,
+    batched over the whole range in ONE query — see hr-flag-management-design.md
+    "get_employee_calendar (existing) — additive change". Identity/fingerprint
+    computation is mocked here: this module only has to prove it wires the batched
+    query and the match/mismatch/absent branching correctly, not that
+    flag_identity.py itself is correct (that lives in its own test module)."""
+
+    FLAG_ROW = {
+        "name": "AF-1",
+        "attendance_date": "2026-08-05",
+        "flag_code": "MISSING_TIME",
+        "severity": "WARNING",
+        "source": "AUTO",
+        "status": "OPEN",
+        "day_closed": 1,
+        "rule_version": 1,
+        "evidence": json.dumps({"minutes": 45, "reason": "gap", "interval_start": "12:00:00"}),
+    }
+
+    def _call(self, *, decision_rows, identity_return="IDENT-1", fingerprint_return="fp-current",
+              start="2026-08-05", end="2026-08-05"):
+        from datetime import date as _date
+
+        import dewey_time.attendance_engine.hr_calendar as hc
+
+        get_all_calls = {"Attendance Flag Decision": 0}
+
+        def _get_all(doctype, **_kwargs):
+            if doctype == "Employee Checkin":
+                return []
+            if doctype == "Attendance Flag":
+                return [dict(self.FLAG_ROW)]
+            if doctype == "Attendance Flag Decision":
+                get_all_calls["Attendance Flag Decision"] += 1
+                return list(decision_rows)
+            return []
+
+        def _table_exists(doctype):
+            return doctype in ("Attendance Flag", "Attendance Flag Decision")
+
+        with patch.object(hc, "_require_calendar_access"), \
+             patch.object(hc, "getdate", lambda v: _date.fromisoformat(str(v))), \
+             patch.object(hc, "get_datetime", lambda v: str(v)), \
+             patch.object(hc, "nowdate", lambda: "2026-08-06"), \
+             patch.object(hc.frappe.db, "get_value", return_value=None), \
+             patch.object(hc.frappe, "get_all", side_effect=_get_all), \
+             patch.object(hc.frappe.db, "table_exists", side_effect=_table_exists), \
+             patch.object(hc, "flag_identity", return_value=identity_return), \
+             patch.object(hc, "evidence_fingerprint", return_value=fingerprint_return):
+            payload = hc.get_employee_calendar("EMP-001", start, end)
+        return payload, get_all_calls
+
+    def test_matching_decision_reports_matched(self):
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": None,
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-current",
+        }
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "matched")
+        self.assertEqual(flag["decision"]["name"], "AFD-1")
+        self.assertEqual(flag["decision"]["outcome"], "EXCUSED")
+
+    def test_fingerprint_mismatch_reports_needs_re_review_but_keeps_decision(self):
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": None,
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-stale",
+        }
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-corrected",
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "needs_re_review")
+        self.assertIsNotNone(flag["decision"])
+        self.assertEqual(flag["decision"]["name"], "AFD-1")
+
+    def test_no_decision_reports_undecided_and_none(self):
+        payload, _ = self._call(
+            decision_rows=[],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "undecided")
+        self.assertIsNone(flag["decision"])
+
+    def test_decision_lookup_is_one_query_for_the_whole_range(self):
+        _, get_all_calls = self._call(
+            decision_rows=[],
+            start="2026-08-01",
+            end="2026-08-05",
+        )
+        self.assertEqual(get_all_calls["Attendance Flag Decision"], 1)
 
 
 if __name__ == "__main__":
