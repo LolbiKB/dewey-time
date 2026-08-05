@@ -1,99 +1,159 @@
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, EyeOff, Loader2, SlidersHorizontal } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Fragment, useMemo, useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
+import { AlertTriangle, Check, ChevronRight, EyeOff, Loader2, SlidersHorizontal } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { DeviceService } from '@/services/device-service'
+import { DeviceService, type DeviceOptionEntry } from '@/services/device-service'
 import { useDevices } from '@/hooks/use-core-data'
 import { signalText, signalAlert } from '@/lib/signal'
 import { cn } from '@/lib/utils'
 import {
   buildOptionMatrix,
-  countDrift,
   hasDrift,
+  groupRowValues,
+  deviceDeviations,
+  deviceLabel,
   type MatrixRow,
-  type DriftVerdict,
+  type MatrixCell,
 } from '@/lib/device-option-matrix'
 
 /**
  * Fleet configuration — "are my terminals the same?"
  *
- * Its own route on purpose. A per-device dialog is the wrong container for
- * fleet state: the question is device-vs-device, and the answer only exists
- * across columns. This works before any desired-state table exists, which is
- * the state the fleet is actually in.
+ * BUILT FOR TEN-PLUS TERMINALS, not four. Two things break as a fleet grows,
+ * and both are structural rather than cosmetic:
  *
- * Read-only. Writing a fleet baseline is Part 3 and slots into this same grid
- * as an extra column plus an Apply action, with no redesign.
+ *   A settings-by-devices grid gets WIDER with every terminal, so the handful
+ *   of settings that actually differ end up off-screen among seventy that do
+ *   not. Fixed by grouping on VALUE — values are few, devices are many, so
+ *   `VOLUME` across twenty terminals is still three lines — and by transposing
+ *   the comparison table to devices-as-rows with only the DRIFTING settings as
+ *   columns. That table is bounded by the number of problems, not the fleet.
+ *
+ *   Raw serials stop being readable. `PYA8261900039` and `PYA8261900038` differ
+ *   in one character; twenty of them is noise. Operators know these boxes by
+ *   where they are, so name and location lead and the serial is the subtitle.
  */
 
-/** Matches the bridge's MAX_DEVICE_OPTIONS_PAGE. See the truncation banner. */
+/** Matches the bridge's MAX_DEVICE_OPTIONS_PAGE. */
 const OPTIONS_PAGE_LIMIT = 500
 
-const VERDICT_TEXT: Record<DriftVerdict, string> = {
-  agree: 'All match',
-  differ: 'Values differ',
-  missing: 'Not on every device',
-  unknown: 'Cannot compare',
+/** How many silent terminals to name before summarising the rest. */
+const MAX_NAMED_SILENT = 4
+
+function valueLabel(cell: MatrixCell | undefined): string {
+  if (!cell?.present) return 'Not reported'
+  if (cell.redacted) return 'Withheld'
+  return cell.value === '' || cell.value == null ? '(empty)' : cell.value
 }
 
-function CellValue({ row, sn }: { row: MatrixRow; sn: string }) {
-  const cell = row.cells[sn]
-  if (!cell?.present) {
-    return <span className={cn('text-xs', signalText.idle)}>—</span>
-  }
-  if (cell.redacted) {
-    return (
-      <span
-        className={cn('inline-flex items-center gap-1 text-xs', signalText.idle)}
-        title="The device reported a value. It was not stored because this key is not on the value allowlist."
-      >
-        <EyeOff className="h-3 w-3" />
-        Withheld
-      </span>
-    )
-  }
-  return <span className="font-mono text-xs break-all">{cell.value || '(empty)'}</span>
+function isSoft(cell: MatrixCell | undefined): boolean {
+  return !cell?.present || cell.redacted
+}
+
+/** One drifting setting, its values grouped by how many terminals report each. */
+function FindingCard({
+  row,
+  reportingDevices,
+  label,
+}: {
+  row: MatrixRow
+  reportingDevices: string[]
+  label: (sn: string) => string
+}) {
+  const groups = groupRowValues(row, reportingDevices)
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-3 space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="font-mono text-xs font-medium break-all">{row.key}</span>
+        <span className={cn('text-xs whitespace-nowrap', signalText.attention)}>
+          {groups.length} value{groups.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div className="space-y-1">
+        {groups.map((g, i) => {
+          const sample = row.cells[g.devices[0]]
+          return (
+            <div key={i} className="flex items-baseline justify-between gap-3 text-xs">
+              <span className="flex items-baseline gap-1.5 font-mono break-all">
+                {sample?.present && sample.redacted && (
+                  <EyeOff className={cn('h-3 w-3 shrink-0', signalText.idle)} />
+                )}
+                <span className={cn(isSoft(sample) && signalText.idle)}>{valueLabel(sample)}</span>
+                {g.isMajority && (
+                  <span className={cn('text-[10px] uppercase tracking-wide', signalText.idle)}>
+                    most common
+                  </span>
+                )}
+              </span>
+              <span
+                className={cn(
+                  'whitespace-nowrap',
+                  g.isMajority ? signalText.idle : signalText.attention
+                )}
+                title={g.devices.map(label).join(', ')}
+              >
+                {g.devices.length} terminal{g.devices.length === 1 ? '' : 's'}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export function DeviceConfig() {
   const [search, setSearch] = useState('')
-  const [driftOnly, setDriftOnly] = useState(false)
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   const devicesQuery = useDevices({ limit: 200 })
-  const optionsQuery = useQuery({
-    queryKey: ['device-options', 'fleet'],
-    queryFn: () => DeviceService.getAllDeviceOptions(OPTIONS_PAGE_LIMIT),
-  })
-
-  // Only approved terminals. Pending and rejected units would otherwise
-  // generate phantom drift that nobody can act on.
-  const deviceSns = useMemo(
+  const devices = useMemo(
     () =>
-      (devicesQuery.data?.devices ?? [])
-        .filter((d: { connection_status?: string }) => d.connection_status === 'approved')
-        .map((d: { serial_number: string }) => d.serial_number),
+      (devicesQuery.data?.devices ?? []).filter(
+        (d: { connection_status?: string }) => d.connection_status === 'approved'
+      ),
     [devicesQuery.data]
   )
-
-  const matrix = useMemo(
-    () => buildOptionMatrix(optionsQuery.data ?? [], deviceSns, { limit: OPTIONS_PAGE_LIMIT }),
-    [optionsQuery.data, deviceSns]
+  const deviceSns: string[] = useMemo(
+    () => devices.map((d: { serial_number: string }) => d.serial_number).sort(),
+    [devices]
   )
+  const label = useMemo(() => (sn: string) => deviceLabel(sn, devices), [devices])
 
-  const visibleRows = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return matrix.rows.filter((r) => {
-      if (driftOnly && !hasDrift(r)) return false
-      if (q && !r.key.toLowerCase().includes(q)) return false
-      return true
-    })
-  }, [matrix.rows, driftOnly, search])
+  // PER DEVICE, not one fleet-wide call. A single bounded query truncates once
+  // the fleet outgrows it — ten terminals at ~78 keys is 780 rows against a 500
+  // cap — and a cut key looks absent everywhere, which reads as drift that is
+  // not real. Per-device queries stay far under the bound however large the
+  // fleet gets, and React Query caches each separately.
+  const optionQueries = useQueries({
+    queries: deviceSns.map((sn) => ({
+      queryKey: ['device-options', sn],
+      queryFn: () => DeviceService.getDeviceOptions(sn),
+    })),
+  })
 
-  const driftCount = countDrift(matrix.rows)
-  const loading = devicesQuery.isLoading || optionsQuery.isLoading
+  const optionsLoading = optionQueries.some((q) => q.isLoading)
+  const stamp = optionQueries.map((q) => q.dataUpdatedAt).join(',')
+  const entries: DeviceOptionEntry[] = useMemo(
+    () => optionQueries.flatMap((q) => q.data ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stamp]
+  )
+  const truncated = optionQueries.some((q) => (q.data?.length ?? 0) >= OPTIONS_PAGE_LIMIT)
 
-  if (loading) {
+  const matrix = useMemo(() => buildOptionMatrix(entries, deviceSns), [entries, deviceSns])
+  const driftRows = useMemo(() => matrix.rows.filter(hasDrift), [matrix.rows])
+  const outlierCount = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const d of deviceDeviations(matrix.rows, matrix.reportingDevices)) {
+      map.set(d.deviceSn, d.count)
+    }
+    return map
+  }, [matrix.rows, matrix.reportingDevices])
+
+  if (devicesQuery.isLoading || optionsLoading) {
     return (
       <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
@@ -102,52 +162,44 @@ export function DeviceConfig() {
     )
   }
 
+  const namedSilent = matrix.silentDevices.slice(0, MAX_NAMED_SILENT).map(label)
+  const extraSilent = matrix.silentDevices.length - namedSilent.length
+
   return (
     <div className="space-y-4 p-4 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-          {matrix.rows.length} setting{matrix.rows.length === 1 ? '' : 's'} across{' '}
-          {matrix.reportingDevices.length} terminal
-          {matrix.reportingDevices.length === 1 ? '' : 's'}
-          {driftCount > 0 && (
-            <span className={cn('ml-2', signalText.attention)}>· {driftCount} differ</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter keys…"
-            className="h-8 w-44"
-          />
-          <Button
-            variant={driftOnly ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setDriftOnly((v) => !v)}
-          >
-            Show drift only
-          </Button>
-        </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
+        <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+        {matrix.reportingDevices.length} terminal
+        {matrix.reportingDevices.length === 1 ? '' : 's'} · {matrix.rows.length} keys
+        {driftRows.length > 0 ? (
+          <span className={signalText.attention}>
+            · {driftRows.length} setting{driftRows.length === 1 ? '' : 's'} to review
+          </span>
+        ) : (
+          <span className={cn('inline-flex items-center gap-1', signalText.success)}>
+            <Check className="h-3.5 w-3.5" />
+            settings match
+          </span>
+        )}
       </div>
 
-      {matrix.truncated && (
+      {truncated && (
         <div className={cn('flex gap-2 rounded-lg p-3 text-xs', signalAlert.danger)}>
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>
-            The configuration list hit its {OPTIONS_PAGE_LIMIT}-row limit, so settings are missing
-            from this grid. A key that was cut looks absent on every terminal, which reads as drift
-            that may not be real — <strong>do not act on this view until it is resolved.</strong>
+            A terminal reported more than {OPTIONS_PAGE_LIMIT} keys, so some are missing here. A key
+            that was cut looks absent on every terminal, which reads as drift that may not be real —{' '}
+            <strong>do not act on this view until it is resolved.</strong>
           </span>
         </div>
       )}
 
       {matrix.silentDevices.length > 0 && (
         <div className={cn('rounded-lg p-3 text-xs', signalAlert.attention)}>
-          {matrix.silentDevices.join(', ')} {matrix.silentDevices.length === 1 ? 'has' : 'have'} not
-          reported any configuration yet, so {matrix.silentDevices.length === 1 ? 'it is' : 'they are'}{' '}
-          shown but not compared. A terminal reports on approval, when a watched setting changes, and
-          at least twice a day.
+          {matrix.silentDevices.length} of {deviceSns.length} terminals have not reported yet (
+          {namedSilent.join(', ')}
+          {extraSilent > 0 ? ` and ${extraSilent} more` : ''}), so they are not compared. A terminal
+          reports on approval, when a watched setting changes, and at least twice a day.
         </div>
       )}
 
@@ -155,46 +207,149 @@ export function DeviceConfig() {
         <p className="text-sm text-muted-foreground">
           No terminal has reported its configuration yet.
         </p>
+      ) : driftRows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Every comparable setting matches across the fleet. Identity and live counters differ by
+          nature and are not compared.
+        </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full min-w-max text-left">
-            <thead className="border-b border-border bg-muted/40">
-              <tr>
-                <th className="px-3 py-2 text-xs font-medium">Setting</th>
-                {deviceSns.map((sn) => (
-                  <th key={sn} className="px-3 py-2 font-mono text-xs font-medium">
-                    {sn}
-                  </th>
-                ))}
-                <th className="px-3 py-2 text-xs font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {visibleRows.map((row) => (
-                <tr key={row.key} className={cn(hasDrift(row) && 'bg-attention/5')}>
-                  <td className="px-3 py-2 font-mono text-xs break-all">{row.key}</td>
-                  {deviceSns.map((sn) => (
-                    <td key={sn} className="px-3 py-2">
-                      <CellValue row={row} sn={sn} />
-                    </td>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {driftRows.map((row) => (
+            <FindingCard
+              key={row.key}
+              row={row}
+              reportingDevices={matrix.reportingDevices}
+              label={label}
+            />
+          ))}
+        </div>
+      )}
+
+      {/*
+        TRANSPOSED comparison: devices are ROWS and only the DRIFTING settings
+        are columns. A settings-by-devices grid widens with the fleet; this one
+        is bounded by the number of problems, which is what an operator is
+        working through anyway. Expanding a row shows that terminal's full key
+        list, which is the "what does this box actually have" question the wide
+        grid used to answer badly.
+      */}
+      {matrix.rows.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium">By terminal</div>
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-left">
+              <thead className="border-b border-border bg-muted/40">
+                <tr>
+                  <th className="px-3 py-2 text-xs font-medium">Terminal</th>
+                  {driftRows.map((r) => (
+                    <th key={r.key} className="px-3 py-2 font-mono text-xs font-medium">
+                      {r.key}
+                    </th>
                   ))}
-                  <td
-                    className={cn(
-                      'px-3 py-2 text-xs whitespace-nowrap',
-                      hasDrift(row) ? signalText.attention : signalText.idle
-                    )}
-                  >
-                    {VERDICT_TEXT[row.verdict]}
-                  </td>
+                  <th className="px-3 py-2 text-xs font-medium">Off majority</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {visibleRows.length === 0 && (
-            <p className="p-4 text-sm text-muted-foreground">
-              {driftOnly ? 'Every comparable setting matches across the fleet.' : 'No key matches that filter.'}
-            </p>
-          )}
+              </thead>
+              <tbody className="divide-y divide-border">
+                {deviceSns.map((sn) => {
+                  const off = outlierCount.get(sn) ?? 0
+                  const isOpen = expanded === sn
+                  const own = entries
+                    .filter((e) => e.device_sn === sn)
+                    .sort((a, b) => a.key.localeCompare(b.key))
+
+                  return (
+                    // Key on the Fragment: a row expands into TWO <tr>s, and
+                    // keying the children instead makes React treat each render
+                    // as a fresh list.
+                    <Fragment key={sn}>
+                      <tr
+                        className={cn('cursor-pointer hover:bg-muted/30', off > 0 && 'bg-attention/5')}
+                        onClick={() => setExpanded(isOpen ? null : sn)}
+                      >
+                        <td className="px-3 py-2">
+                          <span className="flex items-center gap-1.5 text-xs font-medium">
+                            <ChevronRight
+                              className={cn('h-3 w-3 transition-transform', isOpen && 'rotate-90')}
+                            />
+                            {label(sn)}
+                          </span>
+                          <span className={cn('ml-4.5 block font-mono text-[10px]', signalText.idle)}>
+                            {sn}
+                          </span>
+                        </td>
+                        {driftRows.map((r) => (
+                          <td key={r.key} className="px-3 py-2">
+                            <span
+                              className={cn(
+                                'font-mono text-xs break-all',
+                                isSoft(r.cells[sn]) && signalText.idle
+                              )}
+                            >
+                              {valueLabel(r.cells[sn])}
+                            </span>
+                          </td>
+                        ))}
+                        <td
+                          className={cn(
+                            'px-3 py-2 text-xs whitespace-nowrap',
+                            off > 0 ? signalText.attention : signalText.idle
+                          )}
+                        >
+                          {matrix.silentDevices.includes(sn) ? 'Not reported' : off > 0 ? off : '—'}
+                        </td>
+                      </tr>
+
+                      {isOpen && (
+                        <tr className="bg-muted/20">
+                          <td colSpan={driftRows.length + 2} className="px-3 py-3">
+                            {own.length === 0 ? (
+                              <p className="text-xs text-muted-foreground">
+                                This terminal has not reported its configuration yet.
+                              </p>
+                            ) : (
+                              <>
+                                <Input
+                                  value={search}
+                                  onChange={(ev) => setSearch(ev.target.value)}
+                                  placeholder="Filter keys…"
+                                  className="mb-2 h-7 w-full sm:w-56"
+                                  onClick={(ev) => ev.stopPropagation()}
+                                />
+                                <div className="grid grid-cols-1 gap-x-6 gap-y-0.5 sm:grid-cols-2 lg:grid-cols-3">
+                                  {own
+                                    .filter((o) =>
+                                      o.key.toLowerCase().includes(search.trim().toLowerCase())
+                                    )
+                                    .map((o) => (
+                                      <div
+                                        key={o.key}
+                                        className="flex items-baseline justify-between gap-3 text-xs"
+                                      >
+                                        <span className="font-mono text-muted-foreground break-all">
+                                          {o.key}
+                                        </span>
+                                        <span
+                                          className={cn(
+                                            'text-right font-mono break-all',
+                                            o.redacted && signalText.idle
+                                          )}
+                                        >
+                                          {o.redacted ? 'Withheld' : o.value || '(empty)'}
+                                        </span>
+                                      </div>
+                                    ))}
+                                </div>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

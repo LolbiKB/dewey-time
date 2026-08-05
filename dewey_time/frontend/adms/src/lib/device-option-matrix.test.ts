@@ -1,5 +1,13 @@
 import { describe, test, expect } from 'vitest'
-import { buildOptionMatrix, countDrift, hasDrift } from './device-option-matrix'
+import {
+  buildOptionMatrix,
+  countDrift,
+  hasDrift,
+  classifyKey,
+  groupRowValues,
+  deviceDeviations,
+  deviceLabel,
+} from './device-option-matrix'
 import type { DeviceOptionEntry } from '@/services/device-service'
 
 /**
@@ -153,5 +161,223 @@ describe('shape', () => {
     const m = buildOptionMatrix([], [])
     expect(m.rows).toEqual([])
     expect(m.reportingDevices).toEqual([])
+  })
+})
+
+/**
+ * Key classification — the fix for "10 differ" on a healthy fleet.
+ *
+ * The first version compared every key. Against the real four-terminal fleet it
+ * reported ten differences, of which EIGHT were keys that must differ: serial
+ * numbers, MAC addresses, IP addresses, and five live counters. Only FWVersion
+ * (one terminal a patch behind) and VOLUME (60/60/20/70) were real.
+ *
+ * The fixture below is that exact fleet, so the count is pinned to reality.
+ */
+const D1 = 'PYA8261900039'
+const D2 = 'PYA8261900038'
+const D3 = 'PYA8254901742'
+const D4 = 'PYA8254100003'
+const FLEET = [D1, D2, D3, D4]
+
+const REAL_FLEET_ROWS: DeviceOptionEntry[] = [
+  ...[D1, D2, D3, D4].map((sn) => e(sn, '~SerialNumber', sn)),
+  ...[['70', D1], ['83', D2], ['67', D3], ['68', D4]].map(([v, sn]) => e(sn, 'FPCount', v)),
+  ...[['5076300', D1], ['5076100', D2], ['5075924', D3], ['5075920', D4]].map(([v, sn]) =>
+    e(sn, 'FreeFlashSize', v)
+  ),
+  e(D1, 'FWVersion', 'ZAM70-NF43VA-Ver3.3.12'),
+  ...[D2, D3, D4].map((sn) => e(sn, 'FWVersion', 'ZAM70-NF43VA-Ver3.3.13')),
+  ...[['192.168.1.202', D1], ['192.168.1.132', D2], ['192.168.1.11', D3], ['192.168.1.218', D4]].map(
+    ([v, sn]) => e(sn, 'IPAddress', v)
+  ),
+  ...[['00:17:61:12:d0:50', D1], ['00:17:61:12:d0:39', D2], ['00:17:61:11:7b:92', D3], ['00:17:61:10:d8:b6', D4]].map(
+    ([v, sn]) => e(sn, 'MAC', v)
+  ),
+  ...[['5', D1], ['8', D2], ['116', D3], ['78', D4]].map(([v, sn]) => e(sn, 'TransactionCount', v)),
+  ...[['73', D1], ['85', D2], ['70', D3], ['71', D4]].map(([v, sn]) => e(sn, 'UserCount', v)),
+  ...[['65', D1], ['76', D2], ['65', D3], ['63', D4]].map(([v, sn]) => e(sn, 'UserPhotoCount', v)),
+  ...[['60', D1], ['60', D2], ['20', D3], ['70', D4]].map(([v, sn]) => e(sn, 'VOLUME', v)),
+]
+
+describe('the real four-terminal fleet', () => {
+  const matrix = () => buildOptionMatrix(REAL_FLEET_ROWS, FLEET)
+
+  test('reports TWO real differences, not ten', () => {
+    const drifting = matrix().rows.filter(hasDrift).map((r) => r.key).sort()
+    expect(drifting).toEqual(['FWVersion', 'VOLUME'])
+    expect(countDrift(matrix().rows)).toBe(2)
+  })
+
+  test('never flags identity keys, which are unique by definition', () => {
+    const rows = matrix().rows
+    for (const key of ['~SerialNumber', 'IPAddress', 'MAC']) {
+      const row = rows.find((r) => r.key === key)!
+      expect(row.kind).toBe('identity')
+      expect(row.verdict).toBe('per-device')
+      expect(hasDrift(row)).toBe(false)
+    }
+  })
+
+  test('never flags live counters, whose values are supposed to move', () => {
+    const rows = matrix().rows
+    for (const key of ['FPCount', 'UserCount', 'TransactionCount', 'UserPhotoCount', 'FreeFlashSize']) {
+      const row = rows.find((r) => r.key === key)!
+      expect(row.kind).toBe('counter')
+      expect(row.verdict).toBe('volatile')
+      expect(hasDrift(row)).toBe(false)
+    }
+  })
+
+  test('still catches the terminal a firmware patch behind', () => {
+    const fw = matrix().rows.find((r) => r.key === 'FWVersion')!
+    expect(fw.verdict).toBe('differ')
+    expect(fw.cells[D1].value).toBe('ZAM70-NF43VA-Ver3.3.12')
+  })
+
+  test('still catches inconsistent volume', () => {
+    const vol = matrix().rows.find((r) => r.key === 'VOLUME')!
+    expect(vol.verdict).toBe('differ')
+  })
+})
+
+describe('classifyKey', () => {
+  test('treats an unknown key as a setting, so it gets compared', () => {
+    // Deliberate direction to fail in: noise is recoverable, silence is not.
+    // Defaulting to 'counter' would hide real drift on every unclassified key.
+    expect(classifyKey('SomeKeyNobodyHasClassified')).toBe('setting')
+    expect(classifyKey('Brightness')).toBe('setting')
+  })
+
+  test('keeps FlashSize a setting while FreeFlashSize is a counter', () => {
+    // Total flash is a hardware fact and should match across identical units;
+    // free flash shrinks with use.
+    expect(classifyKey('FlashSize')).toBe('setting')
+    expect(classifyKey('FreeFlashSize')).toBe('counter')
+  })
+
+  test('treats MainTime as volatile', () => {
+    // A clock differs by the second. It is also the key reporting 1970 on real
+    // hardware, so it must never read as configuration drift.
+    expect(classifyKey('MainTime')).toBe('counter')
+  })
+
+  test('is case-insensitive, since firmware casing is not guaranteed', () => {
+    expect(classifyKey('ipaddress')).toBe('identity')
+    expect(classifyKey('USERCOUNT')).toBe('counter')
+  })
+})
+
+/**
+ * Scaling past a grid.
+ *
+ * A matrix widens with the fleet, so at ten-plus terminals the settings that
+ * actually differ are off-screen. Values are few and devices are many, so
+ * grouping by value collapses the axis that grows.
+ */
+describe('groupRowValues', () => {
+  const rowFor = (entries: DeviceOptionEntry[], sns: string[]) =>
+    buildOptionMatrix(entries, sns).rows[0]
+
+  test('collapses many devices into few value groups', () => {
+    // The whole point: twenty terminals, three lines.
+    const sns = Array.from({ length: 20 }, (_, i) => `SN${i}`)
+    const entries = sns.map((sn, i) => e(sn, 'VOLUME', i < 17 ? '60' : i < 19 ? '20' : '70'))
+    const groups = groupRowValues(rowFor(entries, sns), sns)
+
+    expect(groups).toHaveLength(3)
+    expect(groups[0]).toMatchObject({ value: '60', isMajority: true })
+    expect(groups[0].devices).toHaveLength(17)
+  })
+
+  test('declares no majority on a tie', () => {
+    // Standardising on a value with no more support than its rival is advice
+    // the data does not justify.
+    const sns = ['A', 'B']
+    const groups = groupRowValues(rowFor([e('A', 'VOLUME', '60'), e('B', 'VOLUME', '20')], sns), sns)
+    expect(groups.every((g) => !g.isMajority)).toBe(true)
+  })
+
+  test('keeps withheld, absent and real values in separate groups', () => {
+    const sns = ['A', 'B', 'C']
+    const row = rowFor([e('A', 'K', '1'), e('B', 'K', null, true), e('C', 'OTHER', 'x')], sns)
+    const groups = groupRowValues(row, sns)
+
+    // Three distinct states, never folded together.
+    expect(groups).toHaveLength(3)
+    expect(groups.filter((g) => g.value === null)).toHaveLength(2)
+  })
+})
+
+describe('deviceDeviations', () => {
+  test('ranks the odd terminals out, worst first', () => {
+    // "Which box is wrong" is one site visit; "which setting differs" is not.
+    const sns = ['A', 'B', 'C']
+    const m = buildOptionMatrix(
+      [
+        e('A', 'VOLUME', '60'), e('B', 'VOLUME', '60'), e('C', 'VOLUME', '20'),
+        e('A', 'Brightness', '5'), e('B', 'Brightness', '5'), e('C', 'Brightness', '9'),
+        e('A', 'Language', '69'), e('B', 'Language', '1'), e('C', 'Language', '69'),
+      ],
+      sns
+    )
+    const dev = deviceDeviations(m.rows, m.reportingDevices)
+
+    expect(dev[0]).toMatchObject({ deviceSn: 'C', count: 2 })
+    expect(dev[0].keys.sort()).toEqual(['Brightness', 'VOLUME'])
+    expect(dev[1]).toMatchObject({ deviceSn: 'B', count: 1 })
+    expect(dev.find((d) => d.deviceSn === 'A')).toBeUndefined()
+  })
+
+  test('blames nobody when there is no majority', () => {
+    const sns = ['A', 'B']
+    const m = buildOptionMatrix([e('A', 'VOLUME', '60'), e('B', 'VOLUME', '20')], sns)
+    expect(deviceDeviations(m.rows, m.reportingDevices)).toEqual([])
+  })
+
+  test('ignores identity and counters, which are never anyones fault', () => {
+    const sns = ['A', 'B']
+    const m = buildOptionMatrix(
+      [e('A', 'MAC', 'x'), e('B', 'MAC', 'y'), e('A', 'UserCount', '1'), e('B', 'UserCount', '99')],
+      sns
+    )
+    expect(deviceDeviations(m.rows, m.reportingDevices)).toEqual([])
+  })
+
+  test('names the real fleet outliers', () => {
+    const m = buildOptionMatrix(REAL_FLEET_ROWS, FLEET)
+    const dev = deviceDeviations(m.rows, m.reportingDevices)
+    // FWVersion: three agree, D1 alone. VOLUME: 60 is the majority, D3 and D4 differ.
+    expect(dev.map((d) => d.deviceSn).sort()).toEqual([D1, D3, D4].sort())
+  })
+})
+
+describe('deviceLabel', () => {
+  const devices = [
+    { serial_number: 'SN1', name: 'Front Door', location: 'Lobby' },
+    { serial_number: 'SN2', name: 'Back Door', location: 'Back Door' },
+    { serial_number: 'SN3', name: null, location: 'Warehouse' },
+    { serial_number: 'SN4', name: null, location: null },
+  ]
+
+  test('leads with name and location, since operators know boxes by place', () => {
+    expect(deviceLabel('SN1', devices)).toBe('Front Door · Lobby')
+  })
+
+  test('does not repeat itself when name and location match', () => {
+    expect(deviceLabel('SN2', devices)).toBe('Back Door')
+  })
+
+  test('falls back through location to the serial', () => {
+    expect(deviceLabel('SN3', devices)).toBe('Warehouse')
+    expect(deviceLabel('SN4', devices)).toBe('SN4')
+  })
+
+  test('falls back to the serial for a device it does not know', () => {
+    expect(deviceLabel('SN9', devices)).toBe('SN9')
+  })
+
+  test('ignores whitespace-only names', () => {
+    expect(deviceLabel('SN5', [{ serial_number: 'SN5', name: '   ', location: null }])).toBe('SN5')
   })
 })

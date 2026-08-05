@@ -30,6 +30,62 @@ export type DriftVerdict =
   | 'missing'
   /** Not enough is visible to say — withheld values, or only one reporter. */
   | 'unknown'
+  /** Unique to each terminal by nature. Differing is CORRECT. */
+  | 'per-device'
+  /** Live telemetry. Differing is meaningless. */
+  | 'volatile'
+
+/**
+ * What KIND of thing a key is — the difference between drift and normality.
+ *
+ * The first version of this matrix compared everything and reported "10
+ * differ" on a healthy fleet: serial numbers, MAC addresses, IP addresses and
+ * live counters were all flagged as configuration drift. Eight of the ten were
+ * keys that MUST differ. Only firmware version and volume were real.
+ *
+ * Same failure as the capacity view before it — a confident claim on data that
+ * does not support one — so keys are classified explicitly here.
+ */
+export type KeyKind =
+  /** Should be uniform across the fleet. Drift here is actionable. */
+  | 'setting'
+  /** Unique per terminal: serial, MAC, IP. */
+  | 'identity'
+  /** Changes with use: counters, free space, the clock. */
+  | 'counter'
+
+/** Unique to each unit. Comparing these produces noise, never a finding. */
+const IDENTITY_KEYS = new Set(
+  ['~SerialNumber', 'IPAddress', 'MAC'].map((k) => k.toLowerCase())
+)
+
+/**
+ * Changes as the terminal is used, so a difference says nothing about
+ * configuration. FreeFlashSize shrinks with data; FlashSize is the hardware
+ * total and stays a setting. MainTime is a clock and differs by the second.
+ */
+const COUNTER_KEYS = new Set(
+  [
+    'UserCount', 'FPCount', 'FaceCount', 'FvCount', 'PvCount',
+    'UserPhotoCount', 'UserCardCount', 'ATTPhotoCount', 'TransactionCount',
+    'FreeFlashSize', 'MainTime',
+  ].map((k) => k.toLowerCase())
+)
+
+/**
+ * Anything unclassified is treated as a SETTING, so it gets compared.
+ *
+ * Deliberate direction to fail in: an unknown key that differs shows up as a
+ * finding someone can classify away, whereas defaulting to 'counter' would
+ * silently hide real drift on every key nobody has thought about yet. Noise is
+ * recoverable; silence is not.
+ */
+export function classifyKey(key: string): KeyKind {
+  const k = key.trim().toLowerCase()
+  if (IDENTITY_KEYS.has(k)) return 'identity'
+  if (COUNTER_KEYS.has(k)) return 'counter'
+  return 'setting'
+}
 
 export interface MatrixCell {
   /** The device reported this key at all. */
@@ -43,6 +99,7 @@ export interface MatrixRow {
   key: string
   /** Keyed by device serial. Every column is present, so the grid is dense. */
   cells: Record<string, MatrixCell>
+  kind: KeyKind
   verdict: DriftVerdict
 }
 
@@ -94,14 +151,24 @@ export function buildOptionMatrix(
       const cells: Record<string, MatrixCell> = {}
       for (const sn of deviceSns) cells[sn] = partial[sn] ?? ABSENT
 
-      return { key, cells, verdict: verdictFor(cells, reportingDevices) }
+      const kind = classifyKey(key)
+      return { key, cells, kind, verdict: verdictFor(cells, reportingDevices, kind) }
     })
     .sort((a, b) => a.key.localeCompare(b.key))
 
   return { rows, reportingDevices, silentDevices, truncated }
 }
 
-function verdictFor(cells: Record<string, MatrixCell>, reportingDevices: string[]): DriftVerdict {
+function verdictFor(
+  cells: Record<string, MatrixCell>,
+  reportingDevices: string[],
+  kind: KeyKind
+): DriftVerdict {
+  // Identity and telemetry are expected to differ. Comparing them at all is
+  // what produced "10 differ" on a fleet with two real problems.
+  if (kind === 'identity') return 'per-device'
+  if (kind === 'counter') return 'volatile'
+
   // Only devices that have reported SOMETHING can disagree. A silent terminal
   // is missing every key, which is a fact about the terminal, not about drift.
   if (reportingDevices.length < 2) return 'unknown'
@@ -119,11 +186,117 @@ function verdictFor(cells: Record<string, MatrixCell>, reportingDevices: string[
   return distinct.size > 1 ? 'differ' : 'agree'
 }
 
-/** Rows worth an operator's attention: a genuine, knowable disagreement. */
+/**
+ * Rows worth an operator's attention: a genuine, knowable disagreement on
+ * something that is SUPPOSED to match. Identity and counters can never qualify.
+ */
 export function hasDrift(row: MatrixRow): boolean {
+  if (row.kind !== 'setting') return false
   return row.verdict === 'differ' || row.verdict === 'missing'
 }
 
 export function countDrift(rows: MatrixRow[]): number {
   return rows.filter(hasDrift).length
+}
+
+/**
+ * ── Scaling past a grid ───────────────────────────────────────────────────
+ *
+ * A matrix is rows x devices, so its width grows with the fleet. At four
+ * terminals that is readable; at ten it is horizontal scrolling, and the two
+ * settings that actually differ are somewhere off-screen.
+ *
+ * The fix is to notice that VALUES are few and DEVICES are many. `VOLUME`
+ * across twenty terminals is still three distinct values, so grouping by value
+ * collapses the axis that grows. What an operator needs is "which value should
+ * this be, and who disagrees" — not a cell-by-cell read.
+ */
+
+export interface ValueGroup {
+  /** Raw value; null when withheld or not reported. */
+  value: string | null
+  /** Serials reporting this value. */
+  devices: string[]
+  /** The single largest group. False for ALL groups when there is a tie. */
+  isMajority: boolean
+}
+
+/** Distinct values for one row, largest group first. */
+export function groupRowValues(row: MatrixRow, reportingDevices: string[]): ValueGroup[] {
+  const buckets = new Map<string, { value: string | null; devices: string[] }>()
+
+  for (const sn of reportingDevices) {
+    const cell = row.cells[sn]
+    // Withheld and absent are distinct from each other and from any value, and
+    // neither may be silently folded into a real reading.
+    const id = !cell?.present ? ' absent' : cell.redacted ? ' withheld' : `v:${cell.value}`
+    const value = !cell?.present || cell.redacted ? null : cell.value
+
+    const bucket = buckets.get(id) ?? { value, devices: [] }
+    bucket.devices.push(sn)
+    buckets.set(id, bucket)
+  }
+
+  const groups = [...buckets.values()].sort((a, b) => b.devices.length - a.devices.length)
+  const top = groups[0]?.devices.length ?? 0
+  // A tie has no majority. Declaring one would tell an operator to standardise
+  // on a value with no more support than its rival.
+  const tied = groups.filter((g) => g.devices.length === top).length > 1
+
+  return groups.map((g) => ({ ...g, isMajority: !tied && g.devices.length === top }))
+}
+
+export interface DeviceDeviation {
+  deviceSn: string
+  /** Settings where this device is outside the majority. */
+  count: number
+  keys: string[]
+}
+
+/**
+ * Which terminals are the odd ones out, worst first.
+ *
+ * With a large fleet the useful question inverts: not "which setting differs"
+ * but "which box is wrong". One terminal deviating on six settings is a single
+ * visit; six terminals deviating on one each is a different job entirely.
+ */
+export function deviceDeviations(
+  rows: MatrixRow[],
+  reportingDevices: string[]
+): DeviceDeviation[] {
+  const byDevice = new Map<string, string[]>(reportingDevices.map((sn) => [sn, []]))
+
+  for (const row of rows) {
+    if (!hasDrift(row)) continue
+    const majority = groupRowValues(row, reportingDevices).find((g) => g.isMajority)
+    // No majority means no one is the outlier — everybody is.
+    if (!majority) continue
+    for (const sn of reportingDevices) {
+      if (!majority.devices.includes(sn)) byDevice.get(sn)?.push(row.key)
+    }
+  }
+
+  return [...byDevice.entries()]
+    .map(([deviceSn, keys]) => ({ deviceSn, count: keys.length, keys }))
+    .filter((d) => d.count > 0)
+    .sort((a, b) => b.count - a.count || a.deviceSn.localeCompare(b.deviceSn))
+}
+
+/**
+ * A terminal's display name, falling back to its serial.
+ *
+ * At four terminals a grid of raw serials is merely ugly; at twenty it is
+ * unreadable — `PYA8261900039` and `PYA8261900038` differ in one character.
+ * Operators know these boxes by where they are, so name and location lead and
+ * the serial becomes the subtitle.
+ */
+export function deviceLabel(
+  sn: string,
+  devices: { serial_number: string; name?: string | null; location?: string | null }[]
+): string {
+  const d = devices.find((x) => x.serial_number === sn)
+  const name = d?.name?.trim()
+  const location = d?.location?.trim()
+  if (name && location && name !== location) return `${name} · ${location}`
+  return name || location || sn
 }
