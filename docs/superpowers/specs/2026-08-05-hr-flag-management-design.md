@@ -500,12 +500,12 @@ concept, and is not a second writer. Three separate verifiers checked it indepen
 2. **Nothing consumes decisions yet.** The value is deferred to a payroll integration that
    does not exist. Accepted deliberately — the audit trail has to exist before anything can
    read it.
-2. **Real flag volume is unmeasured.** 500 employees is known; flags-per-week is estimated,
-   not counted. The `limit` cap and keyset pagination are sized defensively. Measuring
-   against a restored production backup before tuning the tier thresholds is worthwhile but
-   not blocking.
-3. **`_require_hr_role()` grants `HR User` and `HR Manager` identical power**, so any HR User
+3. **Real flag volume is unmeasured.** 500 employees is known; flags-per-week is estimated,
+   not counted. The row cap and `truncated` flag are sized defensively. Measuring against a
+   restored production backup before tuning the tier thresholds is worthwhile but not
+   blocking.
+4. **`_require_hr_role()` grants `HR User` and `HR Manager` identical power**, so any HR User
    can excuse any flag for any employee. If decisions ever gain payroll consequence, that
    deserves revisiting — noted, not solved here.
-4. **The `-prov` truncation bug is left live in the engine.** Spec 1 avoids it rather than
+5. **The `-prov` truncation bug is left live in the engine.** Spec 1 avoids it rather than
    fixing it, since fixing it changes existing docnames. Worth its own small task later.
