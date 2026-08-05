@@ -198,3 +198,86 @@ export function hasDrift(row: MatrixRow): boolean {
 export function countDrift(rows: MatrixRow[]): number {
   return rows.filter(hasDrift).length
 }
+
+/**
+ * ── Scaling past a grid ───────────────────────────────────────────────────
+ *
+ * A matrix is rows x devices, so its width grows with the fleet. At four
+ * terminals that is readable; at ten it is horizontal scrolling, and the two
+ * settings that actually differ are somewhere off-screen.
+ *
+ * The fix is to notice that VALUES are few and DEVICES are many. `VOLUME`
+ * across twenty terminals is still three distinct values, so grouping by value
+ * collapses the axis that grows. What an operator needs is "which value should
+ * this be, and who disagrees" — not a cell-by-cell read.
+ */
+
+export interface ValueGroup {
+  /** Raw value; null when withheld or not reported. */
+  value: string | null
+  /** Serials reporting this value. */
+  devices: string[]
+  /** The single largest group. False for ALL groups when there is a tie. */
+  isMajority: boolean
+}
+
+/** Distinct values for one row, largest group first. */
+export function groupRowValues(row: MatrixRow, reportingDevices: string[]): ValueGroup[] {
+  const buckets = new Map<string, { value: string | null; devices: string[] }>()
+
+  for (const sn of reportingDevices) {
+    const cell = row.cells[sn]
+    // Withheld and absent are distinct from each other and from any value, and
+    // neither may be silently folded into a real reading.
+    const id = !cell?.present ? ' absent' : cell.redacted ? ' withheld' : `v:${cell.value}`
+    const value = !cell?.present || cell.redacted ? null : cell.value
+
+    const bucket = buckets.get(id) ?? { value, devices: [] }
+    bucket.devices.push(sn)
+    buckets.set(id, bucket)
+  }
+
+  const groups = [...buckets.values()].sort((a, b) => b.devices.length - a.devices.length)
+  const top = groups[0]?.devices.length ?? 0
+  // A tie has no majority. Declaring one would tell an operator to standardise
+  // on a value with no more support than its rival.
+  const tied = groups.filter((g) => g.devices.length === top).length > 1
+
+  return groups.map((g) => ({ ...g, isMajority: !tied && g.devices.length === top }))
+}
+
+export interface DeviceDeviation {
+  deviceSn: string
+  /** Settings where this device is outside the majority. */
+  count: number
+  keys: string[]
+}
+
+/**
+ * Which terminals are the odd ones out, worst first.
+ *
+ * With a large fleet the useful question inverts: not "which setting differs"
+ * but "which box is wrong". One terminal deviating on six settings is a single
+ * visit; six terminals deviating on one each is a different job entirely.
+ */
+export function deviceDeviations(
+  rows: MatrixRow[],
+  reportingDevices: string[]
+): DeviceDeviation[] {
+  const byDevice = new Map<string, string[]>(reportingDevices.map((sn) => [sn, []]))
+
+  for (const row of rows) {
+    if (!hasDrift(row)) continue
+    const majority = groupRowValues(row, reportingDevices).find((g) => g.isMajority)
+    // No majority means no one is the outlier — everybody is.
+    if (!majority) continue
+    for (const sn of reportingDevices) {
+      if (!majority.devices.includes(sn)) byDevice.get(sn)?.push(row.key)
+    }
+  }
+
+  return [...byDevice.entries()]
+    .map(([deviceSn, keys]) => ({ deviceSn, count: keys.length, keys }))
+    .filter((d) => d.count > 0)
+    .sort((a, b) => b.count - a.count || a.deviceSn.localeCompare(b.deviceSn))
+}

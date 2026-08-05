@@ -1,5 +1,12 @@
 import { describe, test, expect } from 'vitest'
-import { buildOptionMatrix, countDrift, hasDrift, classifyKey } from './device-option-matrix'
+import {
+  buildOptionMatrix,
+  countDrift,
+  hasDrift,
+  classifyKey,
+  groupRowValues,
+  deviceDeviations,
+} from './device-option-matrix'
 import type { DeviceOptionEntry } from '@/services/device-service'
 
 /**
@@ -257,5 +264,89 @@ describe('classifyKey', () => {
   test('is case-insensitive, since firmware casing is not guaranteed', () => {
     expect(classifyKey('ipaddress')).toBe('identity')
     expect(classifyKey('USERCOUNT')).toBe('counter')
+  })
+})
+
+/**
+ * Scaling past a grid.
+ *
+ * A matrix widens with the fleet, so at ten-plus terminals the settings that
+ * actually differ are off-screen. Values are few and devices are many, so
+ * grouping by value collapses the axis that grows.
+ */
+describe('groupRowValues', () => {
+  const rowFor = (entries: DeviceOptionEntry[], sns: string[]) =>
+    buildOptionMatrix(entries, sns).rows[0]
+
+  test('collapses many devices into few value groups', () => {
+    // The whole point: twenty terminals, three lines.
+    const sns = Array.from({ length: 20 }, (_, i) => `SN${i}`)
+    const entries = sns.map((sn, i) => e(sn, 'VOLUME', i < 17 ? '60' : i < 19 ? '20' : '70'))
+    const groups = groupRowValues(rowFor(entries, sns), sns)
+
+    expect(groups).toHaveLength(3)
+    expect(groups[0]).toMatchObject({ value: '60', isMajority: true })
+    expect(groups[0].devices).toHaveLength(17)
+  })
+
+  test('declares no majority on a tie', () => {
+    // Standardising on a value with no more support than its rival is advice
+    // the data does not justify.
+    const sns = ['A', 'B']
+    const groups = groupRowValues(rowFor([e('A', 'VOLUME', '60'), e('B', 'VOLUME', '20')], sns), sns)
+    expect(groups.every((g) => !g.isMajority)).toBe(true)
+  })
+
+  test('keeps withheld, absent and real values in separate groups', () => {
+    const sns = ['A', 'B', 'C']
+    const row = rowFor([e('A', 'K', '1'), e('B', 'K', null, true), e('C', 'OTHER', 'x')], sns)
+    const groups = groupRowValues(row, sns)
+
+    // Three distinct states, never folded together.
+    expect(groups).toHaveLength(3)
+    expect(groups.filter((g) => g.value === null)).toHaveLength(2)
+  })
+})
+
+describe('deviceDeviations', () => {
+  test('ranks the odd terminals out, worst first', () => {
+    // "Which box is wrong" is one site visit; "which setting differs" is not.
+    const sns = ['A', 'B', 'C']
+    const m = buildOptionMatrix(
+      [
+        e('A', 'VOLUME', '60'), e('B', 'VOLUME', '60'), e('C', 'VOLUME', '20'),
+        e('A', 'Brightness', '5'), e('B', 'Brightness', '5'), e('C', 'Brightness', '9'),
+        e('A', 'Language', '69'), e('B', 'Language', '1'), e('C', 'Language', '69'),
+      ],
+      sns
+    )
+    const dev = deviceDeviations(m.rows, m.reportingDevices)
+
+    expect(dev[0]).toMatchObject({ deviceSn: 'C', count: 2 })
+    expect(dev[0].keys.sort()).toEqual(['Brightness', 'VOLUME'])
+    expect(dev[1]).toMatchObject({ deviceSn: 'B', count: 1 })
+    expect(dev.find((d) => d.deviceSn === 'A')).toBeUndefined()
+  })
+
+  test('blames nobody when there is no majority', () => {
+    const sns = ['A', 'B']
+    const m = buildOptionMatrix([e('A', 'VOLUME', '60'), e('B', 'VOLUME', '20')], sns)
+    expect(deviceDeviations(m.rows, m.reportingDevices)).toEqual([])
+  })
+
+  test('ignores identity and counters, which are never anyones fault', () => {
+    const sns = ['A', 'B']
+    const m = buildOptionMatrix(
+      [e('A', 'MAC', 'x'), e('B', 'MAC', 'y'), e('A', 'UserCount', '1'), e('B', 'UserCount', '99')],
+      sns
+    )
+    expect(deviceDeviations(m.rows, m.reportingDevices)).toEqual([])
+  })
+
+  test('names the real fleet outliers', () => {
+    const m = buildOptionMatrix(REAL_FLEET_ROWS, FLEET)
+    const dev = deviceDeviations(m.rows, m.reportingDevices)
+    // FWVersion: three agree, D1 alone. VOLUME: 60 is the majority, D3 and D4 differ.
+    expect(dev.map((d) => d.deviceSn).sort()).toEqual([D1, D3, D4].sort())
   })
 })

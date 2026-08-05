@@ -504,21 +504,14 @@ export class DeviceService {
    * option is unset. The two must never render the same way.
    */
   /**
-   * Every approved terminal's reported configuration, for the fleet matrix.
+   * NOTE: there is deliberately no fleet-wide variant of this.
    *
-   * The bridge bounds this response, so the caller is given the limit it used
-   * and can detect truncation. A silently truncated grid makes present keys
-   * look absent, which renders as drift that is not real.
+   * A bare GET returns every device's rows under ONE bound, which truncates
+   * silently as the fleet grows — ten terminals at ~78 keys is 780 rows against
+   * a 500 cap. A cut key looks absent on every terminal, which renders as drift
+   * that is not real. The fleet page fans out per device instead, so each query
+   * stays far under the bound however many terminals there are.
    */
-  static async getAllDeviceOptions(limit: number): Promise<DeviceOptionEntry[]> {
-    const json = await this.fetchApi<{ success: boolean; data: DeviceOptionEntry[] }>(
-      `/admin/device-options?limit=${encodeURIComponent(String(limit))}`,
-      {},
-      'Failed to load fleet configuration'
-    )
-    return json.data ?? []
-  }
-
   static async getDeviceOptions(serialNumber: string): Promise<DeviceOptionEntry[]> {
     const json = await this.fetchApi<{ success: boolean; data: DeviceOptionEntry[] }>(
       `/admin/device-options?sn=${encodeURIComponent(serialNumber)}`,
