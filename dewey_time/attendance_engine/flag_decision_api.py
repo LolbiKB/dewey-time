@@ -224,7 +224,15 @@ def _write_decision(
     group_key: str,
     decided_by: str,
     decided_at,
-) -> str:
+) -> tuple[str, str | None]:
+    """Insert one decision row. Returns (name, pointer_error).
+
+    Raises only when nothing was written. Once `insert()` returns, the row exists in the
+    table no matter what happens next, so a failure to flip the predecessor's
+    `superseded` pointer is *returned* rather than raised: raising would let the caller
+    book the row as unwritten while it stands, understating `written` and hiding the one
+    state every reader depends on being impossible — two live rows for one identity.
+    """
     if not flag:
         # Correcting a punch changes the evidence and therefore the identity, and
         # correcting a punch is the most common thing HR does while triaging — so this
@@ -260,16 +268,29 @@ def _write_decision(
     # upsert_device_closeout_alert inserts this way (closeout.py:219).
     doc.insert(ignore_permissions=True)
 
+    pointer_error = None
     if previous:
         # Flipped AFTER the insert, so a failed insert can never leave the identity with
         # no live decision at all. Decision content is immutable — this pointer is the
         # only thing that ever changes on an existing row — and update_modified=False
         # keeps the audit row byte-stable.
-        frappe.db.set_value(DECISION_DOCTYPE, previous, "superseded", 1, update_modified=False)
+        try:
+            frappe.db.set_value(DECISION_DOCTYPE, previous, "superseded", 1, update_modified=False)
+        except Exception as exc:
+            # The insert stands, so this identity now has TWO superseded=0 rows and every
+            # reader selects on exactly that. Surface it in the response instead of
+            # discarding a row that was really written.
+            pointer_error = (
+                f"Decision {doc.name} was written, but superseding {previous} failed: {exc}"
+            )
+            frappe.log_error(
+                title="flag decision: supersession pointer flip failed",
+                message=frappe.get_traceback(),
+            )
 
     # The row just written is now the live one for this identity.
     live_decisions[identity] = doc.name
-    return doc.name
+    return doc.name, pointer_error
 
 
 @frappe.whitelist(methods=["POST"])
@@ -320,7 +341,7 @@ def decide_flags(
         # Per-row isolation — one stale identity out of 39 must never cost the other 38.
         # Pattern: schedule_resolver.clear_employee_schedule (schedule_resolver.py:1214-1223).
         try:
-            _write_decision(
+            _name, pointer_error = _write_decision(
                 identity=identity,
                 flag=flags_by_identity.get(identity),
                 branch_by_employee=branch_by_employee,
@@ -332,9 +353,16 @@ def decide_flags(
                 decided_by=decided_by,
                 decided_at=decided_at,
             )
-            written += 1
         except Exception as exc:
             errors.append({"flag_identity": identity, "error": str(exc)})
+            continue
+
+        # Counted the moment the insert returns: past this point the row exists whatever
+        # else went wrong, and a response that understates `written` would invite HR to
+        # retry a decision that already landed.
+        written += 1
+        if pointer_error:
+            errors.append({"flag_identity": identity, "error": pointer_error})
 
     # Commit here rather than leaning on request teardown, so the rows that did write
     # survive a later failure in the same request (dev_tools.py:68 does the same). The
@@ -382,8 +410,10 @@ def _record_reversal_note(names: list[str], *, note: str, group_key: str):
     if not names:
         return
     content = f"Decision batch {group_key} reversed by {frappe.session.user}: {note}"
-    try:
-        for name in names:
+    for name in names:
+        # Per-row isolation, like every other loop in this module: one comment that fails
+        # to write must not cost the remaining rows their reason-for-reversal too.
+        try:
             frappe.get_doc(
                 {
                     "doctype": "Comment",
@@ -393,8 +423,11 @@ def _record_reversal_note(names: list[str], *, note: str, group_key: str):
                     "content": content,
                 }
             ).insert(ignore_permissions=True)
-    except Exception:
-        frappe.log_error(title="flag decision reversal: comment write failed")
+        except Exception:
+            frappe.log_error(
+                title="flag decision reversal: comment write failed",
+                message=frappe.get_traceback(),
+            )
 
 
 @frappe.whitelist(methods=["POST"])
@@ -455,7 +488,12 @@ def reverse_decision_group(group_key: str, note: str, confirm=None) -> dict:
 
         invalidate_flag_queue_cache()
     except Exception:
-        frappe.log_error(title="flag decision reversal: queue cache invalidation failed")
+        # With the traceback attached, a real failure inside invalidate_flag_queue_cache()
+        # is distinguishable from the bare ImportError this also swallows.
+        frappe.log_error(
+            title="flag decision reversal: queue cache invalidation failed",
+            message=frappe.get_traceback(),
+        )
 
     return {
         "ok": not errors,

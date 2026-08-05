@@ -12,6 +12,7 @@ import frappe  # noqa: E402
 
 FIXED_NOW = datetime(2026, 8, 4, 9, 30, 0)
 FLAG_DATE = date(2026, 8, 3)
+GROUP_KEY = "AFD-a1b2c3d4e5f6"
 
 
 def _getdate(value):
@@ -49,7 +50,7 @@ from dewey_time.attendance_engine.flag_identity import (  # noqa: E402
 )
 
 
-def _flag_row(employee, *, flag_code="LATE_START", minutes=12, day_closed=1):
+def _flag_row(employee, *, flag_code="LATE_START", minutes=12, day_closed=1, source="AUTO"):
     return {
         "name": f"AF-{employee}-{flag_code}",
         "employee": employee,
@@ -57,6 +58,7 @@ def _flag_row(employee, *, flag_code="LATE_START", minutes=12, day_closed=1):
         "flag_code": flag_code,
         "evidence": json.dumps({"minutes": minutes}),
         "day_closed": day_closed,
+        "source": source,
     }
 
 
@@ -92,15 +94,47 @@ def _make_get_doc(store):
     return _get_doc
 
 
+def _comparable(value):
+    """Dates compare as their ISO text, the way a real column comparison would: the
+    `attendance_date` filter is built from the "YYYY-MM-DD" parsed out of the identity
+    string, while the fixture rows hold real `date` objects."""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _matches(row, filters):
+    """Apply a Frappe `filters` dict to one fixture row.
+
+    The fake MUST honour filters, not just the doctype: every safety property of this
+    module lives in a filter term (`source: AUTO`, `superseded: 0`, `group_key`), and a
+    doctype-only fake reports a site-wide reversal as a correct one.
+    """
+    for field, condition in (filters or {}).items():
+        value = _comparable(row.get(field))
+        if isinstance(condition, (list, tuple)):
+            operator, operand = condition
+            if operator != "in":
+                raise AssertionError(f"fake get_all does not implement operator {operator!r}")
+            if value not in [_comparable(item) for item in operand]:
+                return False
+        elif value != _comparable(condition):
+            return False
+    return True
+
+
 def _make_get_all(*, flags=(), decisions=(), employees=()):
+    fixtures = {
+        "Attendance Flag": flags,
+        "Attendance Flag Decision": decisions,
+        "Employee": employees,
+    }
+
     def _get_all(doctype, **kwargs):
-        if doctype == "Attendance Flag":
-            return [dict(row) for row in flags]
-        if doctype == "Attendance Flag Decision":
-            return [dict(row) for row in decisions]
-        if doctype == "Employee":
-            return [dict(row) for row in employees]
-        return []
+        rows = fixtures.get(doctype, ())
+        return [dict(row) for row in rows if _matches(row, kwargs.get("filters"))]
 
     return _get_all
 
@@ -117,7 +151,11 @@ class TestDecideFlags(unittest.TestCase):
         # MagicMock returns a truthy MagicMock and would silently confirm everything.
         frappe.form_dict = {}
         frappe.db.set_value.reset_mock()
+        # reset_mock() does NOT clear side_effect, and one test below makes set_value
+        # raise — clear it explicitly or that failure leaks into every later test.
+        frappe.db.set_value.side_effect = None
         frappe.db.commit.reset_mock()
+        frappe.log_error.reset_mock()
 
     def test_non_hr_session_is_rejected(self):
         from dewey_time.attendance_engine.flag_decision_api import decide_flags
@@ -347,7 +385,7 @@ class TestDecideFlags(unittest.TestCase):
             frappe.db.set_value.assert_not_called()
 
             # The first row is now the live one for this identity.
-            decisions.append({"name": first.name, "flag_identity": identity})
+            decisions.append({"name": first.name, "flag_identity": identity, "superseded": 0})
 
             second_result = decide_flags(
                 identities=[identity],
@@ -370,6 +408,100 @@ class TestDecideFlags(unittest.TestCase):
             update_modified=False,
         )
 
+    def test_third_decision_supersedes_the_live_row_not_an_already_superseded_one(self):
+        from dewey_time.attendance_engine.flag_decision_api import decide_flags
+
+        row = _flag_row("HR-EMP-00008")
+        identity = _identity(row)
+        # Two rows already exist for this identity. Only the second is live; the stale one
+        # is listed LAST so that dropping the `superseded: 0` filter would let it win the
+        # dict build and make the third decision supersede a row that was already dead.
+        decisions = [
+            {"name": "AFD-live", "flag_identity": identity, "superseded": 0},
+            {"name": "AFD-stale", "flag_identity": identity, "superseded": 1},
+        ]
+        store = []
+
+        with patch.object(
+            frappe,
+            "get_all",
+            side_effect=_make_get_all(flags=[row], decisions=decisions),
+        ), patch.object(frappe, "get_doc", side_effect=_make_get_doc(store)):
+            result = decide_flags(
+                identities=[identity],
+                outcome="EXCUSED",
+                reason="SCHEDULE_WRONG",
+            )
+
+        self.assertEqual(result["written"], 1)
+        self.assertEqual(_decision_docs(store)[0].payload["supersedes"], "AFD-live")
+        frappe.db.set_value.assert_called_once_with(
+            "Attendance Flag Decision",
+            "AFD-live",
+            "superseded",
+            1,
+            update_modified=False,
+        )
+
+    def test_manual_flags_are_not_decidable(self):
+        from dewey_time.attendance_engine.flag_decision_api import decide_flags
+
+        # A hand-created flag carries the same identity as the AUTO flag it replaced
+        # (flag_identity is source-blind), so `source: "AUTO"` in the query is the only
+        # thing keeping HR's decision bound to engine-generated flags.
+        manual = _flag_row("HR-EMP-00009", source="MANUAL")
+        store = []
+
+        with patch.object(
+            frappe, "get_all", side_effect=_make_get_all(flags=[manual])
+        ), patch.object(frappe, "get_doc", side_effect=_make_get_doc(store)):
+            result = decide_flags(
+                identities=[_identity(manual)],
+                outcome="EXCUSED",
+                reason="APPROVED_LEAVE",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["written"], 0)
+        self.assertEqual(store, [])
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn("No live AUTO flag", result["errors"][0]["error"])
+
+    def test_a_failed_supersession_pointer_still_counts_the_row_it_wrote(self):
+        from dewey_time.attendance_engine.flag_decision_api import decide_flags
+
+        row = _flag_row("HR-EMP-00010")
+        identity = _identity(row)
+        decisions = [{"name": "AFD-live", "flag_identity": identity, "superseded": 0}]
+        store = []
+        frappe.db.set_value.side_effect = Exception("Lock wait timeout exceeded")
+
+        with patch.object(
+            frappe,
+            "get_all",
+            side_effect=_make_get_all(flags=[row], decisions=decisions),
+        ), patch.object(frappe, "get_doc", side_effect=_make_get_doc(store)):
+            result = decide_flags(
+                identities=[identity],
+                outcome="EXCUSED",
+                reason="APPROVED_LEAVE",
+            )
+
+        # The insert succeeded, so the row exists and must be reported as written —
+        # understating it would invite HR to re-decide a flag that already landed.
+        self.assertEqual(len(_decision_docs(store)), 1)
+        self.assertEqual(result["written"], 1)
+        # ...and the dangling pointer is reported, because the identity now has two
+        # superseded=0 rows and every reader selects on exactly that.
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(result["errors"][0]["flag_identity"], identity)
+        self.assertIn("AFD-live", result["errors"][0]["error"])
+        self.assertIn(
+            "flag decision: supersession pointer flip failed",
+            [call.kwargs.get("title") for call in frappe.log_error.call_args_list],
+        )
+
 
 class TestReverseDecisionGroup(unittest.TestCase):
     def setUp(self):
@@ -377,7 +509,9 @@ class TestReverseDecisionGroup(unittest.TestCase):
         frappe.get_roles.return_value = ["HR User"]
         frappe.form_dict = {}
         frappe.db.set_value.reset_mock()
+        frappe.db.set_value.side_effect = None
         frappe.db.commit.reset_mock()
+        frappe.log_error.reset_mock()
 
     def test_plain_hr_user_cannot_reverse_a_group(self):
         from dewey_time.attendance_engine.flag_decision_api import reverse_decision_group
@@ -388,7 +522,7 @@ class TestReverseDecisionGroup(unittest.TestCase):
         ):
             with self.assertRaises(Exception) as ctx:
                 reverse_decision_group(
-                    group_key="AFD-a1b2c3d4e5f6",
+                    group_key=GROUP_KEY,
                     note="Wrong batch.",
                     confirm=1,
                 )
@@ -404,7 +538,7 @@ class TestReverseDecisionGroup(unittest.TestCase):
 
         with patch.object(frappe, "get_all", side_effect=_make_get_all()):
             with self.assertRaises(Exception) as ctx:
-                reverse_decision_group(group_key="AFD-a1b2c3d4e5f6", note="  ", confirm=1)
+                reverse_decision_group(group_key=GROUP_KEY, note="  ", confirm=1)
 
         self.assertIn("note", str(ctx.exception))
 
@@ -413,16 +547,45 @@ class TestReverseDecisionGroup(unittest.TestCase):
 
         frappe.get_roles.return_value = ["HR User", "HR Manager"]
         rows = [
-            {"name": "AFD-0001", "flag_identity": "AUTO-a-2026-08-03-late-start", "employee": "HR-EMP-00001"},
-            {"name": "AFD-0002", "flag_identity": "AUTO-b-2026-08-03-late-start", "employee": "HR-EMP-00002"},
+            {
+                "name": "AFD-0001",
+                "flag_identity": "AUTO-a-2026-08-03-late-start",
+                "employee": "HR-EMP-00001",
+                "group_key": GROUP_KEY,
+                "superseded": 0,
+            },
+            {
+                "name": "AFD-0002",
+                "flag_identity": "AUTO-b-2026-08-03-late-start",
+                "employee": "HR-EMP-00002",
+                "group_key": GROUP_KEY,
+                "superseded": 0,
+            },
+            # A live decision from somebody else's batch. The group_key filter is the only
+            # thing between this reversal and every decision on the site.
+            {
+                "name": "AFD-OTHER",
+                "flag_identity": "AUTO-c-2026-08-03-late-start",
+                "employee": "HR-EMP-00003",
+                "group_key": "AFD-999999999999",
+                "superseded": 0,
+            },
+            # Already superseded, from THIS batch: reversing must not touch it again.
+            {
+                "name": "AFD-DEAD",
+                "flag_identity": "AUTO-d-2026-08-03-late-start",
+                "employee": "HR-EMP-00004",
+                "group_key": GROUP_KEY,
+                "superseded": 1,
+            },
         ]
         store = []
 
         with patch.object(
             frappe, "get_all", side_effect=_make_get_all(decisions=rows)
-        ), patch.object(frappe, "get_doc", side_effect=_make_get_doc(store)):
+        ) as get_all, patch.object(frappe, "get_doc", side_effect=_make_get_doc(store)):
             preview = reverse_decision_group(
-                group_key="AFD-a1b2c3d4e5f6",
+                group_key=GROUP_KEY,
                 note="Device fault was misdiagnosed.",
             )
             self.assertTrue(preview["needs_confirm"])
@@ -430,9 +593,15 @@ class TestReverseDecisionGroup(unittest.TestCase):
             frappe.db.set_value.assert_not_called()
 
             result = reverse_decision_group(
-                group_key="AFD-a1b2c3d4e5f6",
+                group_key=GROUP_KEY,
                 note="Device fault was misdiagnosed.",
                 confirm=1,
+            )
+            # Pinned as well as exercised: the fixture decoys prove the filter is applied,
+            # this proves it is the filter that was asked for.
+            self.assertEqual(
+                get_all.call_args_list[-1].kwargs["filters"],
+                {"group_key": GROUP_KEY, "superseded": 0},
             )
 
         self.assertTrue(result["ok"])
@@ -448,6 +617,52 @@ class TestReverseDecisionGroup(unittest.TestCase):
         comments = [doc for doc in store if doc.payload.get("doctype") == "Comment"]
         self.assertEqual(len(comments), 2)
         self.assertIn("Device fault was misdiagnosed.", comments[0].payload["content"])
+
+    def test_one_failed_reversal_comment_does_not_cost_the_others_theirs(self):
+        from dewey_time.attendance_engine.flag_decision_api import reverse_decision_group
+
+        frappe.get_roles.return_value = ["HR User", "HR Manager"]
+        rows = [
+            {
+                "name": f"AFD-{index:04d}",
+                "flag_identity": f"AUTO-{index}-2026-08-03-late-start",
+                "employee": f"HR-EMP-{index:05d}",
+                "group_key": GROUP_KEY,
+                "superseded": 0,
+            }
+            for index in range(1, 4)
+        ]
+        store = []
+
+        def _get_doc(payload, *args, **kwargs):
+            doc = _FakeDoc(payload, store)
+            if payload.get("reference_name") == "AFD-0001":
+                doc.insert = MagicMock(side_effect=Exception("Deadlock found"))
+            return doc
+
+        with patch.object(
+            frappe, "get_all", side_effect=_make_get_all(decisions=rows)
+        ), patch.object(frappe, "get_doc", side_effect=_get_doc):
+            result = reverse_decision_group(
+                group_key=GROUP_KEY,
+                note="Reversed in error.",
+                confirm=1,
+            )
+
+        # The reversal itself is untouched by an audit-note failure...
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["reversed"], 3)
+        # ...and the two rows after the failing one still get their reason recorded.
+        commented = [
+            doc.payload["reference_name"]
+            for doc in store
+            if doc.payload.get("doctype") == "Comment"
+        ]
+        self.assertEqual(commented, ["AFD-0002", "AFD-0003"])
+        self.assertIn(
+            "flag decision reversal: comment write failed",
+            [call.kwargs.get("title") for call in frappe.log_error.call_args_list],
+        )
 
 
 if __name__ == "__main__":
