@@ -23,6 +23,21 @@ This is the P1 deferred in `docs/FRAPPE_ATTENDANCE_RULES.md:212`:
 Spec 2 depends entirely on Spec 1's decision record existing, so the order is forced,
 not preferential.
 
+## Prerequisite — a separate engine fix lands first
+
+**`intraday.py:214` must be fixed before this plan is written.** It deletes every AUTO flag
+for an employee/date on a checkin edit but regenerates only `MISSING_TIME` and
+`NON_PRIMARY_SITE_PUNCH`, and only as provisional — so on an already-closed past date every
+other flag is destroyed permanently (details under *Background*). Correcting a punch is the
+most common HR action while triaging, so shipping the queue on top of this bug would
+manufacture `orphaned_flag_gone` decisions during ordinary use and make the page look broken
+when the engine is at fault.
+
+Scope of that fix: on a date that has already closed out, either restrict the deletion to
+what the intraday pass will actually regenerate, or re-run full closeout generation instead
+of the intraday subset. Self-contained, testable on its own, and **not** part of this plan —
+it gets its own branch and review.
+
 ## Background — why a new record is required
 
 `Attendance Flag` already carries a full review workflow in its schema (`status`,
@@ -398,14 +413,33 @@ Split inbox:
 Reuses the existing notice components (`components/ui/notice.tsx` — `AttentionStrip`,
 `FailureBlock`) rather than `Alert`, per the three-role notice system merged in 823d43c1.
 
+### Retiring the Desk decision path
+
+This page becomes the only place HR decides. In the same work:
+
+- `flagDetails.ts:126-163` — rewrite `flagHrGuidance` so it no longer instructs HR to
+  "approve or reject in Desk". Guidance points at this page instead.
+- `FlagDetailPanel.tsx:118-125` — "Review in Desk" demoted from primary action to a
+  secondary "Open record" link; the decide actions become primary.
+- `Attendance Flag`'s `status`, `hr_note`, `hr_user`, `hr_decided_at` are marked deprecated
+  in the doctype (label prefix `(deprecated)`, `read_only: 1`). They are **not** dropped —
+  dropping columns would destroy whatever history survived the deletion table.
+- A one-off patch, registered in `dewey_time/patches.txt`, best-effort migrates any surviving
+  `status != "OPEN"` rows into `Attendance Flag Decision`, mapping `APPROVED → EXCUSED` and
+  `REJECTED → UPHELD` with `reason = OTHER`, `note = hr_note`, `decided_by = hr_user`,
+  `decided_at = hr_decided_at`. Rows it cannot map are logged, not silently dropped.
+
+The mirror-writes alternative was rejected: writing decisions back into fields that get
+deleted couples this feature to the exact failure it exists to escape.
+
 ## Error handling
 
 - Load failure → `FailureBlock` in the region the queue would occupy, with Retry.
 - Partial bulk failure → the queue refetches and an `AttentionStrip` reports
   *"34 of 39 saved — 5 flags changed while you were deciding"*, with the failures listed in
   its disclosure. Those five re-enter the queue as `needs_re_review`.
-- A decision whose flag has vanished entirely (punch corrected, flag no longer generated) is
-  retained in the database for audit and simply not shown.
+- A decision whose flag has vanished entirely (`orphaned_flag_gone`) is retained in the
+  database for audit and simply not shown in the queue.
 
 ## Testing
 
@@ -463,15 +497,7 @@ concept, and is not a second writer. Three separate verifiers checked it indepen
    `(employee, attendance_date, flag_code)` — is punch-stable but cannot distinguish two
    `MISSING_TIME` gaps on one day. Decision taken: fine-grained key plus explicit orphan
    states. Revisit if orphan rates in practice turn out to be high.
-2. **`intraday.py:214` destroys flags on closed dates and nothing regenerates them.**
-   Pre-existing, not introduced here, and not fixed here — but it will produce
-   `orphaned_flag_gone` decisions during normal use of this page. Deserves its own engine
-   task, ahead of or alongside the plan.
-3. **The existing in-place HR fields on `Attendance Flag`** (`status`, `hr_note`, `hr_user`,
-   `hr_decided_at`) are left in place and unused by this feature, which means two judgment
-   stores coexist — one live and lossy, one durable. Migrate, retire, or knowingly keep
-   both. Not decided here; must be decided before the plan is written.
-4. **Nothing consumes decisions yet.** The value is deferred to a payroll integration that
+2. **Nothing consumes decisions yet.** The value is deferred to a payroll integration that
    does not exist. Accepted deliberately — the audit trail has to exist before anything can
    read it.
 2. **Real flag volume is unmeasured.** 500 employees is known; flags-per-week is estimated,
