@@ -27,6 +27,21 @@ export interface DeviceFilters extends BaseFilters {
 }
 
 // Device Entry (matches database schema)
+/** One option a terminal reported about itself in an INFO reply. */
+export interface DeviceOptionEntry {
+  device_sn: string
+  key: string
+  /** Null when withheld — see `redacted`. Never assume null means "unset". */
+  value: string | null
+  /**
+   * The device reported a value that the bridge deliberately did not store,
+   * because this key is not on its value allowlist. Anything written to that
+   * table also lands in backups, so unclassified values are never persisted.
+   */
+  redacted: boolean
+  reported_at: string
+}
+
 export interface DeviceEntry {
   serial_number: string
   name?: string
@@ -465,5 +480,37 @@ export class DeviceService {
     const presence = getDevicePresence(d.last_seen)
     return { ...d, status: presence.status, last_seen_minutes: presence.lastSeenMinutes }
   }
+
+  /**
+   * Ask a terminal to report its own configuration (ZKTeco INFO, §12.4.3).
+   *
+   * Queues a command — the terminal answers on its NEXT POLL, so options appear
+   * seconds later, not in this response. Super Admin only, enforced by the bridge.
+   */
+  static async refreshDeviceOptions(serialNumber: string): Promise<{ commandId: number }> {
+    const json = await this.fetchApi<{ success: boolean; commandId: number }>(
+      `/admin/devices/${encodeURIComponent(serialNumber)}/options/refresh`,
+      { method: 'POST', body: JSON.stringify({}) },
+      'Failed to request device configuration'
+    )
+    return { commandId: json.commandId }
+  }
+
+  /**
+   * What a terminal last reported about itself.
+   *
+   * `redacted` means the device DID report a value the bridge deliberately did
+   * not store, because the key is not on its value allowlist — NOT that the
+   * option is unset. The two must never render the same way.
+   */
+  static async getDeviceOptions(serialNumber: string): Promise<DeviceOptionEntry[]> {
+    const json = await this.fetchApi<{ success: boolean; data: DeviceOptionEntry[] }>(
+      `/admin/device-options?sn=${encodeURIComponent(serialNumber)}`,
+      {},
+      'Failed to load device configuration'
+    )
+    return json.data ?? []
+  }
+
 }
 

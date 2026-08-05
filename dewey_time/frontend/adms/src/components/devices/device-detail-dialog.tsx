@@ -38,7 +38,11 @@ import {
 import { cn } from '@/lib/utils'
 import { signalText, signalBadge, signalAlert } from '@/lib/signal'
 import { supabase } from '@/lib/supabase'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
+import { useAuth } from '@/contexts/auth-context'
+import { DeviceConfigSection } from '@/components/devices/device-config-section'
+import { DeviceService } from '@/services/device-service'
+import { notifySuccess, notifyInfo, notifyError } from '@/lib/toast'
 import { queryKeys } from '@/lib/query-keys'
 import { 
   useDeviceWithUsers, 
@@ -245,7 +249,71 @@ export function DeviceDetailDialog({
   const registration = parseDeviceRegistrationData(infoDevice?.registration_data)
 
   const queryClient = useQueryClient()
-  
+  const { isSuperAdmin } = useAuth()
+
+  // What the terminal last reported about itself (ZKTeco INFO).
+  //
+  // Polled while the Info tab is open, because a refresh is a QUEUED command:
+  // the terminal answers on its next poll, so the rows land seconds after the
+  // request returns. Without polling the panel would sit empty and look broken.
+  const [requestingOptions, setRequestingOptions] = useState(false)
+  const [rebootingDevice, setRebootingDevice] = useState(false)
+
+  const deviceOptions = useQuery({
+    queryKey: ['device-options', deviceSn],
+    queryFn: () => DeviceService.getDeviceOptions(deviceSn || ''),
+    enabled: open && !!deviceSn && activeTab === 'info',
+    refetchInterval: requestingOptions ? 3000 : false,
+  })
+
+  const optionRows = useMemo(() => deviceOptions.data ?? [], [deviceOptions.data])
+  const optionsReportedAt = useMemo(
+    () =>
+      optionRows.reduce<string | null>(
+        (latest, r) => (!latest || r.reported_at > latest ? r.reported_at : latest),
+        null
+      ),
+    [optionRows]
+  )
+
+  // Stop polling once the terminal has answered. Comparing the newest
+  // reported_at against the moment we asked is what distinguishes a fresh
+  // answer from the rows that were already there.
+  const [optionsRequestedAt, setOptionsRequestedAt] = useState<string | null>(null)
+  useEffect(() => {
+    if (!requestingOptions || !optionsRequestedAt) return
+    if (optionsReportedAt && optionsReportedAt > optionsRequestedAt) {
+      setRequestingOptions(false)
+      notifySuccess('Device reported its configuration')
+    }
+  }, [requestingOptions, optionsRequestedAt, optionsReportedAt])
+
+  const handleRefreshOptions = async () => {
+    if (!deviceSn) return
+    setOptionsRequestedAt(new Date().toISOString())
+    setRequestingOptions(true)
+    try {
+      await DeviceService.refreshDeviceOptions(deviceSn)
+      notifyInfo('Asked the device to report its configuration', 'It answers on its next poll.')
+    } catch (err: unknown) {
+      setRequestingOptions(false)
+      notifyError('Could not request configuration', err instanceof Error ? err.message : undefined)
+    }
+  }
+
+  const handleRebootDevice = async () => {
+    if (!deviceSn) return
+    setRebootingDevice(true)
+    try {
+      await DeviceService.rebootDevice(deviceSn)
+      notifySuccess('Reboot queued', 'The terminal restarts on its next poll.')
+    } catch (err: unknown) {
+      notifyError('Could not reboot device', err instanceof Error ? err.message : undefined)
+    } finally {
+      setRebootingDevice(false)
+    }
+  }
+
   // Infinite query for users (TanStack)
   const paginatedUsers = useDeviceUsersPaginated(deviceSn || '', {
     limit: 20,
@@ -666,6 +734,17 @@ export function DeviceDetailDialog({
                   ADMS.
                 </p>
               </div>
+
+              <DeviceConfigSection
+                options={optionRows}
+                reportedAt={optionsReportedAt}
+                loading={deviceOptions.isLoading}
+                refreshing={requestingOptions}
+                rebooting={rebootingDevice}
+                canCommand={isSuperAdmin}
+                onRefresh={handleRefreshOptions}
+                onReboot={handleRebootDevice}
+              />
             </div>
             </div>
           </TabsContent>
