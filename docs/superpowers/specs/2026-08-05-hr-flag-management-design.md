@@ -37,7 +37,8 @@ because **AUTO flag rows are deleted and rebuilt constantly**:
 | `closeout.py:473` | `day_closed=0` rows |
 | `closeout.py:476` | `day_closed=1` rows |
 | `closeout.py:696` | the shared helper all of the above call |
-| `schedule_resolver.py:1240` | **not the engine** — `clear_employee_schedule` deletes that employee's flags when HR clears their schedule |
+| `schedule_resolver.py:1240` | **not the engine**, and **not scoped to `source = "AUTO"`** — `clear_employee_schedule` deletes that employee's flags, including any HR- or EMPLOYEE-sourced rows, when HR clears their schedule |
+| `schedule_resolver.py:1299-1348` | `clear_all_employee_schedules` — the site-wide wipe |
 
 The intraday engine runs every 30 minutes and on every punch. Deletion is a raw
 `frappe.db.delete()` that bypasses document hooks and permissions
@@ -48,6 +49,29 @@ the schedule wizard, which is the case most likely to surprise someone.
 Note also that the deterministic name is itself **unstable across the provisional→final
 transition** (the `-prov` marker, `attendance_flag.py:53-71`), so even setting deletion
 aside, `Attendance Flag.name` could not serve as a foreign key.
+
+### This failure is already live
+
+The SPA currently tells HR to go and decide in Desk — `flagDetails.ts:126-163` renders
+guidance like *"approve or reject the flag there"* — and `Attendance Flag` already carries
+`status`, `hr_note`, `hr_user`, `hr_decided_at`. Every decision HR has made that way is
+subject to the deletion table above. This spec is not preventing a hypothetical problem;
+it is closing one that is running today, unmonitored.
+
+### A worse, adjacent bug this spec does not fix
+
+`intraday.py:214` deletes **every** AUTO flag — any code, provisional and final — for an
+employee/date whenever an `Employee Checkin`'s time or employee is edited (`:196-201`). The
+regeneration it triggers rewrites **only** `MISSING_TIME` and `NON_PRIMARY_SITE_PUNCH`, and
+only as `day_closed=0`. On an already-closed past date every other AUTO flag is therefore
+deleted and **nothing ever regenerates it** — the only recovery is the dev-only, 31-day-capped
+`run_engine_for_employee` (`dev_tools.py:27-60`).
+
+This matters here because correcting a punch is the single most likely thing HR does while
+working a flag. Under this bug, correcting a punch can silently destroy the other flags on
+that day. Spec 1 does not fix it — the fix belongs in the engine and needs its own task —
+but the queue must not pretend the flags are still there, and this is called out in Open
+risks.
 
 **Decision: store HR judgments in a separate doctype the engine never reads or writes.**
 The engine's delete-everything-and-reinsert-truth invariant is left completely
@@ -188,6 +212,35 @@ On read, a flag whose current fingerprint differs from its decision's is returne
 **`needs_re_review`**. The decision is *not* applied and *not* deleted; the flag re-enters
 the queue with its prior decision shown as context.
 
+### What `flag_identity` does and does not buy — stated plainly
+
+Excluding `day_closed` fixes the provisional→final rename. **It does not make identity
+durable, and this spec must not be read as claiming otherwise.** The suffix is
+evidence-derived, and the evidence is recomputed from punch times —
+`MISSING_TIME`'s `interval_start` in `absence_flags.py:52-66`, `ATTENDANCE_ISSUE`'s
+`punch_time` in `record_issue_flags.py:24-50`. Editing a punch changes the identity. Since
+editing a punch is the most common HR action while triaging, orphaning is the *expected*
+path, not an edge case.
+
+Orphaning is therefore a first-class state on read, with three values:
+
+| State | Meaning |
+|---|---|
+| `matched` | live flag, fingerprint agrees — decision applies |
+| `orphaned_evidence_changed` | same employee/date/code exists, different evidence key — the punch was corrected |
+| `orphaned_flag_gone` | no live flag for this identity at all — corrected away, or destroyed by the `intraday.py:214` bug |
+
+Reconciliation is **read-side only**: the queue endpoint diffs live flags against decisions
+for the range. A push-side `on_trash` hook cannot work — every deletion path uses raw
+`frappe.db.delete()` and fires no document hooks, and the doctype has no `on_trash` today.
+
+Orphaned decisions are retained forever for audit and never shown as applied.
+
+> **Unresolved (Open risk 1):** a coarser key of `(employee, attendance_date, flag_code)`
+> would be punch-edit-stable, but collapses multiple same-code flags on one day — which is
+> the exact reason the evidence suffix exists. This spec takes the fine-grained key plus
+> explicit orphan states; the trade is real and is called out rather than hidden.
+
 ### Supersession
 
 Corrections append. Writing a decision for an identity that already has a live one:
@@ -261,17 +314,34 @@ range, one over `Employee` for branch/name, and one each over `Device Closeout A
 `Device Sync Status` by branch+date. Grouping, ranking, person-dedup and fingerprint
 comparison happen in Python over those result sets — never per-employee queries.
 
-Pagination is keyset on `(triage_rank DESC, employee ASC)`; there is no existing
-offset/cursor idiom in this codebase to copy, so this defines one. `limit` is capped at 500
-server-side.
+**Query budget is a hard constraint, not a goal:** O(1) queries per request regardless of
+employee count. Any per-employee or per-day query inside this endpoint is a spec violation.
+Never loop `get_employee_calendar` (`hr_calendar.py:603-646`) or reuse `get_my_week`'s
+per-day shape (`api.py:78-82,109-112`).
 
-Requires new indexes — none of these columns is indexed today, and `Select`/`Data` columns
-are not indexed by Frappe automatically:
+**Bounding follows the existing cross-employee precedent rather than inventing one.**
+`coverage_api.get_schedule_coverage` is the established shape for an HR-only page that reads
+the whole roster: a hard cap (`COVERAGE_EMPLOYEE_LIMIT = 2000`, `coverage_api.py:29`), a
+120-second Redis cache (`:25-26`, `:89-96`), doc-event cache invalidation wired at
+`hooks.py:126-132`, and a `truncated` counter (`:65-68`) in place of pagination. Reuse that:
+date-range cap + row limit + `truncated` flag + cache invalidated on `Attendance Flag` and
+`Attendance Flag Decision` writes. A from-scratch cursor scheme is explicitly *not* required
+— there is nothing in the repo to copy for one, and `truncated` is honest about what was
+dropped.
+
+**Indexes ship with the feature.** No field of any doctype in this app carries
+`search_index` today. Add `"search_index": 1` to:
 
 - `Attendance Flag`: `attendance_date`, `flag_code`, `status`
 - `Attendance Flag Decision`: `flag_identity`, `attendance_date`, `superseded`
 
-Added via a patch registered in `dewey_time/patches.txt`.
+`attendance_flag.json` also needs its `modified` timestamp bumped, or `bench migrate` skips
+the schema reimport entirely and the indexes silently never appear. Alternatively add a
+composite index via a patch registered in `dewey_time/patches.txt`.
+
+> Frappe auto-indexes `Link` columns, so `employee` and `company` are already covered. That
+> behaviour is documented framework rather than something verifiable in this repo (no bench
+> is present here) — confirm on a bench before sizing the query.
 
 ### `decide_flags(identities, outcome, reason, note=None, group_key=None)`
 
@@ -377,9 +447,31 @@ bulk decision with one stale row reports partial failure.
   registry does not exist.
 - Changing `severity`, `FLAG_SEVERITY`, or any existing consumer of them.
 
+## Naming collision to not re-litigate
+
+`frontend/adms/src/components/users/attendance-flag-notice.tsx` and
+`user-service.ts:334-354` in the ADMS SPA are **unrelated**. That is a Supabase
+`users.attendance_flagged_at` suspicious-punch marker on a device user, cleared through a
+bridge REST endpoint. It never touches the Frappe `Attendance Flag` doctype, has no severity
+concept, and is not a second writer. Three separate verifiers checked it independently.
+
 ## Open risks
 
-1. **Nothing consumes decisions yet.** The value is deferred to a payroll integration that
+1. **`flag_identity` is stable against regeneration, not against punch edits.** The
+   fine-grained evidence key orphans a decision whenever HR corrects the punch underneath
+   it, which is a common action rather than a rare one. The alternative — keying on
+   `(employee, attendance_date, flag_code)` — is punch-stable but cannot distinguish two
+   `MISSING_TIME` gaps on one day. Decision taken: fine-grained key plus explicit orphan
+   states. Revisit if orphan rates in practice turn out to be high.
+2. **`intraday.py:214` destroys flags on closed dates and nothing regenerates them.**
+   Pre-existing, not introduced here, and not fixed here — but it will produce
+   `orphaned_flag_gone` decisions during normal use of this page. Deserves its own engine
+   task, ahead of or alongside the plan.
+3. **The existing in-place HR fields on `Attendance Flag`** (`status`, `hr_note`, `hr_user`,
+   `hr_decided_at`) are left in place and unused by this feature, which means two judgment
+   stores coexist — one live and lossy, one durable. Migrate, retire, or knowingly keep
+   both. Not decided here; must be decided before the plan is written.
+4. **Nothing consumes decisions yet.** The value is deferred to a payroll integration that
    does not exist. Accepted deliberately — the audit trail has to exist before anything can
    read it.
 2. **Real flag volume is unmeasured.** 500 employees is known; flags-per-week is estimated,
