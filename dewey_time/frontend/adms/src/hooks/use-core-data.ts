@@ -40,9 +40,14 @@ export function useDevices(filters?: DeviceFilters, options?: { enabled?: boolea
       status: filters?.status,
     }),
     queryFn: async () => {
+      // Explicit columns, for the same reason as useDevice below: select('*')
+      // shipped devices.comm_key — the device authentication secret — into
+      // every admin's browser and React Query cache. This is the DEVICE LIST,
+      // so it leaked the key for every device at once, and nothing in the UI
+      // renders it.
       let dbQuery = supabase
         .from('devices')
-        .select('*', { count: 'exact' })
+        .select(DEVICE_PUBLIC_COLUMNS, { count: 'exact' })
 
       if (filters?.search) {
         dbQuery = dbQuery.or(`serial_number.ilike.%${filters.search}%,name.ilike.%${filters.search}%,location.ilike.%${filters.search}%`)
