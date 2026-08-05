@@ -31,6 +31,42 @@ class TestFlagIdentity(unittest.TestCase):
         self.assertEqual(provisional, final)
         self.assertEqual(provisional, "AUTO-hr_emp_00042-2026-08-03-late_start")
 
+    def test_day_closed_is_excluded_from_identity(self):
+        # Simulates the real production shape: a provisional Attendance
+        # Flag row (day_closed=0) and the final row that later replaces it
+        # at closeout (day_closed=1) carry identical employee/
+        # attendance_date/flag_code/evidence. Extracting only the four
+        # flag_identity() contract fields from each row -- exactly as the
+        # Task 5/Task 6 call sites will -- must yield the same identity in
+        # both cases, since day_closed never reaches flag_identity() at
+        # all. Uses MISSING_TIME (an evidence-keyed suffix, unlike
+        # LATE_START above) and pins the resulting string, so a suffix
+        # builder that started ignoring interval_start, or any other
+        # deviation from the module's real behaviour, would fail this
+        # assertion even though it says nothing about day_closed itself.
+        provisional_row = {
+            "day_closed": 0,
+            "employee": "HR-EMP-00042",
+            "attendance_date": date(2026, 8, 3),
+            "flag_code": "MISSING_TIME",
+            "evidence": {"interval_start": "2026-08-03T09:00:00"},
+        }
+        final_row = {**provisional_row, "day_closed": 1}
+
+        def identity_from_row(row):
+            return flag_identity(
+                employee=row["employee"],
+                attendance_date=row["attendance_date"],
+                flag_code=row["flag_code"],
+                evidence=row["evidence"],
+            )
+
+        self.assertEqual(identity_from_row(provisional_row), identity_from_row(final_row))
+        self.assertEqual(
+            identity_from_row(provisional_row),
+            "AUTO-hr_emp_00042-2026-08-03-missing-time-2026_08_03t09:00:00",
+        )
+
     def test_missing_time_identity_changes_when_interval_start_changes(self):
         first = flag_identity(
             employee="HR-EMP-00042",
@@ -65,6 +101,58 @@ class TestFlagIdentity(unittest.TestCase):
         # (uncapped there); this module closes it.
         self.assertEqual(suffix_key, "9" * 80)
         self.assertEqual(len(suffix_key), 80)
+
+    def test_delivery_failed_prefers_nested_undelivered_key_over_top_level(self):
+        # _delivery_failed_suffix checks evidence["undelivered"] first and
+        # only falls back to a top-level key if that lookup misses. A
+        # future refactor that swapped the two lookup loops (or checked
+        # top-level first) would pass every other DELIVERY_FAILED test in
+        # this file -- none of them supply both a nested and a top-level
+        # key at once -- while silently changing the identity of every
+        # real DELIVERY_FAILED flag, orphaning any Attendance Flag
+        # Decision stored against the old identity.
+        identity = flag_identity(
+            employee="HR-EMP-00042",
+            attendance_date=date(2026, 8, 3),
+            flag_code="DELIVERY_FAILED",
+            evidence={"undelivered": {"pin": "1234"}, "pin": "9999"},
+        )
+        self.assertEqual(identity, "AUTO-hr_emp_00042-2026-08-03-delivery-failed-1234")
+
+    def test_attendance_issue_suffix_reflects_reason_and_never_falls_back(self):
+        # ATTENDANCE_ISSUE folds two distinct real-world causes -- a
+        # single checkin and an unknown device branch -- into one
+        # flag_code, so two ATTENDANCE_ISSUE flags for the same
+        # employee/date is the normal case, not an edge case. Unlike its
+        # MISSING_TIME/DELIVERY_FAILED siblings, _attendance_issue_suffix
+        # never returns None (its `reason` defaults to "issue"), so it can
+        # never reach the scrub(flag_code) fallback -- a regression that
+        # collapsed both reasons into one identity would go uncaught
+        # without an assertion that two different reasons produce
+        # different identities.
+        single_checkin = flag_identity(
+            employee="HR-EMP-00042",
+            attendance_date=date(2026, 8, 3),
+            flag_code="ATTENDANCE_ISSUE",
+            evidence={"reason": "single_checkin"},
+        )
+        unknown_device_branch = flag_identity(
+            employee="HR-EMP-00042",
+            attendance_date=date(2026, 8, 3),
+            flag_code="ATTENDANCE_ISSUE",
+            evidence={"reason": "unknown_device_branch"},
+        )
+        self.assertNotEqual(single_checkin, unknown_device_branch)
+
+        empty_evidence = flag_identity(
+            employee="HR-EMP-00042",
+            attendance_date=date(2026, 8, 3),
+            flag_code="ATTENDANCE_ISSUE",
+            evidence={},
+        )
+        self.assertEqual(
+            empty_evidence, "AUTO-hr_emp_00042-2026-08-03-attendance-issue-issue_"
+        )
 
     def test_missing_evidence_keys_fall_back_to_scrub_flag_code(self):
         # MISSING_TIME with no interval_start: _missing_time_suffix returns
