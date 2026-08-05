@@ -339,10 +339,26 @@ per-day shape (`api.py:78-82,109-112`).
 the whole roster: a hard cap (`COVERAGE_EMPLOYEE_LIMIT = 2000`, `coverage_api.py:29`), a
 120-second Redis cache (`:25-26`, `:89-96`), doc-event cache invalidation wired at
 `hooks.py:126-132`, and a `truncated` counter (`:65-68`) in place of pagination. Reuse that:
-date-range cap + row limit + `truncated` flag + cache invalidated on `Attendance Flag` and
-`Attendance Flag Decision` writes. A from-scratch cursor scheme is explicitly *not* required
-— there is nothing in the repo to copy for one, and `truncated` is honest about what was
-dropped.
+date-range cap + row limit + `truncated` flag + doc-event cache invalidation. A from-scratch
+cursor scheme is explicitly *not* required — there is nothing in the repo to copy for one,
+and `truncated` is honest about what was dropped.
+
+**Invalidation is wired to `Attendance Flag Decision` writes only — deliberately not to
+`Attendance Flag`.** This corrects an earlier version of this spec that required both.
+`frappe.cache().delete_keys()` performs a blocking `KEYS` scan over the whole Redis keyspace,
+and the engine inserts flags one `doc.insert()` at a time (`closeout.py:715-731`, from the
+loop at `:686-692`), so hooking `Attendance Flag` fired hundreds of those scans per closeout —
+on every site running this app, whether or not anyone had the page open.
+
+It also bought almost nothing. Intraday re-inserts flags on every checkin
+(`intraday.py:132,153`), so the cache was being flushed more or less continuously through
+business hours; and because the engine *deletes* flags with raw `frappe.db.delete()`, which
+fires no document hooks at all, hooking inserts could never have made the cache correct in
+the first place. The 60-second TTL is what actually bounds staleness for engine-written
+flags. Decision writes are HR-rate and stay hooked, because that is where immediate
+invalidation is both cheap and worth having.
+
+Accepted cost: a flag the engine generates can be up to 60 seconds stale in the queue.
 
 **Indexes ship with the feature.** No field of any doctype in this app carries
 `search_index` today. Add `"search_index": 1` to:
