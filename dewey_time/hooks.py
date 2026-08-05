@@ -130,4 +130,19 @@ doc_events = {
         "on_update": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
         "on_trash": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
     },
+    # Keep the HR flag queue fresh: clear its cached pages whenever a flag or an HR
+    # decision is written. Best-effort ONLY — the engine deletes flags with a raw
+    # frappe.db.delete() (closeout.py:712), which fires no document hooks at all, so a
+    # regeneration cycle never reaches this handler. The 60s TTL in flag_queue_api is
+    # what actually bounds staleness; this hook just makes the common case immediate.
+    "Attendance Flag": {
+        "after_insert": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+        "on_update": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+        "on_trash": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+    },
+    "Attendance Flag Decision": {
+        "after_insert": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+        "on_update": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+        "on_trash": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+    },
 }
