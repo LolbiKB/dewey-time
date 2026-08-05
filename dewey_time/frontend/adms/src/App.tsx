@@ -5,12 +5,13 @@ import { BrowserRouter, HashRouter, Routes, Route, useLocation, Link, Navigate }
 import { isFrappeMode } from '@/lib/auth-mode'
 import { AttendanceLogs } from './pages/AttendanceLogs'
 import { Devices } from './pages/Devices'
+import { DeviceConfig } from './pages/DeviceConfig'
 import { Users } from './pages/Users'
 import { LoginPage } from './pages/Login'
 import { AuthProvider, useAuth } from '@/contexts/auth-context'
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
-import { Loader2, LogOut, CalendarCheck, Users as UsersIcon, HardDrive } from 'lucide-react'
+import { Loader2, LogOut, CalendarCheck, Users as UsersIcon, HardDrive, SlidersHorizontal } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 import { AppShell, type ShellNavMode } from '@lolbikb/dewey-ui'
 import { Brandmark } from '@/brand/Brandmark'
@@ -53,6 +54,7 @@ const routeTitles: Record<string, string> = {
   '/users': 'User Management',
   '/attendance-logs': 'Attendance Logs',
   '/devices': 'Device Management',
+  '/device-config': 'Fleet Configuration',
 }
 
 function AppContent() {
@@ -111,6 +113,13 @@ function AppContent() {
       { label: 'Users', href: '/users', icon: UsersIcon, active: location.pathname === '/users' },
       { label: 'Devices', href: '/devices', icon: HardDrive, active: location.pathname === '/devices' },
       {
+        label: 'Fleet Config',
+        shortLabel: 'Config',
+        href: '/device-config',
+        icon: SlidersHorizontal,
+        active: location.pathname === '/device-config',
+      },
+      {
         label: 'Attendance Logs',
         shortLabel: 'Attendance',
         href: '/attendance-logs',
@@ -147,6 +156,7 @@ function AppContent() {
           <Route path="/users" element={<Users />} />
           <Route path="/attendance-logs" element={<AttendanceLogs />} />
           <Route path="/devices" element={<Devices />} />
+          <Route path="/device-config" element={<DeviceConfig />} />
         </Routes>
       </AppShell>
     </div>

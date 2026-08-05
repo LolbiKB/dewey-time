@@ -1,4 +1,5 @@
-import { EyeOff, Loader2, RefreshCw, RotateCcw, SlidersHorizontal } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { ArrowRight, EyeOff, Loader2, RefreshCw, RotateCcw, SlidersHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { signalText } from '@/lib/signal'
 import { cn } from '@/lib/utils'
@@ -13,59 +14,51 @@ export function formatReportedAt(reportedAt?: string | null): string {
 }
 
 /**
- * What a terminal reports about its own configuration.
+ * The four facts that answer "what am I looking at" for one terminal.
  *
- * Presentational only — the caller owns the query and the mutations, so this
- * renders without a QueryClientProvider and stays testable.
- *
- * A REDACTED option is not an unset one. The bridge records the key of every
- * option a terminal reports but the value only for keys on its allowlist,
- * because anything written to device_option_observed also lands in every later
- * backup and an unclassified value would be a one-way door. Rendering a
- * withheld credential as "not set" would tell an admin the device is
- * unconfigured when it is not — so withheld says so, and says why.
+ * This used to be the full reported list — 78 rows inside a modal tab, which
+ * is reference data in a container built for a summary. The whole list now
+ * lives on the fleet page, where it can be compared ACROSS terminals, which is
+ * the question it was always really answering.
  */
-export function DeviceConfigPanel({ options }: { options: DeviceOptionEntry[] }) {
-  if (options.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        This terminal has not reported its configuration yet. Use{' '}
-        <span className="font-medium">Read from device</span> to ask it.
-      </p>
-    )
-  }
+const FACTS: readonly { label: string; key: string }[] = [
+  { label: 'Model', key: '~DeviceName' },
+  { label: 'Firmware', key: 'FWVersion' },
+  { label: 'Network', key: 'IPAddress' },
+  { label: 'Protocol', key: 'PushVersion' },
+]
 
-  const withheld = options.filter((o) => o.redacted).length
+export function DeviceFactStrip({ options }: { options: DeviceOptionEntry[] }) {
+  const byKey = new Map(options.map((o) => [o.key.toLowerCase(), o]))
 
   return (
-    <div className="space-y-3">
-      <div className="divide-y divide-border rounded-lg border border-border">
-        {options.map((o) => (
-          <div key={o.key} className="flex items-baseline justify-between gap-4 px-3 py-2">
-            <span className="font-mono text-xs text-muted-foreground break-all">{o.key}</span>
-            {o.redacted ? (
-              <span
-                className={cn('flex shrink-0 items-center gap-1 text-xs', signalText.attention)}
-                title="The device reported a value. It was not stored because this key has not been reviewed for the value allowlist."
-              >
-                <EyeOff className="h-3 w-3" />
-                Not stored
-              </span>
-            ) : (
-              <span className="font-mono text-xs break-all">{o.value}</span>
-            )}
+    <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+      {FACTS.map(({ label, key }) => {
+        const entry = byKey.get(key.toLowerCase())
+        return (
+          <div key={key} className="flex items-baseline justify-between gap-3">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="text-right font-mono break-all">
+              {!entry ? (
+                <span className={signalText.idle}>Not reported</span>
+              ) : entry.redacted ? (
+                // A withheld value is not an unset one. Rendering it as blank
+                // would say the device is unconfigured when it is not.
+                <span
+                  className={cn('inline-flex items-center gap-1', signalText.idle)}
+                  title="The device reported a value. It was not stored because this key is not on the value allowlist."
+                >
+                  <EyeOff className="h-3 w-3" />
+                  Not stored
+                </span>
+              ) : (
+                entry.value || <span className={signalText.idle}>Not reported</span>
+              )}
+            </dd>
           </div>
-        ))}
-      </div>
-
-      {withheld > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {withheld} value{withheld === 1 ? '' : 's'} not stored. The key names are recorded, the
-          values are withheld until the key is reviewed and added to the allowlist — anything saved
-          here also lands in backups.
-        </p>
-      )}
-    </div>
+        )
+      })}
+    </dl>
   )
 }
 
@@ -82,8 +75,7 @@ interface DeviceConfigSectionProps {
 }
 
 /**
- * The device configuration card: what the terminal reports, and the two
- * commands that act on it.
+ * Per-device configuration summary and the two commands that act on it.
  *
  * Both actions are Super-Admin-gated by the bridge; hiding them for everyone
  * else is the UI half of that, not the enforcement.
@@ -103,7 +95,7 @@ export function DeviceConfigSection({
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium">
           <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-          Device configuration
+          Configuration
         </div>
         {canCommand && (
           <div className="flex items-center gap-2">
@@ -113,7 +105,7 @@ export function DeviceConfigSection({
               ) : (
                 <RefreshCw className="mr-1.5 h-3 w-3" />
               )}
-              Read from device
+              Read now
             </Button>
             <Button variant="outline" size="sm" onClick={onReboot} disabled={rebooting}>
               {rebooting ? (
@@ -127,21 +119,32 @@ export function DeviceConfigSection({
         )}
       </div>
 
-      <p className="text-xs text-muted-foreground">Last reported: {formatReportedAt(reportedAt)}</p>
-
       {loading ? (
         <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading…
         </div>
+      ) : options.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          This terminal has not reported its configuration yet. It reports on approval, when a
+          watched setting changes, and at least twice a day.
+        </p>
       ) : (
-        <DeviceConfigPanel options={options} />
+        <DeviceFactStrip options={options} />
       )}
 
-      <p className="text-xs text-muted-foreground">
-        Reading is a queued command — the terminal answers on its next poll, so values appear a few
-        seconds later.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2.5">
+        <span className="text-xs text-muted-foreground">
+          Last reported: {formatReportedAt(reportedAt)}
+        </span>
+        <Link
+          to="/device-config"
+          className="inline-flex items-center gap-1 text-xs font-medium text-foreground hover:underline"
+        >
+          View fleet configuration
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+      </div>
     </div>
   )
 }

@@ -503,6 +503,22 @@ export class DeviceService {
    * not store, because the key is not on its value allowlist — NOT that the
    * option is unset. The two must never render the same way.
    */
+  /**
+   * Every approved terminal's reported configuration, for the fleet matrix.
+   *
+   * The bridge bounds this response, so the caller is given the limit it used
+   * and can detect truncation. A silently truncated grid makes present keys
+   * look absent, which renders as drift that is not real.
+   */
+  static async getAllDeviceOptions(limit: number): Promise<DeviceOptionEntry[]> {
+    const json = await this.fetchApi<{ success: boolean; data: DeviceOptionEntry[] }>(
+      `/admin/device-options?limit=${encodeURIComponent(String(limit))}`,
+      {},
+      'Failed to load fleet configuration'
+    )
+    return json.data ?? []
+  }
+
   static async getDeviceOptions(serialNumber: string): Promise<DeviceOptionEntry[]> {
     const json = await this.fetchApi<{ success: boolean; data: DeviceOptionEntry[] }>(
       `/admin/device-options?sn=${encodeURIComponent(serialNumber)}`,
