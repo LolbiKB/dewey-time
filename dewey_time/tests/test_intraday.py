@@ -160,3 +160,133 @@ class TestIntradayEnqueue(unittest.TestCase):
         enqueue.assert_called_once()
         self.assertTrue(enqueue.call_args.kwargs.get("deduplicate"))
         self.assertIn("dewey_time-intraday", enqueue.call_args.kwargs.get("job_id", ""))
+
+
+def _real_getdate(value):
+    """The frappe mock stubs getdate as identity, which would let a datetime
+    reach a `date` comparison and raise. Real frappe.utils.getdate returns a
+    date, and the branch under test compares one, so the tests need the real
+    narrowing behaviour."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
+class _EditedCheckin:
+    """Minimal stand-in for an Employee Checkin being saved. MagicMock is wrong
+    here: `.get("time")` on one returns a truthy Mock, so the handler's
+    did-anything-actually-change guard silently never fires."""
+
+    def __init__(self, employee, time, before=None):
+        self.employee = employee
+        self.time = time
+        self._before = before
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def get_doc_before_save(self):
+        return self._before
+
+
+class TestCheckinEditRegeneration(unittest.TestCase):
+    """A punch edit on an already-closed date used to delete every AUTO flag for
+    that employee/date and then enqueue the intraday pass, which rebuilds only
+    MISSING_TIME and NON_PRIMARY_SITE_PUNCH, and only as provisional. Every other
+    flag on that day was destroyed with nothing left to rebuild it: the company
+    fallback only ever processes yesterday and only emits UNNOTIFIED_ABSENCE, and
+    the device webhook fires once per device/date. Correcting a punch is the most
+    common HR action while reviewing a flag, so this fired constantly."""
+
+    TODAY = date(2026, 8, 5)
+
+    @patch("dewey_time.attendance_engine.intraday.nowdate", return_value=date(2026, 8, 5))
+    @patch("dewey_time.attendance_engine.intraday.getdate", side_effect=_real_getdate)
+    @patch("dewey_time.attendance_engine.intraday._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.intraday.frappe.enqueue")
+    def test_past_date_edit_rebuilds_the_full_final_set(self, enqueue, delete_flags, _gd, _nd):
+        from dewey_time.attendance_engine.intraday import on_employee_checkin_on_update
+
+        before = _EditedCheckin("EMP-1", datetime(2026, 8, 1, 8, 0, 0))
+        doc = _EditedCheckin("EMP-1", datetime(2026, 8, 1, 9, 30, 0), before=before)
+
+        on_employee_checkin_on_update(doc)
+
+        # The whole point: closeout's generator, which deletes AND rebuilds both
+        # day_closed=0 and =1, not the intraday subset.
+        enqueue.assert_called_once()
+        self.assertEqual(
+            enqueue.call_args.args[0],
+            "dewey_time.attendance_engine.closeout._generate_for_employee_date_isolated",
+        )
+        self.assertEqual(enqueue.call_args.kwargs.get("attendance_date"), "2026-08-01")
+
+        # And crucially NOT the unscoped delete that caused the data loss.
+        delete_flags.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.intraday.nowdate", return_value=date(2026, 8, 5))
+    @patch("dewey_time.attendance_engine.intraday.getdate", side_effect=_real_getdate)
+    @patch("dewey_time.attendance_engine.intraday._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.intraday.frappe.enqueue")
+    def test_today_edit_keeps_the_intraday_path_and_spares_finals(
+        self, enqueue, delete_flags, _gd, _nd
+    ):
+        from dewey_time.attendance_engine.intraday import on_employee_checkin_on_update
+
+        before = _EditedCheckin("EMP-1", datetime(2026, 8, 5, 8, 0, 0))
+        doc = _EditedCheckin("EMP-1", datetime(2026, 8, 5, 9, 30, 0), before=before)
+
+        on_employee_checkin_on_update(doc)
+
+        # Today has not closed out, so the intraday pass is the correct rebuilder
+        # and generating day_closed=1 rows mid-shift would invent LEFT_EARLY and
+        # UNNOTIFIED_ABSENCE for a day that is not over.
+        enqueue.assert_called_once()
+        self.assertIn("dewey_time-intraday", enqueue.call_args.kwargs.get("job_id", ""))
+
+        # The delete must be scoped to provisional rows. An early device closeout
+        # can already have written finals for today, and deleting those drops into
+        # the same nothing-rebuilds-them hole.
+        delete_flags.assert_called_once()
+        self.assertEqual(delete_flags.call_args.kwargs.get("day_closed"), 0)
+
+    @patch("dewey_time.attendance_engine.intraday.nowdate", return_value=date(2026, 8, 5))
+    @patch("dewey_time.attendance_engine.intraday.getdate", side_effect=_real_getdate)
+    @patch("dewey_time.attendance_engine.intraday._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.intraday.frappe.enqueue")
+    def test_moving_a_punch_across_days_rebuilds_both(self, enqueue, delete_flags, _gd, _nd):
+        from dewey_time.attendance_engine.intraday import on_employee_checkin_on_update
+
+        before = _EditedCheckin("EMP-1", datetime(2026, 8, 1, 8, 0, 0))
+        doc = _EditedCheckin("EMP-1", datetime(2026, 8, 2, 8, 0, 0), before=before)
+
+        on_employee_checkin_on_update(doc)
+
+        # Both the vacated day and the new one are past, so both get a full rebuild.
+        self.assertEqual(enqueue.call_count, 2)
+        dates = sorted(c.kwargs.get("attendance_date") for c in enqueue.call_args_list)
+        self.assertEqual(dates, ["2026-08-01", "2026-08-02"])
+        for call in enqueue.call_args_list:
+            self.assertEqual(
+                call.args[0],
+                "dewey_time.attendance_engine.closeout._generate_for_employee_date_isolated",
+            )
+        delete_flags.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.intraday.nowdate", return_value=date(2026, 8, 5))
+    @patch("dewey_time.attendance_engine.intraday.getdate", side_effect=_real_getdate)
+    @patch("dewey_time.attendance_engine.intraday._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.intraday.frappe.enqueue")
+    def test_unchanged_punch_touches_nothing(self, enqueue, delete_flags, _gd, _nd):
+        from dewey_time.attendance_engine.intraday import on_employee_checkin_on_update
+
+        same = datetime(2026, 8, 1, 8, 0, 0)
+        before = _EditedCheckin("EMP-1", same)
+        doc = _EditedCheckin("EMP-1", same, before=before)
+
+        on_employee_checkin_on_update(doc)
+
+        enqueue.assert_not_called()
+        delete_flags.assert_not_called()

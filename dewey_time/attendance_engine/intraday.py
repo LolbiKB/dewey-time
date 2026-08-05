@@ -14,6 +14,7 @@ from dewey_time.attendance_engine.holidays import holiday_by_date_for_company
 from dewey_time.attendance_engine.closeout import (
     _delete_auto_flags_for_employee_date,
     _get_checkins_for_day,
+    _generate_for_employee_date_isolated,
     _get_shift_assignment,
     _get_shift_meta,
     _insert_flag,
@@ -176,6 +177,34 @@ def enqueue_intraday_refresh(employee: str, attendance_date):
     )
 
 
+def enqueue_closed_day_regeneration(employee: str, attendance_date):
+    """Rebuild a past day's FULL flag set after a punch correction.
+
+    Deliberately the closeout generator rather than the intraday one: the intraday
+    pass writes only INTRADAY_FLAG_CODES, as provisional, which is the wrong answer
+    for a day that has already closed. Enqueued rather than run inline so a Desk
+    edit's save stays fast, and coalesced per (employee, date) so a burst of
+    corrections to the same day collapses into one rebuild.
+
+    _generate_for_employee_date_isolated contains its own failures to the Error Log,
+    so a bad shift or punch sequence can never make the checkin save fail.
+    """
+    attendance_date = str(getdate(attendance_date))
+    employee = (employee or "").strip()
+    if not employee:
+        return
+
+    job_id = f"dewey_time-closed-regen-{frappe.scrub(employee)}-{attendance_date}"[:140]
+    frappe.enqueue(
+        "dewey_time.attendance_engine.closeout._generate_for_employee_date_isolated",
+        queue="short",
+        job_id=job_id,
+        deduplicate=True,
+        employee=employee,
+        attendance_date=attendance_date,
+    )
+
+
 def on_employee_checkin_after_insert(doc, method=None):
     if not doc or not doc.get("employee") or not doc.get("time"):
         return
@@ -208,10 +237,41 @@ def on_employee_checkin_on_update(doc, method=None):
         if old_date != new_date:
             dates_to_refresh.add(old_date)
 
+    today = getdate(nowdate())
+
     for attendance_date in dates_to_refresh:
-        # Void all stale AUTO flags (provisional and final) so the next intraday
-        # run and eventual closeout produce fresh results from the corrected punch.
-        _delete_auto_flags_for_employee_date(employee=doc.employee, attendance_date=attendance_date)
+        if attendance_date < today:
+            # A past date will never be closed out again. run_company_fallback_closeout
+            # only ever processes yesterday (closeout.py:92) and only emits
+            # UNNOTIFIED_ABSENCE, and generate_auto_flags_for_device_date fires once per
+            # device/date off the bridge webhook.
+            #
+            # This branch used to delete EVERY AUTO flag and enqueue the intraday pass,
+            # which rebuilds only INTRADAY_FLAG_CODES (MISSING_TIME,
+            # NON_PRIMARY_SITE_PUNCH) and only as day_closed=0. LATE_START, LEFT_EARLY,
+            # UNNOTIFIED_ABSENCE, ATTENDANCE_ISSUE, OFF_SHIFT_PUNCH and LATE_FROM_LUNCH
+            # were therefore destroyed with nothing left to rebuild them — recoverable
+            # only via the dev-only, 31-day-capped run_engine_for_employee. Correcting a
+            # punch is the most common HR action while reviewing a flag, so this fired
+            # constantly and silently.
+            #
+            # The closeout generator is the right rebuilder: it deletes both
+            # day_closed=0 and =1 itself (closeout.py:473-478) and regenerates the
+            # complete final set from the corrected punches, so no separate delete
+            # belongs here.
+            enqueue_closed_day_regeneration(doc.employee, attendance_date)
+            continue
+
+        # Today has not closed out, so the intraday pass is the correct rebuilder —
+        # generating day_closed=1 rows mid-shift would invent LEFT_EARLY and
+        # UNNOTIFIED_ABSENCE for a day that is not over yet.
+        #
+        # Scoped to provisional rows on purpose: a device that closes out early can
+        # already have written finals for today, and deleting those would drop them into
+        # the same nothing-rebuilds-them hole this function just fixed for past dates.
+        _delete_auto_flags_for_employee_date(
+            employee=doc.employee, attendance_date=attendance_date, day_closed=0
+        )
         enqueue_intraday_refresh(doc.employee, attendance_date)
 
 
