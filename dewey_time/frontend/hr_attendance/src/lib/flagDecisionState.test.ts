@@ -120,3 +120,73 @@ test("remainingIdentities is worst-first and omits decided flags", () => {
 
   assert.deepEqual(remainingIdentities(p), ["AUTO-worst", "AUTO-middle"]);
 });
+
+test("groupPayload's coveredEmployeeCount excludes a member whose only unresolved flag needs_re_review", () => {
+  // A "needs_re_review" flag is unresolved on the backend (flag_grouping.py's
+  // UNRESOLVED_STATES includes it, so this member's undecided_count would be
+  // 1 and they stay in the queue) but it must never be swept into a bulk
+  // write — a stale prior decision needs a human to look again, not a repeat
+  // of the old verdict. So this member is checked (counted in employeeCount)
+  // but contributes zero identities, and coveredEmployeeCount must say so.
+  const staleDecision = flag({
+    flag_identity: "AUTO-stale",
+    decision_state: "needs_re_review",
+    decision: {
+      name: "AFD-3",
+      outcome: "EXCUSED",
+      reason: "DEVICE_OR_DATA_FAULT",
+      decided_by: "hr@example.com",
+      decided_at: "2026-08-01 09:00:00",
+    },
+  });
+  const members: QueuePerson[] = [
+    person({ employee: "HR-EMP-00001", flags: [flag({ flag_identity: "AUTO-1" })] }),
+    person({ employee: "HR-EMP-00002", flags: [staleDecision] }),
+  ];
+
+  const { identities, employeeCount, coveredEmployeeCount } = groupPayload(members, new Set());
+
+  assert.deepEqual(identities, ["AUTO-1"]);
+  assert.equal(employeeCount, 2);
+  assert.equal(coveredEmployeeCount, 1);
+});
+
+test("remainingIdentities excludes needs_re_review flags even though the backend's undecided_count includes them", () => {
+  // Constructed WITHOUT the person() helper above: that helper approximates
+  // undecided_count as count-of-strictly-"undecided" flags, which is the
+  // frontend's own filter, not the real backend's. The real backend
+  // (flag_grouping.py's UNRESOLVED_STATES) counts BOTH "undecided" and
+  // "needs_re_review" into undecided_count, so this test sets it that way by
+  // hand to pin the exact divergence Finding 2 describes: a caller reading
+  // person.undecided_count for a button label ("Apply to remaining 2") would
+  // silently promise one more identity than decide_flags will actually
+  // receive.
+  const staleDecision = flag({
+    flag_identity: "AUTO-stale",
+    rank: 90,
+    decision_state: "needs_re_review",
+    decision: {
+      name: "AFD-4",
+      outcome: "EXCUSED",
+      reason: "DEVICE_OR_DATA_FAULT",
+      decided_by: "hr@example.com",
+      decided_at: "2026-08-01 09:00:00",
+    },
+  });
+  const open = flag({ flag_identity: "AUTO-open", rank: 50 });
+  const p: QueuePerson = {
+    employee: "HR-EMP-00001",
+    employee_name: "HR-EMP-00001",
+    employee_branch: null,
+    attendance_date: "2026-08-03",
+    rank: 90,
+    tier: "routine",
+    flags: [staleDecision, open],
+    undecided_count: 2, // backend counts "undecided" + "needs_re_review"
+  };
+
+  const remaining = remainingIdentities(p);
+
+  assert.deepEqual(remaining, ["AUTO-open"]);
+  assert.notEqual(remaining.length, p.undecided_count);
+});

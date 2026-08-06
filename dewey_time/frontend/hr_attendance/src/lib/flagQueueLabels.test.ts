@@ -12,13 +12,23 @@ import {
 } from "@/lib/flagQueueLabels";
 import type { FlagOut, QueuePerson, Reason } from "@/types/flags";
 
-// Hardcoded independently of REASON_LABELS's own keys. Iterating
-// `Object.keys(REASON_LABELS)` would trivially pass even if a Reason added to
-// `types/flags.ts` was never given a label, because the map would simply
-// lack that key and `Object.keys` would never produce it to check. This list
-// mirrors the closed `REASONS` tuple in `flag_decision_api.py` (Interface
-// Contract) so a future addition to the union has to be added here too, or
-// this test fails instead of the UI silently rendering "GENUINE_VIOLATION".
+// Hardcoded independently of REASON_LABELS's own keys — NOT derived by
+// iterating `Object.keys(REASON_LABELS)`, which would trivially pass even if
+// a Reason added to `types/flags.ts` was never given a label (the map would
+// simply lack that key, so `Object.keys` would never produce it to check).
+// This list mirrors the closed `REASONS` tuple in `flag_decision_api.py`
+// (Interface Contract). On its own, looping this array only proves every
+// entry IN IT has a label — it says nothing about a `Reason` value that
+// exists in `types/flags.ts` but was left out of both this list and
+// `REASON_LABELS` together. Catching that (a future `Reason` added to the
+// union but never given a label, so `reasonLabel` silently returns
+// `undefined`) needs the set-equality check below the loop: it fails the
+// moment `ALL_REASONS` and `REASON_LABELS`'s keys diverge in EITHER
+// direction, which is what makes "a future addition has to be added here
+// too, or this test fails" actually true rather than aspirational. `tsx`
+// strips types without checking them for `test:web`, so the `Record<Reason,
+// string>` exhaustiveness TypeScript would otherwise offer never runs here —
+// this run-time check is what stands in for it.
 const ALL_REASONS: Reason[] = [
   "APPROVED_LEAVE",
   "DEVICE_OR_DATA_FAULT",
@@ -38,6 +48,14 @@ test("every Reason in the union has a non-empty label", () => {
     assert.notEqual(label, reason);
     assert.doesNotMatch(label, /_/);
   }
+});
+
+test("REASON_LABELS covers exactly the Reason union, no more and no fewer", () => {
+  // Fails the moment either side grows without the other: add an eighth
+  // Reason to types/flags.ts and forget REASON_LABELS (or forget to add it
+  // here), and this catches it — the loop above cannot, since it only ever
+  // walks ALL_REASONS.
+  assert.deepEqual(Object.keys(REASON_LABELS).sort(), [...ALL_REASONS].sort());
 });
 
 test("tierLabel covers all three tiers", () => {

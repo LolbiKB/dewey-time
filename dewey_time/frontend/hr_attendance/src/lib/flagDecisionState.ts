@@ -14,6 +14,22 @@
  * device-fault rows could be silently excused by a checkbox that only
  * covered their headline flag, which the design doc calls "the single most
  * damaging thing this page could do".
+ *
+ * IMPORTANT — `undecided` (frontend) vs `unresolved` (backend) are different
+ * sets. `flag_grouping.py`'s `UNRESOLVED_STATES = (STATE_UNDECIDED,
+ * STATE_NEEDS_RE_REVIEW)` is what `QueuePerson.undecided_count` actually
+ * counts (`_person`'s `unresolved = [f for f in person_flags if
+ * f["decision_state"] in UNRESOLVED_STATES]`) — so it INCLUDES
+ * `needs_re_review` flags (a stale prior decision whose evidence changed;
+ * it needs a human to look again, not a bulk repeat of the old verdict).
+ * Both `groupPayload` and `remainingIdentities` below deliberately filter to
+ * the strict `"undecided"` state only, on purpose — a `needs_re_review` flag
+ * must never be swept into a bulk write. That means the counts these two
+ * functions return can be LOWER than `person.undecided_count` for the same
+ * person. Do not pair `undecided_count` with either function's output in
+ * user-facing copy (e.g. a button reading "Apply to remaining N" must read N
+ * from `remainingIdentities(...).length`/`groupPayload(...)`'s own counts,
+ * never from `undecided_count`) — see each function's docstring below.
  */
 import type { FlagOut, Outcome, QueuePerson, Reason } from "@/types/flags";
 
@@ -36,8 +52,8 @@ function isUndecided(flag: FlagOut): boolean {
 }
 
 /**
- * Builds the `identities` array (plus a live headcount for the group header)
- * for a bulk `decide_flags` call over a cause group's members.
+ * Builds the `identities` array (plus two live headcounts for the group
+ * header) for a bulk `decide_flags` call over a cause group's members.
  *
  * Two filters, both load-bearing:
  *   - an excluded employee contributes NOTHING: every flag of theirs is
@@ -49,34 +65,51 @@ function isUndecided(flag: FlagOut): boolean {
  *     (or needs a human to look again, not a bulk repeat); including it
  *     would produce a spurious supersession nobody asked for.
  *
- * `employeeCount` counts every non-excluded member once, independent of
- * whether they end up contributing an identity — it backs the group
- * header's live count ("Excuse 39" when 2 of 41 are unchecked), which
- * tracks the checkboxes, not the write's contents.
+ * Two counts come back, and they answer different questions:
+ *   - `employeeCount` counts every non-excluded member once, independent of
+ *     whether they end up contributing an identity — it backs the checkbox
+ *     tally ("39 of 41 checked").
+ *   - `coveredEmployeeCount` counts only the non-excluded members who
+ *     actually contribute at least one identity to `identities`. A member
+ *     whose only unresolved flag is `needs_re_review` is checked (counted in
+ *     `employeeCount`) but writes nothing (excluded from
+ *     `coveredEmployeeCount`), per the module docstring's `undecided` vs
+ *     `unresolved` note above. The group header's action label ("Excuse 39")
+ *     must read from `coveredEmployeeCount`, not `employeeCount`, or it
+ *     promises a write that will not happen for some of those 39.
  */
 export function groupPayload(
   members: QueuePerson[],
   excluded: ReadonlySet<string>,
-): { identities: string[]; employeeCount: number } {
+): { identities: string[]; employeeCount: number; coveredEmployeeCount: number } {
   const identities: string[] = [];
   let employeeCount = 0;
+  let coveredEmployeeCount = 0;
 
   for (const person of members) {
     if (excluded.has(person.employee)) continue;
     employeeCount += 1;
+    const before = identities.length;
     for (const f of person.flags) {
       if (isUndecided(f)) identities.push(f.flag_identity);
     }
+    if (identities.length > before) coveredEmployeeCount += 1;
   }
 
-  return { identities, employeeCount };
+  return { identities, employeeCount, coveredEmployeeCount };
 }
 
 /**
  * A person's undecided flag identities, worst-first. `person.flags` already
  * arrives worst-first per the queue contract (FlagOut[] — "worst-first, ALL
  * that person's flags that day"), so this only filters; it never re-sorts.
- * Backs "Apply to remaining N" once the panel's first decision has fired.
+ * Backs "Apply to remaining N" once the panel's first decision has fired —
+ * N must be read as `remainingIdentities(person).length`, NEVER as
+ * `person.undecided_count`. `undecided_count` counts `needs_re_review` flags
+ * too (per the module docstring's `undecided` vs `unresolved` note above),
+ * so it can be strictly higher than what this function returns for the same
+ * person; labelling a button from it would promise more than the next
+ * `decide_flags` call actually writes.
  */
 export function remainingIdentities(person: QueuePerson): string[] {
   return person.flags.filter(isUndecided).map((f) => f.flag_identity);
