@@ -2128,6 +2128,59 @@ EOF
   - `parseFlagEvidence` from `@/lib/flagLabels`; `formatCheckinTime`, `formatBranchLabel`, `minutesFromDateTime`, `parseDateTimeLocal` from `@/lib/attendanceTime`; `computeDayTimeWindow`, `sortCheckinsByTime` from `@/lib/attendancePunches`.
 - Produces: the completed `OFF_SHIFT_PUNCH` (both `holiday_has_checkins` and `off_shift_has_checkins` reasons) and `NON_PRIMARY_SITE_PUNCH` branches of `flagNarrative()`. Task 6's `FlagEvidenceTimeline({ spec, ariaLabel })` must handle both outputs this task produces: a marks-only `FlagTimelineSpec` with `band: null` (OFF_SHIFT_PUNCH), and `timeline: null` meaning "render nothing" (NON_PRIMARY_SITE_PUNCH). Task 7 wires both panels to read `narrative.timeline` before deciding whether to mount the timeline at all.
 
+
+#### Conventions established by Tasks 1-3 — THESE OVERRIDE ANY CODE BLOCK BELOW
+
+This task's code blocks were drafted before Tasks 1-3 shipped. Two review rounds have
+since closed defects that those blocks still contain. **Where a code block below
+disagrees with this section, this section governs.** Read the current
+`src/lib/flagNarrative.ts` before writing anything, and match what is already there.
+
+1. **Never hand-build a `facts:` array literal.** Route every value through
+   `evidenceTimeText(...)` (or the value itself when it is already a plain string),
+   then `fact(label, value)`, then `buildFacts([...])`:
+
+   ```ts
+   const facts = buildFacts([
+     fact("Punch times", punchTimesValue),
+     fact("Home branch", formatBranchLabel(evidence.employee_branch)),
+   ]);
+   ```
+
+   Why: `formatCheckinTime(undefined)` returns the **string** `"—"`
+   (`attendanceTime.ts:61`) and `formatDurationMinutes(null)` likewise, so a literal
+   `{ label, value: formatCheckinTime(x) }` renders a row with an em-dash instead of
+   dropping it. `fact()` filters only `null` / `undefined` / `""`, which is why
+   `evidenceTimeText()` must convert a missing timestamp to `null` first.
+   `buildFacts()` also enforces `MAX_FACTS = 4`; a hand-built array does not.
+
+2. **Every builder needs an empty-evidence early return.** A flag whose blob is `{}`
+   must never render a confident sentence made of em-dashes, and must never draw a
+   fabricated timeline. Mirror the Task-2 pattern:
+
+   ```ts
+   if (!evidence.<the key this builder cannot work without>) {
+     return boundaryFallback(flag, genericEvidence, day, dateKey);
+   }
+   ```
+
+   `boundaryFallback` routes to `emittedFallbackNarrative`, which attaches
+   `EMPTY_EVIDENCE_NOTE`. Add a test proving the caveat survives.
+
+3. **Minute math must be overnight-safe.** Use `isOvernightShift` and
+   `normalizeOvernightAnchor`. A shift ending 06:00 yields a *minute-of-day* 360 that
+   sorts below a 23:40 punch at 1420: spans invert and collapse to zero, windows
+   balloon to ~19 hours, and `endMin <= startMin` guards silently drop the timeline.
+   This has now been a real defect in two separate tasks.
+
+4. **Tests must be able to fail.** Where an assertion claims a value comes from the
+   live calendar (`day.checkins`, `day.shift`, `day.holiday`, `day.observedLunch`)
+   rather than from the evidence blob, the fixture's two values **must differ**. Task 2
+   shipped five timeline tests whose `day.checkins` were byte-identical to the evidence
+   timestamps — every one would have passed had the code read the blob instead. Put a
+   decoy value in `evidence` and assert the panel follows the calendar.
+
+
 - [ ] **Step 1: Write the failing tests**
 
 Append the following to `dewey_time/frontend/hr_attendance/src/lib/flagNarrative.test.ts` (merge the `import` lines into the file's existing import block from Task 1/2/3 — drop any that are already there rather than duplicating):
@@ -2600,6 +2653,59 @@ merged onto the shared per-employee-day dict at `closeout.py:505-516` / `:692`):
 | `delivery_failed` | `reason`, `undelivered` (`{pin, frappe_employee_id, …}`) | same, incl. `device_sn` |
 
 ---
+
+
+#### Conventions established by Tasks 1-3 — THESE OVERRIDE ANY CODE BLOCK BELOW
+
+This task's code blocks were drafted before Tasks 1-3 shipped. Two review rounds have
+since closed defects that those blocks still contain. **Where a code block below
+disagrees with this section, this section governs.** Read the current
+`src/lib/flagNarrative.ts` before writing anything, and match what is already there.
+
+1. **Never hand-build a `facts:` array literal.** Route every value through
+   `evidenceTimeText(...)` (or the value itself when it is already a plain string),
+   then `fact(label, value)`, then `buildFacts([...])`:
+
+   ```ts
+   const facts = buildFacts([
+     fact("Punch times", punchTimesValue),
+     fact("Home branch", formatBranchLabel(evidence.employee_branch)),
+   ]);
+   ```
+
+   Why: `formatCheckinTime(undefined)` returns the **string** `"—"`
+   (`attendanceTime.ts:61`) and `formatDurationMinutes(null)` likewise, so a literal
+   `{ label, value: formatCheckinTime(x) }` renders a row with an em-dash instead of
+   dropping it. `fact()` filters only `null` / `undefined` / `""`, which is why
+   `evidenceTimeText()` must convert a missing timestamp to `null` first.
+   `buildFacts()` also enforces `MAX_FACTS = 4`; a hand-built array does not.
+
+2. **Every builder needs an empty-evidence early return.** A flag whose blob is `{}`
+   must never render a confident sentence made of em-dashes, and must never draw a
+   fabricated timeline. Mirror the Task-2 pattern:
+
+   ```ts
+   if (!evidence.<the key this builder cannot work without>) {
+     return boundaryFallback(flag, genericEvidence, day, dateKey);
+   }
+   ```
+
+   `boundaryFallback` routes to `emittedFallbackNarrative`, which attaches
+   `EMPTY_EVIDENCE_NOTE`. Add a test proving the caveat survives.
+
+3. **Minute math must be overnight-safe.** Use `isOvernightShift` and
+   `normalizeOvernightAnchor`. A shift ending 06:00 yields a *minute-of-day* 360 that
+   sorts below a 23:40 punch at 1420: spans invert and collapse to zero, windows
+   balloon to ~19 hours, and `endMin <= startMin` guards silently drop the timeline.
+   This has now been a real defect in two separate tasks.
+
+4. **Tests must be able to fail.** Where an assertion claims a value comes from the
+   live calendar (`day.checkins`, `day.shift`, `day.holiday`, `day.observedLunch`)
+   rather than from the evidence blob, the fixture's two values **must differ**. Task 2
+   shipped five timeline tests whose `day.checkins` were byte-identical to the evidence
+   timestamps — every one would have passed had the code read the blob instead. Put a
+   decoy value in `evidence` and assert the panel follows the calendar.
+
 
 - [ ] **Step 1: Write the failing test**
 
