@@ -601,6 +601,85 @@ class TestCounts(unittest.TestCase):
         self.assertNotIn("EMP-2", [p["employee"] for p in _people_in(payload)])
 
 
+class TestIncludeDecided(unittest.TestCase):
+    """Deciding an already-decided identity is the ONLY way HR can correct a
+    decision (decide_flags supersedes rather than duplicating), so a person whose
+    flags are all settled has to stay reachable somehow. Reachability is opt-in:
+    the default payload answers "who still owes me something", which is what
+    every other test in this file pins.
+    """
+
+    def _fixture(self, **kwargs):
+        """One settled person (EMP-1) and one who still owes HR an answer (EMP-2)."""
+        settled = _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 90})
+        open_absence = _flag("EMP-2", DATE, "UNNOTIFIED_ABSENCE")
+        return build_queue(
+            flags=[settled, open_absence],
+            decisions_by_identity={settled["flag_identity"]: _decision(settled)},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-A")),
+            outage_branch_dates=set(),
+            **kwargs,
+        )
+
+    def test_the_default_payload_is_byte_identical_with_the_flag_absent_or_false(self):
+        self.assertEqual(self._fixture(), self._fixture(include_decided=False))
+        # …and the default really is "settled people are gone", not "the
+        # parameter happens to be unread".
+        self.assertEqual([e["employee"] for e in self._fixture()["entries"]], ["EMP-2"])
+
+    def test_a_fully_decided_person_is_reachable_with_include_decided(self):
+        payload = self._fixture(include_decided=True)
+
+        self.assertEqual(sorted(e["employee"] for e in payload["entries"]), ["EMP-1", "EMP-2"])
+        ana = next(e for e in payload["entries"] if e["employee"] == "EMP-1")
+        self.assertEqual(ana["kind"], "person")
+        self.assertEqual(ana["undecided_count"], 0)
+        self.assertEqual([f["decision_state"] for f in ana["flags"]], ["matched"])
+        # The live decision travels with the flag, so the panel can show HR what
+        # they are about to replace.
+        self.assertEqual(ana["flags"][0]["decision"]["name"], "AFD-0001")
+
+    def test_a_fully_decided_person_ranks_last_rather_than_crashing_on_no_unresolved_flag(self):
+        # rank/tier come from the worst UNRESOLVED flag, and this person has
+        # none — the derivation has to survive an empty list, not raise.
+        payload = self._fixture(include_decided=True)
+        ana = next(e for e in payload["entries"] if e["employee"] == "EMP-1")
+
+        self.assertEqual(ana["rank"], 0)
+        self.assertEqual(ana["tier"], "routine")
+        # Worst-first still holds: the person who owes HR an answer stays on top.
+        self.assertEqual([e["employee"] for e in payload["entries"]], ["EMP-2", "EMP-1"])
+
+    def test_counts_still_mean_the_same_thing_with_decided_people_in_view(self):
+        # `people` is "people with something open" (it backs the header's "N
+        # people with something open"), so surfacing settled people must not
+        # inflate it — and no other count moves either.
+        self.assertEqual(self._fixture()["counts"], self._fixture(include_decided=True)["counts"])
+        self.assertEqual(self._fixture(include_decided=True)["counts"]["people"], 1)
+
+    def test_a_settled_person_does_not_join_a_cause_group(self):
+        # Cause groups are a bulk-decide affordance; a person with nothing
+        # unresolved has nothing to bulk-decide, so they render on their own
+        # rather than padding a group whose action would skip them.
+        flags = [_flag(emp, DATE, "LATE_START", evidence={"minutes": 9})
+                 for emp in ("EMP-1", "EMP-2", "EMP-3")]
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={flags[0]["flag_identity"]: _decision(flags[0])},
+            employees_by_id=_employees(
+                ("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-A"), ("EMP-3", "Cy", "BR-A")
+            ),
+            outage_branch_dates=set(),
+            include_decided=True,
+        )
+
+        routine = _groups(payload, "ROUTINE_CODE")
+        self.assertEqual([m["employee"] for m in routine[0]["members"]], ["EMP-2", "EMP-3"])
+        self.assertEqual(
+            [e["employee"] for e in payload["entries"] if e["kind"] == "person"], ["EMP-1"]
+        )
+
+
 class TestProvisionalFinalCollision(unittest.TestCase):
     def test_provisional_and_final_rows_for_one_identity_collapse_to_the_final(self):
         identity = "AUTO-emp-1-2026-08-03-unnotified-absence"

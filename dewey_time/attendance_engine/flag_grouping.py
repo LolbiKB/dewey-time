@@ -46,6 +46,7 @@ def build_queue(
     decisions_by_identity: dict[str, dict],
     employees_by_id: dict[str, dict],
     outage_branch_dates: set[tuple[str, str]],
+    include_decided: bool = False,
 ) -> dict:
     """Rank, dedup and group live flags against live decisions.
 
@@ -55,10 +56,18 @@ def build_queue(
     employee id to {employee_name, branch}; `outage_branch_dates` holds
     (branch, "YYYY-MM-DD") pairs with an open closeout alert or no sync watermark.
 
+    `include_decided` keeps people whose flags are ALL settled in `entries`. It is
+    off by default because the queue's default question is "who still owes me
+    something", and on because deciding an already-decided identity is the only
+    way HR can correct a decision (`flag_decision_api._write_decision` inserts a
+    new row and supersedes the old one) — unreachable people make that correction
+    unreachable too.
+
     Returns {"entries", "counts", "orphans"}. Counts are flag counts over the
     whole input — including flags belonging to people who have fully cleared the
     queue, which is what makes `decided` a meaningful toolbar number — while
-    `counts["people"]` counts distinct employees actually present in `entries`.
+    `counts["people"]` counts distinct employees who still owe HR an answer,
+    whether or not settled people are also on show.
     """
     counts = {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0}
     by_person: dict[tuple[str, str], dict[str, dict]] = {}
@@ -94,13 +103,21 @@ def build_queue(
             else:
                 counts["decided"] += 1
         person = _person(employee, date_str, person_flags, employees_by_id)
-        # A person leaves the queue only once every flag of theirs is settled.
-        if person["undecided_count"]:
+        # A person leaves the queue only once every flag of theirs is settled —
+        # unless the caller asked for the settled ones back, which is what makes
+        # an applied decision reachable for replacement.
+        if person["undecided_count"] or include_decided:
             persons.append(person)
 
     entries = _entries_for(persons, outage_branch_dates)
     entries.sort(key=_entry_sort_key)
-    counts["people"] = len({person["employee"] for person in _iter_people(entries)})
+    # Only people who still owe HR an answer, so `people` keeps meaning "people
+    # with something open" (which is what the toolbar renders it as) when settled
+    # people are on show. Under the default every person in `entries` is
+    # unresolved by construction, so the filter changes nothing there.
+    counts["people"] = len(
+        {person["employee"] for person in _iter_people(entries) if person["undecided_count"]}
+    )
 
     return {
         "entries": entries,
@@ -156,6 +173,9 @@ def _person(employee: str, date_str: str, person_flags: list[dict], employees_by
     """One Person. `person_flags` must already be worst-first."""
     meta = employees_by_id.get(employee) or {}
     unresolved = [f for f in person_flags if f["decision_state"] in UNRESOLVED_STATES]
+    # `default=0` is what a fully settled person ranks — reachable only under
+    # include_decided, and correct: they sink to the foot of a worst-first queue
+    # because they are not work, they are a record to correct if HR got it wrong.
     rank = max((f["rank"] for f in unresolved), default=0)
     return {
         "employee": employee,
@@ -209,7 +229,11 @@ def _entries_for(persons: list[dict], outage_branch_dates: set) -> list[dict]:
         # Routine grouping keys off the person's WORST unresolved flag, never off
         # a routine flag they merely also have: someone 9 minutes late who also
         # has a 3h gap must land under the gap. person["tier"] is that worst
-        # flag's tier by construction (_person).
+        # flag's tier by construction (_person). `top` is None for a fully settled
+        # person (only reachable under include_decided): a cause group is a
+        # bulk-decide affordance, and there is nothing of theirs to bulk-decide,
+        # so they fall through to a lone entry rather than pad a group whose
+        # action would skip them.
         top = _top_unresolved(person)
         if top is not None and person["tier"] == TIER_ROUTINE:
             key = "{0}:{1}:{2}".format(GROUP_ROUTINE_CODE, top["flag_code"], date_str)

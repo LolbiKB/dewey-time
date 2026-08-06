@@ -16,10 +16,12 @@ import {
   DECIDE_FAILED_MESSAGE,
   DEVICE_ALERT_EXPLAINER,
   REASON_OPTIONS,
+  SHOWING_DECIDED_MESSAGE,
   deviceAlertHeadline,
   partialFailureMessage,
 } from "@/lib/flagQueueLabels";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
+import { cn } from "@/lib/utils";
 import { decideFlags } from "@/services/flags";
 import type { QueueEntry, QueuePayload } from "@/types/flags";
 import { FlagDecisionPanel } from "@/ui/FlagDecisionPanel";
@@ -117,7 +119,15 @@ export function FlagQueuePage() {
     };
   }, []);
 
-  const { entries, counts, alerts, truncated, isLoading, error, refresh } = useFlagQueue(range);
+  // Off by default: the queue's job is what is still waiting on HR. Turned on,
+  // people who have nothing outstanding come back into the list, which is the
+  // only route to a decision HR wants to replace.
+  const [includeDecided, setIncludeDecided] = useState(false);
+
+  const { entries, counts, alerts, truncated, isLoading, error, refresh } = useFlagQueue({
+    ...range,
+    includeDecided,
+  });
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
@@ -165,6 +175,15 @@ export function FlagQueuePage() {
     },
     [resetRowState],
   );
+
+  const handleToggleDecided = useCallback(() => {
+    setIncludeDecided((prev) => !prev);
+    // The two views are different result sets, so the selected row may not exist
+    // in the one being switched to — and a half-typed decision belongs to the row
+    // it was started on either way.
+    setSelectedKey(null);
+    resetRowState();
+  }, [resetRowState]);
 
   const handleToggleMember = useCallback((employee: string) => {
     setExcluded((prev) => {
@@ -267,6 +286,8 @@ export function FlagQueuePage() {
         // something open" beside a failed load reads as "nothing to do", which
         // is the exact false calm this page exists to break.
         counts={isLoading || error ? null : counts}
+        includeDecided={includeDecided}
+        onToggleDecided={handleToggleDecided}
         truncated={truncated}
         isLoading={isLoading}
         error={error}
@@ -340,6 +361,9 @@ export function FlagQueuePage() {
 
 export type FlagQueueViewProps = {
   counts: QueuePayload["counts"] | null;
+  /** Whether the queue is also listing people with nothing outstanding. */
+  includeDecided?: boolean;
+  onToggleDecided?: () => void;
   truncated?: boolean;
   isLoading: boolean;
   error: unknown;
@@ -374,8 +398,11 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </p>
         ) : null}
 
-        {/* Counts, not filters. They report the size of the job; making them
-            silently filter the list is how a queue starts hiding work. */}
+        {/* Open and Needs re-review are counts, not filters — they report the
+            size of the job, and letting them hide rows is how a queue starts
+            hiding work. Decided is the one exception, and it only ever ADDS:
+            pressed, the settled people it counts come back into the list so a
+            decision can be replaced. Nothing here can subtract from the queue. */}
         <div
           role="group"
           aria-label="Queue counts"
@@ -383,8 +410,20 @@ export function FlagQueueView(props: FlagQueueViewProps) {
         >
           <CountChip label="Open" value={counts?.open ?? 0} />
           <CountChip label="Needs re-review" value={counts?.needs_re_review ?? 0} />
-          <CountChip label="Decided" value={counts?.decided ?? 0} />
+          <CountChip
+            label="Decided"
+            value={counts?.decided ?? 0}
+            pressed={props.includeDecided}
+            onToggle={props.onToggleDecided}
+          />
         </div>
+
+        {/* Without this the extra rows read as a bug: entries with no action
+            left on them, in a queue that promises everything in it is waiting
+            on you. */}
+        {props.includeDecided ? (
+          <p className="text-xs text-muted-foreground">{SHOWING_DECIDED_MESSAGE}</p>
+        ) : null}
       </PageHeader>
 
       {/* Role 2, not role 3: the queue itself loaded fine, so no region is
@@ -473,11 +512,38 @@ export function FlagQueueView(props: FlagQueueViewProps) {
   );
 }
 
-function CountChip(props: { label: string; value: number }) {
-  return (
-    <span className="flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground sm:flex-none">
+function CountChip(props: {
+  label: string;
+  value: number;
+  /** Present only on a chip that also toggles what the list shows. */
+  pressed?: boolean;
+  onToggle?: () => void;
+}) {
+  const body = (
+    <>
       {props.label}
       <span className="tabular-nums text-foreground">{props.value}</span>
-    </span>
+    </>
+  );
+  const shape =
+    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium sm:flex-none";
+
+  if (!props.onToggle) {
+    return <span className={cn(shape, "text-muted-foreground")}>{body}</span>;
+  }
+
+  return (
+    <button
+      type="button"
+      aria-pressed={props.pressed}
+      onClick={props.onToggle}
+      className={cn(
+        shape,
+        "transition-colors hover:text-foreground",
+        props.pressed ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
+      )}
+    >
+      {body}
+    </button>
   );
 }

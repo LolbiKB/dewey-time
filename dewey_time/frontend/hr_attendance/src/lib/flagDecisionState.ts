@@ -1,7 +1,7 @@
 /**
  * Pure decision-state logic for the flag triage page: whether a pending
- * decision has what it needs before "Decide" submits, and the two payload
- * builders that turn a person or a cause-group selection into the exact
+ * decision has what it needs before "Decide" submits, and the three payload
+ * builders that turn a flag, a person or a cause-group selection into the exact
  * `identities` array `decide_flags` expects.
  *
  * `groupPayload` is the safety property the design doc calls out under
@@ -49,6 +49,23 @@ export function decisionIsComplete(decision: PendingDecision): boolean {
 
 function isUndecided(flag: FlagOut): boolean {
   return flag.decision_state === "undecided";
+}
+
+/**
+ * The `identities` a decide on ONE flag submits — the smallest of the three
+ * builders, and the only one that also serves an already-decided flag.
+ *
+ * Re-deciding sends the flag's own `flag_identity`, exactly as the first
+ * decision did, and that is the whole mechanism: `decide_flags` looks up the
+ * live decision BY IDENTITY (`flag_decision_api._live_decisions_by_identity`),
+ * inserts the new row pointing at it through `supersedes`, and flips
+ * `superseded` on the old one. Send anything else — the decision row's `name`,
+ * a synthesised key — and the backend finds no live predecessor, so the flag
+ * ends up with two live decisions and every reader (which all filter
+ * `superseded = 0`) sees whichever it happens to load last.
+ */
+export function flagIdentities(flag: FlagOut): string[] {
+  return [flag.flag_identity];
 }
 
 /**

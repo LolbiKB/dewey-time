@@ -315,10 +315,13 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
   await page.getByText("Noor Aziz").first().click();
 
   // Selecting the person only reveals its flag card; the decision form
-  // (reason picker, note, submit) is gated behind its own "Decide" button
-  // (FlagDecisionPanel.tsx's FlagCard: `decided ? null : props.open ? <DecisionForm/> : <Button>Decide</Button>`),
-  // so it must be opened before the reason control exists in the DOM.
-  await page.getByRole("button", { name: "Decide" }).click();
+  // (reason picker, note, submit) is gated behind its own button
+  // (FlagDecisionPanel.tsx's FlagCard: `props.open ? <DecisionForm/> :
+  // <Button>{decided ? DECIDE_AGAIN_LABEL : "Decide"}</Button>`), so it must be
+  // opened before the reason control exists in the DOM. `exact` because
+  // Playwright's `name` is a substring match and the toolbar's "Decided" chip is
+  // a button too — the toggle that surfaces already-decided people.
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
 
   // Reason is the closed 7-item vocabulary (contract `REASONS`); its label
   // text is the design doc's own copy, quoted under a `Labels:` heading. The
@@ -481,4 +484,133 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
   // screen reader mid-sentence"). A write that half-succeeded is exactly that
   // case, not a hard failure, so no role="alert" element should exist at all.
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("a decided flag is reachable and can be decided again", async ({ page }) => {
+  // The correction path. Every other spec in this file makes a FIRST decision;
+  // this is the only way HR can fix one they got wrong — decide the same flag
+  // again, which the backend records as a new row superseding the old one.
+  // Two links in that chain have no unit coverage and both fail SILENTLY:
+  // the `include_decided` request parameter (Frappe ignores an argument the
+  // endpoint does not declare, so a renamed one leaves the toggle doing
+  // nothing) and the identity in the re-decide body (the wrong value writes a
+  // second live decision instead of superseding, and raises nothing).
+  //
+  // No mobile skip, same reasoning as the specs above: the toolbar chip and the
+  // decision form are the same component tree at every viewport.
+
+  const FLAG_IDENTITY = "AUTO-EMP-201-2026-08-13-late_start";
+  const decidedFlag = {
+    flag_identity: FLAG_IDENTITY,
+    flag_code: "LATE_START",
+    severity: "WARNING",
+    day_closed: 1,
+    evidence: { minutes: 75 },
+    rank: 65,
+    tier: "review",
+    decision_state: "matched",
+    decision: {
+      name: "AFD-0001",
+      outcome: "EXCUSED",
+      reason: "APPROVED_LEAVE",
+      note: null,
+      decided_by: "hr@example.com",
+      decided_at: "2026-08-13 09:00:00",
+      group_key: "grp-single-0001",
+    },
+  };
+
+  const settledPerson = {
+    kind: "person",
+    employee: "EMP-201",
+    employee_name: "Noor Aziz",
+    employee_branch: "BRANCH-A",
+    attendance_date: "2026-08-13",
+    // A settled person ranks 0: rank comes from the worst UNRESOLVED flag and
+    // they have none (flag_grouping._person).
+    rank: 0,
+    tier: "routine",
+    flags: [decidedFlag],
+    undecided_count: 0,
+  };
+
+  const basePayload = {
+    counts: { open: 0, needs_re_review: 0, decided: 1, people: 0 },
+    orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
+    alerts: [],
+    truncated: false,
+    start_date: "2026-08-09",
+    end_date: "2026-08-15",
+  };
+
+  const queueParams: (string | null)[] = [];
+
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+
+    if (p.includes("get_flag_queue")) {
+      const includeDecided = url.searchParams.get("include_decided");
+      queueParams.push(includeDecided);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        // The default view genuinely does not contain this person — which is
+        // the entire reason the toggle has to exist.
+        body: JSON.stringify({
+          message: { ...basePayload, entries: includeDecided ? [settledPerson] : [] },
+        }),
+      });
+    }
+
+    if (p.includes("decide_flags")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "grp-single-0002", errors: [] },
+        }),
+      });
+    }
+
+    return route.fallback();
+  });
+
+  await page.goto("/hr-flags");
+  await expect(page.getByText("Nothing to triage in this range.")).toBeVisible();
+  await expect(page.getByText("Noor Aziz")).toHaveCount(0);
+
+  // The Decided count is the control: it already answers "how many", so it also
+  // answers "show me".
+  await page.getByRole("button", { name: /^Decided/ }).click();
+
+  await expect(page.getByText("Noor Aziz").first()).toBeVisible();
+  expect(queueParams[0]).toBeNull();
+  expect(queueParams).toContain("1");
+
+  await page.getByText("Noor Aziz").first().click();
+  // The decision in force is readable before anything replaces it.
+  await expect(page.getByText("Excused — Approved leave or holiday")).toBeVisible();
+
+  await page.getByRole("button", { name: "Decide again" }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Genuine violation" });
+  // UPHELD, the opposite of the decision in force — a correction, not a repeat.
+  // The first click is the outcome toggle (the only "Uphold" on the page while
+  // the draft still reads EXCUSED); filling the note then enables the submit
+  // button, which the same label now names — `.last()` in DOM order, the same
+  // idiom as the single-decision spec above.
+  await page.getByRole("button", { name: /^Uphold\b/ }).click();
+  await page.getByPlaceholder("Note").fill("Manager confirmed no approval was given.");
+
+  const decidePost = page.waitForRequest((request) => request.url().includes("decide_flags"));
+  await page.getByRole("button", { name: /^Uphold\b/ }).last().click();
+  const body = (await decidePost).postDataJSON();
+
+  // The SAME identity as the decision being replaced: that is what makes the
+  // backend supersede rather than leave two live decisions on one flag.
+  expect(body.identities).toEqual([FLAG_IDENTITY]);
+  expect(body.outcome).toBe("UPHELD");
+  expect(body.reason).toBe("GENUINE_VIOLATION");
 });

@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   decisionIsComplete,
+  flagIdentities,
   groupPayload,
   remainingIdentities,
   type PendingDecision,
@@ -14,6 +15,7 @@ import {
 import { flagSummary, formatFlagContextDate, formatFlagEvidenceDetails } from "@/lib/flagDetails";
 import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
 import {
+  DECIDE_AGAIN_LABEL,
   DECIDE_ONE_BY_ONE_LABEL,
   OUTCOME_OPTIONS,
   REASON_OPTIONS,
@@ -191,31 +193,42 @@ function FlagCard(props: {
         </p>
       ) : null}
 
+      {/* The decision in force, kept on screen while the form below is open —
+          this is what HR is replacing, and they should be able to read it while
+          they type the reason they are replacing it. */}
       {flag.decision && decided ? (
         <p className="text-xs text-muted-foreground">{appliedDecisionLabel(flag.decision)}</p>
       ) : null}
 
-      {decided ? null : props.open ? (
+      {/* A decided flag is decidable AGAIN, through this same form. That is the
+          only way HR can correct a decision they got wrong: the write is an
+          ordinary decide_flags call on the same flag_identity, which the backend
+          records as a new row superseding the old one — nothing is edited and
+          nothing is deleted. */}
+      {props.open ? (
         <DecisionForm
           draft={props.draft}
           onChange={props.onDraftChange}
           submitLabel={outcomeActionLabel(props.draft.outcome)}
-          onSubmit={() => props.onSubmit([flag.flag_identity], props.draft)}
+          onSubmit={() => props.onSubmit(flagIdentities(flag), props.draft)}
           onCancel={props.onClose}
           submitting={props.submitting}
         />
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={props.onOpen}>
-            Decide
+          <Button size="sm" variant={decided ? "outline" : "default"} onClick={props.onOpen}>
+            {decided ? DECIDE_AGAIN_LABEL : "Decide"}
           </Button>
-          {props.lastDecision ? (
+          {/* Only for flags still awaiting one: repeating the day's decision onto
+              a flag that already has one would be a supersession nobody asked
+              for, recorded under HR's name. */}
+          {!decided && props.lastDecision ? (
             <Button
               size="sm"
               variant="secondary"
               disabled={props.submitting}
               onClick={() =>
-                props.onSubmit([flag.flag_identity], props.lastDecision as PendingDecision)
+                props.onSubmit(flagIdentities(flag), props.lastDecision as PendingDecision)
               }
             >
               {SAME_REASON_LABEL}

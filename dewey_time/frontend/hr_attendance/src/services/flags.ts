@@ -41,12 +41,19 @@ export function getFlagQueue(args: {
   endDate: string;
   tier?: Tier | null;
   limit?: number;
+  /**
+   * Also return people whose flags are all settled, so an applied decision can
+   * be reached and replaced. Sent only when true — omitted, the backend answers
+   * exactly as it always has.
+   */
+  includeDecided?: boolean;
 }) {
   return frappeCall<QueuePayload>(`${QUEUE_NS}.get_flag_queue`, {
     start_date: args.startDate,
     end_date: args.endDate,
     tier: args.tier ?? undefined,
     limit: args.limit,
+    include_decided: args.includeDecided ? 1 : undefined,
   });
 }
 

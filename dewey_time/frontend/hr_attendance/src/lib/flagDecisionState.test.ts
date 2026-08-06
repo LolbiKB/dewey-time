@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decisionIsComplete, groupPayload, remainingIdentities } from "@/lib/flagDecisionState";
+import {
+  decisionIsComplete,
+  flagIdentities,
+  groupPayload,
+  remainingIdentities,
+} from "@/lib/flagDecisionState";
 import type { FlagOut, QueuePerson } from "@/types/flags";
 
 function flag(over: Partial<FlagOut> & { flag_identity: string }): FlagOut {
@@ -189,4 +194,33 @@ test("remainingIdentities excludes needs_re_review flags even though the backend
 
   assert.deepEqual(remaining, ["AUTO-open"]);
   assert.notEqual(remaining.length, p.undecided_count);
+});
+
+// Correcting a decision is deciding the same flag again — the backend has always
+// supported it, and the identity is the whole mechanism: decide_flags finds the
+// live decision BY flag_identity and supersedes it. Send the decision row's name
+// (or anything else) and it finds no predecessor, leaving the flag with two live
+// decisions and every reader filtering superseded=0 picking one at random.
+test("re-deciding a decided flag submits that flag's own identity, not its decision's", () => {
+  const decided = flag({
+    flag_identity: "AUTO-hr-emp-00001-2026-08-03-late_start",
+    decision_state: "matched",
+    decision: {
+      name: "afd00000000001",
+      outcome: "EXCUSED",
+      reason: "APPROVED_LEAVE",
+      decided_by: "hr@example.com",
+      decided_at: "2026-08-04 09:00:00",
+    },
+  });
+
+  assert.deepEqual(flagIdentities(decided), ["AUTO-hr-emp-00001-2026-08-03-late_start"]);
+  assert.ok(!flagIdentities(decided).includes("afd00000000001"));
+});
+
+test("deciding an undecided flag submits exactly that one identity", () => {
+  // One flag, one write: a per-flag decide must never widen to the person's
+  // other flags — "Apply to remaining" is a separate, explicit affordance.
+  const undecided = flag({ flag_identity: "AUTO-only-this-one" });
+  assert.deepEqual(flagIdentities(undecided), ["AUTO-only-this-one"]);
 });

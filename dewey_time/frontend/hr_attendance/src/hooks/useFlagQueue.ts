@@ -21,6 +21,8 @@ export type FlagQueueParams = {
   startDate: string;
   endDate: string;
   tier?: Tier | null;
+  /** Include people whose flags are all decided, so HR can replace a decision. */
+  includeDecided?: boolean;
 };
 
 export type FlagQueue = {
@@ -35,11 +37,11 @@ export type FlagQueue = {
 };
 
 export function useFlagQueue(params: FlagQueueParams): FlagQueue {
-  const { startDate, endDate, tier = null } = params;
+  const { startDate, endDate, tier = null, includeDecided = false } = params;
 
   const { data, error, isLoading, refetch } = useQuery({
-    queryKey: queryKeys.flags.queue(startDate, endDate, tier),
-    queryFn: () => getFlagQueue({ startDate, endDate, tier }),
+    queryKey: queryKeys.flags.queue(startDate, endDate, tier, includeDecided),
+    queryFn: () => getFlagQueue({ startDate, endDate, tier, includeDecided }),
   });
 
   return useMemo(

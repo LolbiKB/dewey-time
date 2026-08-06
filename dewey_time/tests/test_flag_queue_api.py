@@ -76,9 +76,31 @@ class _Recorder:
         self.rows_by_doctype = rows_by_doctype
         self.calls = []
 
+    @staticmethod
+    def _matches(row, filters):
+        """Honour SCALAR EQUALITY filters, and only for a key the canned row carries.
+
+        Operator filters (["between", …], ["in", …], ["is", "not set"]) are still
+        ignored — every fixture here is deliberately inside the range or set they
+        express — but an equality filter like source == "AUTO" is a correctness
+        invariant, and a fake that ignores it lets a mutant deleting the filter pass
+        with the suite green. That is exactly the blindness Task 5's review found in
+        the decision-write harness; this is the same repair on the read side.
+        """
+        for field, expected in filters.items():
+            if isinstance(expected, (list, tuple)):
+                continue
+            if field in row and row[field] != expected:
+                return False
+        return True
+
     def __call__(self, doctype, **kwargs):
         self.calls.append((doctype, kwargs))
-        rows = self.rows_by_doctype.get(doctype, [])
+        rows = [
+            row
+            for row in self.rows_by_doctype.get(doctype, [])
+            if self._matches(row, kwargs.get("filters") or {})
+        ]
         limit = kwargs.get("limit_page_length")
         if limit:
             rows = rows[:limit]
@@ -142,6 +164,9 @@ def _flag_row(employee, attendance_date="2026-08-03", flag_code="LATE_START", **
         "severity": "WARNING",
         "day_closed": 1,
         "evidence": '{"minutes": 12}',
+        # Carried so the recorder's equality filter can act on it — the module
+        # never selects `source`, it only filters by it.
+        "source": "AUTO",
     }
     row.update(extra)
     return row
@@ -270,6 +295,25 @@ class TestQueueInputs(unittest.TestCase):
             kwargs["employees_by_id"]["HR-EMP-00000"],
             {"employee_name": "Name HR-EMP-00000", "branch": "BR-A"},
         )
+
+    def test_only_auto_flags_reach_the_queue(self):
+        # flag_identity hard-prefixes "AUTO-" whatever the row's real source, so an
+        # HR-created flag for the same employee/date would be decided under an
+        # identity that belongs to the engine's row. Every other reader and writer
+        # on this feature filters source == "AUTO" for exactly this reason, and the
+        # missing-filter bug has already shipped twice on this branch.
+        rows = _roster(1)
+        rows["Attendance Flag"] = [
+            _flag_row("HR-EMP-00000", flag_code="LATE_START"),
+            _flag_row("HR-EMP-00000", flag_code="OFF_SHIFT_PUNCH", source="HR"),
+        ]
+        with _harness(rows) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.build.call_args.kwargs["flags"]
+            filters = h.recorder.kwargs_for("Attendance Flag")[0]["filters"]
+
+        self.assertEqual(filters["source"], "AUTO")
+        self.assertEqual([f["flag_code"] for f in flags], ["LATE_START"])
 
     def test_provisional_and_final_rows_collapse_to_the_final_flag(self):
         # flag_identity deliberately excludes day_closed, so during the closeout window
@@ -417,6 +461,58 @@ class TestTierFilter(unittest.TestCase):
         with _harness(_roster(2)):
             with self.assertRaises(Exception):
                 flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="urgent")
+
+
+class TestIncludeDecided(unittest.TestCase):
+    """The opt-in that makes an applied decision reachable again. Everything the
+    default does is pinned by the tests above, so what matters here is that the
+    default is genuinely unmoved — same argument to build_queue, same cache key —
+    and that the wire's string "1" turns the flag on.
+    """
+
+    def test_the_default_request_asks_for_no_decided_people(self):
+        with _harness(_roster(1)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertIs(h.build.call_args.kwargs["include_decided"], False)
+
+    def test_truthy_wire_values_turn_it_on(self):
+        # Frappe hands whitelisted arguments over as strings; frappeCall
+        # JSON-encodes a number, so the SPA's `1` arrives as "1".
+        for value in (1, "1", True, "true", "yes"):
+            with self.subTest(value=value):
+                with _harness(_roster(1)) as h:
+                    flag_queue_api.get_flag_queue(
+                        "2026-08-01", "2026-08-07", include_decided=value
+                    )
+                self.assertIs(h.build.call_args.kwargs["include_decided"], True)
+
+    def test_falsy_wire_values_leave_it_off(self):
+        for value in (0, "0", "", None, False, "false"):
+            with self.subTest(value=value):
+                with _harness(_roster(1)) as h:
+                    flag_queue_api.get_flag_queue(
+                        "2026-08-01", "2026-08-07", include_decided=value
+                    )
+                self.assertIs(h.build.call_args.kwargs["include_decided"], False)
+
+    def test_the_two_views_are_separate_cache_entries(self):
+        # Sharing one key would serve the toggled request the default page — the
+        # settled people would simply never appear, with nothing to show for it.
+        cache = _FakeCache()
+        with _harness(_roster(1), cache=cache) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            after_first = h.recorder.count
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", include_decided=1)
+            self.assertGreater(h.recorder.count, after_first)
+
+        self.assertEqual(
+            [key for key, _ttl in cache.set_calls],
+            [
+                # The default key is unchanged — the suffix is only ever added.
+                "flag_queue:v1:2026-08-01:2026-08-07:all",
+                "flag_queue:v1:2026-08-01:2026-08-07:all:decided",
+            ],
+        )
 
 
 class TestQueueCache(unittest.TestCase):

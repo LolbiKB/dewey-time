@@ -221,8 +221,9 @@ export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): st
  * The one line that stands for a person in the list: their worst flag that is
  * still waiting on someone. `flags` arrives worst-first from `build_queue`, so
  * the first non-`matched` entry is the worst unresolved one; a fully decided
- * person (who should not be in the queue at all) falls back to their worst
- * flag overall rather than rendering blank.
+ * person — which the queue does list when HR asks for decided people, so they
+ * can replace a decision — falls back to their worst flag overall rather than
+ * rendering blank.
  *
  * Reuses `formatFlagLabel` rather than defining a second set of flag-code
  * labels — that helper already renders `MISSING_TIME` as "Missing 3h 12m",
@@ -251,6 +252,23 @@ export function priorDecisionLabel(decision: FlagDecision): string {
 export function appliedDecisionLabel(decision: FlagDecision): string {
   return `${outcomeLabel(decision.outcome)} — ${reasonLabel(decision.reason)}`;
 }
+
+/**
+ * Reopens the decision form on a flag that already has a live decision. Reads
+ * as a correction rather than a fresh judgment because that is what it is: the
+ * new decision supersedes the old one and both stay on the record. The verb on
+ * the form's own submit button stays `outcomeActionLabel` ("Excuse" / "Uphold"),
+ * so this label never has to guess which way HR will go.
+ */
+export const DECIDE_AGAIN_LABEL = "Decide again";
+
+/**
+ * Shown while the queue is also listing people who have nothing outstanding.
+ * The list looks wrong without it — rows with no action left on them, in a
+ * queue whose entire premise is "these are waiting on you".
+ */
+export const SHOWING_DECIDED_MESSAGE =
+  "Also showing people whose flags are all decided. Decide one again to replace it — the original decision is kept.";
 
 /**
  * A bulk write where some rows landed and some did not — design doc, "Error

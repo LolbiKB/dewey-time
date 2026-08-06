@@ -44,8 +44,19 @@ export const queryKeys = {
 
   flags: {
     all: ["flags"] as const,
-    queue: (startDate: string, endDate: string, tier: string | null) =>
-      [...queryKeys.flags.all, "queue", startDate, endDate, tier ?? "all"] as const,
+    // `includeDecided` is part of the key and deliberately has no default: the
+    // two views are different result sets over the same range, and one cache
+    // entry for both would serve whichever landed first — the toggle would
+    // simply appear to do nothing.
+    queue: (startDate: string, endDate: string, tier: string | null, includeDecided: boolean) =>
+      [
+        ...queryKeys.flags.all,
+        "queue",
+        startDate,
+        endDate,
+        tier ?? "all",
+        includeDecided ? "with-decided" : "open-only",
+      ] as const,
   },
 
   maintenance: {

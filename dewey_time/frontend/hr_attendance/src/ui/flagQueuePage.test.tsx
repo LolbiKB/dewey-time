@@ -4,7 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import {
+  DECIDE_AGAIN_LABEL,
   SAME_REASON_LABEL,
+  SHOWING_DECIDED_MESSAGE,
+  appliedDecisionLabel,
   applyToRemainingLabel,
   decisionStateLabel,
   outcomeActionLabel,
@@ -374,6 +377,95 @@ test("bulk labels count what will actually be written, not undecided_count", () 
     !groupHtml.includes(`${outcomeActionLabel("EXCUSED")} 2`),
     "the checked-but-unwritable member must not be promised"
   );
+});
+
+// The user's answer to "how does HR fix a decision they got wrong" is
+// supersession, and deciding an already-decided flag is how it is invoked. With
+// the card rendering nothing for a `matched` flag, that answer did not exist in
+// the product: the backend supported it and no button reached it.
+test("a decided flag can be decided again, with the decision it replaces in view", () => {
+  const settled = makeFlag({
+    identity: "id-late",
+    code: "LATE_START",
+    rank: 20,
+    tier: "routine",
+    evidence: { minutes: 12 },
+    state: "matched",
+    decision: PRIOR,
+  });
+  const person = makePerson({
+    employee: "HR-EMP-00001",
+    name: "Ada Lovelace",
+    rank: 0,
+    tier: "routine",
+    flags: [settled],
+  });
+  const entry: QueueEntry = { kind: "person", ...person };
+
+  const closed = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.ok(closed.includes(DECIDE_AGAIN_LABEL), "the settled flag offers a way to decide again");
+  assert.ok(
+    closed.includes(appliedDecisionLabel(PRIOR)),
+    "…and says what the decision in force actually is"
+  );
+  assert.ok(
+    !closed.includes(SAME_REASON_LABEL),
+    "the day-repeat is for flags still awaiting a decision, not for re-deciding a settled one"
+  );
+
+  // The SAME form, reopened — not a second one. The submit verb comes from the
+  // draft outcome, exactly as it does on a first decision.
+  const open = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry, activeIdentity: "id-late" })} />
+  );
+  assert.ok(open.includes(`>${outcomeActionLabel("EXCUSED")}<`), "the decision form is open");
+  assert.ok(open.includes('aria-label="Outcome"'), "with the same outcome/reason/note controls");
+  assert.ok(
+    open.includes(appliedDecisionLabel(PRIOR)),
+    "the decision being replaced stays readable while the replacement is typed"
+  );
+});
+
+test("the Decided count doubles as the control that surfaces decided people", () => {
+  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40 };
+
+  const off = renderToStaticMarkup(
+    <FlagQueueView
+      counts={counts}
+      includeDecided={false}
+      onToggleDecided={() => {}}
+      isLoading={false}
+      error={null}
+      onRetry={() => {}}
+      bulkFailure={null}
+      list={<div />}
+      panel={<div />}
+    />
+  );
+  assert.match(off, /aria-pressed="false"[^>]*>Decided/, "the chip is an off toggle, not a label");
+  assert.ok(!off.includes(SHOWING_DECIDED_MESSAGE), "nothing extra is in the list yet");
+
+  const on = renderToStaticMarkup(
+    <FlagQueueView
+      counts={counts}
+      includeDecided
+      onToggleDecided={() => {}}
+      isLoading={false}
+      error={null}
+      onRetry={() => {}}
+      bulkFailure={null}
+      list={<div />}
+      panel={<div />}
+    />
+  );
+  assert.match(on, /aria-pressed="true"[^>]*>Decided/, "pressed when it is on");
+  // Rows with nothing left to do, in a queue that promises otherwise, read as a
+  // bug unless the page says what it is doing.
+  assert.ok(on.includes(SHOWING_DECIDED_MESSAGE), "and the list says it is showing more than open work");
+
+  // Open and Needs re-review must NOT become filters: a queue whose counts can
+  // hide work is worse than no queue.
+  assert.equal((on.match(/aria-pressed=/g) ?? []).length, 1);
 });
 
 test("a load failure renders exactly one assertive alert", () => {

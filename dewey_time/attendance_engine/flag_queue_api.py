@@ -62,20 +62,49 @@ def _date_key(value) -> str:
     return date_key(value)
 
 
-def _queue_cache_key(start_date: str, end_date: str, tier: str | None) -> str:
-    return f"{_QUEUE_CACHE_PREFIX}:{start_date}:{end_date}:{tier or 'all'}"
+def _queue_cache_key(
+    start_date: str, end_date: str, tier: str | None, include_decided: bool = False
+) -> str:
+    """The two views are separate entries — sharing one key would serve a request
+    that asked for settled people the page that omits them, silently.
+
+    The include_decided component is a SUFFIX rather than a fourth slot so the
+    default view's key is byte-identical to what it has always been; the prefix
+    scan in invalidate_flag_queue_cache reaches both either way.
+    """
+    key = f"{_QUEUE_CACHE_PREFIX}:{start_date}:{end_date}:{tier or 'all'}"
+    return f"{key}:decided" if include_decided else key
 
 
 def invalidate_flag_queue_cache(doc=None, method=None):
-    """Drop every cached queue page. Wired to Attendance Flag and Attendance Flag
-    Decision doc events (after_insert / on_update / on_trash) in hooks.py, mirroring
+    """Drop every cached queue page. Wired in hooks.py to Attendance Flag Decision
+    doc events only (after_insert / on_update / on_trash), mirroring
     coverage_api.invalidate_coverage_cache.
+
+    Deliberately NOT wired to Attendance Flag: this is a delete_keys() prefix scan,
+    i.e. a blocking Redis KEYS over the whole keyspace, and the engine rewrites
+    flags on every checkin and every closeout — it would run that scan all day for
+    freshness the 60s TTL already provides, on sites with nobody on the page. It
+    could not have made the cache correct either, since the engine's deletes go
+    through raw frappe.db.delete() and fire no document hooks at all.
+    test_engine_flag_writes_are_deliberately_not_hooked pins the absence.
 
     delete_keys (not delete_value) because the key carries the range and tier, so one
     request writes one of many pages. Best-effort — see _QUEUE_CACHE_TTL_SECONDS above
     for why the TTL is what really bounds staleness.
     """
     frappe.cache().delete_keys(_QUEUE_CACHE_PREFIX)
+
+
+def _parse_include_decided(value) -> bool:
+    """Same coercion as flag_decision_api._parse_confirm (and dev_tools before it):
+    Frappe hands whitelisted arguments over as strings, so the SPA's `1` arrives as
+    "1" and a bare False must not read as truthy."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return bool(value)
 
 
 def _coerce_limit(limit) -> int:
@@ -300,9 +329,13 @@ def _outage_branch_dates(*, flags, employees_by_id, alert_rows, sync_pairs) -> s
     return outage
 
 
-def _build_queue_payload(*, start, end, tier: str | None) -> dict:
+def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool = False) -> dict:
     """Five queries, always: flags, decisions, employees, alerts, sync rows. Adding a
-    sixth that varies with employee or day count is a spec violation, not a slow path."""
+    sixth that varies with employee or day count is a spec violation, not a slow path.
+
+    include_decided changes only which people build_queue keeps in `entries`; the
+    reads underneath are identical, because the decided flags were always read
+    (that is where `counts["decided"]` comes from)."""
     flags, flags_capped = _flag_rows(start, end)
     decisions_by_identity, decisions_capped = _decisions_by_identity(start, end)
     employees_by_id = _employees_by_id({flag["employee"] for flag in flags if flag.get("employee")})
@@ -320,6 +353,7 @@ def _build_queue_payload(*, start, end, tier: str | None) -> dict:
             alert_rows=alert_rows,
             sync_pairs=sync_pairs,
         ),
+        include_decided=include_decided,
     )
 
     entries = queue.get("entries") or []
@@ -339,9 +373,20 @@ def _build_queue_payload(*, start, end, tier: str | None) -> dict:
 
 
 @frappe.whitelist()
-def get_flag_queue(start_date: str, end_date: str, tier: str | None = None, limit: int = 2000) -> dict:
+def get_flag_queue(
+    start_date: str,
+    end_date: str,
+    tier: str | None = None,
+    limit: int = 2000,
+    include_decided=0,
+) -> dict:
     """HR-only: every AUTO flag in the range, ranked, person-deduped and cause-grouped,
     plus the unresolved device alerts that produced no flags at all.
+
+    include_decided=1 additionally returns people whose flags are all settled, so HR
+    can reach an applied decision and replace it (deciding the same identity again
+    supersedes it). Default 0: the queue's default answer is "who still owes me
+    something", and the response for the default is unchanged, cache key included.
 
     _require_hr_role() raises frappe.ValidationError (417), not PermissionError (403) —
     inconsistent with its neighbours and deliberately kept that way for drop-in
@@ -361,11 +406,15 @@ def get_flag_queue(start_date: str, end_date: str, tier: str | None = None, limi
         # Silently returning nothing for a typo'd tier looks like an empty queue.
         frappe.throw("Unknown tier")
 
+    include_decided = _parse_include_decided(include_decided)
+
     # Normalised dates in the key so "2026-8-1" and "2026-08-01" are one cache entry.
-    cache_key = _queue_cache_key(str(start), str(end), tier)
+    cache_key = _queue_cache_key(str(start), str(end), tier, include_decided)
     payload = frappe.cache().get_value(cache_key)
     if not payload:
-        payload = _build_queue_payload(start=start, end=end, tier=tier)
+        payload = _build_queue_payload(
+            start=start, end=end, tier=tier, include_decided=include_decided
+        )
         frappe.cache().set_value(cache_key, payload, expires_in_sec=_QUEUE_CACHE_TTL_SECONDS)
 
     return _apply_entry_limit(payload, _coerce_limit(limit))
