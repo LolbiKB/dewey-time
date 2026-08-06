@@ -43,11 +43,12 @@ import {
   clamp,
   formatCheckinTime,
   formatDurationMinutes,
+  formatMinuteOnDay,
   minutesFromDateTime,
   parseDateTimeLocal,
   parseTimeToMinutes,
 } from "@/lib/attendanceTime";
-import { sortCheckinsByTime } from "@/lib/attendancePunches";
+import { computeDayTimeWindow, sortCheckinsByTime } from "@/lib/attendancePunches";
 import { formatFlagLabel, parseFlagEvidence, type FlagEvidence } from "@/lib/flagLabels";
 import { computeExpectedWindowPct, computeLunchWindowPct } from "@/lib/shiftTimeline";
 import { observedLunchMinuteRange } from "@/lib/lunchDetection";
@@ -673,6 +674,192 @@ function buildLateFromLunchNarrative(flag: Flag, day: NarrativeDay, dateKey: str
   };
 }
 
+// --- MISSING_TIME --------------------------------------------------------
+//
+// absence_flags.py:34-67 (evaluate_missing_time_flags, called from both
+// closeout.py and the 30-min intraday scheduler) writes exactly
+// { interval_start, interval_end, minutes, kind, threshold_minutes } — the
+// first four already model 1:1 onto flagLabels.ts's FlagEvidence, so no
+// local evidence type is needed for this flag.
+//
+// The decisive question for HR is not "how long" but "was it lunch": the
+// same 45 minutes is a fed employee inside the scheduled lunch window and
+// unaccounted time everywhere else. Rule 12 draws that comparison from the
+// gap (evidence) against the lunch window (the live calendar's day.shift)
+// — never from an evidence-side shift_start/shift_type, which this flag's
+// evidence dict doesn't carry in the first place.
+
+function missingTimeGapMinutes(evidence: FlagEvidence): { startMin: number; endMin: number } {
+  const startMin = minutesFromDateTime(evidence.interval_start) ?? 0;
+  const endMin = minutesFromDateTime(evidence.interval_end) ?? startMin;
+  return { startMin, endMin };
+}
+
+function narrateMissingTime(
+  evidence: FlagEvidence,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const { startMin: gapStartMin, endMin: gapEndMin } = missingTimeGapMinutes(evidence);
+  const minutes = evidence.minutes ?? Math.max(0, gapEndMin - gapStartMin);
+  const durationLabel = formatDurationMinutes(minutes);
+  const startLabel = formatCheckinTime(evidence.interval_start);
+  const endLabel = formatCheckinTime(evidence.interval_end);
+
+  const lunchStartMin = parseTimeToMinutes(day.shift?.lunch_start ?? null);
+  const lunchEndMin = parseTimeToMinutes(day.shift?.lunch_end ?? null);
+  const hasLunchWindow =
+    lunchStartMin != null && lunchEndMin != null && lunchEndMin > lunchStartMin;
+  const overlapsLunch =
+    hasLunchWindow && gapStartMin < lunchEndMin! && gapEndMin > lunchStartMin!;
+
+  const lunchRelationship = overlapsLunch
+    ? "overlapping the scheduled lunch window"
+    : "and it wasn't lunch";
+
+  // Feed the axis from the day's real checkin list (rule 11), then widen it
+  // to guarantee the gap itself is never clipped — a "trailing" gap (left
+  // early) can run past shift end well beyond the checkins-derived margin.
+  const punchWindow = computeDayTimeWindow(day.checkins, minutesFromDateTime);
+
+  return {
+    headline: `Gone from ${startLabel} to ${endLabel} — ${durationLabel} unaccounted, ${lunchRelationship}.`,
+    subline: null,
+    facts: [
+      { label: "Gap", value: durationLabel },
+      { label: "Left", value: startLabel },
+      { label: "Back", value: endLabel },
+      {
+        label: "Lunch window",
+        value: hasLunchWindow
+          ? `${formatMinuteOnDay(dateKey, lunchStartMin!)} – ${formatMinuteOnDay(dateKey, lunchEndMin!)}`
+          : "No scheduled lunch",
+      },
+    ],
+    timeline: {
+      window: {
+        startMin: Math.min(punchWindow?.startMin ?? gapStartMin, gapStartMin),
+        endMin: Math.max(punchWindow?.endMin ?? gapEndMin, gapEndMin),
+      },
+      // No shift band: this flag's finding is the lunch comparison, not the
+      // shift boundary — rule 10's corollary (draw only the boundary the
+      // flag is about; LATE_START gets the start boundary, this gets lunch).
+      band: null,
+      lunch: hasLunchWindow ? { startMin: lunchStartMin!, endMin: lunchEndMin! } : null,
+      threshold: null,
+      spans: [{ startMin: gapStartMin, endMin: gapEndMin, tone: "gap" }],
+      marks: [],
+    },
+  };
+}
+
+// --- UNNOTIFIED_ABSENCE ---------------------------------------------------
+//
+// Two producers write this code with different evidence:
+//  - device closeout, reason "on_shift_no_checkins" (closeout.py:505-516 +
+//    :588-590): evidence includes shift_type, employee_branch, device_sn,
+//    first_in: null, last_out: null, holiday — merged with {reason}.
+//  - the ~3am company fallback, reason "company_fallback_no_checkins"
+//    (closeout.py:301-313): evidence is exactly {employee, date, on_shift,
+//    reason, checkins_count} — no shift_type, no employee_branch, no
+//    device_sn.
+//
+// Rule 10: never source the "Shift" fact or the headline's shift name from
+// evidence.shift_type — read the live calendar (day.shift) instead, so both
+// producers describe the same situation identically. device_sn is buried
+// provenance here (rule 8: no device serial in user-facing copy outside
+// delivery_failed's "Reported by"), so it is read nowhere below.
+
+type UnnotifiedAbsenceEvidence = FlagEvidence & { checkins_count?: number };
+
+const UNNOTIFIED_ABSENCE_CAUGHT_BY: Record<string, string> = {
+  on_shift_no_checkins: "Confirmed at end-of-day device closeout",
+  company_fallback_no_checkins: "Confirmed by the overnight company-wide check",
+};
+
+function unnotifiedAbsenceCaughtBy(reason: string | undefined): string {
+  return (reason && UNNOTIFIED_ABSENCE_CAUGHT_BY[reason]) ?? "Confirmed automatically";
+}
+
+function unnotifiedAbsenceBand(
+  shift: NarrativeDay["shift"]
+): { startMin: number; endMin: number } | null {
+  if (!shift?.shift_assigned) return null;
+  const startMin = parseTimeToMinutes(shift.start_time ?? null);
+  const endMin = parseTimeToMinutes(shift.end_time ?? null);
+  // Same overnight guard as shiftTimeline.ts's computeExpectedWindowPct
+  // (end < start) — an inverted band is out of scope for this task.
+  if (startMin == null || endMin == null || endMin <= startMin) return null;
+  return { startMin, endMin };
+}
+
+/** Named shift only, for the headline sentence. A synthesized time range
+ * read as "the 9:00 AM – 1:00 PM shift" scans like a typo, not a schedule —
+ * the headline degrades straight to the generic sentence instead. */
+function unnotifiedAbsenceHeadlineShiftLabel(shift: NarrativeDay["shift"]): string | null {
+  if (!shift?.shift_assigned) return null;
+  const type = shift.shift_type?.trim();
+  return type || null;
+}
+
+/** Shift fact value: same named-shift-first source as the headline, but
+ * falls back to a start–end time range — more detail than the headline
+ * needs — before giving up. Never evidence.shift_type (rule 10). */
+function unnotifiedAbsenceShiftFactLabel(shift: NarrativeDay["shift"], dateKey: string): string {
+  const named = unnotifiedAbsenceHeadlineShiftLabel(shift);
+  if (named) return named;
+  const band = unnotifiedAbsenceBand(shift);
+  if (!band) return "Not resolved on this calendar";
+  return `${formatMinuteOnDay(dateKey, band.startMin)} – ${formatMinuteOnDay(dateKey, band.endMin)}`;
+}
+
+/** Rule 7: UNNOTIFIED_ABSENCE keeps its empty timeline — hatched so it reads
+ * as absence, not a chart. Width is the point (a 4h shift reads differently
+ * from a 10h shift), so band and window both come from the shift; nothing
+ * else is drawn — "zero marks, band only": no lunch subdivision, no cutoff
+ * line, the whole band is uniformly "gone". */
+function unnotifiedAbsenceTimeline(band: { startMin: number; endMin: number }): FlagTimelineSpec {
+  const ABSENCE_TIMELINE_MARGIN_MIN = 30; // matches computeDayTimeWindow's own default margin
+  return {
+    window: {
+      startMin: clamp(band.startMin - ABSENCE_TIMELINE_MARGIN_MIN, 0, 24 * 60),
+      endMin: clamp(band.endMin + ABSENCE_TIMELINE_MARGIN_MIN, 0, 24 * 60),
+    },
+    band,
+    lunch: null,
+    threshold: null,
+    spans: [{ startMin: band.startMin, endMin: band.endMin, tone: "gap" }],
+    marks: [],
+  };
+}
+
+function narrateUnnotifiedAbsence(
+  evidence: UnnotifiedAbsenceEvidence,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const shiftName = unnotifiedAbsenceHeadlineShiftLabel(day.shift);
+  const headline = shiftName
+    ? `Scheduled for the ${shiftName} shift, but never checked in — zero punches all day.`
+    : "Scheduled to work, but never checked in — zero punches all day.";
+
+  const band = unnotifiedAbsenceBand(day.shift);
+
+  return {
+    headline,
+    subline: null,
+    facts: [
+      { label: "Shift", value: unnotifiedAbsenceShiftFactLabel(day.shift, dateKey) },
+      { label: "Punches", value: String(evidence.checkins_count ?? 0) },
+      { label: "Caught by", value: unnotifiedAbsenceCaughtBy(evidence.reason) },
+    ],
+    // Rule 9's second clause: no trustworthy timestamp for the thing being
+    // flagged when the calendar can't resolve a shift band — the timeline
+    // does not earn its place rather than fabricating a full-day axis.
+    timeline: band ? unnotifiedAbsenceTimeline(band) : null,
+  };
+}
+
 export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
   const evidence = readEvidence(flag);
   const input: NarrativeInput = {
@@ -699,6 +886,10 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
       return buildLeftEarlyNarrative(flag, day, dateKey);
     case "LATE_FROM_LUNCH":
       return buildLateFromLunchNarrative(flag, day, dateKey);
+    case "MISSING_TIME":
+      return narrateMissingTime(evidence, day, dateKey);
+    case "UNNOTIFIED_ABSENCE":
+      return narrateUnnotifiedAbsence(evidence as UnnotifiedAbsenceEvidence, day, dateKey);
     default:
       // Emitted codes with no builder yet — Tasks 3-5 add their arms above this.
       return emittedFallbackNarrative(input);

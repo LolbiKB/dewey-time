@@ -718,3 +718,279 @@ test("flagNarrative: LATE_FROM_LUNCH timeline follows day.observedLunch, not the
     { atMin: 810, tone: "alert", label: "Back" },
   ]);
 });
+
+test("MISSING_TIME states the gap's relationship to lunch, not just its duration", () => {
+  // absence_flags.py:34-67 (evaluate_missing_time_flags) — evidence is
+  // exactly interval_start/interval_end/minutes/kind/threshold_minutes.
+  const flag: Flag = {
+    name: "AUTO-mt-1",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T10:00:00",
+      interval_end: "2026-08-06T10:45:00",
+      minutes: 45,
+      kind: "away",
+      threshold_minutes: 30,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 08:00:00" }, { time: "2026-08-06 17:00:00" }],
+    shift: {
+      shift_assigned: true,
+      start_time: "08:00",
+      end_time: "17:00",
+      lunch_start: "12:00",
+      lunch_end: "12:30",
+    },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Gone from 10:00 AM to 10:45 AM — 45m unaccounted, and it wasn't lunch."
+  );
+  assert.deepEqual(narrative.facts, [
+    { label: "Gap", value: "45m" },
+    { label: "Left", value: "10:00 AM" },
+    { label: "Back", value: "10:45 AM" },
+    { label: "Lunch window", value: "12:00 PM – 12:30 PM" },
+  ]);
+  // Rule 10's corollary: draw only the boundary the flag is about. This
+  // flag's boundary is the lunch comparison, not shift start/end, so the
+  // shift band must stay off the timeline entirely (band: null) — asserted
+  // by absence, since the defect this task fixes is extra rows/marks, not
+  // just wrong ones.
+  assert.deepEqual(narrative.timeline, {
+    window: { startMin: 450, endMin: 1050 },
+    band: null,
+    lunch: { startMin: 720, endMin: 750 },
+    threshold: null,
+    spans: [{ startMin: 600, endMin: 645, tone: "gap" }],
+    marks: [],
+  });
+});
+
+test("MISSING_TIME flips the relationship when the gap overlaps the scheduled lunch window", () => {
+  const flag: Flag = {
+    name: "AUTO-mt-2",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T12:00:00",
+      interval_end: "2026-08-06T13:15:00",
+      minutes: 75,
+      kind: "away",
+      threshold_minutes: 30,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 08:00:00" }, { time: "2026-08-06 17:00:00" }],
+    shift: {
+      shift_assigned: true,
+      start_time: "08:00",
+      end_time: "17:00",
+      lunch_start: "12:00",
+      lunch_end: "12:30",
+    },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Gone from 12:00 PM to 1:15 PM — 1h 15m unaccounted, overlapping the scheduled lunch window."
+  );
+  assert.equal(narrative.facts.find((f) => f.label === "Gap")?.value, "1h 15m");
+  assert.deepEqual(narrative.timeline?.lunch, { startMin: 720, endMin: 750 });
+});
+
+test("MISSING_TIME degrades to 'wasn't lunch' when the day has no scheduled lunch window", () => {
+  const flag: Flag = {
+    name: "AUTO-mt-3",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T10:00:00",
+      interval_end: "2026-08-06T10:30:00",
+      minutes: 30,
+      kind: "away",
+      threshold_minutes: 30,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 08:00:00" }, { time: "2026-08-06 17:00:00" }],
+    shift: {
+      shift_assigned: true,
+      start_time: "08:00",
+      end_time: "17:00",
+      lunch_start: null,
+      lunch_end: null,
+    },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.match(narrative.headline, /and it wasn't lunch\.$/);
+  assert.deepEqual(narrative.facts.find((f) => f.label === "Lunch window"), {
+    label: "Lunch window",
+    value: "No scheduled lunch",
+  });
+  assert.equal(narrative.timeline?.lunch, null);
+});
+
+test("UNNOTIFIED_ABSENCE (device closeout) takes its shift label from the live calendar, not evidence.shift_type", () => {
+  // closeout.py:505-516 + :588-590 — the device-closeout producer's evidence
+  // carries shift_type, employee_branch and device_sn (frozen at emission
+  // time), merged with {reason: "on_shift_no_checkins"}.
+  const flag: Flag = {
+    name: "AUTO-ua-1",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00001",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins",
+      shift_type: "Night Shift", // frozen at emission — deliberately NOT "Morning"
+      employee_branch: "BRANCH-1",
+      checkins_count: 0,
+      first_in: null,
+      last_out: null,
+      device_sn: "ZK-EAST-01",
+      holiday: null,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: true, shift_type: "Morning", start_time: "09:00", end_time: "17:00" },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  // If this read evidence.shift_type it would say "Night Shift" — reading
+  // "Morning" instead proves the headline is sourced from the live
+  // calendar (rule 10), which is the only source the company-fallback
+  // producer below can supply at all.
+  assert.equal(
+    narrative.headline,
+    "Scheduled for the Morning shift, but never checked in — zero punches all day."
+  );
+  assert.deepEqual(narrative.facts, [
+    { label: "Shift", value: "Morning" },
+    { label: "Punches", value: "0" },
+    { label: "Caught by", value: "Confirmed at end-of-day device closeout" },
+  ]);
+  // device_sn is buried provenance here, not a fact (rule 8 — no device
+  // serial in user-facing copy outside delivery_failed's "Reported by").
+  assert.ok(!narrative.facts.some((f) => f.value.includes("ZK-EAST-01")));
+  assert.ok(!narrative.headline.includes("ZK-EAST-01"));
+  assert.deepEqual(narrative.timeline, {
+    window: { startMin: 510, endMin: 1050 },
+    band: { startMin: 540, endMin: 1020 },
+    lunch: null,
+    threshold: null,
+    spans: [{ startMin: 540, endMin: 1020, tone: "gap" }],
+    marks: [],
+  });
+});
+
+test("UNNOTIFIED_ABSENCE (company fallback) resolves the same way even though its evidence carries no shift_type at all", () => {
+  // closeout.py:301-313 — the ~3am company-fallback producer's evidence is
+  // exactly {employee, date, on_shift, reason, checkins_count}. No
+  // shift_type, no employee_branch, no device_sn, no first_in/last_out/holiday.
+  const flag: Flag = {
+    name: "AUTO-ua-2",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00002",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "company_fallback_no_checkins",
+      checkins_count: 0,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: true, shift_type: "Evening", start_time: "14:00", end_time: "22:00" },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Scheduled for the Evening shift, but never checked in — zero punches all day."
+  );
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Caught by")?.value,
+    "Confirmed by the overnight company-wide check"
+  );
+  // Headline voice rule 3: HR should never read the engine's internal name
+  // for this producer.
+  assert.ok(!narrative.headline.toLowerCase().includes("fallback"));
+  assert.ok(!narrative.facts.some((f) => f.value.toLowerCase().includes("fallback")));
+});
+
+test("UNNOTIFIED_ABSENCE degrades to the generic headline and drops its timeline when the calendar can't resolve a shift", () => {
+  const flag: Flag = {
+    name: "AUTO-ua-3",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00003",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins",
+      shift_type: "Morning", // present on evidence — must still be ignored
+      checkins_count: 0,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: false }, // assignment was edited away after the flag was raised
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Scheduled to work, but never checked in — zero punches all day."
+  );
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Shift")?.value,
+    "Not resolved on this calendar"
+  );
+  // Rule 9's second clause: no trustworthy timestamp for the thing being
+  // flagged (no shift band to size the hatched absence against) — the
+  // timeline does not earn its place rather than fabricating a full-day axis.
+  assert.equal(narrative.timeline, null);
+});
+
+test("UNNOTIFIED_ABSENCE falls back to a start–end time range in the Shift fact when the calendar has a shift but no named shift_type", () => {
+  const flag: Flag = {
+    name: "AUTO-ua-4",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00004",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins",
+      checkins_count: 0,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: true, start_time: "09:00", end_time: "13:00" }, // no shift_type
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  // The headline stays generic — "Scheduled for the 9:00 AM – 1:00 PM
+  // shift" reads like a typo, not a schedule. The extra detail belongs in
+  // the more-verbose facts row instead.
+  assert.equal(
+    narrative.headline,
+    "Scheduled to work, but never checked in — zero punches all day."
+  );
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Shift")?.value,
+    "9:00 AM – 1:00 PM"
+  );
+  assert.deepEqual(narrative.timeline?.band, { startMin: 540, endMin: 780 });
+});
