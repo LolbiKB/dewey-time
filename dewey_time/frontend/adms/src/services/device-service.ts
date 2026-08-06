@@ -35,6 +35,44 @@ export interface DeviceFilters extends BaseFilters {
 export type KeyKind = 'setting' | 'identity' | 'counter'
 
 /** One option a terminal reported about itself in an INFO reply. */
+/** One key's derived state on the write ladder. */
+export interface OptionKeyState {
+  key: string
+  status: 'unproven' | 'proven' | 'unsupported'
+  /**
+   * The terminal's own Appendix 1 code where there is one — but ALSO
+   * `set_not_delivered` / `reload_not_delivered` from abandoned writes, which
+   * mean the command never reached the terminal rather than that it refused.
+   * The two must not be worded the same way.
+   */
+  lastError: string | null
+  /** A canary is queued and unanswered, so fleet apply is refused meanwhile. */
+  canaryInFlight: boolean
+}
+
+export interface DesiredOptionEntry {
+  /** null is the fleet standard; a serial is a per-device override. */
+  device_sn: string | null
+  key: string
+  value: string
+  updated_by: string | null
+  updated_at: string
+}
+
+export interface OptionPolicy {
+  desired: DesiredOptionEntry[]
+  keys: OptionKeyState[]
+}
+
+export interface ApplyResult {
+  success: boolean
+  queued: number
+  writeIds?: number[]
+  /** Terminals whose current value is withheld, so agreement is unknown. */
+  unverifiable?: string[]
+  message?: string
+}
+
 export interface DeviceOptionEntry {
   device_sn: string
   key: string
@@ -528,6 +566,81 @@ export class DeviceService {
       'Failed to load device configuration'
     )
     return json.data ?? []
+  }
+
+  /**
+   * The desired values and the per-key ladder.
+   *
+   * `canaryInFlight` comes from the SAME predicate the apply endpoint enforces
+   * with, not from a second reading of the write history. Apply is refused for
+   * up to thirty minutes while a canary is unanswered, even though `status`
+   * still reads `proven` — a pending canary is deliberately no evidence — so
+   * without this flag the page would offer an action the server has already
+   * decided to reject.
+   */
+  static async getOptionPolicy(): Promise<OptionPolicy> {
+    const json = await this.fetchApi<{ success: boolean; data: OptionPolicy }>(
+      '/admin/device-option-policy',
+      {},
+      'Failed to load configuration policy'
+    )
+    return json.data ?? { desired: [], keys: [] }
+  }
+
+  /** The fleet standard for a key (device_sn NULL). */
+  static async setFleetOption(key: string, value: string): Promise<void> {
+    await this.fetchApi<{ success: boolean }>(
+      '/admin/device-options',
+      { method: 'PUT', body: JSON.stringify({ key, value }) },
+      'Failed to set the fleet value'
+    )
+  }
+
+  /** A per-device override, which wins over the fleet standard. */
+  static async setDeviceOption(sn: string, key: string, value: string): Promise<void> {
+    await this.fetchApi<{ success: boolean }>(
+      `/admin/devices/${encodeURIComponent(sn)}/options`,
+      { method: 'PUT', body: JSON.stringify({ key, value }) },
+      'Failed to set the device value'
+    )
+  }
+
+  /**
+   * Write ONE key to ONE terminal — the only way a key first reaches hardware.
+   *
+   * Refused (409) if the terminal already reports this exact value: the verdict
+   * comes entirely from read-back, so writing what is already there yields
+   * `applied` whether the firmware honoured the key, ignored an unknown one, or
+   * never received the command at all.
+   */
+  static async canaryOption(key: string, deviceSn: string, value: string): Promise<void> {
+    await this.fetchApi<{ success: boolean; writeId: number }>(
+      `/admin/device-options/${encodeURIComponent(key)}/canary`,
+      { method: 'POST', body: JSON.stringify({ deviceSn, value }) },
+      'Failed to queue the canary write'
+    )
+  }
+
+  /**
+   * Write the stored desired value to every approved terminal that disagrees.
+   *
+   * TAKES NO VALUE. The endpoint ignores its body by design — what is pushed is
+   * whatever `setFleetOption`/`setDeviceOption` stored. Passing one here would
+   * let the UI show the operator V while the bridge sends W.
+   *
+   * `queued: 0` is NOT always agreement. The bridge answers 409 when no
+   * terminal's value could be read at all (the value allowlist withholds it, so
+   * nothing can be compared and the apply would be a permanent no-op) and 400
+   * when no approved terminal is covered by a desired value. Both arrive here as
+   * a thrown Error carrying the bridge's own wording, which is what the caller
+   * should surface — neither is success.
+   */
+  static async applyOption(key: string): Promise<ApplyResult> {
+    return this.fetchApi<ApplyResult>(
+      `/admin/device-options/${encodeURIComponent(key)}/apply`,
+      { method: 'POST' },
+      'Failed to apply to the fleet'
+    )
   }
 
 }

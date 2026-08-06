@@ -1,8 +1,9 @@
 import { Fragment, useMemo, useState } from 'react'
-import { useQueries } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronRight, EyeOff, Loader2, SlidersHorizontal } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { DeviceService, type DeviceOptionEntry } from '@/services/device-service'
+import { DeviceService, type DeviceOptionEntry, type OptionKeyState } from '@/services/device-service'
+import { OptionKeyActions } from '@/components/devices/option-key-actions'
 import { useDevices } from '@/hooks/use-core-data'
 import { signalText, signalAlert } from '@/lib/signal'
 import { cn } from '@/lib/utils'
@@ -55,10 +56,13 @@ function FindingCard({
   row,
   reportingDevices,
   label,
+  actions,
 }: {
   row: MatrixRow
   reportingDevices: string[]
   label: (sn: string) => string
+  /** Write controls, when this key is one the bridge will accept a write for. */
+  actions?: React.ReactNode
 }) {
   const groups = groupRowValues(row, reportingDevices)
 
@@ -100,6 +104,8 @@ function FindingCard({
           )
         })}
       </div>
+
+      {actions}
     </div>
   )
 }
@@ -142,6 +148,79 @@ export function DeviceConfig() {
     [stamp]
   )
   const truncated = optionQueries.some((q) => (q.data?.length ?? 0) >= OPTIONS_PAGE_LIMIT)
+
+  /**
+   * The write ladder, fleet-wide and independent of any one device's rows.
+   *
+   * Separate from the per-device option queries because it is per-KEY, not per
+   * device — one call, whatever the fleet size.
+   */
+  const policyQuery = useQuery({
+    queryKey: ['device-option-policy'],
+    queryFn: () => DeviceService.getOptionPolicy(),
+  })
+  const keyState = useMemo(() => {
+    const map = new Map<string, OptionKeyState>()
+    for (const k of policyQuery.data?.keys ?? []) map.set(k.key, k)
+    return map
+  }, [policyQuery.data])
+
+  const queryClient = useQueryClient()
+  /**
+   * Invalidate the DEVICE rows as well as the policy.
+   *
+   * A write does not land until the terminal next polls, so neither cache is
+   * correct at this moment — but leaving the option rows stale is what makes the
+   * drift view disagree with the ladder, and an operator reading two panels that
+   * contradict each other trusts neither.
+   */
+  const refetchAll = () => {
+    void queryClient.invalidateQueries({ queryKey: ['device-option-policy'] })
+    for (const sn of deviceSns) void queryClient.invalidateQueries({ queryKey: ['device-options', sn] })
+  }
+
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionNote, setActionNote] = useState<string | null>(null)
+
+  const canaryMutation = useMutation({
+    mutationFn: ({ key, sn, value }: { key: string; sn: string; value: string }) =>
+      DeviceService.canaryOption(key, sn, value),
+    onMutate: () => {
+      setActionError(null)
+      setActionNote(null)
+    },
+    onSuccess: (_data, vars) => {
+      // "Queued", never "applied". The terminal has not been asked yet.
+      setActionNote(`${vars.key} queued for ${vars.sn} — it applies when that terminal next polls.`)
+      refetchAll()
+    },
+    onError: (e: Error) => setActionError(e.message),
+  })
+
+  const applyMutation = useMutation({
+    mutationFn: (key: string) => DeviceService.applyOption(key),
+    onMutate: () => {
+      setActionError(null)
+      setActionNote(null)
+    },
+    onSuccess: (result, key) => {
+      // `queued: 0` reaching here means every terminal already matched. The
+      // cases where nothing could be compared arrive as errors, not as this.
+      setActionNote(
+        result.queued === 0
+          ? (result.message ?? `Every terminal already matches ${key}.`)
+          : `${key} queued for ${result.queued} terminal${result.queued === 1 ? '' : 's'} — each applies when it next polls.`
+      )
+      refetchAll()
+    },
+    onError: (e: Error) => setActionError(e.message),
+  })
+
+  const pendingKey = canaryMutation.isPending
+    ? canaryMutation.variables?.key
+    : applyMutation.isPending
+      ? applyMutation.variables
+      : undefined
 
   const matrix = useMemo(() => buildOptionMatrix(entries, deviceSns), [entries, deviceSns])
   const driftRows = useMemo(() => matrix.rows.filter(hasDrift), [matrix.rows])
@@ -203,6 +282,24 @@ export function DeviceConfig() {
         </div>
       )}
 
+      {/*
+        The result of the last write action, stated as what actually happened.
+        A queued command is not an applied one — the terminal has not been asked
+        yet — and the errors here include the two the bridge answers when a
+        fleet apply could not compare anything at all (409, the value is
+        withheld) or covers no approved terminal (400). Neither is success, and
+        neither may render as one.
+      */}
+      {actionError && (
+        <div className={cn('flex gap-2 rounded-lg p-3 text-xs', signalAlert.danger)}>
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{actionError}</span>
+        </div>
+      )}
+      {actionNote && !actionError && (
+        <div className={cn('rounded-lg p-3 text-xs', signalAlert.attention)}>{actionNote}</div>
+      )}
+
       {matrix.rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No terminal has reported its configuration yet.
@@ -220,6 +317,23 @@ export function DeviceConfig() {
               row={row}
               reportingDevices={matrix.reportingDevices}
               label={label}
+              actions={
+                // Identity and live counters are not writable, and the bridge
+                // refuses them anyway — offering a control for MAC or UserCount
+                // would be an action that cannot succeed.
+                row.kind === 'setting' ? (
+                  <OptionKeyActions
+                    status={keyState.get(row.key)?.status ?? 'unproven'}
+                    optionKey={row.key}
+                    devices={deviceSns}
+                    lastError={keyState.get(row.key)?.lastError}
+                    pending={pendingKey === row.key}
+                    canaryInFlight={keyState.get(row.key)?.canaryInFlight}
+                    onCanary={(sn, value) => canaryMutation.mutate({ key: row.key, sn, value })}
+                    onApply={() => applyMutation.mutate(row.key)}
+                  />
+                ) : undefined
+              }
             />
           ))}
         </div>
