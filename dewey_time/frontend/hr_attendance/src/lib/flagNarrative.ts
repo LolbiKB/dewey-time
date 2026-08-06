@@ -41,6 +41,7 @@
  */
 import {
   clamp,
+  formatBranchLabel,
   formatCheckinTime,
   formatDurationMinutes,
   formatMinuteOnDay,
@@ -914,6 +915,175 @@ function narrateUnnotifiedAbsence(flag: Flag, day: NarrativeDay, dateKey: string
   };
 }
 
+// --- OFF_SHIFT_PUNCH -------------------------------------------------------
+//
+// Two producers write this code, both from the shared per-employee-day
+// evidence dict (closeout.py:505-516) merged with one of two extra_evidence
+// branches: holiday_has_checkins (closeout.py:524, only reached once a
+// holiday has already been resolved for the day) and off_shift_has_checkins
+// (closeout.py:559, only reached once `on_shift` is false). Neither branch
+// runs against a resolved shift, so there is never a band to draw — only the
+// punches themselves earn a place on the axis (rule 6: auto-scale to the
+// punches rather than falling back to a blank 24-hour axis).
+//
+// employee, date, on_shift, shift_type, first_in, last_out and device_sn all
+// ride along on the shared dict but are exactly the constraint-6/constraint-8
+// fields this scenario must never promote to a fact or name in copy.
+
+type OffShiftPunchEvidence = {
+  reason?: "holiday_has_checkins" | "off_shift_has_checkins";
+  checkins_count?: number;
+  holiday?: { description: string; weekly_off: boolean } | null;
+};
+
+/**
+ * "10:15 AM, 2:40 PM", or null when there is nothing to list. Routed through
+ * fact() rather than a hand-built row, so an evidence/calendar mismatch (a
+ * frozen count with no matching live punches) drops the row instead of
+ * rendering an empty string.
+ */
+function punchTimesValue(checkins: Checkin[]): string | null {
+  const sorted = sortCheckinsByTime(checkins, parseDateTimeLocal);
+  if (!sorted.length) return null;
+  return sorted.map((c) => formatCheckinTime(c.time)).join(", ");
+}
+
+/**
+ * Punch marks only, no band, no threshold — the shift half of a
+ * FlagTimelineSpec never applies to OFF_SHIFT_PUNCH because neither reason
+ * runs against a resolved shift. The axis still auto-scales to the punches
+ * themselves (rule 6) via computeDayTimeWindow rather than falling back to a
+ * blank 24-hour axis; when there are no punches to scale to, no timeline is
+ * drawn at all.
+ */
+function punchMarksTimeline(checkins: Checkin[]): FlagTimelineSpec | null {
+  const window = computeDayTimeWindow(checkins, minutesFromDateTime);
+  if (!window) return null;
+
+  const sorted = sortCheckinsByTime(checkins, parseDateTimeLocal);
+  const marks: TimelineMark[] = sorted
+    .map((c) => minutesFromDateTime(c.time))
+    .filter((atMin): atMin is number => atMin != null)
+    .map((atMin) => ({ atMin, tone: "alert" as const }));
+
+  return {
+    window: { startMin: window.startMin, endMin: window.endMin },
+    band: null,
+    lunch: null,
+    threshold: null,
+    spans: [],
+    marks,
+  };
+}
+
+/**
+ * OFF_SHIFT_PUNCH carries two reasons that are unrelated stories to a human —
+ * a public holiday nobody was scheduled to work, versus simply having no
+ * shift assignment at all — so each gets its own headline.
+ *
+ * The holiday name is read from evidence.holiday, not day.holiday: it is the
+ * frozen finding the engine judged, and it is the exact value the current
+ * evidence-dump panel loses today (an object value never resolves to a
+ * displayable row there, while employee_branch — pure disclosure noise for
+ * this scenario — gets a first-class one). Promoting it to a fact here is
+ * that fix.
+ */
+function buildOffShiftPunchNarrative(
+  flag: Flag,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const genericEvidence = readEvidence(flag);
+  const evidence = genericEvidence as OffShiftPunchEvidence;
+  // Without checkins_count there is no finding to state confidently — it is
+  // the number this whole sentence is built around, and falling back to
+  // day.checkins.length would fabricate a count from data this flag never
+  // actually compared against.
+  if (evidence.checkins_count == null) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
+  const checkins = day.checkins ?? [];
+  const n = evidence.checkins_count;
+  const times = n === 1 ? "time" : "times";
+  const timeline = punchMarksTimeline(checkins);
+
+  if (evidence.reason === "holiday_has_checkins") {
+    const holidayName = evidence.holiday?.description ?? "a holiday";
+    return {
+      headline: `Punched ${n} ${times} on ${holidayName}, a public holiday — nobody was scheduled.`,
+      subline: null,
+      facts: buildFacts([
+        fact("Day", holidayName),
+        fact("Punch times", punchTimesValue(checkins)),
+      ]),
+      timeline,
+    };
+  }
+
+  // off_shift_has_checkins (and any reason this scenario doesn't otherwise
+  // recognise): no holiday, and no Shift Assignment covers the day.
+  return {
+    headline: `Punched ${n} ${times} — no shift was scheduled for this employee that day.`,
+    subline: null,
+    facts: buildFacts([fact("Punch times", punchTimesValue(checkins))]),
+    timeline,
+  };
+}
+
+// --- NON_PRIMARY_SITE_PUNCH -------------------------------------------------
+//
+// NON_PRIMARY_SITE_PUNCH's own evidence (_non_primary_site_punch_flag,
+// closeout.py:413-436, shared verbatim by intraday.py:126-141) plus
+// checkins_count from whichever producer's shared per-employee-day dict it
+// rode in on.
+//
+// No timeline. The finding here is WHERE the punches landed, not WHEN — a
+// timeline would render an evenly-spaced set of marks and say nothing about
+// location (rule 5: categorical findings — which branch, which device, which
+// day type — earn no timeline).
+//
+// Deliberately never reads evidence.device_sn: on the closeout producer it
+// names whichever device triggered THAT closeout job, not the device that
+// recorded the off-site punch, and the intraday producer never writes
+// device_sn at all. There is no device↔branch registry to resolve either
+// case correctly (constraint 8), so no device is named.
+
+type NonPrimarySitePunchEvidence = {
+  employee_branch?: string | null;
+  non_primary_checkins?: number;
+  checkins_count?: number;
+};
+
+function buildNonPrimarySitePunchNarrative(
+  flag: Flag,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const genericEvidence = readEvidence(flag);
+  const evidence = genericEvidence as NonPrimarySitePunchEvidence;
+  // Without both counts there is nothing to compare — the entire finding is
+  // "N of M punches were elsewhere", and either count missing would force a
+  // fabricated "0 of 0" sentence.
+  if (evidence.non_primary_checkins == null || evidence.checkins_count == null) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
+  const nonPrimary = evidence.non_primary_checkins;
+  const total = evidence.checkins_count;
+  const branch = formatBranchLabel(evidence.employee_branch) ?? "their home branch";
+
+  return {
+    headline: `${nonPrimary} of ${total} punches today were at a site other than ${branch}, this employee's home branch.`,
+    subline: null,
+    facts: buildFacts([
+      fact("Home branch", branch),
+      fact("Punches elsewhere", `${nonPrimary} of ${total}`),
+    ]),
+    timeline: null,
+  };
+}
+
 export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
   const evidence = readEvidence(flag);
   const input: NarrativeInput = {
@@ -944,6 +1114,10 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
       return narrateMissingTime(flag, day, dateKey);
     case "UNNOTIFIED_ABSENCE":
       return narrateUnnotifiedAbsence(flag, day, dateKey);
+    case "OFF_SHIFT_PUNCH":
+      return buildOffShiftPunchNarrative(flag, day, dateKey);
+    case "NON_PRIMARY_SITE_PUNCH":
+      return buildNonPrimarySitePunchNarrative(flag, day, dateKey);
     default:
       // Emitted codes with no builder yet — Tasks 3-5 add their arms above this.
       return emittedFallbackNarrative(input);

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { computeDayTimeWindow } from "@/lib/attendancePunches";
+import { minutesFromDateTime } from "@/lib/attendanceTime";
 import {
   buildFacts,
   evidenceMinute,
@@ -1159,4 +1161,322 @@ test("flagNarrative: MISSING_TIME's Lunch window fact comes from day.shift, not 
     "12:00 PM – 12:30 PM"
   );
   assert.match(narrative.headline, /and it wasn't lunch\.$/);
+});
+
+// --- Task 4: OFF_SHIFT_PUNCH ----------------------------------------------
+// Evidence shape mirrors the shared per-employee-day dict (closeout.py:505-516)
+// merged with the holiday branch's extra_evidence (closeout.py:524): every key
+// below except `reason` and `holiday` is either constraint-6 noise (employee,
+// date, on_shift, shift_type) or constraint-8 provenance (device_sn) that must
+// never surface in the narrative, on either scenario in this file.
+const holidayEvidence = {
+  employee: "HR-EMP-00007",
+  date: "2026-08-06",
+  on_shift: false,
+  shift_type: null,
+  employee_branch: "Riverside",
+  checkins_count: 2,
+  first_in: "2026-08-06T10:15:00",
+  last_out: "2026-08-06T14:40:00",
+  device_sn: "ZK-A4-014",
+  holiday: { description: "Founders' Day", weekly_off: false },
+  reason: "holiday_has_checkins",
+};
+
+const holidayFlag: Flag = {
+  name: "AF-HOLIDAY-1",
+  flag_code: "OFF_SHIFT_PUNCH",
+  day_closed: 1,
+  evidence: holidayEvidence,
+};
+
+const holidayCheckins: Checkin[] = [
+  { time: "2026-08-06 10:15:00", custom_device_branch: "Riverside" },
+  { time: "2026-08-06 14:40:00", custom_device_branch: "Riverside" },
+];
+
+const holidayDay: NarrativeDay = { checkins: holidayCheckins };
+
+test("OFF_SHIFT_PUNCH (holiday_has_checkins) promotes the holiday name to a fact instead of losing it to the disclosure", () => {
+  const narrative = flagNarrative(holidayFlag, holidayDay, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Punched 2 times on Founders' Day, a public holiday — nobody was scheduled."
+  );
+  assert.equal(narrative.subline, null);
+
+  // This is the fix for the design doc's counter-example: formatEvidenceValue
+  // (flagDetails.ts:187-219) returns null for the holiday object so it never
+  // reached a row, while employee_branch got a first-class one. Assert both
+  // halves of the inversion are gone: the holiday IS a fact, employee_branch
+  // is NOT.
+  assert.deepEqual(narrative.facts, [
+    { label: "Day", value: "Founders' Day" },
+    { label: "Punch times", value: "10:15 AM, 2:40 PM" },
+  ]);
+  assert.ok(!narrative.facts.some((f) => f.label === "Employee branch"));
+  assert.ok(narrative.facts.length <= 4);
+
+  // Constraint 8: no device serial anywhere in user-facing copy, even though
+  // evidence.device_sn is present on this flag.
+  assert.ok(!narrative.headline.includes("ZK-A4-014"));
+  assert.ok(!narrative.facts.some((f) => f.value.includes("ZK-A4-014")));
+
+  // No shift exists for either OFF_SHIFT_PUNCH reason, so there is no shift
+  // band to draw — but the axis must still auto-scale to the punches
+  // (design rule 6), never a blank 24-hour axis.
+  assert.ok(narrative.timeline);
+  const expectedWindow = computeDayTimeWindow(holidayCheckins, minutesFromDateTime)!;
+  assert.deepEqual(narrative.timeline!.window, {
+    startMin: expectedWindow.startMin,
+    endMin: expectedWindow.endMin,
+  });
+  assert.equal(narrative.timeline!.band, null);
+  assert.equal(narrative.timeline!.lunch, null);
+  assert.equal(narrative.timeline!.threshold, null);
+  assert.deepEqual(narrative.timeline!.spans, []);
+  assert.deepEqual(narrative.timeline!.marks, [
+    { atMin: minutesFromDateTime("2026-08-06 10:15:00"), tone: "alert" },
+    { atMin: minutesFromDateTime("2026-08-06 14:40:00"), tone: "alert" },
+  ]);
+});
+
+// Same shared dict shape, holiday is null (closeout.py:559's branch is only
+// reached once the holiday branch at :520 has already returned).
+const noShiftEvidence = {
+  employee: "HR-EMP-00009",
+  date: "2026-08-06",
+  on_shift: false,
+  shift_type: null,
+  employee_branch: null,
+  checkins_count: 1,
+  first_in: "2026-08-06T09:05:00",
+  last_out: "2026-08-06T09:05:00",
+  device_sn: "ZK-B1-002",
+  holiday: null,
+  reason: "off_shift_has_checkins",
+};
+
+const noShiftFlag: Flag = {
+  name: "AF-NOSHIFT-1",
+  flag_code: "OFF_SHIFT_PUNCH",
+  day_closed: 1,
+  evidence: noShiftEvidence,
+};
+
+const noShiftCheckins: Checkin[] = [
+  { time: "2026-08-06 09:05:00", custom_device_branch: null },
+];
+
+const noShiftDay: NarrativeDay = { checkins: noShiftCheckins };
+
+test("OFF_SHIFT_PUNCH (off_shift_has_checkins) gets its own headline, no Day fact, and no grace anywhere", () => {
+  const narrative = flagNarrative(noShiftFlag, noShiftDay, "2026-08-06");
+
+  // Different reason, different story — a day with literally no shift
+  // assigned is not the same finding as a public holiday, so this must not
+  // reuse the holiday headline template.
+  assert.equal(
+    narrative.headline,
+    "Punched 1 time — no shift was scheduled for this employee that day."
+  );
+  assert.equal(narrative.subline, null);
+  assert.deepEqual(narrative.facts, [{ label: "Punch times", value: "9:05 AM" }]);
+  assert.ok(!narrative.facts.some((f) => f.label === "Day"));
+
+  // Neither OFF_SHIFT_PUNCH reason writes a grace-bearing extra_evidence key
+  // (closeout.py:524 and :559 both write only `reason`), so nothing here
+  // should ever mention grace — the defect this whole plan exists to remove.
+  assert.ok(!narrative.headline.toLowerCase().includes("grace"));
+  assert.ok(!narrative.facts.some((f) => f.value.toLowerCase().includes("grace")));
+
+  assert.ok(narrative.timeline);
+  const expectedWindow = computeDayTimeWindow(noShiftCheckins, minutesFromDateTime)!;
+  assert.deepEqual(narrative.timeline!.window, {
+    startMin: expectedWindow.startMin,
+    endMin: expectedWindow.endMin,
+  });
+  assert.equal(narrative.timeline!.band, null);
+  assert.deepEqual(narrative.timeline!.marks, [
+    { atMin: minutesFromDateTime("2026-08-06 09:05:00"), tone: "alert" },
+  ]);
+});
+
+// Conventions rule 2: an evidence blob missing the one key this builder
+// cannot work without (checkins_count — the number the whole sentence is
+// built around) must fall back honestly, even when the live calendar has
+// real punches sitting right there. Without this guard, `n` would silently
+// read `checkins.length` instead of the frozen finding.
+test("OFF_SHIFT_PUNCH falls back with the empty-evidence caveat when checkins_count is absent, even though the live calendar has real punches", () => {
+  const flag: Flag = {
+    name: "AF-OFFSHIFT-EMPTY",
+    flag_code: "OFF_SHIFT_PUNCH",
+    day_closed: 1,
+    evidence: {},
+  };
+  const dayWithPunches: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 09:00:00" }],
+  };
+
+  const narrative = flagNarrative(flag, dayWithPunches, DATE_KEY);
+
+  assert.equal(narrative.headline, "Punched on day off");
+  assert.doesNotMatch(
+    narrative.headline,
+    /—/,
+    "the empty blob must not reach the confident sentence"
+  );
+  assert.ok(narrative.subline != null && narrative.subline.includes(EMPTY_EVIDENCE_NOTE));
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+// Conventions rule 4: the headline's punch count is pinned to the frozen
+// evidence.checkins_count (mirroring UNNOTIFIED_ABSENCE's "Punches" fact —
+// the count IS the finding), while "Punch times" and the timeline follow the
+// live day.checkins. Evidence's own first_in/last_out are decoys this
+// builder must never read at all. Give every one of these three sources a
+// different value so a regression toward any of the wrong ones can fail.
+test("OFF_SHIFT_PUNCH pins its headline count to evidence.checkins_count while Punch times and the timeline follow the live day.checkins, never evidence.first_in/last_out", () => {
+  const flag: Flag = {
+    name: "AF-OFFSHIFT-DECOY",
+    flag_code: "OFF_SHIFT_PUNCH",
+    day_closed: 1,
+    evidence: {
+      reason: "off_shift_has_checkins",
+      checkins_count: 1, // frozen at emission — deliberately stale
+      first_in: "2026-08-06T05:00:00", // decoy: never read by this builder
+      last_out: "2026-08-06T23:59:00", // decoy: never read by this builder
+    },
+  };
+  const dayLater: NarrativeDay = {
+    // A later correction/backfill added a second punch after the flag fired.
+    checkins: [{ time: "2026-08-06 09:05:00" }, { time: "2026-08-06 09:40:00" }],
+  };
+
+  const narrative = flagNarrative(flag, dayLater, DATE_KEY);
+
+  assert.equal(
+    narrative.headline,
+    "Punched 1 time — no shift was scheduled for this employee that day."
+  );
+  assert.deepEqual(narrative.facts, [{ label: "Punch times", value: "9:05 AM, 9:40 AM" }]);
+  assert.ok(narrative.timeline);
+  assert.deepEqual(narrative.timeline!.marks, [
+    { atMin: minutesFromDateTime("2026-08-06 09:05:00"), tone: "alert" },
+    { atMin: minutesFromDateTime("2026-08-06 09:40:00"), tone: "alert" },
+  ]);
+});
+
+// --- Task 4: NON_PRIMARY_SITE_PUNCH ---------------------------------------
+// Evidence shape mirrors _non_primary_site_punch_flag (closeout.py:413-436),
+// merged into either producer's shared dict — closeout.py:732 (inside
+// `_insert_flags`) or intraday.py:137-141 — both of which carry checkins_count. Only the
+// closeout path also carries device_sn (closeout.py:514); this fixture
+// includes it to prove it is read nowhere near this flag.
+const nonPrimaryEvidence = {
+  employee: "HR-EMP-00003",
+  date: "2026-08-06",
+  on_shift: true,
+  shift_type: "Day Shift",
+  employee_branch: "Riverside",
+  checkins_count: 5,
+  first_in: "2026-08-06T08:02:00",
+  last_out: "2026-08-06T16:58:00",
+  device_sn: "ZK-A4-014",
+  non_primary_checkins: 3,
+};
+
+const nonPrimaryFlag: Flag = {
+  name: "AF-NONPRIMARY-1",
+  flag_code: "NON_PRIMARY_SITE_PUNCH",
+  day_closed: 1,
+  evidence: nonPrimaryEvidence,
+};
+
+const nonPrimaryCheckins: Checkin[] = [
+  { time: "2026-08-06 08:02:00", custom_device_branch: "Riverside" },
+  { time: "2026-08-06 10:30:00", custom_device_branch: "Elm Street" },
+  { time: "2026-08-06 12:00:00", custom_device_branch: "Elm Street" },
+  { time: "2026-08-06 13:15:00", custom_device_branch: "Elm Street" },
+  { time: "2026-08-06 16:58:00", custom_device_branch: "Riverside" },
+];
+
+const nonPrimaryDay: NarrativeDay = { checkins: nonPrimaryCheckins };
+
+test("NON_PRIMARY_SITE_PUNCH states WHERE, drops the timeline entirely, and never names a device", () => {
+  const narrative = flagNarrative(nonPrimaryFlag, nonPrimaryDay, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "3 of 5 punches today were at a site other than Riverside, this employee's home branch."
+  );
+  assert.equal(narrative.subline, null);
+  assert.deepEqual(narrative.facts, [
+    { label: "Home branch", value: "Riverside" },
+    { label: "Punches elsewhere", value: "3 of 5" },
+  ]);
+  assert.ok(narrative.facts.length <= 4);
+
+  // This is the first flag in the plan where the timeline is honestly
+  // dropped (design rule 5 / row "NON_PRIMARY_SITE_PUNCH ... No"). The
+  // finding is WHICH branch, not WHEN — a timeline would render five
+  // evenly-spaced marks and say nothing a clock face can answer.
+  assert.equal(narrative.timeline, null);
+
+  // Constraint 8: evidence.device_sn is present on this fixture (inherited
+  // from the shared closeout evidence dict) but must never be named — there
+  // is no device↔branch registry to resolve it against the punch that was
+  // actually off-site.
+  assert.ok(!narrative.headline.includes("ZK-A4-014"));
+  assert.ok(!narrative.facts.some((f) => f.value.includes("ZK-A4-014")));
+  assert.ok(!/device/i.test(narrative.headline));
+  assert.ok(!narrative.facts.some((f) => /device/i.test(f.label)));
+});
+
+// Conventions rule 2: an empty blob must fall back honestly rather than
+// rendering a fabricated "0 of 0" sentence.
+test("NON_PRIMARY_SITE_PUNCH falls back with the empty-evidence caveat when its counts are absent", () => {
+  const flag: Flag = {
+    name: "AF-NONPRIMARY-EMPTY",
+    flag_code: "NON_PRIMARY_SITE_PUNCH",
+    day_closed: 1,
+    evidence: {},
+  };
+
+  const narrative = flagNarrative(flag, EMPTY_DAY, DATE_KEY);
+
+  assert.equal(narrative.headline, "Other site");
+  assert.doesNotMatch(
+    narrative.headline,
+    /—/,
+    "the empty blob must not reach the confident sentence"
+  );
+  assert.ok(narrative.subline != null && narrative.subline.includes(EMPTY_EVIDENCE_NOTE));
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+// The guard must require BOTH counts, not just one — a lone checkins_count
+// with non_primary_checkins missing would otherwise fabricate "0 of 5"
+// instead of admitting there is no finding to state.
+test("NON_PRIMARY_SITE_PUNCH falls back when only one of its two counts is present", () => {
+  const flag: Flag = {
+    name: "AF-NONPRIMARY-PARTIAL",
+    flag_code: "NON_PRIMARY_SITE_PUNCH",
+    day_closed: 1,
+    evidence: { employee_branch: "Riverside", checkins_count: 5 },
+  };
+
+  const narrative = flagNarrative(flag, EMPTY_DAY, DATE_KEY);
+
+  // The blob isn't empty (employee_branch/checkins_count are present), so
+  // this takes the boundary fallback's "no caveat needed" branch rather than
+  // the EMPTY_EVIDENCE_NOTE one — but it must still land on the generic
+  // label rather than fabricating a "0 of 5" sentence off a missing count.
+  assert.equal(narrative.headline, "Other site");
+  assert.equal(narrative.subline, null);
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
 });
