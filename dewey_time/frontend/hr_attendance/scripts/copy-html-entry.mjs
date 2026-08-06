@@ -8,11 +8,37 @@ const builtHtmlPath = path.join(appRoot, "public/hr_attendance/index.html");
 const targetHtmlPaths = [
   path.join(appRoot, "www/hr-attendance.html"),
   path.join(appRoot, "www/hr-schedule.html"),
+  path.join(appRoot, "www/hr-flags.html"),
 ];
 const buildIdPath = path.join(appRoot, "public/hr_attendance/assets/build-id.txt");
+const builtCssPath = path.join(appRoot, "public/hr_attendance/assets/index.css");
+
+// The full stylesheet is ~172 kB. A build that scanned no component sources emits
+// ~90 kB — everything Tailwind generates from this app's own markup, and nothing
+// from the design system. 150 kB sits well clear of both.
+const MIN_CSS_BYTES = 150_000;
 
 if (!fs.existsSync(builtHtmlPath)) {
   console.error(`Build output not found: ${builtHtmlPath}`);
+  process.exit(1);
+}
+
+// A silently unstyled SPA is the worst failure this build can produce, because
+// `vite build` reports success for it. src/index.css's
+// `@source "../node_modules/@lolbikb/dewey-ui/dist"` is a FILESYSTEM glob, and
+// Tailwind does not walk up to a parent's node_modules the way JS resolution
+// does — so in a git worktree with no node_modules at
+// dewey_time/frontend/hr_attendance/, Tailwind scans nothing, emits a stylesheet
+// with none of the dewey-ui/shadcn classes, and EXITS 0 WITH NO WARNING. That
+// bundle is the deployed artifact (Frappe Cloud never rebuilds it), so it ships.
+// This already happened once on this branch.
+const cssBytes = fs.existsSync(builtCssPath) ? fs.statSync(builtCssPath).size : 0;
+if (cssBytes < MIN_CSS_BYTES) {
+  console.error(
+    `index.css is ${cssBytes} bytes, under the ${MIN_CSS_BYTES} byte floor — this build is missing its component styles.\n` +
+      `Most likely cause: no node_modules at ${path.join(appRoot, "frontend/hr_attendance")}, so Tailwind's @source glob for @lolbikb/dewey-ui matched nothing.\n` +
+      `Fix the install (or symlink node_modules into this worktree) and rebuild; do NOT commit this bundle.`
+  );
   process.exit(1);
 }
 

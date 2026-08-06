@@ -17,6 +17,7 @@ from dewey_time.attendance_engine.shift_assignment import (
     get_shift_assignment as _get_shift_assignment,
     shift_assignment_bounds_by_employee,
 )
+from dewey_time.attendance_engine.flag_identity import date_key, evidence_fingerprint, flag_identity
 
 
 HR_STAFF_ROLES = frozenset({"System Manager", "HR User", "HR Manager"})
@@ -450,6 +451,69 @@ def _employee_nav_meta(employee: str) -> dict:
     }
 
 
+# What the attach point below actually needs from a decision: the key to match it
+# to a flag, the fingerprint that decides matched vs needs_re_review, and the two
+# fields a non-HR viewer is allowed to see.
+_DECISION_FIELDS_EMPLOYEE_VIEW = (
+    "flag_identity",
+    "outcome",
+    "decided_at",
+    "evidence_fingerprint",
+)
+
+# Everything above plus HR's own working record: the free-text note, the reason
+# (which can read GENUINE_VIOLATION), who decided, and the batch it belonged to.
+_DECISION_FIELDS_HR_VIEW = (
+    "name",
+    "flag_identity",
+    "outcome",
+    "reason",
+    "note",
+    "decided_by",
+    "decided_at",
+    "group_key",
+    "evidence_fingerprint",
+)
+
+
+def _live_decisions_by_identity(*, employee: str, start, end, hr_view: bool) -> dict[str, dict]:
+    """Live (superseded=0) Attendance Flag Decision rows for one employee's date
+    range, as ONE batched query keyed by flag_identity — never per-day, never
+    per-flag (Global Constraint 5). Called exactly once per get_employee_calendar
+    request, regardless of how many days or flags are in range; the per-flag
+    attach below this is an in-memory dict lookup, not a query.
+
+    `hr_view` narrows the SELECT rather than the payload. The payload is already
+    safe — the attach point projects an allowlist for a non-HR viewer — but an
+    employee reading their own calendar is a first-class path here, and HR's
+    private note about them has no reason to be fetched into that request's memory
+    at all. Defence in depth: two things would have to break before it leaks.
+    """
+    if not frappe.db.table_exists("Attendance Flag Decision"):
+        return {}
+
+    rows = (
+        frappe.get_all(
+            "Attendance Flag Decision",
+            filters={
+                "employee": employee,
+                "attendance_date": ["between", [start, end]],
+                "superseded": 0,
+            },
+            fields=list(_DECISION_FIELDS_HR_VIEW if hr_view else _DECISION_FIELDS_EMPLOYEE_VIEW),
+        )
+        or []
+    )
+
+    by_identity: dict[str, dict] = {}
+    for row in rows:
+        row["decided_at"] = _format_datetime(row.get("decided_at"))
+        identity = row.get("flag_identity")
+        if identity:
+            by_identity[identity] = row
+    return by_identity
+
+
 @frappe.whitelist()
 def get_employee_calendar(employee: str, start_date: str, end_date: str):
     """
@@ -568,10 +632,24 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             }
         )
 
+    # Resolved once for the whole request — reads cached roles, no query, so this
+    # does not touch the query budget (Global Constraint 5). An employee viewing
+    # their own calendar (a first-class path: _require_calendar_access allows a
+    # non-HR user through for their own linked Employee) must not receive HR's
+    # private `note`/`decided_by`/`reason` on their own flags. Resolved BEFORE the
+    # decision read so it can narrow the SELECT as well as the payload.
+    hr_view = _is_hr_staff()
+    decisions_by_identity = _live_decisions_by_identity(
+        employee=employee, start=start, end=end, hr_view=hr_view
+    )
+
     flags_by_day_raw: dict[str, list[dict]] = defaultdict(list)
     for f in flags:
         d = f.get("attendance_date")
-        key = str(d) if d else None
+        # date_key(), not str(d): the ONE normaliser flag_queue_api._flag_rows also
+        # uses, so a datetime-shaped attendance_date can never silently produce an
+        # identity that fails to match a decision's stored flag_identity.
+        key = date_key(d)
         if not key:
             continue
         ev = f.get("evidence")
@@ -581,10 +659,51 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             except Exception:
                 f["evidence"] = None
         day_closed = f.get("day_closed")
+        source = (f.get("source") or "").upper()
+        if source == "AUTO":
+            # Attach the live decision (if any) by flag_identity, computed from the
+            # flag's own fields — never from `name`, which is unstable across the
+            # provisional/final rename (attendance_flag.py:53-71, Global Constraint 2).
+            identity = flag_identity(
+                employee=employee,
+                attendance_date=key,
+                flag_code=f.get("flag_code"),
+                evidence=f.get("evidence"),
+            )
+            decision = decisions_by_identity.get(identity)
+            if decision is None:
+                decision_state = "undecided"
+            elif evidence_fingerprint(f.get("evidence")) == decision.get("evidence_fingerprint"):
+                decision_state = "matched"
+            else:
+                # Evidence moved under the decision (e.g. HR corrected the punch that
+                # produced it). Same match/mismatch rule flag_grouping.build_queue
+                # uses for the triage queue, so this surface and that one can never
+                # disagree about the same flag_identity.
+                decision_state = "needs_re_review"
+        else:
+            # HR/EMPLOYEE-created rows are never AUTO, but flag_identity() always
+            # prefixes "AUTO-" (flag_identity.py:181) — computing one here would
+            # risk colliding with an unrelated engine-generated flag for the same
+            # employee/date/code. flag_queue_api._flag_rows filters source == "AUTO"
+            # for the identical reason (flag_queue_api.py:102-105).
+            decision, decision_state = None, "undecided"
+
+        if decision is not None and not hr_view:
+            # Allowlist, never `pop()`/`del`: a field the doctype gains later then
+            # defaults to hidden rather than leaking, the same reason
+            # flag_queue_api._open_alert_rows rebuilds its card field by field
+            # instead of passing the row through. decision_state stays truthful
+            # either way — redacting the whole attachment instead would make an
+            # excused flag falsely report "undecided" in the employee's own view.
+            decision = {"outcome": decision.get("outcome"), "decided_at": decision.get("decided_at")}
+
         flags_by_day_raw[key].append(
             {
                 **f,
                 "is_provisional": day_closed == 0,
+                "decision": decision,
+                "decision_state": decision_state,
             }
         )
 

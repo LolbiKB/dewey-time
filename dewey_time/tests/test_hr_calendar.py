@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -309,6 +310,334 @@ class TestCalendarPayloadEmployeeBranch(unittest.TestCase):
         payload = self._call(None)
         self.assertIn("employee_branch", payload)
         self.assertIsNone(payload["employee_branch"])
+
+
+class TestCalendarDecisions(unittest.TestCase):
+    """get_employee_calendar attaches a `decision` + `decision_state` to each flag,
+    batched over the whole range in ONE query — see hr-flag-management-design.md
+    "get_employee_calendar (existing) — additive change". Identity/fingerprint
+    computation is mocked here: this module only has to prove it wires the batched
+    query and the match/mismatch/absent branching correctly, not that
+    flag_identity.py itself is correct (that lives in its own test module — and
+    see TestCalendarDecisionsRealIdentity below, which does not mock it).
+
+    hr_view defaults to True in _call() so the match/mismatch/absent tests below
+    assert the full decision row undisturbed by the viewer-redaction concern,
+    which gets its own dedicated tests (test_non_hr_viewer_sees_redacted_decision,
+    test_hr_viewer_sees_full_decision)."""
+
+    FLAG_ROW = {
+        "name": "AF-1",
+        "attendance_date": "2026-08-05",
+        "flag_code": "MISSING_TIME",
+        "severity": "WARNING",
+        "source": "AUTO",
+        "status": "OPEN",
+        "day_closed": 1,
+        "rule_version": 1,
+        "evidence": json.dumps({"minutes": 45, "reason": "gap", "interval_start": "12:00:00"}),
+    }
+
+    def _call(self, *, decision_rows, identity_return="IDENT-1", fingerprint_return="fp-current",
+              start="2026-08-05", end="2026-08-05", hr_view=True, flag_row=None):
+        from datetime import date as _date
+
+        import dewey_time.attendance_engine.hr_calendar as hc
+
+        get_all_calls = {"Attendance Flag Decision": 0}
+        row = flag_row if flag_row is not None else self.FLAG_ROW
+        # The SELECT the decision read was issued with, for the tests that assert
+        # HR-private columns are never fetched for a non-HR viewer. Recorded rather
+        # than honoured: the fake still returns whole canned rows, so the allowlist
+        # projection stays the thing under test in the redaction cases below.
+        self.decision_fields = []
+
+        def _get_all(doctype, **kwargs):
+            if doctype == "Employee Checkin":
+                return []
+            if doctype == "Attendance Flag":
+                return [dict(row)]
+            if doctype == "Attendance Flag Decision":
+                get_all_calls["Attendance Flag Decision"] += 1
+                self.decision_fields = list(kwargs.get("fields") or [])
+                return list(decision_rows)
+            return []
+
+        def _table_exists(doctype):
+            return doctype in ("Attendance Flag", "Attendance Flag Decision")
+
+        with patch.object(hc, "_require_calendar_access"), \
+             patch.object(hc, "_is_hr_staff", return_value=hr_view), \
+             patch.object(hc, "getdate", lambda v: _date.fromisoformat(str(v))), \
+             patch.object(hc, "get_datetime", lambda v: str(v)), \
+             patch.object(hc, "nowdate", lambda: "2026-08-06"), \
+             patch.object(hc.frappe.db, "get_value", return_value=None), \
+             patch.object(hc.frappe, "get_all", side_effect=_get_all), \
+             patch.object(hc.frappe.db, "table_exists", side_effect=_table_exists), \
+             patch.object(hc, "flag_identity", return_value=identity_return), \
+             patch.object(hc, "evidence_fingerprint", return_value=fingerprint_return):
+            payload = hc.get_employee_calendar("EMP-001", start, end)
+        return payload, get_all_calls
+
+    def test_matching_decision_reports_matched(self):
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": None,
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-current",
+        }
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "matched")
+        self.assertEqual(flag["decision"]["name"], "AFD-1")
+        self.assertEqual(flag["decision"]["outcome"], "EXCUSED")
+
+    def test_fingerprint_mismatch_reports_needs_re_review_but_keeps_decision(self):
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": None,
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-stale",
+        }
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-corrected",
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "needs_re_review")
+        self.assertIsNotNone(flag["decision"])
+        self.assertEqual(flag["decision"]["name"], "AFD-1")
+
+    def test_no_decision_reports_undecided_and_none(self):
+        payload, _ = self._call(
+            decision_rows=[],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "undecided")
+        self.assertIsNone(flag["decision"])
+
+    def test_decision_lookup_is_one_query_for_the_whole_range(self):
+        _, get_all_calls = self._call(
+            decision_rows=[],
+            start="2026-08-01",
+            end="2026-08-05",
+        )
+        self.assertEqual(get_all_calls["Attendance Flag Decision"], 1)
+
+    def test_non_hr_viewer_sees_redacted_decision(self):
+        """Task 7 review Finding 1: an employee viewing their own calendar is a
+        first-class path (_require_calendar_access allows a non-HR user through
+        for their own linked Employee), and must never receive HR's private
+        note/decided_by/reason. decision_state stays "matched" (truthful) even
+        though the decision content is redacted to an allowlist -- gating the
+        whole attachment instead would make an excused flag falsely report
+        "undecided" in the employee's own view."""
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": "HR's private reasoning about this employee",
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-current",
+        }
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+            hr_view=False,
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "matched")
+        # Equality on the whole dict, not individual assertNotIn checks: this
+        # fails the moment ANY extra key leaks, including one added later that
+        # nobody thought to assertNotIn for.
+        self.assertEqual(flag["decision"], {"outcome": "EXCUSED", "decided_at": "2026-08-05 09:00:00"})
+
+    def test_hr_viewer_sees_full_decision(self):
+        """The redaction in test_non_hr_viewer_sees_redacted_decision is
+        viewer-specific, not universal -- an HR viewer must still get the full
+        row (note, decided_by, reason and all), which is what the triage queue
+        and day inspector need to act on a decision."""
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": "HR's private reasoning about this employee",
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-current",
+        }
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+            hr_view=True,
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "matched")
+        self.assertEqual(flag["decision"]["note"], "HR's private reasoning about this employee")
+        self.assertEqual(flag["decision"]["decided_by"], "hr@example.com")
+        self.assertEqual(flag["decision"]["reason"], "APPROVED_LEAVE")
+
+    def test_a_non_hr_viewer_never_fetches_hr_private_columns(self):
+        """Defence in depth behind the allowlist projection above. The payload is
+        already safe, but an employee reading their own calendar is a first-class
+        path, and HR's private note about them has no business being loaded into
+        that request at all — two things have to break before it can leak, not
+        one."""
+        self._call(decision_rows=[], hr_view=False)
+
+        for field in ("note", "decided_by", "reason", "group_key", "name"):
+            self.assertNotIn(field, self.decision_fields, f"{field} is HR-private")
+        # …while still fetching everything the attach point needs, or the flag
+        # would report "undecided" to the employee whose flag was excused.
+        for field in ("flag_identity", "outcome", "decided_at", "evidence_fingerprint"):
+            self.assertIn(field, self.decision_fields)
+
+    def test_an_hr_viewer_still_fetches_the_whole_row(self):
+        self._call(decision_rows=[], hr_view=True)
+
+        for field in (
+            "name",
+            "flag_identity",
+            "outcome",
+            "reason",
+            "note",
+            "decided_by",
+            "decided_at",
+            "group_key",
+            "evidence_fingerprint",
+        ):
+            self.assertIn(field, self.decision_fields)
+
+    def test_non_auto_flag_never_attaches_a_decision(self):
+        """Task 7 review Finding 2: flag_identity() always prefixes "AUTO-"
+        (flag_identity.py:181) regardless of the flag's real source, so an
+        unguarded lookup could hand an HR- or employee-created flag the
+        engine's own decision for the same employee/date/code. The AUTO guard
+        must block attachment even when the (mocked) identity matches the live
+        decision's identity exactly -- proving it is the source check doing the
+        work here, not an identity mismatch."""
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": "IDENT-1",
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": None,
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": "fp-current",
+        }
+        non_auto_row = dict(self.FLAG_ROW, source="HR")
+        payload, _ = self._call(
+            decision_rows=[decision_row],
+            identity_return="IDENT-1",
+            fingerprint_return="fp-current",
+            flag_row=non_auto_row,
+        )
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "undecided")
+        self.assertIsNone(flag["decision"])
+
+
+class TestCalendarDecisionsRealIdentity(unittest.TestCase):
+    """Task 7 review Finding 3: TestCalendarDecisions above mocks flag_identity
+    and evidence_fingerprint to constants, so it cannot catch a date
+    normalisation drift in hr_calendar.py itself -- e.g. reverting to str(d)
+    instead of flag_identity.date_key(). This class calls the REAL functions,
+    so a regression there fails for real instead of being invisible behind a
+    mocked identity_return."""
+
+    def test_attaches_decision_when_attendance_date_arrives_datetime_shaped(self):
+        from datetime import date as _date
+
+        import dewey_time.attendance_engine.hr_calendar as hc
+        from dewey_time.attendance_engine.flag_identity import (
+            evidence_fingerprint as real_evidence_fingerprint,
+            flag_identity as real_flag_identity,
+        )
+
+        # A datetime-shaped attendance_date ("YYYY-MM-DD HH:MM:SS"), not a bare
+        # date. str(d) would leave this untouched and compute a DIFFERENT
+        # identity than the one below; date_key() strips it to "YYYY-MM-DD"
+        # first, the same normaliser flag_queue_api._flag_rows uses.
+        flag_row = {
+            "name": "AF-1",
+            "attendance_date": "2026-08-05 00:00:00",
+            "flag_code": "LATE_START",
+            "severity": "WARNING",
+            "source": "AUTO",
+            "status": "OPEN",
+            "day_closed": 1,
+            "rule_version": 1,
+            "evidence": None,
+        }
+        real_identity = real_flag_identity(
+            employee="EMP-001",
+            attendance_date="2026-08-05",
+            flag_code="LATE_START",
+            evidence=None,
+        )
+        decision_row = {
+            "name": "AFD-1",
+            "flag_identity": real_identity,
+            "outcome": "EXCUSED",
+            "reason": "APPROVED_LEAVE",
+            "note": None,
+            "decided_by": "hr@example.com",
+            "decided_at": "2026-08-05 09:00:00",
+            "group_key": "GRP-1",
+            "evidence_fingerprint": real_evidence_fingerprint(None),
+        }
+
+        def _get_all(doctype, **_kwargs):
+            if doctype == "Employee Checkin":
+                return []
+            if doctype == "Attendance Flag":
+                return [dict(flag_row)]
+            if doctype == "Attendance Flag Decision":
+                return [dict(decision_row)]
+            return []
+
+        def _table_exists(doctype):
+            return doctype in ("Attendance Flag", "Attendance Flag Decision")
+
+        with patch.object(hc, "_require_calendar_access"), \
+             patch.object(hc, "_is_hr_staff", return_value=True), \
+             patch.object(hc, "getdate", lambda v: _date.fromisoformat(str(v))), \
+             patch.object(hc, "get_datetime", lambda v: str(v)), \
+             patch.object(hc, "nowdate", lambda: "2026-08-06"), \
+             patch.object(hc.frappe.db, "get_value", return_value=None), \
+             patch.object(hc.frappe, "get_all", side_effect=_get_all), \
+             patch.object(hc.frappe.db, "table_exists", side_effect=_table_exists):
+            payload = hc.get_employee_calendar("EMP-001", "2026-08-05", "2026-08-05")
+
+        flag = payload["days"][0]["flags"][0]
+        self.assertEqual(flag["decision_state"], "matched")
+        self.assertEqual(flag["decision"]["name"], "AFD-1")
 
 
 if __name__ == "__main__":

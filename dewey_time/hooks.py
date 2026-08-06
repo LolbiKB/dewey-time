@@ -87,6 +87,8 @@ website_route_rules = [
     {"from_route": "/hr-attendance", "to_route": "hr-attendance"},
     {"from_route": "/hr-schedule/<path:app_path>", "to_route": "hr-schedule"},
     {"from_route": "/hr-schedule", "to_route": "hr-schedule"},
+    {"from_route": "/hr-flags/<path:app_path>", "to_route": "hr-flags"},
+    {"from_route": "/hr-flags", "to_route": "hr-flags"},
 ]
 
 # Ensure dewey_time's custom fields exist on install (and after every upgrade).
@@ -129,5 +131,24 @@ doc_events = {
         "after_insert": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
         "on_update": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
         "on_trash": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+    },
+    # Keep the HR flag queue fresh: clear its cached pages whenever an HR decision is
+    # written, so a decision disappears from the queue on the next refresh rather than up
+    # to 60s later. Decisions are HR-rate — a handful of writes a minute at most.
+    #
+    # `Attendance Flag` is deliberately NOT hooked here, and the asymmetry is the point.
+    # Hooking it could never have made the cache correct: the engine deletes flags with a
+    # raw frappe.db.delete() (closeout.py:712), which fires no document hooks at all, so
+    # a regeneration cycle would clear the cache on the re-insert but not on the delete.
+    # And it would cost: the invalidator is a delete_keys() prefix scan (a blocking Redis
+    # KEYS over the whole keyspace), while intraday re-inserts flags on every single
+    # checkin (intraday.py:132,153 via on_employee_checkin_after_insert) — that is one
+    # full-keyspace scan per flag row on the engine's hottest write path, all day, to
+    # shave at most 60s off a cache that engine writes churn continuously anyway. The 60s
+    # TTL in flag_queue_api is what bounds staleness for engine-written flags.
+    "Attendance Flag Decision": {
+        "after_insert": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+        "on_update": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
+        "on_trash": "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache",
     },
 }

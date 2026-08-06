@@ -19,24 +19,28 @@ import { MobileTabBar, type MobileTab } from "@/ui/MobileTabBar";
 import { defaultHrAccessContext, type HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
 const DESK_URL = "/desk";
-const FLAGS_INBOX_URL = "/app/attendance-flag";
 
-type AppTab = "attendance" | "schedule" | "coverage";
+type AppTab = "attendance" | "schedule" | "coverage" | "flags";
 
-function activeTab(pathname: string): AppTab {
+// Exported for direct-call testing (HrAppShell.test.tsx) — these are pure
+// functions with no hook dependencies, so they don't need to render the shell.
+export function activeTab(pathname: string): AppTab {
   // Check the more specific /hr-schedule/coverage before the /hr-schedule prefix.
   if (pathname.startsWith("/hr-schedule/coverage")) return "coverage";
   if (pathname.startsWith("/hr-schedule")) return "schedule";
+  if (pathname.startsWith("/hr-flags")) return "flags";
   return "attendance";
 }
 
-function tabHref(tab: AppTab, employee: string | null): string {
+export function tabHref(tab: AppTab, employee: string | null): string {
   const base =
-    tab === "coverage"
-      ? "/hr-schedule/coverage"
-      : tab === "schedule"
-        ? "/hr-schedule"
-        : "/hr-attendance";
+    tab === "flags"
+      ? "/hr-flags"
+      : tab === "coverage"
+        ? "/hr-schedule/coverage"
+        : tab === "schedule"
+          ? "/hr-schedule"
+          : "/hr-attendance";
   return employee ? `${base}?employee=${encodeURIComponent(employee)}` : base;
 }
 
@@ -86,6 +90,12 @@ export function HrAppShell() {
             active: tab === "coverage",
             icon: UserCheckIcon,
           },
+          {
+            label: "Flags",
+            href: tabHref("flags", employee),
+            active: tab === "flags",
+            icon: FlagIcon,
+          },
         ]
       : []),
   ];
@@ -105,7 +115,6 @@ export function HrAppShell() {
         <>
           <NotificationsButton />
           <InstallButton />
-          {hrStaff ? <DeskLink href={FLAGS_INBOX_URL} label="Flags" icon={FlagIcon} /> : null}
           <DeskLink href={DESK_URL} label="Desk" icon={LayoutGridIcon} />
         </>
       }

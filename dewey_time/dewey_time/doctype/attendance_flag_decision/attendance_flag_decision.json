@@ -1,0 +1,192 @@
+{
+  "actions": [],
+  "allow_copy": 0,
+  "allow_guest_to_view": 0,
+  "allow_import": 0,
+  "allow_rename": 0,
+  "autoname": "hash",
+  "creation": "2026-08-05 00:00:00.000000",
+  "custom": 1,
+  "docstatus": 0,
+  "doctype": "DocType",
+  "document_type": "Document",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "flag_identity",
+    "employee",
+    "attendance_date",
+    "flag_code",
+    "employee_branch",
+    "column_break_1",
+    "outcome",
+    "reason",
+    "note",
+    "evidence_fingerprint",
+    "group_key",
+    "column_break_2",
+    "decided_by",
+    "decided_at",
+    "supersedes",
+    "superseded"
+  ],
+  "fields": [
+    {
+      "fieldname": "flag_identity",
+      "fieldtype": "Data",
+      "label": "Flag Identity",
+      "reqd": 1,
+      "search_index": 1,
+      "in_list_view": 1,
+      "in_standard_filter": 1
+    },
+    {
+      "fieldname": "employee",
+      "fieldtype": "Link",
+      "label": "Employee",
+      "options": "Employee",
+      "reqd": 1,
+      "in_list_view": 1,
+      "in_standard_filter": 1
+    },
+    {
+      "fieldname": "attendance_date",
+      "fieldtype": "Date",
+      "label": "Attendance Date",
+      "reqd": 1,
+      "search_index": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "flag_code",
+      "fieldtype": "Select",
+      "label": "Flag Code",
+      "options": "NON_PRIMARY_SITE_PUNCH\nLATE_START\nLATE_FROM_LUNCH\nLEFT_EARLY\nMISSING_TIME\nATTENDANCE_ISSUE\nNO_CHECKIN_YET\nOFF_SHIFT_PUNCH\nMISSING_IN_OR_OUT\nMISSING_LUNCH\nUNNOTIFIED_ABSENCE\nUNKNOWN_DEVICE_BRANCH\nDELIVERY_FAILED",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "employee_branch",
+      "fieldtype": "Data",
+      "label": "Employee Branch"
+    },
+    {
+      "fieldname": "column_break_1",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "outcome",
+      "fieldtype": "Select",
+      "label": "Outcome",
+      "options": "EXCUSED\nUPHELD",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "reason",
+      "fieldtype": "Select",
+      "label": "Reason",
+      "options": "APPROVED_LEAVE\nDEVICE_OR_DATA_FAULT\nMANAGER_APPROVED\nSCHEDULE_WRONG\nCOVERING_OTHER_SITE\nGENUINE_VIOLATION\nOTHER",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "note",
+      "fieldtype": "Text",
+      "label": "Note"
+    },
+    {
+      "fieldname": "evidence_fingerprint",
+      "fieldtype": "Data",
+      "label": "Evidence Fingerprint"
+    },
+    {
+      "fieldname": "group_key",
+      "fieldtype": "Data",
+      "label": "Group Key",
+      "in_standard_filter": 1
+    },
+    {
+      "fieldname": "column_break_2",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "decided_by",
+      "fieldtype": "Link",
+      "label": "Decided By",
+      "options": "User",
+      "read_only": 1
+    },
+    {
+      "fieldname": "decided_at",
+      "fieldtype": "Datetime",
+      "label": "Decided At",
+      "read_only": 1
+    },
+    {
+      "fieldname": "supersedes",
+      "fieldtype": "Link",
+      "label": "Supersedes",
+      "options": "Attendance Flag Decision",
+      "read_only": 1
+    },
+    {
+      "fieldname": "superseded",
+      "fieldtype": "Check",
+      "label": "Superseded",
+      "read_only": 1,
+      "default": "0",
+      "search_index": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "links": [],
+  "modified": "2026-08-05 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dewey Time",
+  "name": "Attendance Flag Decision",
+  "naming_rule": "Random",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 0,
+      "email": 1,
+      "export": 0,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "HR User",
+      "share": 0,
+      "write": 1
+    },
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "HR Manager",
+      "share": 1,
+      "write": 1
+    },
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}

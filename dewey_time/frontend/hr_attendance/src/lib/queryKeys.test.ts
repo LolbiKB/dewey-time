@@ -71,3 +71,16 @@ test("no two keys in the registry collide", () => {
     seen.set(serialised, label);
   }
 });
+
+// The registry-wide collision test above cannot see this one: it calls each
+// builder once, so two keys that differ only in an ARGUMENT never meet. Sharing
+// one entry between the flag queue's two views would serve whichever landed
+// first, and the Decided toggle would silently appear to do nothing.
+test("the flag queue's open-only and with-decided views are separate cache entries", () => {
+  const openOnly = queryKeys.flags.queue("2026-08-01", "2026-08-07", null, false);
+  const withDecided = queryKeys.flags.queue("2026-08-01", "2026-08-07", null, true);
+
+  assert.notDeepEqual(openOnly, withDecided);
+  // …and neither collides with a different tier over the same range.
+  assert.notDeepEqual(openOnly, queryKeys.flags.queue("2026-08-01", "2026-08-07", "act", false));
+});
