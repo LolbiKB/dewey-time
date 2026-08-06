@@ -49,7 +49,13 @@ import {
   parseDateTimeLocal,
   parseTimeToMinutes,
 } from "@/lib/attendanceTime";
-import { computeDayTimeWindow, sortCheckinsByTime } from "@/lib/attendancePunches";
+import {
+  classifyUnpairedPresentations,
+  computeDayTimeWindow,
+  deriveSegments,
+  hasPunchBranch,
+  sortCheckinsByTime,
+} from "@/lib/attendancePunches";
 import { formatFlagLabel, parseFlagEvidence, type FlagEvidence } from "@/lib/flagLabels";
 import { computeExpectedWindowPct, computeLunchWindowPct } from "@/lib/shiftTimeline";
 import { observedLunchMinuteRange } from "@/lib/lunchDetection";
@@ -258,16 +264,22 @@ function sourceText(flag: Flag): string | null {
  * Nothing else in the blob is touched, which is what keeps the shared key maps
  * (flagDetails.ts:65-94) away from keys whose names collide by accident.
  */
-function noDetectorNarrative(input: NarrativeInput): FlagNarrative {
-  const label = formatFlagLabel(input.flag.flag_code, input.evidence as FlagEvidence);
+function noDetectorNarrative(flag: Flag, evidence: NarrativeEvidence): FlagNarrative {
+  // The blob is deliberately NOT passed to formatFlagLabel. Its special cases are
+  // keyed by flag_code + evidence key name (flagLabels.ts:57-79), so a
+  // hand-created row is one lucky key name away from being formatted and
+  // promoted as if a detector had produced it. No code that reaches HERE hits one
+  // of those cases today — all three belong to emitted codes — so this changes
+  // nothing observable; it removes the way in.
+  const label = formatFlagLabel(flag.flag_code, null);
   return {
     headline: `"${label}" isn't a rule this engine currently checks automatically.`,
-    subline: hasEvidence(input.evidence)
+    subline: hasEvidence(evidence)
       ? NO_DETECTOR_SUBLINE
       : `${NO_DETECTOR_SUBLINE} ${EMPTY_EVIDENCE_NOTE}`,
     facts: buildFacts([
-      fact("Raised by", sourceText(input.flag)),
-      fact("Recorded reason", input.reason),
+      fact("Raised by", sourceText(flag)),
+      fact("Recorded reason", evidenceReason(evidence)),
     ]),
     timeline: null,
   };
@@ -814,7 +826,14 @@ function unnotifiedAbsenceCaughtBy(reason: string | undefined): string {
   return (reason && UNNOTIFIED_ABSENCE_CAUGHT_BY[reason]) ?? "Confirmed automatically";
 }
 
-function unnotifiedAbsenceBand(
+/**
+ * The scheduled shift as a minute band, or null when the calendar has no shift
+ * to draw. Shared by UNNOTIFIED_ABSENCE (which sizes its hatched band from it)
+ * and the ATTENDANCE_ISSUE builders below (which draw punches against it) —
+ * every scenario that needs the shift band needs the same overnight rollover,
+ * so there is one of these rather than one per flag.
+ */
+function narrativeShiftBand(
   shift: NarrativeDay["shift"]
 ): { startMin: number; endMin: number } | null {
   if (!shift?.shift_assigned) return null;
@@ -848,7 +867,7 @@ function unnotifiedAbsenceHeadlineShiftLabel(shift: NarrativeDay["shift"]): stri
 function unnotifiedAbsenceShiftFactLabel(shift: NarrativeDay["shift"], dateKey: string): string {
   const named = unnotifiedAbsenceHeadlineShiftLabel(shift);
   if (named) return named;
-  const band = unnotifiedAbsenceBand(shift);
+  const band = narrativeShiftBand(shift);
   if (!band) return "Not resolved on this calendar";
   return `${formatMinuteOnDay(dateKey, band.startMin)} – ${formatMinuteOnDay(dateKey, band.endMin)}`;
 }
@@ -890,7 +909,7 @@ function narrateUnnotifiedAbsence(flag: Flag, day: NarrativeDay, dateKey: string
     ? `Scheduled for the ${shiftName} shift, but never checked in — zero punches all day.`
     : "Scheduled to work, but never checked in — zero punches all day.";
 
-  const band = unnotifiedAbsenceBand(day.shift);
+  const band = narrativeShiftBand(day.shift);
 
   return {
     headline,
@@ -1084,6 +1103,409 @@ function buildNonPrimarySitePunchNarrative(
   };
 }
 
+// --- ATTENDANCE_ISSUE -------------------------------------------------------
+//
+// One code, four unrelated stories. record_issue_flags.py:24-81 writes
+// `single_checkin`, `unpaired_punch`, `unknown_device_branch` and
+// `delivery_failed`, each with two or three keys of its own, and closeout.py:692
+// then merges every one of them onto the SAME shared per-employee-day dict — so
+// all four arrive carrying shift_start, late_threshold and seven grace keys that
+// had nothing to do with the finding. `single_checkin` is the flag from the
+// spec's opening screenshot: thirteen rows, seven of them grace, the finding at
+// row thirteen.
+//
+// Relevance is therefore scoped to (flag_code, reason), not flag_code:
+// `device_sn` is buried provenance for `single_checkin` and a first-class
+// "Reported by" fact for `delivery_failed` — same code, opposite treatment.
+
+/** Margin either side of a punch on the axis; matches computeDayTimeWindow's default. */
+const RECORD_ISSUE_WINDOW_MARGIN_MIN = 30;
+
+/** A string evidence value, or null for anything that is not one (or is blank). */
+function evString(evidence: NarrativeEvidence, key: string): string | null {
+  const value = evidence[key];
+  if (typeof value !== "string") return null;
+  return value.trim() || null;
+}
+
+/** A finite number evidence value, or null. */
+function evNumber(evidence: NarrativeEvidence, key: string): number | null {
+  const value = evidence[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The overnight rollover the day's minute math has to share.
+ *
+ * Every minute in a record-issue timeline — the shift band, the evidence punch,
+ * each checkin — has to sit on ONE frame, or a 01:30 punch (90) sorts hours
+ * below a 22:00 shift start (1320): the mark lands outside the band and the
+ * window balloons to most of the day. `narrativeShiftBand` already rolls the
+ * shift end; this rolls everything else onto the same frame.
+ */
+type OvernightFrame = { overnight: boolean; shiftStartMin: Minute | null };
+
+function overnightFrame(day: NarrativeDay): OvernightFrame {
+  return {
+    overnight: isOvernightShift(day.shift),
+    shiftStartMin: parseTimeToMinutes(day.shift?.start_time ?? null),
+  };
+}
+
+function framedMinute(frame: OvernightFrame, min: Minute | null): Minute | null {
+  return normalizeOvernightAnchor(min, frame.shiftStartMin, frame.overnight);
+}
+
+/**
+ * Axis bounds for a record-issue timeline: the shift band, the day's punches
+ * and any extra anchor, each with a margin.
+ *
+ * Returns null when nothing positions an axis, and the caller then draws no
+ * timeline at all rather than falling back to a blank 24-hour one. Not
+ * `computeDayTimeWindow`: that reads raw minute-of-day off each checkin, which
+ * is exactly what the overnight frame exists to correct.
+ */
+function narrativeWindow(
+  day: NarrativeDay,
+  band: { startMin: Minute; endMin: Minute } | null,
+  anchors: Minute[]
+): { startMin: Minute; endMin: Minute } | null {
+  const frame = overnightFrame(day);
+  const ceiling = (frame.overnight ? 48 : 24) * 60;
+  const lows: Minute[] = [];
+  const highs: Minute[] = [];
+
+  if (band) {
+    lows.push(band.startMin);
+    highs.push(band.endMin);
+  }
+
+  for (const checkin of day.checkins ?? []) {
+    const min = framedMinute(frame, minutesFromDateTime(checkin.time));
+    if (min == null) continue;
+    lows.push(min - RECORD_ISSUE_WINDOW_MARGIN_MIN);
+    highs.push(min + RECORD_ISSUE_WINDOW_MARGIN_MIN);
+  }
+
+  for (const anchor of anchors) {
+    lows.push(anchor - RECORD_ISSUE_WINDOW_MARGIN_MIN);
+    highs.push(anchor + RECORD_ISSUE_WINDOW_MARGIN_MIN);
+  }
+
+  if (!lows.length) return null;
+
+  const startMin = clamp(Math.min(...lows), 0, ceiling);
+  const endMin = clamp(Math.max(...highs), 0, ceiling);
+  if (endMin <= startMin) return null;
+  return { startMin, endMin };
+}
+
+const punchHelpers = {
+  parseTime: parseDateTimeLocal,
+  minutesFromDateTime,
+  clamp,
+};
+
+/** The day's paired in/out runs — the context that makes a lone tick read as an anomaly. */
+function workedSpans(checkins: Checkin[], frame: OvernightFrame): TimelineSpan[] {
+  const spans: TimelineSpan[] = [];
+  for (const segment of deriveSegments(checkins, punchHelpers)) {
+    const startMin = framedMinute(frame, segment.startMin);
+    const endMin = framedMinute(frame, segment.endMin);
+    if (startMin == null || endMin == null || endMin <= startMin) continue;
+    spans.push({ startMin, endMin, tone: "worked" });
+  }
+  return spans;
+}
+
+/**
+ * One mark per punch, toned by the caller. (Distinct from Task 4's
+ * `punchMarksTimeline`, which builds a whole spec and tones every punch alike.)
+ * A non-null atMin already proves the timestamp parsed, so formatCheckinTime
+ * cannot hit date-fns' RangeError here.
+ */
+function punchMarks(
+  checkins: Checkin[],
+  toneFor: (checkin: Checkin) => "normal" | "alert",
+  frame: OvernightFrame
+): TimelineMark[] {
+  const marks: TimelineMark[] = [];
+  for (const checkin of sortCheckinsByTime(checkins, parseDateTimeLocal)) {
+    const atMin = framedMinute(frame, minutesFromDateTime(checkin.time));
+    if (atMin == null) continue;
+    marks.push({ atMin, tone: toneFor(checkin), label: formatCheckinTime(checkin.time) });
+  }
+  return marks;
+}
+
+/**
+ * ONE fact, deliberately. The detector writes exactly three keys for this reason
+ * (record_issue_flags.py:26-34) and inherits twenty more; the punch time IS the
+ * finding, and "First check-in 2:23 PM / Last check-out 2:23 PM / Punch time
+ * 2:23 PM" is one timestamp under three labels, none of which says "and then
+ * they never punched again".
+ */
+function narrateSingleCheckin(
+  flag: Flag,
+  evidence: NarrativeEvidence,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const punchClock = evidenceTimeText(evidence.punch_time);
+  // Without the punch time the whole sentence collapses to "Punched once at —".
+  if (punchClock == null) return boundaryFallback(flag, evidence, day, dateKey);
+
+  const frame = overnightFrame(day);
+  const punchMin = framedMinute(frame, evidenceMinute(evidence.punch_time));
+  const band = narrativeShiftBand(day.shift);
+  const window = narrativeWindow(day, band, punchMin == null ? [] : [punchMin]);
+
+  return {
+    headline: `Punched once at ${punchClock}, then never again that day.`,
+    subline: "There is no matching clock-out, so no hours could be counted for this day.",
+    facts: buildFacts([fact("Only punch", punchClock)]),
+    timeline:
+      window == null || punchMin == null
+        ? null
+        : {
+            window,
+            band,
+            // Draw only the boundary the flag is about: the lunch band and the
+            // late threshold belong to other flags.
+            lunch: null,
+            threshold: null,
+            // A single punch pairs with nothing, so the band is empty by
+            // construction — that emptiness is the picture.
+            spans: [],
+            // The one mark on this axis is the frozen punch, not a re-derived
+            // one: this flag exists because the day had exactly one punch, so a
+            // calendar that has since been corrected would draw a tick
+            // contradicting the headline directly above it. Same pin as
+            // UNNOTIFIED_ABSENCE's "Punches" fact. The axis still follows the
+            // live calendar (`narrativeWindow` reads day.checkins).
+            marks: [{ atMin: punchMin, tone: "alert", label: punchClock }],
+          },
+  };
+}
+
+/**
+ * The rogue tick, borrowed rather than reinvented. DayTimeline draws exactly the
+ * `rogue` + `unpairedError` presentations as error punches, so routing the panel
+ * through the same classifier keeps the two surfaces from disagreeing about
+ * which punch is the odd one. The evidence punch is added even when the live day
+ * no longer classifies it as unpaired: the panel reports the frozen finding and
+ * does not arbitrate against a re-derived calendar.
+ */
+function unpairedAlertMarks(
+  day: NarrativeDay,
+  dateKey: string,
+  punchMin: Minute | null,
+  band: { startMin: Minute; endMin: Minute } | null,
+  frame: OvernightFrame
+): TimelineMark[] {
+  const presentations = classifyUnpairedPresentations(
+    day.checkins ?? [],
+    {
+      dateKey,
+      shiftEndMin: band?.endMin ?? null,
+      shiftAssigned: day.shift?.shift_assigned === true,
+    },
+    punchHelpers
+  );
+
+  const mins = new Set<Minute>();
+  for (const row of presentations) {
+    if (row.kind !== "rogue" && row.kind !== "unpairedError") continue;
+    const atMin = framedMinute(frame, row.startMin);
+    if (atMin != null) mins.add(atMin);
+  }
+  if (punchMin != null) mins.add(punchMin);
+
+  return [...mins]
+    .sort((a, b) => a - b)
+    .map((atMin) => ({ atMin, tone: "alert" as const, label: formatMinuteOnDay(dateKey, atMin) }));
+}
+
+function narrateUnpairedPunch(
+  flag: Flag,
+  evidence: NarrativeEvidence,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const punchClock = evidenceTimeText(evidence.punch_time);
+  if (punchClock == null) return boundaryFallback(flag, evidence, day, dateKey);
+
+  const frame = overnightFrame(day);
+  const punchMin = framedMinute(frame, evidenceMinute(evidence.punch_time));
+  const band = narrativeShiftBand(day.shift);
+  const window = narrativeWindow(day, band, punchMin == null ? [] : [punchMin]);
+  const marks = unpairedAlertMarks(day, dateKey, punchMin, band, frame);
+
+  return {
+    headline: `Punched at ${punchClock}, but it never got matched to a clock-out — the day's other punches paired up fine.`,
+    subline: null,
+    facts: buildFacts([
+      fact("Odd punch", punchClock),
+      // A rogue punch has no device branch at all — record_issue_flags.py:47
+      // copies whatever the punch carried, which is None for a device that
+      // reports no site. An empty "From —" row is exactly the padding this
+      // redesign removes, so fact() drops it.
+      fact("From", formatBranchLabel(evString(evidence, "custom_device_branch"))),
+    ]),
+    timeline:
+      window == null || !marks.length
+        ? null
+        : {
+            window,
+            band,
+            lunch: null,
+            threshold: null,
+            spans: workedSpans(day.checkins ?? [], frame),
+            marks,
+          },
+  };
+}
+
+function narrateUnknownDeviceBranch(
+  flag: Flag,
+  evidence: NarrativeEvidence,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  const count = evNumber(evidence, "unknown_branch_checkins");
+  // The count IS the finding, and day.checkins cannot stand in for it — those
+  // are the day's punches, not the unlabelled ones.
+  if (count == null) return boundaryFallback(flag, evidence, day, dateKey);
+
+  const punches = count === 1 ? "1 punch" : `${count} punches`;
+  const checkins = day.checkins ?? [];
+  const frame = overnightFrame(day);
+  const band = narrativeShiftBand(day.shift);
+  // The evidence carries a COUNT and nothing else (record_issue_flags.py:52-62),
+  // so WHICH punches were unlabelled can only come from the day's checkin list.
+  // With no checkin list there is nothing to point at, and a bare count on an
+  // axis would be a chart of one number.
+  const window = checkins.length ? narrativeWindow(day, band, []) : null;
+  const marks = punchMarks(
+    checkins,
+    (checkin) => (hasPunchBranch(checkin) ? "normal" : "alert"),
+    frame
+  );
+
+  return {
+    headline: `${punches} today came from a device that didn't report which site it's at.`,
+    subline: "This is a device or config problem, not necessarily an employee problem.",
+    facts: buildFacts([fact("Unlabelled punches", punches)]),
+    timeline:
+      window == null || !marks.length
+        ? null
+        : {
+            window,
+            band,
+            lunch: null,
+            threshold: null,
+            // The finding is about the punches themselves, not about worked time.
+            spans: [],
+            marks,
+          },
+  };
+}
+
+/**
+ * Badge = the device-side user id. Mirrors the nested-then-top-level lookup in
+ * attendance_flag.py:90-103 and flag_identity.py:113-128: Bridge sends the item
+ * under `undelivered`, but the identity code still reads the same keys flat, so
+ * rows written either way must both resolve here.
+ *
+ * Only `pin`/`user_id` — those two backends also accept `supabase_log_id` and
+ * `custom_supabase_log_id`, but those are opaque row ids; showing one to HR
+ * under the label "Badge" would be a wrong answer rather than a missing one.
+ */
+function undeliveredBadge(evidence: NarrativeEvidence): string | null {
+  const sources: NarrativeEvidence[] = [];
+  const nested = evidence.undelivered;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    sources.push(nested as NarrativeEvidence);
+  }
+  sources.push(evidence);
+
+  for (const source of sources) {
+    for (const key of ["pin", "user_id"]) {
+      const value = source[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+      if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    }
+  }
+  return null;
+}
+
+/**
+ * No empty-evidence guard, and it does not need one: the only key this reads for
+ * copy is the `reason` that routed us here, nothing is run through a time
+ * formatter, and no timeline is drawn — so a blob carrying nothing else degrades
+ * to a shorter true sentence rather than a confident row of em-dashes.
+ */
+function narrateDeliveryFailed(evidence: NarrativeEvidence): FlagNarrative {
+  const deviceSn = evString(evidence, "device_sn");
+  const badge = undeliveredBadge(evidence);
+
+  return {
+    // The company-fallback producer never passes a device_sn, so the headline
+    // has to survive without one rather than reading "Device null …".
+    headline: deviceSn
+      ? `Device ${deviceSn} recorded a punch that never reached HR's records.`
+      : "A punch was recorded on a device but never reached HR's records.",
+    subline: "A lost record, not a missed check-in — nothing to hold against the employee.",
+    facts: buildFacts([
+      // device_sn is buried provenance on `single_checkin` and a first-class fact
+      // here — same code, opposite treatment. This row is the ONE place in the
+      // panel where a device serial is named, because it is the only handle HR
+      // has on which box lost the punch.
+      fact("Reported by", deviceSn),
+      fact("Badge", badge),
+    ]),
+    // No trustworthy timestamp exists for this punch — that IS the finding — so
+    // there is nothing to place on an axis.
+    timeline: null,
+  };
+}
+
+/**
+ * An ATTENDANCE_ISSUE whose reason this build does not recognise. The reason is
+ * echoed verbatim and unmapped: REASON_LABELS would translate it into a phrase
+ * asserting a finding this build cannot vouch for.
+ */
+function narrateUnreconciledRecord(reason: string): FlagNarrative {
+  return {
+    headline: "This day's punch data could not be reconciled into complete in/out pairs.",
+    subline: null,
+    facts: buildFacts([fact("Recorded reason", reason)]),
+    timeline: null,
+  };
+}
+
+function narrateAttendanceIssue(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
+  const evidence = readEvidence(flag);
+  const reason = evidenceReason(evidence);
+  // With no reason there is no scenario to narrate — not even the
+  // unrecognised-reason sentence, which would assert a reconciliation failure
+  // nothing on this flag recorded.
+  if (!reason) return boundaryFallback(flag, evidence, day, dateKey);
+
+  switch (reason) {
+    case "single_checkin":
+      return narrateSingleCheckin(flag, evidence, day, dateKey);
+    case "unpaired_punch":
+      return narrateUnpairedPunch(flag, evidence, day, dateKey);
+    case "unknown_device_branch":
+      return narrateUnknownDeviceBranch(flag, evidence, day, dateKey);
+    case "delivery_failed":
+      return narrateDeliveryFailed(evidence);
+    default:
+      return narrateUnreconciledRecord(reason);
+  }
+}
+
 export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
   const evidence = readEvidence(flag);
   const input: NarrativeInput = {
@@ -1096,7 +1518,7 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
 
   // Checked BEFORE the switch, so a hand-created row can never reach a builder
   // that assumes engine-written keys.
-  if (!isEmittedCode(flag.flag_code)) return noDetectorNarrative(input);
+  if (!isEmittedCode(flag.flag_code)) return noDetectorNarrative(flag, evidence);
 
   // Codes whose treatment splits by evidence.reason branch on it INSIDE their
   // builder (Global Constraint 7: relevance is scoped to (flag_code, reason) —
@@ -1118,8 +1540,14 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
       return buildOffShiftPunchNarrative(flag, day, dateKey);
     case "NON_PRIMARY_SITE_PUNCH":
       return buildNonPrimarySitePunchNarrative(flag, day, dateKey);
+    case "ATTENDANCE_ISSUE":
+      return narrateAttendanceIssue(flag, day, dateKey);
     default:
-      // Emitted codes with no builder yet — Tasks 3-5 add their arms above this.
+      // Emitted codes with no arm of their own. DELIVERY_FAILED is the live
+      // example: the Bridge delivery path really does write it, so it gets the
+      // formatted label plus the full blob in the disclosure rather than an
+      // invented finding — and never noDetectorNarrative, which would tell HR
+      // that a code the engine emits isn't a rule it checks.
       return emittedFallbackNarrative(input);
   }
 }

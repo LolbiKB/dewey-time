@@ -96,13 +96,16 @@ test("flagNarrative returns a usable narrative for every declared code and for a
 // seven grace rows and two boundary times for a finding that is "one punch,
 // then nothing".
 test("a single_checkin ATTENDANCE_ISSUE render contains no grace string at all", () => {
-  const text = renderedText(
-    flagNarrative(
-      flag({ flag_code: "ATTENDANCE_ISSUE", evidence: FULL_DAY_EVIDENCE }),
-      EMPTY_DAY,
-      DATE_KEY,
-    ),
+  const narrative = flagNarrative(
+    flag({ flag_code: "ATTENDANCE_ISSUE", evidence: FULL_DAY_EVIDENCE }),
+    EMPTY_DAY,
+    DATE_KEY,
   );
+  // Every assertion below is an absence, so they only mean something once the
+  // builder actually promotes facts — while ATTENDANCE_ISSUE returned an empty
+  // narrative they could not fail. Pin the presence too.
+  assert.ok(narrative.facts.length > 0, "the single_checkin builder promoted no facts at all");
+  const text = renderedText(narrative);
   assert.doesNotMatch(text, /grace/i, "a grace row reached the narrative");
   assert.doesNotMatch(text, /10m/, "a grace duration reached the narrative");
   // `late_threshold` is a comparison this flag never made, and `shift_start` is
@@ -1477,6 +1480,617 @@ test("NON_PRIMARY_SITE_PUNCH falls back when only one of its two counts is prese
   // label rather than fabricating a "0 of 5" sentence off a missing count.
   assert.equal(narrative.headline, "Other site");
   assert.equal(narrative.subline, null);
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+// --- Task 5: ATTENDANCE_ISSUE + the no-detector fallback -------------------
+
+const RECORD_ISSUE_SHIFT: ShiftContext = {
+  shift_assigned: true,
+  shift_type: "Day Shift",
+  start_time: "08:00:00",
+  end_time: "17:00:00",
+  grace_minutes: 10,
+  lunch_start: "12:00:00",
+  lunch_end: "12:30:00",
+};
+
+/**
+ * The thirteen-row blob from the spec's opening screenshot, verbatim: every key
+ * `_generate_for_employee_date` stamps onto the shared evidence dict
+ * (closeout.py:505-516, :606-611, :662-663) and then merges into EVERY flag it
+ * inserts for that employee-day. A record-issue flag never asked for any of it.
+ */
+const SHARED_CLOSEOUT_EVIDENCE = {
+  employee: "HR-EMP-00001",
+  date: "2026-08-03",
+  on_shift: true,
+  shift_type: "Day Shift",
+  employee_branch: "BRANCH-Downtown",
+  checkins_count: 1,
+  first_in: "2026-08-03T14:23:00",
+  last_out: "2026-08-03T14:23:00",
+  device_sn: "ZK-A4-014",
+  holiday: null,
+  shift_start: "2026-08-03T08:00:00",
+  late_threshold: "2026-08-03T08:10:00",
+  shift_end: "2026-08-03T17:00:00",
+  early_threshold: "2026-08-03T16:50:00",
+  grace_minutes: 10,
+  effective_start_grace_minutes: 10,
+  effective_end_grace_minutes: 10,
+  effective_lunch_return_grace_minutes: 10,
+  custom_grace_minutes: 10,
+  late_entry_grace_period: 10,
+  early_exit_grace_period: 10,
+};
+
+function recordIssueFlag(over: Partial<Flag> & { evidence: unknown }): Flag {
+  return {
+    name: "AF-record-issue-1",
+    flag_code: "ATTENDANCE_ISSUE",
+    severity: "WARNING",
+    status: "OPEN",
+    source: "AUTO",
+    day_closed: 1,
+    ...over,
+  } as Flag;
+}
+
+function punch(time: string, branch: string | null = "BRANCH-Downtown"): Checkin {
+  return { name: `EC-${time}`, time: `2026-08-03 ${time}:00`, custom_device_branch: branch };
+}
+
+function recordIssueDay(over: Partial<NarrativeDay> = {}): NarrativeDay {
+  return { checkins: [], shift: RECORD_ISSUE_SHIFT, holiday: null, observedLunch: null, ...over };
+}
+
+/**
+ * Everything a human actually reads, and nothing else. Asserting on
+ * JSON.stringify(narrative) would be useless here: FlagTimelineSpec has a key
+ * literally named `threshold`, so /threshold/ matches the serialised shape of a
+ * narrative that shows no threshold at all.
+ */
+function visibleCopy(narrative: FlagNarrative): string {
+  return [
+    narrative.headline,
+    narrative.subline ?? "",
+    ...narrative.facts.flatMap((fact) => [fact.label, fact.value]),
+    ...(narrative.timeline?.marks ?? []).map((mark) => mark.label ?? ""),
+  ].join(" | ");
+}
+
+const SINGLE_CHECKIN = recordIssueFlag({
+  evidence: {
+    ...SHARED_CLOSEOUT_EVIDENCE,
+    reason: "single_checkin",
+    checkins_count: 1,
+    punch_time: "2026-08-03T14:23:00",
+  },
+});
+
+test("single_checkin headline states the finding, not the fields", () => {
+  const narrative = flagNarrative(
+    SINGLE_CHECKIN,
+    recordIssueDay({ checkins: [punch("14:23")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Punched once at 2:23 PM, then never again that day.");
+});
+
+// THE regression test for this whole redesign. The live panel renders thirteen
+// rows for this exact flag; seven are grace values that have nothing to do with
+// whether there was one punch or two. One fact, and no grace string anywhere.
+test("single_checkin renders exactly one fact and no grace, threshold or shift-start copy", () => {
+  const narrative = flagNarrative(
+    SINGLE_CHECKIN,
+    recordIssueDay({ checkins: [punch("14:23")] }),
+    "2026-08-03",
+  );
+
+  assert.deepEqual(narrative.facts, [{ label: "Only punch", value: "2:23 PM" }]);
+
+  const copy = visibleCopy(narrative);
+  assert.doesNotMatch(copy, /grace/i);
+  assert.doesNotMatch(copy, /10m/);
+  assert.doesNotMatch(copy, /threshold/i);
+  assert.doesNotMatch(copy, /8:00 AM/);
+  assert.doesNotMatch(copy, /8:10 AM/);
+  assert.doesNotMatch(copy, /4:50 PM/);
+  // "First check-in 2:23 PM / Last check-out 2:23 PM / Punch time 2:23 PM" is one
+  // timestamp under three labels; only one of them survives, and it is not these.
+  assert.doesNotMatch(copy, /First check-in/i);
+  assert.doesNotMatch(copy, /Last check-out/i);
+  assert.doesNotMatch(copy, /Punch time/i);
+  assert.doesNotMatch(copy, /Shift start/i);
+});
+
+test("single_checkin draws a lone alert mark in an otherwise empty shift band", () => {
+  const narrative = flagNarrative(
+    SINGLE_CHECKIN,
+    recordIssueDay({ checkins: [punch("14:23")] }),
+    "2026-08-03",
+  );
+
+  const timeline = narrative.timeline;
+  assert.ok(timeline);
+  assert.deepEqual(timeline.window, { startMin: 480, endMin: 1020 });
+  assert.deepEqual(timeline.band, { startMin: 480, endMin: 1020 });
+  // Only the boundary the flag is about: no lunch band, no late threshold.
+  assert.equal(timeline.lunch, null);
+  assert.equal(timeline.threshold, null);
+  // "Otherwise empty" is the point — one punch pairs with nothing.
+  assert.deepEqual(timeline.spans, []);
+  assert.equal(timeline.marks.length, 1);
+  assert.equal(timeline.marks[0].atMin, 863);
+  assert.equal(timeline.marks[0].tone, "alert");
+});
+
+// Conventions rule 4: the shift band must come from the live calendar, so the
+// fixture's shift (9-3) is deliberately NOT the evidence's frozen
+// shift_start/shift_end (8-5). A builder that read the blob would draw 480-1020.
+test("single_checkin's band follows the live calendar's shift, not evidence.shift_start/shift_end", () => {
+  const narrative = flagNarrative(
+    SINGLE_CHECKIN,
+    recordIssueDay({
+      checkins: [punch("14:23")],
+      shift: { ...RECORD_ISSUE_SHIFT, start_time: "09:00:00", end_time: "15:00:00" },
+    }),
+    "2026-08-03",
+  );
+
+  assert.deepEqual(narrative.timeline?.band, { startMin: 540, endMin: 900 });
+  assert.deepEqual(narrative.timeline?.window, { startMin: 540, endMin: 900 });
+});
+
+// The mirror image of the band test above, and the one place in this scenario
+// where the frozen blob wins: the punch being marked is the punch the flag was
+// raised about. Same pin as UNNOTIFIED_ABSENCE's "Punches: 0" fact (:1122) — if
+// the mark were re-derived from a calendar that has since been corrected, the
+// tick would contradict the headline sitting directly above it.
+test("single_checkin marks the punch the flag was raised about, not a later correction", () => {
+  const narrative = flagNarrative(
+    SINGLE_CHECKIN,
+    // The live calendar's one punch has since been corrected to 3:10 PM.
+    recordIssueDay({ checkins: [punch("15:10")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Punched once at 2:23 PM, then never again that day.");
+  assert.deepEqual(
+    narrative.timeline?.marks.map((mark) => [mark.atMin, mark.label]),
+    [[863, "2:23 PM"]],
+  );
+});
+
+// Conventions rule 2: without punch_time there is no finding to state — the
+// whole sentence is built around that one timestamp, and formatCheckinTime
+// would render it as "Punched once at —".
+test("single_checkin falls back with the empty-evidence caveat when punch_time is absent", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({ evidence: {} }),
+    recordIssueDay({ checkins: [punch("14:23")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Attendance record issue");
+  assert.doesNotMatch(narrative.headline, /—/);
+  assert.ok(narrative.subline != null && narrative.subline.includes(EMPTY_EVIDENCE_NOTE));
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+test("single_checkin with a reason but no punch_time falls back without inventing a time", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: { ...SHARED_CLOSEOUT_EVIDENCE, reason: "single_checkin", punch_time: null },
+    }),
+    recordIssueDay({ checkins: [punch("14:23")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Attendance record issue · Single punch only");
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+  assert.doesNotMatch(visibleCopy(narrative), /—/);
+});
+
+// Conventions rule 3: a punch after midnight on an overnight shift decodes to a
+// small minute-of-day (01:30 -> 90) that sorts BELOW the 22:00 shift start, so
+// an un-normalised mark lands hours before the band and the window balloons to
+// most of the day instead of hugging the shift.
+test("single_checkin rolls an after-midnight punch onto the overnight shift's frame", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: {
+        reason: "single_checkin",
+        checkins_count: 1,
+        punch_time: "2026-08-04T01:30:00",
+      },
+    }),
+    recordIssueDay({
+      checkins: [{ time: "2026-08-04 01:30:00", custom_device_branch: "BRANCH-Downtown" }],
+      shift: { shift_assigned: true, start_time: "22:00:00", end_time: "06:00:00" },
+    }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Punched once at 1:30 AM, then never again that day.");
+  const timeline = narrative.timeline;
+  assert.ok(timeline);
+  assert.deepEqual(timeline.band, { startMin: 1320, endMin: 1800 });
+  // 90 + 1440 — on the same frame as the band, not 90 minutes past midnight.
+  assert.deepEqual(
+    timeline.marks.map((mark) => [mark.atMin, mark.tone]),
+    [[1530, "alert"]],
+  );
+  assert.deepEqual(timeline.window, { startMin: 1320, endMin: 1800 });
+});
+
+// A rogue punch: no device branch, so it is its own run and pairs with nothing,
+// sitting between two healthy paired spans.
+const ROGUE_DAY_CHECKINS = [
+  punch("08:00"),
+  punch("12:00"),
+  punch("13:07", null),
+  punch("13:30"),
+  punch("17:00"),
+];
+
+const UNPAIRED_ROGUE = recordIssueFlag({
+  evidence: {
+    ...SHARED_CLOSEOUT_EVIDENCE,
+    checkins_count: 5,
+    reason: "unpaired_punch",
+    punch_time: "2026-08-03T13:07:00",
+    custom_device_branch: null,
+  },
+});
+
+test("unpaired_punch headline names the punch and says the rest of the day paired up", () => {
+  const narrative = flagNarrative(
+    UNPAIRED_ROGUE,
+    recordIssueDay({ checkins: ROGUE_DAY_CHECKINS }),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    "Punched at 1:07 PM, but it never got matched to a clock-out — the day's other punches paired up fine.",
+  );
+});
+
+test("unpaired_punch omits the From fact when the odd punch carried no device branch", () => {
+  const narrative = flagNarrative(
+    UNPAIRED_ROGUE,
+    recordIssueDay({ checkins: ROGUE_DAY_CHECKINS }),
+    "2026-08-03",
+  );
+
+  assert.deepEqual(narrative.facts, [{ label: "Odd punch", value: "1:07 PM" }]);
+  assert.doesNotMatch(visibleCopy(narrative), /\bFrom\b/);
+});
+
+// The spans can only come from the day's checkin list — evidence carries a
+// single punch_time and a first_in/last_out pair (2:23 PM) that matches none of
+// these punches, so a builder reading the blob could not produce them.
+test("unpaired_punch marks the rogue tick between the day's two healthy spans", () => {
+  const narrative = flagNarrative(
+    UNPAIRED_ROGUE,
+    recordIssueDay({ checkins: ROGUE_DAY_CHECKINS }),
+    "2026-08-03",
+  );
+
+  const timeline = narrative.timeline;
+  assert.ok(timeline);
+  assert.deepEqual(timeline.window, { startMin: 450, endMin: 1050 });
+  assert.deepEqual(timeline.spans, [
+    { startMin: 480, endMin: 720, tone: "worked" },
+    { startMin: 810, endMin: 1020, tone: "worked" },
+  ]);
+  assert.deepEqual(
+    timeline.marks.map((mark) => [mark.atMin, mark.tone]),
+    [[787, "alert"]],
+  );
+});
+
+test("unpaired_punch promotes the punch's device branch as From", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: {
+        ...SHARED_CLOSEOUT_EVIDENCE,
+        checkins_count: 3,
+        reason: "unpaired_punch",
+        punch_time: "2026-08-03T17:00:00",
+        custom_device_branch: "BRANCH-Downtown",
+      },
+    }),
+    recordIssueDay({ checkins: [punch("08:00"), punch("12:00"), punch("17:00")] }),
+    "2026-08-03",
+  );
+
+  assert.deepEqual(narrative.facts, [
+    { label: "Odd punch", value: "5:00 PM" },
+    { label: "From", value: "Downtown" },
+  ]);
+  const timeline = narrative.timeline;
+  assert.ok(timeline);
+  assert.deepEqual(
+    timeline.marks.map((mark) => [mark.atMin, mark.tone]),
+    [[1020, "alert"]],
+  );
+});
+
+test("unpaired_punch falls back with the empty-evidence caveat when punch_time is absent", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({ evidence: { reason: "unpaired_punch" } }),
+    recordIssueDay({ checkins: ROGUE_DAY_CHECKINS }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Attendance record issue · Unpaired punch");
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+  assert.doesNotMatch(visibleCopy(narrative), /—/);
+});
+
+const UNKNOWN_BRANCH_CHECKINS = [
+  punch("08:00"),
+  punch("12:03", null),
+  punch("12:35", null),
+  punch("17:00"),
+];
+
+const UNKNOWN_BRANCH = recordIssueFlag({
+  evidence: {
+    ...SHARED_CLOSEOUT_EVIDENCE,
+    checkins_count: 4,
+    reason: "unknown_device_branch",
+    unknown_branch_checkins: 2,
+  },
+});
+
+test("unknown_device_branch counts the punches and says whose problem it is", () => {
+  const narrative = flagNarrative(
+    UNKNOWN_BRANCH,
+    recordIssueDay({ checkins: UNKNOWN_BRANCH_CHECKINS }),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    "2 punches today came from a device that didn't report which site it's at.",
+  );
+  assert.equal(
+    narrative.subline,
+    "This is a device or config problem, not necessarily an employee problem.",
+  );
+  assert.deepEqual(narrative.facts, [{ label: "Unlabelled punches", value: "2 punches" }]);
+});
+
+// Evidence carries only a count, so WHICH punches were unlabelled can come from
+// exactly one place: the day's checkin list. (The blob's own first_in/last_out
+// both say 2:23 PM — 863 — which appears in none of these marks.)
+test("unknown_device_branch marks the unlabelled punches from the day's checkin list", () => {
+  const narrative = flagNarrative(
+    UNKNOWN_BRANCH,
+    recordIssueDay({ checkins: UNKNOWN_BRANCH_CHECKINS }),
+    "2026-08-03",
+  );
+
+  const timeline = narrative.timeline;
+  assert.ok(timeline);
+  assert.deepEqual(timeline.window, { startMin: 450, endMin: 1050 });
+  assert.deepEqual(timeline.spans, []);
+  assert.deepEqual(
+    timeline.marks.map((mark) => [mark.atMin, mark.tone]),
+    [
+      [480, "normal"],
+      [723, "alert"],
+      [755, "alert"],
+      [1020, "normal"],
+    ],
+  );
+});
+
+test("unknown_device_branch says '1 punch' for a single unlabelled punch", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: {
+        ...SHARED_CLOSEOUT_EVIDENCE,
+        checkins_count: 2,
+        reason: "unknown_device_branch",
+        unknown_branch_checkins: 1,
+      },
+    }),
+    recordIssueDay({ checkins: [punch("08:00"), punch("17:00", null)] }),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    "1 punch today came from a device that didn't report which site it's at.",
+  );
+  assert.deepEqual(narrative.facts, [{ label: "Unlabelled punches", value: "1 punch" }]);
+});
+
+// Conventions rule 2: the count IS the finding here, and the live checkin list
+// cannot stand in for it — those punches are the day's, not the unlabelled ones.
+test("unknown_device_branch falls back when the blob carries no count, even with punches on the calendar", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({ evidence: { reason: "unknown_device_branch" } }),
+    recordIssueDay({ checkins: UNKNOWN_BRANCH_CHECKINS }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Attendance record issue · Unknown device location");
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+const DELIVERY_FAILED = recordIssueFlag({
+  evidence: {
+    ...SHARED_CLOSEOUT_EVIDENCE,
+    checkins_count: 0,
+    reason: "delivery_failed",
+    undelivered: { pin: "42", frappe_employee_id: "HR-EMP-00001" },
+  },
+});
+
+test("delivery_failed promotes the device serial and badge, and draws no timeline", () => {
+  const narrative = flagNarrative(DELIVERY_FAILED, recordIssueDay(), "2026-08-03");
+
+  assert.equal(
+    narrative.headline,
+    "Device ZK-A4-014 recorded a punch that never reached HR's records.",
+  );
+  assert.deepEqual(narrative.facts, [
+    { label: "Reported by", value: "ZK-A4-014" },
+    { label: "Badge", value: "42" },
+  ]);
+  // There is no trustworthy timestamp for this punch — that IS the finding.
+  assert.equal(narrative.timeline, null);
+});
+
+// The most important copy in the redesign: this is a data-integrity flag that
+// currently wears the same clothes as a behaviour flag.
+test("delivery_failed says a lost record is not the employee's fault", () => {
+  const narrative = flagNarrative(DELIVERY_FAILED, recordIssueDay(), "2026-08-03");
+
+  assert.equal(
+    narrative.subline,
+    "A lost record, not a missed check-in — nothing to hold against the employee.",
+  );
+});
+
+test("delivery_failed degrades when the producer passed no device serial", () => {
+  // The company-fallback producer never has a device_sn (it is a keyword arg that
+  // defaults to None), so the headline must not read "Device null ...".
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: {
+        ...SHARED_CLOSEOUT_EVIDENCE,
+        device_sn: null,
+        reason: "delivery_failed",
+        undelivered: { pin: "42" },
+      },
+    }),
+    recordIssueDay(),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    "A punch was recorded on a device but never reached HR's records.",
+  );
+  assert.deepEqual(narrative.facts, [{ label: "Badge", value: "42" }]);
+});
+
+// attendance_flag.py:90-103 and flag_identity.py:113-128 both read the nested
+// `undelivered` dict FIRST and then the same keys flat on evidence, so rows
+// written either way must resolve here too.
+test("delivery_failed reads the badge flat off evidence when there is no undelivered object", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: { reason: "delivery_failed", device_sn: "ZK-A4-014", user_id: 42 },
+    }),
+    recordIssueDay(),
+    "2026-08-03",
+  );
+
+  assert.deepEqual(narrative.facts, [
+    { label: "Reported by", value: "ZK-A4-014" },
+    { label: "Badge", value: "42" },
+  ]);
+});
+
+test("an ATTENDANCE_ISSUE with an unrecognised reason echoes it verbatim and draws nothing", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      evidence: { ...SHARED_CLOSEOUT_EVIDENCE, reason: "missing_lunch_pair" },
+    }),
+    recordIssueDay({ checkins: [punch("08:00"), punch("17:00")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    "This day's punch data could not be reconciled into complete in/out pairs.",
+  );
+  assert.deepEqual(narrative.facts, [{ label: "Recorded reason", value: "missing_lunch_pair" }]);
+  assert.equal(narrative.timeline, null);
+  assert.doesNotMatch(visibleCopy(narrative), /grace/i);
+});
+
+// Conventions rule 2 for the dispatcher itself: with no reason at all there is
+// no scenario to narrate, so the honest generic treatment wins over the
+// unrecognised-reason sentence, which would assert a reconciliation failure
+// nothing recorded.
+test("an ATTENDANCE_ISSUE with no reason at all takes the empty-evidence fallback", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({ evidence: { employee: "HR-EMP-00001", date: "2026-08-03" } }),
+    recordIssueDay({ checkins: [punch("08:00"), punch("17:00")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(narrative.headline, "Attendance record issue");
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+test("a no-detector code renders the generic treatment and never promotes shift_start", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      name: "AF-manual-1",
+      flag_code: "MISSING_IN_OR_OUT",
+      source: "HR",
+      // A hand-created row whose evidence happens to use the name `shift_start`.
+      // Running an unknown code's keys through the shared TIME_EVIDENCE_KEYS map
+      // would silently format and promote it as a cause of the flag.
+      evidence: { shift_start: "2026-08-03T08:00:00", reason: "spot_check" },
+    }),
+    recordIssueDay({ checkins: [punch("08:04")] }),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    '"Missing in or out" isn\'t a rule this engine currently checks automatically.',
+  );
+  assert.deepEqual(narrative.facts, [
+    // The plan's Task 5 block spells this "HR, by hand", but Task 1 shipped
+    // FLAG_SOURCE_LABELS with "HR" and pinned it in a test above (:167) for the
+    // same input. Two contradictory plan texts for one string; the conventions
+    // rule ("match what is already there") settles it in favour of the shipped
+    // copy rather than re-litigating a prior task's reviewed assertion.
+    { label: "Raised by", value: "HR" },
+    { label: "Recorded reason", value: "spot_check" },
+  ]);
+  assert.equal(narrative.timeline, null);
+
+  const copy = visibleCopy(narrative);
+  assert.doesNotMatch(copy, /Shift start/i);
+  assert.doesNotMatch(copy, /8:00 AM/);
+});
+
+test("an entirely unrecognised flag code falls back to formatFlagLabel's own label", () => {
+  const narrative = flagNarrative(
+    recordIssueFlag({
+      name: "AF-manual-2",
+      flag_code: "SOME_MANUAL_CODE",
+      source: undefined,
+      evidence: {},
+    }),
+    recordIssueDay(),
+    "2026-08-03",
+  );
+
+  assert.equal(
+    narrative.headline,
+    '"some manual code" isn\'t a rule this engine currently checks automatically.',
+  );
   assert.deepEqual(narrative.facts, []);
   assert.equal(narrative.timeline, null);
 });
