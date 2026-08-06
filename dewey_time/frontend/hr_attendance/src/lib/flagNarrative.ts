@@ -40,11 +40,16 @@
  * Read the explicit `effective_*` key for the code instead.
  */
 import {
+  clamp,
   formatCheckinTime,
+  formatDurationMinutes,
   minutesFromDateTime,
   parseDateTimeLocal,
 } from "@/lib/attendanceTime";
+import { sortCheckinsByTime } from "@/lib/attendancePunches";
 import { formatFlagLabel, parseFlagEvidence, type FlagEvidence } from "@/lib/flagLabels";
+import { computeExpectedWindowPct, computeLunchWindowPct } from "@/lib/shiftTimeline";
+import { observedLunchMinuteRange } from "@/lib/lunchDetection";
 import type {
   Checkin,
   Flag,
@@ -288,6 +293,264 @@ function emittedFallbackNarrative(input: NarrativeInput): FlagNarrative {
   };
 }
 
+/**
+ * Evidence keys read for the three boundary flags (LATE_START / LEFT_EARLY /
+ * LATE_FROM_LUNCH). closeout.py:606-674 and lunch_flags.py:58-63 write these onto
+ * the shared per-employee-day evidence dict. `grace_minutes` is deliberately NOT
+ * in this list — rule 3 forbids reading it here because it is an alias whose
+ * meaning depends on which flag's extra_evidence wrote it last
+ * (shift_grace.py:80-95's grace_evidence()); read the effective_*_grace_minutes
+ * key for the flag instead.
+ */
+type BoundaryEvidence = {
+  first_in?: string;
+  last_out?: string;
+  shift_start?: string;
+  shift_end?: string;
+  late_threshold?: string;
+  early_threshold?: string;
+  effective_start_grace_minutes?: number;
+  lunch_out?: string;
+  lunch_in?: string;
+  lunch_start?: string;
+  lunch_end?: string;
+  return_threshold?: string;
+};
+
+/** Boundary-flag timelines stay narrow: the boundary plus ~45min of runway either side. */
+const BOUNDARY_WINDOW_MARGIN_MIN = 45;
+
+/**
+ * Minutes between two evidence ISO datetimes (later - earlier), floored at 0.
+ * Epoch-based, not minute-of-day: LEFT_EARLY's shift_end/early_threshold can roll
+ * to the next calendar day for an overnight shift (closeout.py:660), and a
+ * minute-of-day subtraction would silently go negative across that rollover.
+ */
+function minutesBetweenIso(laterIso: string | undefined, earlierIso: string | undefined): number {
+  if (!laterIso || !earlierIso) return 0;
+  const later = parseDateTimeLocal(laterIso).getTime();
+  const earlier = parseDateTimeLocal(earlierIso).getTime();
+  if (!Number.isFinite(later) || !Number.isFinite(earlier)) return 0;
+  return Math.max(0, Math.round((later - earlier) / 60000));
+}
+
+/**
+ * computeDayTimeWindow (attendancePunches.ts:605) only takes real checkins, but a
+ * boundary flag's window also needs the shift boundary and the cutoff line in
+ * view even when neither is itself a punch. Same margin-and-clamp shape, built
+ * from raw minute anchors instead.
+ */
+function minuteWindowFromAnchors(
+  anchors: Array<number | null | undefined>,
+  marginMin: number = BOUNDARY_WINDOW_MARGIN_MIN
+): { startMin: Minute; endMin: Minute } {
+  const finite = anchors.filter((n): n is number => n != null && Number.isFinite(n));
+  if (!finite.length) return { startMin: 0, endMin: 24 * 60 };
+  return {
+    startMin: clamp(Math.min(...finite) - marginMin, 0, 24 * 60),
+    endMin: clamp(Math.max(...finite) + marginMin, 0, 24 * 60),
+  };
+}
+
+/** Strips computeExpectedWindowPct/computeLunchWindowPct's pct fields down to the contract's {startMin,endMin}. */
+function toMinuteRange(
+  win: { startMin: number; endMin: number } | null
+): { startMin: Minute; endMin: Minute } | null {
+  return win ? { startMin: win.startMin, endMin: win.endMin } : null;
+}
+
+function pluralMinutes(n: number): string {
+  return n === 1 ? "minute" : "minutes";
+}
+
+/** flag.evidence is `unknown`; parseFlagEvidence only narrows it to the generic FlagEvidence shape. */
+function readBoundaryEvidence(flag: Flag): BoundaryEvidence {
+  return (parseFlagEvidence(flag.evidence) ?? {}) as unknown as BoundaryEvidence;
+}
+
+function buildLateStartTimeline(
+  day: NarrativeDay,
+  evidence: BoundaryEvidence,
+  grace: number
+): FlagTimelineSpec {
+  // Rule 11: spans/marks come from the day's real punches, not evidence.first_in.
+  const sorted = sortCheckinsByTime(day.checkins, parseDateTimeLocal);
+  const arrivalMin = sorted[0]
+    ? minutesFromDateTime(sorted[0].time)
+    : minutesFromDateTime(evidence.first_in);
+  const nextMin = sorted[1] ? minutesFromDateTime(sorted[1].time) : null;
+
+  const band = day.shift ? toMinuteRange(computeExpectedWindowPct(day.shift)) : null;
+  const shiftStartMin = band?.startMin ?? minutesFromDateTime(evidence.shift_start);
+  // The threshold line must match the headline's "past cutoff" number exactly
+  // (voice rule 2), so both are read from the same frozen evidence field.
+  const thresholdMin = minutesFromDateTime(evidence.late_threshold);
+
+  const spans: TimelineSpan[] = [];
+  if (shiftStartMin != null && arrivalMin != null && arrivalMin > shiftStartMin) {
+    spans.push({ startMin: shiftStartMin, endMin: arrivalMin, tone: "gap" });
+  }
+  if (arrivalMin != null && nextMin != null && nextMin > arrivalMin) {
+    spans.push({ startMin: arrivalMin, endMin: nextMin, tone: "worked" });
+  }
+
+  const marks: TimelineMark[] =
+    arrivalMin != null ? [{ atMin: arrivalMin, tone: "alert", label: "Clocked in" }] : [];
+
+  return {
+    window: minuteWindowFromAnchors([shiftStartMin, arrivalMin, nextMin]),
+    band,
+    lunch: null,
+    // grace=0 makes the cutoff and shift start the same minute — a threshold line
+    // on top of the band's own start edge would be a redundant line, not a fact.
+    threshold: grace > 0 ? thresholdMin : null,
+    spans,
+    marks,
+  };
+}
+
+function buildLateStartNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
+  const evidence = readBoundaryEvidence(flag);
+  const grace = evidence.effective_start_grace_minutes ?? 0;
+  const firstInLabel = formatCheckinTime(evidence.first_in);
+  const lateMinutes = minutesBetweenIso(evidence.first_in, evidence.late_threshold);
+
+  const headline =
+    grace > 0
+      ? `Clocked in at ${firstInLabel} — ${lateMinutes} ${pluralMinutes(lateMinutes)} late, even after a ${grace}-minute grace period.`
+      : `Clocked in at ${firstInLabel} — ${lateMinutes} ${pluralMinutes(lateMinutes)} after the ${formatCheckinTime(evidence.shift_start)} shift start.`;
+
+  const facts: FlagFact[] =
+    grace > 0
+      ? [
+          { label: "Clocked in", value: firstInLabel },
+          { label: "Cutoff", value: formatCheckinTime(evidence.late_threshold) },
+          { label: "Past cutoff", value: formatDurationMinutes(lateMinutes) },
+        ]
+      : [
+          { label: "Clocked in", value: firstInLabel },
+          { label: "Shift start", value: formatCheckinTime(evidence.shift_start) },
+          { label: "Late by", value: formatDurationMinutes(lateMinutes) },
+        ];
+
+  return {
+    headline,
+    subline: null,
+    facts,
+    timeline: buildLateStartTimeline(day, evidence, grace),
+  };
+}
+
+function buildLeftEarlyTimeline(day: NarrativeDay, evidence: BoundaryEvidence): FlagTimelineSpec {
+  const sorted = sortCheckinsByTime(day.checkins, parseDateTimeLocal);
+  const last = sorted[sorted.length - 1];
+  const departureMin = last
+    ? minutesFromDateTime(last.time)
+    : minutesFromDateTime(evidence.last_out);
+
+  const band = day.shift ? toMinuteRange(computeExpectedWindowPct(day.shift)) : null;
+  const shiftEndMin = band?.endMin ?? minutesFromDateTime(evidence.shift_end);
+  const thresholdMin = minutesFromDateTime(evidence.early_threshold);
+
+  const spans: TimelineSpan[] = [];
+  if (departureMin != null && shiftEndMin != null && shiftEndMin > departureMin) {
+    spans.push({ startMin: departureMin, endMin: shiftEndMin, tone: "gap" });
+  }
+
+  const marks: TimelineMark[] =
+    departureMin != null ? [{ atMin: departureMin, tone: "alert", label: "Clocked out" }] : [];
+
+  return {
+    window: minuteWindowFromAnchors([departureMin, thresholdMin, shiftEndMin]),
+    band,
+    lunch: null,
+    threshold: thresholdMin,
+    spans,
+    marks,
+  };
+}
+
+function buildLeftEarlyNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
+  const evidence = readBoundaryEvidence(flag);
+  const lastOutLabel = formatCheckinTime(evidence.last_out);
+  const earlyMinutes = minutesBetweenIso(evidence.early_threshold, evidence.last_out);
+
+  const headline = `Clocked out at ${lastOutLabel}, ${earlyMinutes} ${pluralMinutes(earlyMinutes)} before their shift was scheduled to end.`;
+
+  const facts: FlagFact[] = [
+    { label: "Clocked out", value: lastOutLabel },
+    { label: "Shift end", value: formatCheckinTime(evidence.shift_end) },
+    { label: "Early by", value: formatDurationMinutes(earlyMinutes) },
+  ];
+
+  return {
+    headline,
+    subline: null,
+    facts,
+    timeline: buildLeftEarlyTimeline(day, evidence),
+  };
+}
+
+function buildLateFromLunchTimeline(day: NarrativeDay, evidence: BoundaryEvidence): FlagTimelineSpec {
+  // Rule 11: feed spans/marks from the day's real lunch detection, not the frozen
+  // evidence pair. day.observedLunch is lunchDetection.ts's detectObservedLunch()
+  // re-run against the live punch list; evidence.lunch_out/lunch_in are only the
+  // fallback for a caller that has not populated observedLunch.
+  const observed = observedLunchMinuteRange(day.observedLunch);
+  const outMin = observed?.startMin ?? minutesFromDateTime(evidence.lunch_out);
+  const inMin = observed?.endMin ?? minutesFromDateTime(evidence.lunch_in);
+
+  // Raw scheduled window, no grace — grace lives in `threshold` alone (rule 4),
+  // so the "Scheduled" fact and this band never disagree with each other.
+  const lunch = day.shift ? toMinuteRange(computeLunchWindowPct(day.shift)) : null;
+  const band = day.shift ? toMinuteRange(computeExpectedWindowPct(day.shift)) : null;
+  const thresholdMin = minutesFromDateTime(evidence.return_threshold);
+
+  const spans: TimelineSpan[] = [];
+  if (outMin != null && inMin != null && inMin > outMin) {
+    spans.push({ startMin: outMin, endMin: inMin, tone: "gap" });
+  }
+
+  const marks: TimelineMark[] = [];
+  if (outMin != null) marks.push({ atMin: outMin, tone: "normal", label: "Left for lunch" });
+  if (inMin != null) marks.push({ atMin: inMin, tone: "alert", label: "Back" });
+
+  return {
+    window: minuteWindowFromAnchors([outMin, inMin, lunch?.startMin, thresholdMin]),
+    band,
+    lunch,
+    threshold: thresholdMin,
+    spans,
+    marks,
+  };
+}
+
+function buildLateFromLunchNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
+  const evidence = readBoundaryEvidence(flag);
+  const outLabel = formatCheckinTime(evidence.lunch_out);
+  const inLabel = formatCheckinTime(evidence.lunch_in);
+  const lateMinutes = minutesBetweenIso(evidence.lunch_in, evidence.return_threshold);
+
+  const headline = `Left for lunch at ${outLabel}, back at ${inLabel} — ${lateMinutes} min past the return deadline.`;
+
+  const facts: FlagFact[] = [
+    { label: "Actual lunch", value: `${outLabel} – ${inLabel}` },
+    {
+      label: "Scheduled",
+      value: `${formatCheckinTime(evidence.lunch_start)} – ${formatCheckinTime(evidence.lunch_end)}`,
+    },
+    { label: "Deadline", value: formatCheckinTime(evidence.return_threshold) },
+    { label: "Late by", value: formatDurationMinutes(lateMinutes) },
+  ];
+
+  return {
+    headline,
+    subline: null,
+    facts,
+    timeline: buildLateFromLunchTimeline(day, evidence),
+  };
+}
+
 export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
   const evidence = readEvidence(flag);
   const input: NarrativeInput = {
@@ -302,23 +565,20 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
   // that assumes engine-written keys.
   if (!isEmittedCode(flag.flag_code)) return noDetectorNarrative(input);
 
-  // No per-code builders exist yet, so every emitted code gets the generic
-  // treatment. Task 2 converts this single return into a
-  // `switch (flag.flag_code)` whose `default:` arm is this same call; Tasks 3-5
-  // then add their own arms to that switch:
-  //   Task 2 — LATE_START, LEFT_EARLY, LATE_FROM_LUNCH
-  //   Task 3 — MISSING_TIME, UNNOTIFIED_ABSENCE
-  //   Task 4 — OFF_SHIFT_PUNCH, NON_PRIMARY_SITE_PUNCH
-  //   Task 5 — ATTENDANCE_ISSUE
-  //
-  // Stub arms are deliberately NOT scaffolded here: eight case labels that all
-  // return the same thing as `default:` are dead weight until the task that
-  // fills them lands.
-  //
   // Codes whose treatment splits by evidence.reason branch on it INSIDE their
   // builder (Global Constraint 7: relevance is scoped to (flag_code, reason) —
   // `device_sn` is buried provenance for `single_checkin` and a first-class
   // fact for `delivery_failed`, same code, opposite treatment). Keeping that
-  // second level inside the builder leaves the eventual switch one level deep.
-  return emittedFallbackNarrative(input);
+  // second level inside the builder leaves this switch one level deep.
+  switch (flag.flag_code) {
+    case "LATE_START":
+      return buildLateStartNarrative(flag, day, dateKey);
+    case "LEFT_EARLY":
+      return buildLeftEarlyNarrative(flag, day, dateKey);
+    case "LATE_FROM_LUNCH":
+      return buildLateFromLunchNarrative(flag, day, dateKey);
+    default:
+      // Emitted codes with no builder yet — Tasks 3-5 add their arms above this.
+      return emittedFallbackNarrative(input);
+  }
 }
