@@ -321,13 +321,24 @@ decoupled from flag rows. These cards are informational; they carry no decide ac
 
 ## APIs
 
-### `get_flag_queue(start_date, end_date, tier=None, cursor=None, limit=100)`
+### `get_flag_queue(start_date, end_date, tier=None, limit=2000, include_decided=0)`
 
 Whitelisted read, gated by `_require_hr_role()`. **One batched query** over `Attendance
 Flag` for the range, one over `Attendance Flag Decision` (`superseded = 0`) for the same
 range, one over `Employee` for branch/name, and one each over `Device Closeout Alert` and
 `Device Sync Status` by branch+date. Grouping, ranking, person-dedup and fingerprint
 comparison happen in Python over those result sets — never per-employee queries.
+
+**`include_decided` is how HR reaches a settled person.** Off by default, so the ordinary
+response is exactly what this document describes elsewhere: a person leaves the queue once
+every one of their flags is decided. Turned on — the toolbar's Decided count doubles as the
+control — fully-decided people are returned as entries too, ranked last, so a decision can be
+found and corrected. Deciding an already-decided flag writes a new row and supersedes the
+old, which is the append-only correction path; there is no edit.
+
+Without this the feature has no correction path at all, since a settled person is otherwise
+unreachable and a decided flag renders no action. Group-level reversal
+(`reverse_decision_group`) remains backend-only — see issue #112.
 
 **Query budget is a hard constraint, not a goal:** O(1) queries per request regardless of
 employee count. Any per-employee or per-day query inside this endpoint is a spec violation.
