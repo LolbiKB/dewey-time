@@ -141,6 +141,11 @@ export function orphanedEvidenceChangedSummary(count: number): string {
 /** The two outcomes `decide_flags` accepts. Order is the button order. */
 export const OUTCOME_OPTIONS: readonly Outcome[] = ["EXCUSED", "UPHELD"];
 
+/**
+ * Past tense — for describing a decision that has already been made
+ * ("Excused — Device or data fault"). Never put these on a button: a control
+ * that reads "Excused 39" describes a state that does not exist yet.
+ */
 export const OUTCOME_LABELS: Record<Outcome, string> = {
   EXCUSED: "Excused",
   UPHELD: "Upheld",
@@ -148,6 +153,21 @@ export const OUTCOME_LABELS: Record<Outcome, string> = {
 
 export function outcomeLabel(outcome: Outcome): string {
   return OUTCOME_LABELS[outcome];
+}
+
+/**
+ * Imperative — for buttons and menu actions, which name the thing the click
+ * will do: "Excuse 39", not "Excused 39". The pair exists because the same
+ * outcome needs both voices, and using one where the other belongs is a
+ * mistake a reader notices immediately but a type checker never will.
+ */
+export const OUTCOME_ACTION_LABELS: Record<Outcome, string> = {
+  EXCUSED: "Excuse",
+  UPHELD: "Uphold",
+};
+
+export function outcomeActionLabel(outcome: Outcome): string {
+  return OUTCOME_ACTION_LABELS[outcome];
 }
 
 /**
@@ -254,6 +274,12 @@ export const SAME_REASON_LABEL = "Same reason applies";
 
 /** Breaks a cause group into its member rows when it turns out not to be uniform. */
 export const DECIDE_ONE_BY_ONE_LABEL = "Decide one by one";
+
+/** …and the way back, so "Decide one by one" is not a one-way door. */
+export const SHOW_AS_GROUP_LABEL = "Show as one group";
+
+/** A decide_flags call that failed outright — nothing was written. */
+export const DECIDE_FAILED_MESSAGE = "That decision wasn't saved. Nothing has changed.";
 
 type DeviceAlert = QueuePayload["alerts"][number];
 

@@ -11,8 +11,10 @@ import {
   groupHeadline,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
+  OUTCOME_ACTION_LABELS,
   OUTCOME_LABELS,
   OUTCOME_OPTIONS,
+  outcomeActionLabel,
   outcomeLabel,
   partialFailureMessage,
   personHeadline,
@@ -172,6 +174,19 @@ test("OUTCOME_LABELS and OUTCOME_OPTIONS cover exactly the Outcome union", () =>
   assert.deepEqual([...OUTCOME_OPTIONS].sort(), [...ALL_OUTCOMES].sort());
   assert.equal(outcomeLabel("EXCUSED"), "Excused");
   assert.equal(outcomeLabel("UPHELD"), "Upheld");
+});
+
+test("OUTCOME_ACTION_LABELS is the imperative voice, and covers the union too", () => {
+  assert.deepEqual(Object.keys(OUTCOME_ACTION_LABELS).sort(), [...ALL_OUTCOMES].sort());
+  assert.equal(outcomeActionLabel("EXCUSED"), "Excuse");
+  assert.equal(outcomeActionLabel("UPHELD"), "Uphold");
+
+  // The whole reason both maps exist. A button labelled from the past-tense map
+  // reads "Excused 39" — describing a state that does not exist until it is
+  // clicked. Nothing but a reader catches that, so pin it.
+  for (const outcome of ALL_OUTCOMES) {
+    assert.notEqual(outcomeActionLabel(outcome), outcomeLabel(outcome));
+  }
 });
 
 test("REASON_OPTIONS offers every Reason, in flag_decision_api's declared order", () => {

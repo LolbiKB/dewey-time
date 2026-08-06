@@ -7,16 +7,18 @@ import {
   SAME_REASON_LABEL,
   applyToRemainingLabel,
   decisionStateLabel,
-  outcomeLabel,
+  outcomeActionLabel,
   partialFailureMessage,
   reasonLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import type { DecisionState, FlagDecision, FlagOut, QueueEntry, QueuePerson, Tier } from "@/types/flags";
 
+import { SHOW_AS_GROUP_LABEL } from "@/lib/flagQueueLabels";
+
 import { FlagDecisionPanel, type FlagDecisionPanelProps } from "./FlagDecisionPanel";
 import { FlagQueueList } from "./FlagQueueList";
-import { FlagQueueView } from "./FlagQueuePage";
+import { FlagQueueView, decideEffect, type DecideArgs, type DecideEffect } from "./FlagQueuePage";
 
 const DATE = "2026-08-03";
 
@@ -183,16 +185,16 @@ test("the group action count drops when members are excluded", () => {
   };
 
   const all = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry: group })} />);
-  assert.ok(all.includes(`${outcomeLabel("EXCUSED")} 41`), "all 41 members are included by default");
+  assert.ok(all.includes(`${outcomeActionLabel("EXCUSED")} 41`), "all 41 members are included by default");
 
   const partial = renderToStaticMarkup(
     <FlagDecisionPanel
       {...panelProps({ entry: group, excluded: new Set(["HR-EMP-00007", "HR-EMP-00019"]) })}
     />
   );
-  assert.ok(partial.includes(`${outcomeLabel("EXCUSED")} 39`), "two exclusions drop the count to 39");
+  assert.ok(partial.includes(`${outcomeActionLabel("EXCUSED")} 39`), "two exclusions drop the count to 39");
   assert.ok(
-    !partial.includes(`${outcomeLabel("EXCUSED")} 41`),
+    !partial.includes(`${outcomeActionLabel("EXCUSED")} 41`),
     "the stale 41 must not survive anywhere in the panel"
   );
 });
@@ -365,11 +367,11 @@ test("bulk labels count what will actually be written, not undecided_count", () 
 
   const groupHtml = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry: group })} />);
   assert.ok(
-    groupHtml.includes(`${outcomeLabel("EXCUSED")} 1`),
+    groupHtml.includes(`${outcomeActionLabel("EXCUSED")} 1`),
     "one of the two members has anything to write"
   );
   assert.ok(
-    !groupHtml.includes(`${outcomeLabel("EXCUSED")} 2`),
+    !groupHtml.includes(`${outcomeActionLabel("EXCUSED")} 2`),
     "the checked-but-unwritable member must not be promised"
   );
 });
@@ -524,6 +526,150 @@ test("device alert cards carry no decide action", () => {
 
   assert.doesNotMatch(html, />Excuse</);
   assert.doesNotMatch(html, />Uphold</);
+});
+
+const DRAFT: PendingDecision = { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" };
+const ARGS: DecideArgs = {
+  identities: ["id-1", "id-2", "id-3"],
+  decision: DRAFT,
+  groupKey: null,
+};
+
+function settled(effect: DecideEffect) {
+  assert.equal(effect.kind, "settled");
+  return effect as Extract<DecideEffect, { kind: "settled" }>;
+}
+
+// The repeat affordance is armed from the *result*, not from the fact that a
+// request completed. A 200 that wrote zero rows still completed.
+test("the repeat is armed by what was written, not by the call returning", () => {
+  const allFailed = settled(
+    decideEffect(
+      {
+        ok: true,
+        written: 0,
+        errors: ARGS.identities.map((id) => ({ flag_identity: id, error: "Flag no longer exists" })),
+      },
+      ARGS
+    )
+  );
+  assert.equal(
+    allFailed.lastDecision,
+    null,
+    "nothing landed, so offering to repeat it would spread a failure across the day"
+  );
+  assert.deepEqual(
+    { saved: allFailed.bulkFailure?.saved, attempted: allFailed.bulkFailure?.attempted },
+    { saved: 0, attempted: 3 }
+  );
+
+  const partial = settled(
+    decideEffect(
+      { ok: true, written: 2, errors: [{ flag_identity: "id-3", error: "Flag no longer exists" }] },
+      ARGS
+    )
+  );
+  assert.equal(partial.lastDecision, DRAFT, "two rows did land, so the repeat is real");
+  assert.deepEqual(
+    { saved: partial.bulkFailure?.saved, attempted: partial.bulkFailure?.attempted },
+    { saved: 2, attempted: 3 }
+  );
+
+  const clean = settled(decideEffect({ ok: true, written: 3, errors: [] }, ARGS));
+  assert.equal(clean.lastDecision, DRAFT);
+  assert.equal(clean.bulkFailure, null, "nothing failed, so no strip");
+});
+
+test("an over-threshold decide asks for confirmation and settles nothing", () => {
+  const effect = decideEffect({ needs_confirm: true, preview: { count: 39, employees: 39 } }, ARGS);
+  assert.equal(effect.kind, "confirm");
+  assert.deepEqual(
+    effect.kind === "confirm" ? effect.preview : null,
+    { count: 39, employees: 39 },
+    "the blast radius is shown to the user, not guessed at"
+  );
+
+  // The backend has always sent a preview alongside needs_confirm, but the count
+  // is what the confirm button promises to write — falling back to the identity
+  // count keeps that promise honest rather than rendering "Write 0 decisions".
+  const noPreview = decideEffect({ needs_confirm: true }, ARGS);
+  assert.deepEqual(noPreview.kind === "confirm" ? noPreview.preview.count : -1, 3);
+});
+
+test("a decide that fails outright is reported, politely, without hiding the queue", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40 }}
+      isLoading={false}
+      error={null}
+      onRetry={() => {}}
+      bulkFailure={null}
+      writeFailure="You do not have permission to decide flags."
+      list={<div>LIST-SENTINEL</div>}
+      panel={<div>PANEL-SENTINEL</div>}
+    />
+  );
+
+  assert.ok(
+    html.includes("You do not have permission to decide flags."),
+    "the server's reason reaches the user rather than dying in the console"
+  );
+  // Role 2, not role 3: the queue loaded fine and is still fully usable — there
+  // is no missing region for FailureBlock to replace.
+  assert.match(html, /role="status"/);
+  assert.doesNotMatch(html, /role="alert"/);
+  assert.ok(html.includes("LIST-SENTINEL"));
+  assert.ok(html.includes("PANEL-SENTINEL"));
+});
+
+test("an expanded group can be put back together", () => {
+  const group: QueueEntry = {
+    kind: "group",
+    group_type: "ROUTINE_CODE",
+    group_key: "ROUTINE_CODE:LATE_START:2026-08-03",
+    branch: null,
+    flag_code: "LATE_START",
+    attendance_date: DATE,
+    rank: 20,
+    tier: "routine",
+    members: [
+      makePerson({
+        employee: "HR-EMP-00002",
+        name: "Grace Hopper",
+        rank: 20,
+        tier: "routine",
+        flags: [
+          makeFlag({
+            identity: "id-late-2",
+            code: "LATE_START",
+            rank: 20,
+            tier: "routine",
+            evidence: { minutes: 9 },
+          }),
+        ],
+      }),
+    ],
+  };
+
+  const collapsed = renderToStaticMarkup(
+    <FlagQueueList entries={[group]} selectedKey={null} expandedGroupKey={null} onSelect={() => {}} />
+  );
+  assert.ok(!collapsed.includes("Grace Hopper"), "members are hidden inside the group row");
+  assert.ok(!collapsed.includes(SHOW_AS_GROUP_LABEL), "nothing to collapse yet");
+
+  const expanded = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[group]}
+      selectedKey={null}
+      expandedGroupKey={group.kind === "group" ? group.group_key : null}
+      onSelect={() => {}}
+      onCollapseGroup={() => {}}
+    />
+  );
+  assert.ok(expanded.includes("Grace Hopper"), "members take the group's place");
+  // Without this, "Decide one by one" is a one-way door: no affordance returns
+  // the user to bulk review short of reloading the page.
+  assert.ok(expanded.includes(SHOW_AS_GROUP_LABEL), "and there is a way back");
 });
 
 test("no alert cards render when the array is empty", () => {

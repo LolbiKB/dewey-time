@@ -11,7 +11,9 @@ import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue } from "@/hooks/useFlagQueue";
 import type { PendingDecision } from "@/lib/flagDecisionState";
+import { extractFrappeError } from "@/lib/frappeError";
 import {
+  DECIDE_FAILED_MESSAGE,
   DEVICE_ALERT_EXPLAINER,
   REASON_OPTIONS,
   deviceAlertHeadline,
@@ -33,7 +35,7 @@ export type BulkFailure = {
   errors: { flag_identity: string; error: string }[];
 };
 
-type DecideArgs = {
+export type DecideArgs = {
   identities: string[];
   decision: PendingDecision;
   groupKey?: string | null;
@@ -46,7 +48,7 @@ type DecideArgs = {
  * only honest test — a union with a fabricated tag would be a lie about the wire
  * format.
  */
-type DecideResponse = {
+export type DecideResponse = {
   ok?: boolean;
   written?: number;
   group_key?: string;
@@ -56,6 +58,46 @@ type DecideResponse = {
 };
 
 type PendingConfirm = { args: DecideArgs; preview: { count: number; employees: number } };
+
+/** What a decide_flags response means for the page's state. */
+export type DecideEffect =
+  /** Over the backend's confirm threshold — show the blast radius, write nothing. */
+  | { kind: "confirm"; preview: { count: number; employees: number } }
+  | {
+      kind: "settled";
+      /**
+       * The decision to offer as "Same reason applies", or null when the call
+       * wrote nothing at all. Offering a repeat of a decision that never landed
+       * would invite HR to propagate a failure across the rest of the day.
+       */
+      lastDecision: PendingDecision | null;
+      bulkFailure: BulkFailure | null;
+    };
+
+/**
+ * Pure reading of a *successful* HTTP response. Kept out of the mutation
+ * callback so it can be tested directly: this suite renders components with
+ * renderToStaticMarkup and has no harness for driving react-query, so logic
+ * left inside `onSuccess` is logic nothing can reach.
+ */
+export function decideEffect(result: DecideResponse, args: DecideArgs): DecideEffect {
+  if (result.needs_confirm) {
+    return {
+      kind: "confirm",
+      preview: result.preview ?? { count: args.identities.length, employees: 0 },
+    };
+  }
+
+  const written = result.written ?? 0;
+  const errors = result.errors ?? [];
+
+  return {
+    kind: "settled",
+    lastDecision: written > 0 ? args.decision : null,
+    bulkFailure:
+      errors.length > 0 ? { saved: written, attempted: args.identities.length, errors } : null,
+  };
+}
 
 /** A fresh draft for a newly selected row. REASON_OPTIONS[0] only seeds the
  *  <select>'s value; nothing is written until HR clicks, and decisionIsComplete
@@ -84,6 +126,7 @@ export function FlagQueuePage() {
   const [lastDecision, setLastDecision] = useState<PendingDecision | null>(null);
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [bulkFailure, setBulkFailure] = useState<BulkFailure | null>(null);
+  const [writeFailure, setWriteFailure] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
   // The selected row can be a group member surfaced by "Decide one by one",
@@ -103,17 +146,25 @@ export function FlagQueuePage() {
     return null;
   }, [entries, expandedGroupKey, selectedKey]);
 
-  const handleSelect = useCallback((key: string) => {
-    // Everything below is per-row state: a draft, a repeat decision or an
-    // exclusion set leaking across a selection change would apply one person's
-    // reasoning to the next.
-    setSelectedKey(key);
+  // Everything reset here is per-row state: a draft, a repeat decision, an
+  // exclusion set or a failure notice leaking across a selection change would
+  // apply one person's reasoning — or one person's error — to the next.
+  const resetRowState = useCallback(() => {
     setDraft(emptyDraft());
     setActiveIdentity(null);
     setLastDecision(null);
     setExcluded(new Set<string>());
     setBulkFailure(null);
+    setWriteFailure(null);
   }, []);
+
+  const handleSelect = useCallback(
+    (key: string) => {
+      setSelectedKey(key);
+      resetRowState();
+    },
+    [resetRowState],
+  );
 
   const handleToggleMember = useCallback((employee: string) => {
     setExcluded((prev) => {
@@ -135,32 +186,38 @@ export function FlagQueuePage() {
         confirm: args.confirm,
       }),
     onSuccess: (result, args) => {
-      if (result.needs_confirm) {
+      const effect = decideEffect(result, args);
+
+      if (effect.kind === "confirm") {
         // decide_flags refuses more than DECIDE_CONFIRM_THRESHOLD (25) writes
         // without an explicit confirm. Show the blast radius and re-issue the
         // identical call — never auto-confirm on the user's behalf.
-        setPendingConfirm({
-          args,
-          preview: result.preview ?? { count: args.identities.length, employees: 0 },
-        });
+        setPendingConfirm({ args, preview: effect.preview });
         return;
       }
 
       setPendingConfirm(null);
       setActiveIdentity(null);
-      setLastDecision(args.decision);
-
-      const errors = result.errors ?? [];
-      setBulkFailure(
-        errors.length > 0
-          ? { saved: result.written ?? 0, attempted: args.identities.length, errors }
-          : null,
-      );
+      setWriteFailure(null);
+      // null only when the call wrote nothing; keep whatever repeat was already
+      // on offer rather than clearing a decision that did land earlier.
+      if (effect.lastDecision) setLastDecision(effect.lastDecision);
+      setBulkFailure(effect.bulkFailure);
 
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
       // all their flags are decided.
       refresh();
+    },
+    // Without this the only write path in the feature fails in complete silence:
+    // frappeCall throws on every non-2xx and on the HTML login page Frappe serves
+    // under 200 for an expired session, the query client sets mutations.retry
+    // false and installs no global handler, so the button would simply re-enable
+    // with the page byte-identical and nothing written.
+    onError: (err) => {
+      setPendingConfirm(null);
+      setBulkFailure(null);
+      setWriteFailure(extractFrappeError(err, DECIDE_FAILED_MESSAGE));
     },
   });
 
@@ -178,6 +235,18 @@ export function FlagQueuePage() {
     setExpandedGroupKey(selectedEntry.group_key);
     setSelectedKey(null);
   }, [selectedEntry]);
+
+  const handleCollapseGroup = useCallback(() => {
+    if (!expandedGroupKey) return;
+    const group = entries.find(
+      (entry) => entry.kind === "group" && entry.group_key === expandedGroupKey,
+    );
+    setExpandedGroupKey(null);
+    // The member rows vanish with the expansion, so a selection pointing at one
+    // would resolve to nothing and blank the panel. Land back on the group.
+    setSelectedKey(group ? entryKey(group) : null);
+    resetRowState();
+  }, [entries, expandedGroupKey, resetRowState]);
 
   if (sessionLoading) {
     return (
@@ -203,6 +272,7 @@ export function FlagQueuePage() {
         error={error}
         onRetry={refresh}
         bulkFailure={bulkFailure}
+        writeFailure={writeFailure}
         alerts={alerts}
         list={
           <FlagQueueList
@@ -210,6 +280,7 @@ export function FlagQueuePage() {
             selectedKey={selectedKey}
             expandedGroupKey={expandedGroupKey}
             onSelect={handleSelect}
+            onCollapseGroup={handleCollapseGroup}
           />
         }
         panel={
@@ -274,6 +345,8 @@ export type FlagQueueViewProps = {
   error: unknown;
   onRetry: () => void;
   bulkFailure: BulkFailure | null;
+  /** A decide call that failed outright — nothing was written. */
+  writeFailure?: string | null;
   /** Flagless device outages, straight from Device Closeout Alert. */
   alerts?: QueuePayload["alerts"];
   list: ReactNode;
@@ -313,6 +386,19 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           <CountChip label="Decided" value={counts?.decided ?? 0} />
         </div>
       </PageHeader>
+
+      {/* Role 2, not role 3: the queue itself loaded fine, so no region is
+          missing and there is nothing for FailureBlock to replace — the write
+          did not happen and the page is otherwise fully usable. Without this the
+          only write path in the feature fails silently. */}
+      {props.writeFailure ? (
+        <AttentionStrip
+          tone="amber"
+          icon={<TriangleAlertIcon className="size-4 text-amber-600" aria-hidden="true" />}
+        >
+          {props.writeFailure}
+        </AttentionStrip>
+      ) : null}
 
       {/* Role 2, polite: most of the batch landed, so nothing the user asked for
           is wholly missing and a screen reader must not be interrupted. The

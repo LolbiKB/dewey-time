@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { groupHeadline, personHeadline, tierLabel } from "@/lib/flagQueueLabels";
+import { SHOW_AS_GROUP_LABEL, groupHeadline, personHeadline, tierLabel } from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
 import type { QueueEntry, QueuePerson, Tier } from "@/types/flags";
 
@@ -26,6 +26,8 @@ export type FlagQueueListProps = {
   /** Group the user sent to "decide one by one" — rendered as its member rows. */
   expandedGroupKey: string | null;
   onSelect: (key: string) => void;
+  /** Puts the expanded group back together — the way out of "decide one by one". */
+  onCollapseGroup?: () => void;
 };
 
 export function FlagQueueList(props: FlagQueueListProps) {
@@ -48,8 +50,31 @@ export function FlagQueueList(props: FlagQueueListProps) {
   for (const entry of ordered) {
     if (entry.kind === "group" && entry.group_key === props.expandedGroupKey) {
       // "Decide one by one": the group turned out not to be uniform, so its
-      // members take its place as ordinary person rows. They keep the same keys
-      // they would have had ungrouped, so selection survives collapsing again.
+      // members take its place as ordinary person rows, under the same keys they
+      // would have had if the backend had never grouped them. The caption row
+      // below is the way back — without it, expanding a group is a one-way door
+      // out of bulk review with no affordance but a page reload.
+      rows.push({
+        key: `x:${entry.group_key}`,
+        tier: entry.tier,
+        element: (
+          <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {groupHeadline(entry)}
+            </span>
+            {props.onCollapseGroup ? (
+              <button
+                type="button"
+                onClick={props.onCollapseGroup}
+                className="shrink-0 text-xs font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {SHOW_AS_GROUP_LABEL}
+              </button>
+            ) : null}
+          </div>
+        ),
+      });
+
       for (const member of entry.members) {
         const key = entryKey({ kind: "person", ...member });
         rows.push({

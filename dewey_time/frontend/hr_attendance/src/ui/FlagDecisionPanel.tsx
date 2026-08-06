@@ -22,6 +22,7 @@ import {
   applyToRemainingLabel,
   decisionStateLabel,
   groupHeadline,
+  outcomeActionLabel,
   outcomeLabel,
   personHeadline,
   priorDecisionLabel,
@@ -198,7 +199,7 @@ function FlagCard(props: {
         <DecisionForm
           draft={props.draft}
           onChange={props.onDraftChange}
-          submitLabel={outcomeLabel(props.draft.outcome)}
+          submitLabel={outcomeActionLabel(props.draft.outcome)}
           onSubmit={() => props.onSubmit([flag.flag_identity], props.draft)}
           onCancel={props.onClose}
           submitting={props.submitting}
@@ -251,7 +252,7 @@ function GroupDecision(props: FlagDecisionPanelProps & { entry: GroupEntry }) {
       <DecisionForm
         draft={props.draft}
         onChange={props.onDraftChange}
-        submitLabel={`${outcomeLabel(props.draft.outcome)} ${payload.coveredEmployeeCount}`}
+        submitLabel={`${outcomeActionLabel(props.draft.outcome)} ${payload.coveredEmployeeCount}`}
         onSubmit={() => props.onSubmit(payload.identities, props.draft)}
         submitting={props.submitting || payload.coveredEmployeeCount === 0}
       />
@@ -316,7 +317,7 @@ function DecisionForm(props: {
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {outcomeLabel(option)}
+              {outcomeActionLabel(option)}
             </button>
           );
         })}
