@@ -781,3 +781,97 @@ test("no alert cards render when the array is empty", () => {
   assert.doesNotMatch(html, /no device data/i);
   assert.doesNotMatch(html, /went offline/i);
 });
+
+// The identity scheme trades durability for precision: correcting a punch under
+// a MISSING_TIME or ATTENDANCE_ISSUE flag changes its identity, so the decision
+// attached to it orphans. The design doc parks that trade with "revisit if
+// orphan rates in practice turn out to be high" — a plan that only works if the
+// rate is on screen. Before this, get_flag_queue computed both counts and
+// nothing rendered them.
+test("orphaned decisions are reported, so the rate is visible rather than inferred", () => {
+  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40 };
+
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      counts={counts}
+      orphans={{ orphaned_flag_gone: 3, orphaned_evidence_changed: 1 }}
+      includeDecided={false}
+      onToggleDecided={() => {}}
+      isLoading={false}
+      error={null}
+      onRetry={() => {}}
+      bulkFailure={null}
+      list={<div />}
+      panel={<div />}
+    />
+  );
+
+  assert.match(html, /3 decisions no longer have a matching flag/);
+  assert.match(html, /1 flag changed since it was decided/);
+});
+
+// A healthy queue must stay quiet: "0 decisions no longer have a matching flag"
+// is noise on the overwhelmingly common day, and each line is independent —
+// one count being zero must not suppress the other.
+test("an orphan line appears only when its own count is non-zero", () => {
+  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40 };
+  const render = (orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number }) =>
+    renderToStaticMarkup(
+      <FlagQueueView
+        counts={counts}
+        orphans={orphans}
+        includeDecided={false}
+        onToggleDecided={() => {}}
+        isLoading={false}
+        error={null}
+        onRetry={() => {}}
+        bulkFailure={null}
+        list={<div />}
+        panel={<div />}
+      />
+    );
+
+  const none = render({ orphaned_flag_gone: 0, orphaned_evidence_changed: 0 });
+  assert.doesNotMatch(none, /no longer have a matching flag|changed since/);
+
+  const goneOnly = render({ orphaned_flag_gone: 2, orphaned_evidence_changed: 0 });
+  assert.match(goneOnly, /2 decisions no longer have a matching flag/);
+  assert.doesNotMatch(goneOnly, /changed since/, "the zero count stays silent");
+
+  const changedOnly = render({ orphaned_flag_gone: 0, orphaned_evidence_changed: 4 });
+  assert.match(changedOnly, /4 flags changed since they were decided/);
+  assert.doesNotMatch(changedOnly, /no longer have a matching flag/);
+});
+
+// Same rule the counts already follow: the hook zero-fills before the first
+// payload, so a load failure must not render an orphan line built from zeros.
+test("orphan lines are withheld while loading and on failure", () => {
+  const orphans = { orphaned_flag_gone: 3, orphaned_evidence_changed: 2 };
+
+  const loading = renderToStaticMarkup(
+    <FlagQueueView
+      counts={null}
+      isLoading
+      error={null}
+      onRetry={() => {}}
+      bulkFailure={null}
+      list={<div />}
+      panel={<div />}
+    />
+  );
+  assert.doesNotMatch(loading, /no longer have a matching flag|changed since/);
+
+  const failed = renderToStaticMarkup(
+    <FlagQueueView
+      counts={null}
+      error={new Error("boom")}
+      isLoading={false}
+      onRetry={() => {}}
+      bulkFailure={null}
+      list={<div />}
+      panel={<div />}
+    />
+  );
+  assert.doesNotMatch(failed, /no longer have a matching flag|changed since/);
+  void orphans;
+});

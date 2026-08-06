@@ -18,6 +18,8 @@ import {
   REASON_OPTIONS,
   SHOWING_DECIDED_MESSAGE,
   deviceAlertHeadline,
+  orphanedEvidenceChangedSummary,
+  orphanedFlagGoneSummary,
   partialFailureMessage,
 } from "@/lib/flagQueueLabels";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
@@ -124,7 +126,7 @@ export function FlagQueuePage() {
   // only route to a decision HR wants to replace.
   const [includeDecided, setIncludeDecided] = useState(false);
 
-  const { entries, counts, alerts, truncated, isLoading, error, refresh } = useFlagQueue({
+  const { entries, counts, alerts, orphans, truncated, isLoading, error, refresh } = useFlagQueue({
     ...range,
     includeDecided,
   });
@@ -286,6 +288,10 @@ export function FlagQueuePage() {
         // something open" beside a failed load reads as "nothing to do", which
         // is the exact false calm this page exists to break.
         counts={isLoading || error ? null : counts}
+        // Withheld on the same terms as counts, and for the same reason: the
+        // hook zero-fills before the first payload, and a stale-looking orphan
+        // line beside a failed load is worse than none.
+        orphans={isLoading || error ? undefined : orphans}
         includeDecided={includeDecided}
         onToggleDecided={handleToggleDecided}
         truncated={truncated}
@@ -373,6 +379,17 @@ export type FlagQueueViewProps = {
   writeFailure?: string | null;
   /** Flagless device outages, straight from Device Closeout Alert. */
   alerts?: QueuePayload["alerts"];
+  /**
+   * Decisions that no longer match a live flag. Reported, never actionable:
+   * the queue lists flags, and by definition these have none to list.
+   *
+   * They are shown because the identity scheme trades durability for
+   * precision — correcting a punch under a MISSING_TIME or ATTENDANCE_ISSUE
+   * flag changes its identity, so the decision attached to it orphans. The
+   * design doc parks that trade with "revisit if orphan rates in practice
+   * turn out to be high", which is only answerable if the rate is visible.
+   */
+  orphans?: QueuePayload["orphans"];
   list: ReactNode;
   panel: ReactNode;
 };
@@ -385,6 +402,17 @@ export type FlagQueueViewProps = {
  */
 export function FlagQueueView(props: FlagQueueViewProps) {
   const counts = props.counts;
+
+  // Each line only when its own count is non-zero — reporting "0 decisions no
+  // longer have a matching flag" is noise on the overwhelmingly common day.
+  const orphanLines = [
+    props.orphans?.orphaned_flag_gone
+      ? orphanedFlagGoneSummary(props.orphans.orphaned_flag_gone)
+      : null,
+    props.orphans?.orphaned_evidence_changed
+      ? orphanedEvidenceChangedSummary(props.orphans.orphaned_evidence_changed)
+      : null,
+  ].filter((line): line is string => line !== null);
 
   return (
     <Page>
@@ -423,6 +451,20 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             on you. */}
         {props.includeDecided ? (
           <p className="text-xs text-muted-foreground">{SHOWING_DECIDED_MESSAGE}</p>
+        ) : null}
+
+        {/* Deliberately prose, not a CountChip: a chip sits in a group whose
+            every member is either a size-of-the-job count or a filter, and
+            these are neither — there is nothing to open and nothing to press.
+            Rendered only when non-zero, so a healthy queue stays quiet. */}
+        {orphanLines.length > 0 ? (
+          <div className="space-y-0.5">
+            {orphanLines.map((line) => (
+              <p key={line} className="text-xs text-muted-foreground">
+                {line}
+              </p>
+            ))}
+          </div>
         ) : null}
       </PageHeader>
 
