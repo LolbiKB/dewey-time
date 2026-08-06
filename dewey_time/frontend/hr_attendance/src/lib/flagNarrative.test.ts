@@ -994,3 +994,169 @@ test("UNNOTIFIED_ABSENCE falls back to a start–end time range in the Shift fac
   );
   assert.deepEqual(narrative.timeline?.band, { startMin: 540, endMin: 780 });
 });
+
+// --- Task 3 review follow-ups --------------------------------------------
+
+test("flagNarrative: MISSING_TIME with empty evidence falls back with the empty-evidence caveat instead of a confident dash-filled sentence", () => {
+  const mt = boundaryFlag("MISSING_TIME", {});
+  const d = day({ checkins: [] });
+
+  const narrative = flagNarrative(mt, d, DATE_KEY);
+
+  assert.equal(narrative.headline, "Missing time");
+  assert.doesNotMatch(narrative.headline, /—/, "the empty blob must not reach the confident sentence");
+  assert.ok(narrative.subline != null && narrative.subline.includes(EMPTY_EVIDENCE_NOTE));
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+test("flagNarrative: UNNOTIFIED_ABSENCE with empty evidence falls back instead of fabricating Punches/Caught-by off nothing", () => {
+  const ua = boundaryFlag("UNNOTIFIED_ABSENCE", {});
+  const d = day({ checkins: [] });
+
+  const narrative = flagNarrative(ua, d, DATE_KEY);
+
+  assert.equal(narrative.headline, "Did not show up");
+  assert.ok(narrative.subline != null && narrative.subline.includes(EMPTY_EVIDENCE_NOTE));
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+test("flagNarrative: MISSING_TIME normalises an overnight shift's gap across midnight instead of inverting it to zero", () => {
+  // absence_intervals.py:318-319 rolls shift_end_min +1440 for an overnight
+  // shift before absence_flags.py:51-60 converts the interval back to
+  // datetimes, so interval_end legitimately lands on the calendar day AFTER
+  // interval_start.
+  const overnightShift: ShiftContext = {
+    shift_assigned: true,
+    start_time: "22:00",
+    end_time: "06:00",
+    lunch_start: null,
+    lunch_end: null,
+  };
+  const flag: Flag = {
+    name: "AUTO-mt-overnight",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T23:30:00",
+      interval_end: "2026-08-07T00:15:00",
+      minutes: 45,
+      kind: "away",
+      threshold_minutes: 30,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 22:05:00" }, { time: "2026-08-07 05:55:00" }],
+    shift: overnightShift,
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Gone from 11:30 PM to 12:15 AM — 45m unaccounted, and it wasn't lunch."
+  );
+  assert.equal(narrative.facts.find((f) => f.label === "Gap")?.value, "45m");
+  // Pre-fix, a raw minute-of-day reading of interval_end (00:15 -> 15) sat
+  // below interval_start (23:30 -> 1410), so Math.max(0, ...) collapsed the
+  // gap span to 0 instead of the real 45-minute span.
+  assert.deepEqual(narrative.timeline?.spans, [{ startMin: 1410, endMin: 1455, tone: "gap" }]);
+});
+
+test("flagNarrative: UNNOTIFIED_ABSENCE keeps its band and Shift fact for an overnight shift instead of losing the timeline at the midnight rollover", () => {
+  const flag: Flag = {
+    name: "AUTO-ua-overnight",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00005",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins",
+      checkins_count: 0,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: true, start_time: "22:00", end_time: "06:00" }, // no shift_type, overnight
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  // Pre-fix, unnotifiedAbsenceBand rejected `endMin <= startMin` outright for
+  // any overnight shift, so this absence lost BOTH its timeline (band: null)
+  // and its Shift fact fell through to the wrong "Not resolved on this
+  // calendar" even though the calendar plainly has a shift.
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Shift")?.value,
+    "10:00 PM – 6:00 AM"
+  );
+  assert.deepEqual(narrative.timeline?.band, { startMin: 1320, endMin: 1800 });
+  assert.deepEqual(narrative.timeline?.spans, [{ startMin: 1320, endMin: 1800, tone: "gap" }]);
+});
+
+test("flagNarrative: UNNOTIFIED_ABSENCE's Punches fact reads evidence.checkins_count, not day.checkins.length — the zero IS the finding", () => {
+  const flag: Flag = {
+    name: "AUTO-ua-punches-pin",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00006",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins",
+      checkins_count: 0,
+    },
+  };
+  const day: NarrativeDay = {
+    // A later correction/backfill added punches to the live calendar after
+    // the flag was raised — if this fact ever switches to day.checkins.length
+    // it would print "Punches: 2" on a flag whose headline says nobody came
+    // in, so pin it to the frozen evidence value instead.
+    checkins: [{ time: "2026-08-06 09:05:00" }, { time: "2026-08-06 17:10:00" }],
+    shift: { shift_assigned: true, shift_type: "Morning", start_time: "09:00", end_time: "17:00" },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(narrative.facts.find((f) => f.label === "Punches")?.value, "0");
+});
+
+test("flagNarrative: MISSING_TIME's Lunch window fact comes from day.shift, not decoy lunch keys on the evidence blob", () => {
+  // absence_flags.py never writes a lunch pair onto MISSING_TIME's evidence
+  // dict (it is exactly interval_start/interval_end/minutes/kind/
+  // threshold_minutes) — these decoy keys are deliberately WRONG relative to
+  // day.shift below, to prove the panel never reads them.
+  const flag: Flag = {
+    name: "AUTO-mt-decoy",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T10:00:00",
+      interval_end: "2026-08-06T10:45:00",
+      minutes: 45,
+      kind: "away",
+      threshold_minutes: 30,
+      lunch_start: "09:30",
+      lunch_end: "11:00",
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 08:00:00" }, { time: "2026-08-06 17:00:00" }],
+    shift: {
+      shift_assigned: true,
+      start_time: "08:00",
+      end_time: "17:00",
+      lunch_start: "12:00",
+      lunch_end: "12:30",
+    },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  // If this read evidence.lunch_start/lunch_end it would say "9:30 AM –
+  // 11:00 AM" and the gap (10:00-10:45) would overlap that decoy window,
+  // flipping the headline's relationship clause.
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Lunch window")?.value,
+    "12:00 PM – 12:30 PM"
+  );
+  assert.match(narrative.headline, /and it wasn't lunch\.$/);
+});

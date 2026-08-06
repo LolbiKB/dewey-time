@@ -695,19 +695,43 @@ function missingTimeGapMinutes(evidence: FlagEvidence): { startMin: number; endM
   return { startMin, endMin };
 }
 
-function narrateMissingTime(
-  evidence: FlagEvidence,
-  day: NarrativeDay,
-  dateKey: string
-): FlagNarrative {
-  const { startMin: gapStartMin, endMin: gapEndMin } = missingTimeGapMinutes(evidence);
+function narrateMissingTime(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
+  const genericEvidence = readEvidence(flag);
+  const evidence = genericEvidence as FlagEvidence;
+  // Task 3 review, finding 2: mirrors buildLateStartNarrative's guard
+  // (:474) — without the interval pair, missingTimeGapMinutes' `?? 0`
+  // midnight fallback would otherwise draw a fabricated zero-length span and
+  // render a confident "Gone from — to —" sentence off an empty blob.
+  if (!evidence.interval_start || !evidence.interval_end) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
+  const overnight = isOvernightShift(day.shift);
+  const shiftStartMin = parseTimeToMinutes(day.shift?.start_time ?? null);
+
+  const raw = missingTimeGapMinutes(evidence);
+  // Task 3 review, finding 3: absence_flags.py:51-60 can legitimately place
+  // interval_end on the calendar day AFTER interval_start for an overnight
+  // shift (absence_intervals.py:318-319 rolls shift_end_min +1440 before
+  // converting the interval back to datetimes), so a raw minute-of-day
+  // reading of interval_end can land below interval_start's. Roll both
+  // anchors onto the same overnight frame the way buildLeftEarlyTimeline
+  // does (:531-535), so the gap survives the rollover instead of inverting
+  // and collapsing to 0 via the Math.max(0, ...) below.
+  const gapStartMin = normalizeOvernightAnchor(raw.startMin, shiftStartMin, overnight) ?? raw.startMin;
+  const gapEndMin = normalizeOvernightAnchor(raw.endMin, shiftStartMin, overnight) ?? raw.endMin;
+
   const minutes = evidence.minutes ?? Math.max(0, gapEndMin - gapStartMin);
   const durationLabel = formatDurationMinutes(minutes);
   const startLabel = formatCheckinTime(evidence.interval_start);
   const endLabel = formatCheckinTime(evidence.interval_end);
 
-  const lunchStartMin = parseTimeToMinutes(day.shift?.lunch_start ?? null);
-  const lunchEndMin = parseTimeToMinutes(day.shift?.lunch_end ?? null);
+  // Same overnight rollover applies to the scheduled lunch window when it
+  // falls on the far side of midnight from shift start.
+  const rawLunchStartMin = parseTimeToMinutes(day.shift?.lunch_start ?? null);
+  const rawLunchEndMin = parseTimeToMinutes(day.shift?.lunch_end ?? null);
+  const lunchStartMin = normalizeOvernightAnchor(rawLunchStartMin, shiftStartMin, overnight);
+  const lunchEndMin = normalizeOvernightAnchor(rawLunchEndMin, shiftStartMin, overnight);
   const hasLunchWindow =
     lunchStartMin != null && lunchEndMin != null && lunchEndMin > lunchStartMin;
   const overlapsLunch =
@@ -722,20 +746,28 @@ function narrateMissingTime(
   // early) can run past shift end well beyond the checkins-derived margin.
   const punchWindow = computeDayTimeWindow(day.checkins, minutesFromDateTime);
 
+  // Task 3 review, finding 1: every value routes through fact()/buildFacts()
+  // — "Left"/"Back" specifically through evidenceTimeText (null on a
+  // missing/unparsable timestamp) rather than formatCheckinTime ("—" on the
+  // same input) — mirroring the three Task-2 builders (:494-502, :584-592,
+  // :662-666) exactly, so a malformed interval drops the row instead of
+  // rendering a dash.
+  const facts = buildFacts([
+    fact("Gap", formatDurationMinutes(minutes)),
+    fact("Left", evidenceTimeText(evidence.interval_start)),
+    fact("Back", evidenceTimeText(evidence.interval_end)),
+    fact(
+      "Lunch window",
+      hasLunchWindow
+        ? `${formatMinuteOnDay(dateKey, lunchStartMin!)} – ${formatMinuteOnDay(dateKey, lunchEndMin!)}`
+        : "No scheduled lunch"
+    ),
+  ]);
+
   return {
     headline: `Gone from ${startLabel} to ${endLabel} — ${durationLabel} unaccounted, ${lunchRelationship}.`,
     subline: null,
-    facts: [
-      { label: "Gap", value: durationLabel },
-      { label: "Left", value: startLabel },
-      { label: "Back", value: endLabel },
-      {
-        label: "Lunch window",
-        value: hasLunchWindow
-          ? `${formatMinuteOnDay(dateKey, lunchStartMin!)} – ${formatMinuteOnDay(dateKey, lunchEndMin!)}`
-          : "No scheduled lunch",
-      },
-    ],
+    facts,
     timeline: {
       window: {
         startMin: Math.min(punchWindow?.startMin ?? gapStartMin, gapStartMin),
@@ -786,10 +818,17 @@ function unnotifiedAbsenceBand(
 ): { startMin: number; endMin: number } | null {
   if (!shift?.shift_assigned) return null;
   const startMin = parseTimeToMinutes(shift.start_time ?? null);
-  const endMin = parseTimeToMinutes(shift.end_time ?? null);
-  // Same overnight guard as shiftTimeline.ts's computeExpectedWindowPct
-  // (end < start) — an inverted band is out of scope for this task.
-  if (startMin == null || endMin == null || endMin <= startMin) return null;
+  let endMin = parseTimeToMinutes(shift.end_time ?? null);
+  if (startMin == null || endMin == null) return null;
+  // Task 3 review, finding 3: unlike shiftTimeline.ts's
+  // computeExpectedWindowPct (which returns null for an overnight shift
+  // because its %-based day axis has nowhere to put the rolled-over
+  // portion), this band drives its own axis — roll the end past midnight the
+  // way buildLeftEarlyTimeline's anchors do (:531-535), instead of dropping
+  // the shift (and with it unnotifiedAbsenceShiftFactLabel's start–end
+  // fallback and the whole timeline) for every overnight absence.
+  endMin = normalizeOvernightAnchor(endMin, startMin, isOvernightShift(shift)) ?? endMin;
+  if (endMin <= startMin) return null;
   return { startMin, endMin };
 }
 
@@ -833,11 +872,18 @@ function unnotifiedAbsenceTimeline(band: { startMin: number; endMin: number }): 
   };
 }
 
-function narrateUnnotifiedAbsence(
-  evidence: UnnotifiedAbsenceEvidence,
-  day: NarrativeDay,
-  dateKey: string
-): FlagNarrative {
+function narrateUnnotifiedAbsence(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
+  const genericEvidence = readEvidence(flag);
+  const evidence = genericEvidence as UnnotifiedAbsenceEvidence;
+  // Task 3 review, finding 2: mirrors narrateMissingTime's guard — without
+  // `reason` (drives "Caught by") and `checkins_count` (drives "Punches" —
+  // see the comment on that fact below), there is no finding to narrate
+  // confidently; an empty `{}` blob would otherwise fabricate "Punches: 0"
+  // and "Caught by: Confirmed automatically" off nothing.
+  if (!evidence.reason || evidence.checkins_count == null) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
   const shiftName = unnotifiedAbsenceHeadlineShiftLabel(day.shift);
   const headline = shiftName
     ? `Scheduled for the ${shiftName} shift, but never checked in — zero punches all day.`
@@ -848,11 +894,19 @@ function narrateUnnotifiedAbsence(
   return {
     headline,
     subline: null,
-    facts: [
-      { label: "Shift", value: unnotifiedAbsenceShiftFactLabel(day.shift, dateKey) },
-      { label: "Punches", value: String(evidence.checkins_count ?? 0) },
-      { label: "Caught by", value: unnotifiedAbsenceCaughtBy(evidence.reason) },
-    ],
+    // Task 3 review, finding 1: routed through fact()/buildFacts() for the
+    // same cap-enforcement and consistency as every other builder, even
+    // though none of these three values is ever null today.
+    facts: buildFacts([
+      fact("Shift", unnotifiedAbsenceShiftFactLabel(day.shift, dateKey)),
+      // Task 3 review, finding 4: the zero count IS this flag's finding, not
+      // surrounding context — if punches existed, the flag would not exist —
+      // so this deliberately reads evidence.checkins_count (frozen at
+      // emission), NOT day.checkins.length, even though day.checkins is the
+      // live-calendar source everywhere else in this file.
+      fact("Punches", String(evidence.checkins_count ?? 0)),
+      fact("Caught by", unnotifiedAbsenceCaughtBy(evidence.reason)),
+    ]),
     // Rule 9's second clause: no trustworthy timestamp for the thing being
     // flagged when the calendar can't resolve a shift band — the timeline
     // does not earn its place rather than fabricating a full-day axis.
@@ -887,9 +941,9 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
     case "LATE_FROM_LUNCH":
       return buildLateFromLunchNarrative(flag, day, dateKey);
     case "MISSING_TIME":
-      return narrateMissingTime(evidence, day, dateKey);
+      return narrateMissingTime(flag, day, dateKey);
     case "UNNOTIFIED_ABSENCE":
-      return narrateUnnotifiedAbsence(evidence as UnnotifiedAbsenceEvidence, day, dateKey);
+      return narrateUnnotifiedAbsence(flag, day, dateKey);
     default:
       // Emitted codes with no builder yet — Tasks 3-5 add their arms above this.
       return emittedFallbackNarrative(input);
