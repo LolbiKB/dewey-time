@@ -17,7 +17,7 @@ from dewey_time.attendance_engine.shift_assignment import (
     get_shift_assignment as _get_shift_assignment,
     shift_assignment_bounds_by_employee,
 )
-from dewey_time.attendance_engine.flag_identity import evidence_fingerprint, flag_identity
+from dewey_time.attendance_engine.flag_identity import date_key, evidence_fingerprint, flag_identity
 
 
 HR_STAFF_ROLES = frozenset({"System Manager", "HR User", "HR Manager"})
@@ -611,11 +611,20 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
         )
 
     decisions_by_identity = _live_decisions_by_identity(employee=employee, start=start, end=end)
+    # Resolved once for the whole request — reads cached roles, no query, so this
+    # does not touch the query budget (Global Constraint 5). An employee viewing
+    # their own calendar (a first-class path: _require_calendar_access allows a
+    # non-HR user through for their own linked Employee) must not receive HR's
+    # private `note`/`decided_by`/`reason` on their own flags.
+    hr_view = _is_hr_staff()
 
     flags_by_day_raw: dict[str, list[dict]] = defaultdict(list)
     for f in flags:
         d = f.get("attendance_date")
-        key = str(d) if d else None
+        # date_key(), not str(d): the ONE normaliser flag_queue_api._flag_rows also
+        # uses, so a datetime-shaped attendance_date can never silently produce an
+        # identity that fails to match a decision's stored flag_identity.
+        key = date_key(d)
         if not key:
             continue
         ev = f.get("evidence")
@@ -625,26 +634,45 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             except Exception:
                 f["evidence"] = None
         day_closed = f.get("day_closed")
-        # Attach the live decision (if any) by flag_identity, computed from the
-        # flag's own fields — never from `name`, which is unstable across the
-        # provisional/final rename (attendance_flag.py:53-71, Global Constraint 2).
-        identity = flag_identity(
-            employee=employee,
-            attendance_date=key,
-            flag_code=f.get("flag_code"),
-            evidence=f.get("evidence"),
-        )
-        decision = decisions_by_identity.get(identity)
-        if decision is None:
-            decision_state = "undecided"
-        elif evidence_fingerprint(f.get("evidence")) == decision.get("evidence_fingerprint"):
-            decision_state = "matched"
+        source = (f.get("source") or "").upper()
+        if source == "AUTO":
+            # Attach the live decision (if any) by flag_identity, computed from the
+            # flag's own fields — never from `name`, which is unstable across the
+            # provisional/final rename (attendance_flag.py:53-71, Global Constraint 2).
+            identity = flag_identity(
+                employee=employee,
+                attendance_date=key,
+                flag_code=f.get("flag_code"),
+                evidence=f.get("evidence"),
+            )
+            decision = decisions_by_identity.get(identity)
+            if decision is None:
+                decision_state = "undecided"
+            elif evidence_fingerprint(f.get("evidence")) == decision.get("evidence_fingerprint"):
+                decision_state = "matched"
+            else:
+                # Evidence moved under the decision (e.g. HR corrected the punch that
+                # produced it). Same match/mismatch rule flag_grouping.build_queue
+                # uses for the triage queue, so this surface and that one can never
+                # disagree about the same flag_identity.
+                decision_state = "needs_re_review"
         else:
-            # Evidence moved under the decision (e.g. HR corrected the punch that
-            # produced it). Same match/mismatch rule flag_grouping.build_queue
-            # uses for the triage queue, so this surface and that one can never
-            # disagree about the same flag_identity.
-            decision_state = "needs_re_review"
+            # HR/EMPLOYEE-created rows are never AUTO, but flag_identity() always
+            # prefixes "AUTO-" (flag_identity.py:181) — computing one here would
+            # risk colliding with an unrelated engine-generated flag for the same
+            # employee/date/code. flag_queue_api._flag_rows filters source == "AUTO"
+            # for the identical reason (flag_queue_api.py:102-105).
+            decision, decision_state = None, "undecided"
+
+        if decision is not None and not hr_view:
+            # Allowlist, never `pop()`/`del`: a field the doctype gains later then
+            # defaults to hidden rather than leaking, the same reason
+            # flag_queue_api._open_alert_rows rebuilds its card field by field
+            # instead of passing the row through. decision_state stays truthful
+            # either way — redacting the whole attachment instead would make an
+            # excused flag falsely report "undecided" in the employee's own view.
+            decision = {"outcome": decision.get("outcome"), "decided_at": decision.get("decided_at")}
+
         flags_by_day_raw[key].append(
             {
                 **f,
