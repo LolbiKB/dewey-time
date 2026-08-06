@@ -42,6 +42,12 @@ export const queryKeys = {
     all: ["coverage"] as const,
   },
 
+  flags: {
+    all: ["flags"] as const,
+    queue: (startDate: string, endDate: string, tier: string | null) =>
+      [...queryKeys.flags.all, "queue", startDate, endDate, tier ?? "all"] as const,
+  },
+
   maintenance: {
     all: ["maintenance"] as const,
     employeeClearPreview: (employee: string) =>
