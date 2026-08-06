@@ -75,7 +75,8 @@
     {
       "fieldname": "attendance_date",
       "fieldtype": "Date",
-      "label": "Attendance Date"
+      "label": "Attendance Date",
+      "search_index": 1
     },
     {
       "fieldname": "flag_section",
@@ -86,7 +87,8 @@
       "fieldname": "flag_code",
       "fieldtype": "Select",
       "label": "Flag Code",
-      "options": "NON_PRIMARY_SITE_PUNCH\nLATE_START\nLATE_FROM_LUNCH\nLEFT_EARLY\nMISSING_TIME\nATTENDANCE_ISSUE\nNO_CHECKIN_YET\nOFF_SHIFT_PUNCH\nMISSING_IN_OR_OUT\nMISSING_LUNCH\nUNNOTIFIED_ABSENCE\nUNKNOWN_DEVICE_BRANCH\nDELIVERY_FAILED"
+      "options": "NON_PRIMARY_SITE_PUNCH\nLATE_START\nLATE_FROM_LUNCH\nLEFT_EARLY\nMISSING_TIME\nATTENDANCE_ISSUE\nNO_CHECKIN_YET\nOFF_SHIFT_PUNCH\nMISSING_IN_OR_OUT\nMISSING_LUNCH\nUNNOTIFIED_ABSENCE\nUNKNOWN_DEVICE_BRANCH\nDELIVERY_FAILED",
+      "search_index": 1
     },
     {
       "fieldname": "severity",
@@ -103,8 +105,10 @@
     {
       "fieldname": "status",
       "fieldtype": "Select",
-      "label": "Status",
-      "options": "OPEN\nEXPLAINED\nAPPROVED\nREJECTED\nCLOSED"
+      "label": "(deprecated) Status",
+      "options": "OPEN\nEXPLAINED\nAPPROVED\nREJECTED\nCLOSED",
+      "search_index": 1,
+      "read_only": 1
     },
     {
       "fieldname": "day_closed",
@@ -160,18 +164,21 @@
     {
       "fieldname": "hr_note",
       "fieldtype": "Text",
-      "label": "HR Note"
+      "label": "(deprecated) HR Note",
+      "read_only": 1
     },
     {
       "fieldname": "hr_user",
       "fieldtype": "Link",
-      "label": "HR User",
-      "options": "User"
+      "label": "(deprecated) HR User",
+      "options": "User",
+      "read_only": 1
     },
     {
       "fieldname": "hr_decided_at",
       "fieldtype": "Datetime",
-      "label": "HR Decided At"
+      "label": "(deprecated) HR Decided At",
+      "read_only": 1
     },
     {
       "fieldname": "status_changed_by",
@@ -191,7 +198,7 @@
   "issingle": 0,
   "istable": 0,
   "links": [],
-  "modified": "2026-07-30 18:00:00.000000",
+  "modified": "2026-08-05 12:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Attendance Flag",

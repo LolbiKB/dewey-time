@@ -128,39 +128,39 @@ export function flagHrGuidance(flag: Flag): string {
   const provisional = flagIsProvisional(flag);
 
   if (status === "APPROVED") {
-    return "This flag has been approved in Desk. No further action is required unless payroll policy changes.";
+    return "This flag was excused. No further action is required unless payroll policy changes.";
   }
   if (status === "REJECTED") {
-    return "This flag was rejected in Desk. Review the HR note on the Attendance Flag record for context.";
+    return "This flag was upheld. Review the note on the decision for context.";
   }
   if (status === "EXPLAINED") {
-    return "The employee submitted an explanation. Review it in Desk and approve or reject the flag.";
+    return "The employee submitted an explanation. Review it in the flag queue and decide to excuse or uphold the flag.";
   }
   if (status === "CLOSED") {
     return "This flag is closed. It remains visible for audit but does not need action.";
   }
 
   if (provisional) {
-    return "This flag is still provisional and may change or disappear after device closeout. Use the timeline below to verify punches, then review again after closeout if it remains.";
+    return "This flag is still provisional and may change or disappear after device closeout. Use the timeline below to verify punches, then check the flag queue again after closeout if it remains.";
   }
 
   switch (flag.flag_code) {
     case "UNNOTIFIED_ABSENCE":
-      return "Confirm whether the employee was on approved leave, holiday, or an excused absence. If not, follow your no-show process and record the decision in Desk.";
+      return "Confirm whether the employee was on approved leave, holiday, or an excused absence. If not, follow your no-show process and record the decision in the flag queue.";
     case "OFF_SHIFT_PUNCH":
-      return "Check whether the punches were expected (for example overtime or a schedule error). If valid, document the reason in Desk; otherwise note the off-shift activity.";
+      return "Check whether the punches were expected (for example overtime or a schedule error). Record the outcome — excused or upheld — in the flag queue.";
     case "MISSING_TIME":
     case "LATE_START":
     case "LATE_FROM_LUNCH":
     case "LEFT_EARLY":
-      return "Compare the supporting details with the day timeline. If the issue is valid, leave the flag open or add an HR note in Desk; if excused, approve or close the flag there.";
+      return "Compare the supporting details with the day timeline, then decide to excuse or uphold this flag in the flag queue.";
     case "ATTENDANCE_ISSUE":
     case "MISSING_IN_OR_OUT":
     case "DELIVERY_FAILED":
     case "UNKNOWN_DEVICE_BRANCH":
-      return "This is a data-quality issue. Verify punches in the timeline and Desk, correct check-ins if needed, then resolve the flag in Desk.";
+      return "This is a data-quality issue. Verify punches in the timeline, then decide in the flag queue whether the underlying time still counts.";
     default:
-      return "Open the Attendance Flag in Desk to add an HR note, approve, reject, or close this issue.";
+      return "Review the supporting details, then excuse or uphold this flag in the flag queue.";
   }
 }
 
