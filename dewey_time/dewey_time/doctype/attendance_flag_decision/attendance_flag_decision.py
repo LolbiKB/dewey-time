@@ -7,6 +7,14 @@ from frappe.model.document import Document
 # append-only, and the way to correct a decision is to decide the flag again, which
 # inserts a new row and supersedes this one (flag_decision_api._write_decision).
 #
+# `employee_branch` is in the list even though nothing reads it back off a decision
+# row today. It is written at insert from branch_by_employee
+# (flag_decision_api.py:252) as a denormalisation so cause grouping never has to
+# join Employee, which makes it part of what was recorded — and a Desk edit would
+# rewrite this decision's branch attribution while leaving decided_by/decided_at
+# pointing at whoever originally decided. That is the misattribution this guard
+# exists to stop, whether or not a reader happens to consume the field yet.
+#
 # Without this guard a Desk edit — HR User and HR Manager both hold write:1, and
 # outcome/reason/note are ordinary editable fields — rewrites a verdict while
 # KEEPING the original decided_by/decided_at, i.e. attributes one person's change
@@ -23,6 +31,7 @@ IMMUTABLE_FIELDS = (
     "employee",
     "attendance_date",
     "flag_code",
+    "employee_branch",
     "outcome",
     "reason",
     "note",

@@ -211,6 +211,11 @@ class TestAttendanceFlagDecisionImmutability(unittest.TestCase):
         ("employee", "HR-EMP-00002"),
         ("attendance_date", date(2026, 8, 2)),
         ("flag_code", "LEFT_EARLY"),
+        # Nothing reads employee_branch back off a decision row today — it is a
+        # denormalisation written at insert so cause grouping never joins Employee
+        # — but it is part of what was recorded, and rewriting it would change this
+        # decision's branch attribution under the original decider's name.
+        ("employee_branch", "Siem Reap Depot"),
         ("outcome", "UPHELD"),
         ("reason", "GENUINE_VIOLATION"),
         ("note", "Actually, no."),
