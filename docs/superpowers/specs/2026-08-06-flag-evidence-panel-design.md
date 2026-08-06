@@ -61,7 +61,8 @@ Nothing becomes unreachable. Things stop being the first thing HR reads.
 |---|---|---|---|---|
 | `LATE_START` | default | Clocked in at {first_in} — {n} minutes late, even after a {grace}-minute grace period. | Clocked in · Cutoff · Past cutoff | **Yes** — start boundary + threshold |
 | `LATE_START` | grace = 0 | Clocked in at {first_in} — {n} minutes after the {shift_start} shift start. | Clocked in · Shift start · Late by | **Yes** — same, no threshold line |
-| `LEFT_EARLY` | default | Clocked out at {last_out}, {n} minutes before their shift was scheduled to end. | Clocked out · Shift end · Early by | **Yes** — trailing hatched gap |
+| `LEFT_EARLY` | default | Clocked out at {last_out} — {n} minutes past the {early_threshold} cutoff, even after a {grace}-minute grace period. | Clocked out · Cutoff · Past cutoff | **Yes** — trailing hatched gap |
+| `LEFT_EARLY` | grace = 0 | Clocked out at {last_out} — {n} minutes before the {shift_end} shift end. | Clocked out · Shift end · Early by | **Yes** — same, no threshold line |
 | `LATE_FROM_LUNCH` | default | Left for lunch at {out}, back at {in} — {n} min past the return deadline. | Actual lunch · Scheduled · Deadline · Late by | **Yes** — scheduled band + overshooting gap |
 | `MISSING_TIME` | default | Gone from {start} to {end} — {duration} unaccounted, {lunch_relationship}. | Gap · Left · Back · Lunch window | **Yes** — hatched gap against lunch band |
 | `UNNOTIFIED_ABSENCE` | device closeout | Scheduled for the {shift} shift, but never checked in — zero punches all day. | Shift · Punches (0) · Caught by | **Yes** — empty hatched band |
@@ -74,6 +75,16 @@ Nothing becomes unreachable. Things stop being the first thing HR reads.
 | `ATTENDANCE_ISSUE` | `unknown_device_branch` | {n} punches today came from a device that didn't report which site it's at. | Unlabelled punches | **Yes** — marked punches |
 | `ATTENDANCE_ISSUE` | `delivery_failed` | Device {device_sn} recorded a punch that never reached HR's records. | Reported by · Badge | **No** |
 | `MISSING_IN_OR_OUT`, `NO_CHECKIN_YET`, `MISSING_LUNCH` | no detector | "{label}" isn't a rule this engine currently checks automatically. | Raised by · Recorded reason | **No** |
+
+**Amendment (2026-08-06, during Task 2).** `LEFT_EARLY` originally read "Clocked out at
+{last_out}, {n} minutes before their shift was scheduled to end" with facts
+Clocked out · Shift end · Early by. That is internally inconsistent: `{n}` is measured
+against `early_threshold` (the grace-adjusted cutoff), not against `shift_end`, so the
+headline and the fact rows disagree by exactly the grace period — 5:00 PM shift end,
+10-minute grace and a 4:37 PM clock-out gave "13 minutes" in the headline beside facts
+whose own subtraction says 23. `LEFT_EARLY` now mirrors `LATE_START`, which already had
+this right: name the cutoff, measure against it, and split on grace = 0. `{n}` stays
+measured from `early_threshold` — that is the violation the engine actually flagged.
 
 Emission sites for the implementer: `closeout.py:619-628` (LATE_START), `:656-674`
 (LEFT_EARLY), `:524`/`:559` (OFF_SHIFT_PUNCH's two reasons), `:589` and `:301-313`
