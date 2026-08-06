@@ -45,6 +45,7 @@ import {
   formatDurationMinutes,
   minutesFromDateTime,
   parseDateTimeLocal,
+  parseTimeToMinutes,
 } from "@/lib/attendanceTime";
 import { sortCheckinsByTime } from "@/lib/attendancePunches";
 import { formatFlagLabel, parseFlagEvidence, type FlagEvidence } from "@/lib/flagLabels";
@@ -310,6 +311,7 @@ type BoundaryEvidence = {
   late_threshold?: string;
   early_threshold?: string;
   effective_start_grace_minutes?: number;
+  effective_end_grace_minutes?: number;
   lunch_out?: string;
   lunch_in?: string;
   lunch_start?: string;
@@ -363,9 +365,62 @@ function pluralMinutes(n: number): string {
   return n === 1 ? "minute" : "minutes";
 }
 
-/** flag.evidence is `unknown`; parseFlagEvidence only narrows it to the generic FlagEvidence shape. */
-function readBoundaryEvidence(flag: Flag): BoundaryEvidence {
-  return (parseFlagEvidence(flag.evidence) ?? {}) as unknown as BoundaryEvidence;
+/** Narrows an already-parsed generic evidence blob to the boundary-flag shape. */
+function readBoundaryEvidence(evidence: NarrativeEvidence): BoundaryEvidence {
+  return evidence as unknown as BoundaryEvidence;
+}
+
+/**
+ * The fallback a boundary builder takes when the evidence keys its own story
+ * depends on are absent — e.g. an empty `{}` blob. Without this, a builder that
+ * pushes straight through renders a confident-looking sentence built entirely
+ * from `formatCheckinTime`/`formatDurationMinutes`'s missing-value placeholders
+ * ("Clocked in at — — 0 minutes after the — shift start."), which is worse than
+ * `emittedFallbackNarrative`'s honest "no story yet" treatment.
+ */
+function boundaryFallback(
+  flag: Flag,
+  evidence: NarrativeEvidence,
+  day: NarrativeDay,
+  dateKey: string
+): FlagNarrative {
+  return emittedFallbackNarrative({
+    flag,
+    evidence,
+    reason: evidenceReason(evidence),
+    day,
+    dateKey,
+  });
+}
+
+/** True when the shift's scheduled end clock-time is earlier than its start (crosses midnight). */
+function isOvernightShift(shift: ShiftContext | null | undefined): boolean {
+  if (!shift?.shift_assigned) return false;
+  const startMin = parseTimeToMinutes(shift.start_time ?? null);
+  const endMin = parseTimeToMinutes(shift.end_time ?? null);
+  return startMin != null && endMin != null && endMin < startMin;
+}
+
+/**
+ * Rolls a minute-of-day anchor onto the following calendar day when it reads
+ * earlier than the overnight shift's start.
+ *
+ * computeExpectedWindowPct returns null for an overnight shift (end < start,
+ * shiftTimeline.ts:190), so an evidence-derived boundary like `shift_end` or
+ * `early_threshold` decodes through `minutesFromDateTime` to a small
+ * minute-of-day (06:00 -> 360) even though it actually falls on the calendar
+ * day AFTER the shift started. Left unnormalised, that 360 reads as "before" a
+ * late-evening departure (23:40 -> 1420), so the gap-span guard
+ * (`shiftEndMin > departureMin`) silently fails and the window's margin math
+ * spans nearly the whole day instead of the ~90 minutes around the boundary.
+ */
+function normalizeOvernightAnchor(
+  min: Minute | null,
+  shiftStartMin: Minute | null,
+  overnight: boolean
+): Minute | null {
+  if (min == null || !overnight || shiftStartMin == null) return min;
+  return min < shiftStartMin ? min + 24 * 60 : min;
 }
 
 function buildLateStartTimeline(
@@ -410,7 +465,15 @@ function buildLateStartTimeline(
 }
 
 function buildLateStartNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
-  const evidence = readBoundaryEvidence(flag);
+  const genericEvidence = readEvidence(flag);
+  const evidence = readBoundaryEvidence(genericEvidence);
+  // Finding 2: without this, an evidence blob missing the arrival/cutoff pair
+  // (e.g. `{}`) falls through to a confident-looking sentence built from
+  // formatCheckinTime/formatDurationMinutes's own "—"/"0 minutes" placeholders.
+  if (!evidence.first_in || !evidence.late_threshold) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
   const grace = evidence.effective_start_grace_minutes ?? 0;
   const firstInLabel = formatCheckinTime(evidence.first_in);
   const lateMinutes = minutesBetweenIso(evidence.first_in, evidence.late_threshold);
@@ -420,18 +483,23 @@ function buildLateStartNarrative(flag: Flag, day: NarrativeDay, dateKey: string)
       ? `Clocked in at ${firstInLabel} — ${lateMinutes} ${pluralMinutes(lateMinutes)} late, even after a ${grace}-minute grace period.`
       : `Clocked in at ${firstInLabel} — ${lateMinutes} ${pluralMinutes(lateMinutes)} after the ${formatCheckinTime(evidence.shift_start)} shift start.`;
 
-  const facts: FlagFact[] =
+  // Finding 1: values route through evidenceTimeText (null on a missing/
+  // unparsable field) rather than formatCheckinTime ("—" on the same input),
+  // so fact()/buildFacts() can actually drop a row with nothing to say instead
+  // of rendering a dash. `shift_start` in particular is not covered by the
+  // guard above and can still be absent here.
+  const facts =
     grace > 0
-      ? [
-          { label: "Clocked in", value: firstInLabel },
-          { label: "Cutoff", value: formatCheckinTime(evidence.late_threshold) },
-          { label: "Past cutoff", value: formatDurationMinutes(lateMinutes) },
-        ]
-      : [
-          { label: "Clocked in", value: firstInLabel },
-          { label: "Shift start", value: formatCheckinTime(evidence.shift_start) },
-          { label: "Late by", value: formatDurationMinutes(lateMinutes) },
-        ];
+      ? buildFacts([
+          fact("Clocked in", evidenceTimeText(evidence.first_in)),
+          fact("Cutoff", evidenceTimeText(evidence.late_threshold)),
+          fact("Past cutoff", formatDurationMinutes(lateMinutes)),
+        ])
+      : buildFacts([
+          fact("Clocked in", evidenceTimeText(evidence.first_in)),
+          fact("Shift start", evidenceTimeText(evidence.shift_start)),
+          fact("Late by", formatDurationMinutes(lateMinutes)),
+        ]);
 
   return {
     headline,
@@ -444,13 +512,26 @@ function buildLateStartNarrative(flag: Flag, day: NarrativeDay, dateKey: string)
 function buildLeftEarlyTimeline(day: NarrativeDay, evidence: BoundaryEvidence): FlagTimelineSpec {
   const sorted = sortCheckinsByTime(day.checkins, parseDateTimeLocal);
   const last = sorted[sorted.length - 1];
-  const departureMin = last
-    ? minutesFromDateTime(last.time)
-    : minutesFromDateTime(evidence.last_out);
+  let departureMin = last ? minutesFromDateTime(last.time) : minutesFromDateTime(evidence.last_out);
 
   const band = day.shift ? toMinuteRange(computeExpectedWindowPct(day.shift)) : null;
-  const shiftEndMin = band?.endMin ?? minutesFromDateTime(evidence.shift_end);
-  const thresholdMin = minutesFromDateTime(evidence.early_threshold);
+  let shiftEndMin = band?.endMin ?? minutesFromDateTime(evidence.shift_end);
+  let thresholdMin = minutesFromDateTime(evidence.early_threshold);
+
+  // Finding 5: an overnight shift has no `band` (computeExpectedWindowPct
+  // returns null for end < start), so shiftEndMin/thresholdMin fall back to
+  // raw minute-of-day values that read as "before" a late-evening departure
+  // once the shift crosses midnight. Roll every anchor that lands before the
+  // shift's start clock-time onto the departure's timeline — including
+  // departureMin itself, so a departure that is ALSO past midnight (an early
+  // 1am walkout, rather than the late-evening case) stays on the same frame
+  // as the normalised shiftEndMin/thresholdMin instead of anchoring a bogus
+  // multi-day span.
+  const overnight = isOvernightShift(day.shift);
+  const shiftStartMin = parseTimeToMinutes(day.shift?.start_time ?? null);
+  departureMin = normalizeOvernightAnchor(departureMin, shiftStartMin, overnight);
+  shiftEndMin = normalizeOvernightAnchor(shiftEndMin, shiftStartMin, overnight);
+  thresholdMin = normalizeOvernightAnchor(thresholdMin, shiftStartMin, overnight);
 
   const spans: TimelineSpan[] = [];
   if (departureMin != null && shiftEndMin != null && shiftEndMin > departureMin) {
@@ -471,17 +552,44 @@ function buildLeftEarlyTimeline(day: NarrativeDay, evidence: BoundaryEvidence): 
 }
 
 function buildLeftEarlyNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
-  const evidence = readBoundaryEvidence(flag);
+  const genericEvidence = readEvidence(flag);
+  const evidence = readBoundaryEvidence(genericEvidence);
+  // Finding 2: mirrors buildLateStartNarrative's guard — an evidence blob
+  // missing the departure/cutoff pair must not reach a confidently-worded
+  // sentence built from placeholder "—"/"0 minutes" values.
+  if (!evidence.last_out || !evidence.early_threshold) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
+  // Finding 3: mirrors buildLateStartNarrative's two-branch shape exactly —
+  // read the grace from the explicit effective_end_grace_minutes key (never
+  // the grace_minutes alias, constraint 4), and measure earlyMinutes against
+  // early_threshold — the boundary the engine actually flagged against — in
+  // BOTH branches, so the headline number and the facts number never disagree
+  // the way the previous "Shift end" + early_threshold-derived magnitude did.
+  const grace = evidence.effective_end_grace_minutes ?? 0;
   const lastOutLabel = formatCheckinTime(evidence.last_out);
   const earlyMinutes = minutesBetweenIso(evidence.early_threshold, evidence.last_out);
 
-  const headline = `Clocked out at ${lastOutLabel}, ${earlyMinutes} ${pluralMinutes(earlyMinutes)} before their shift was scheduled to end.`;
+  const headline =
+    grace > 0
+      ? `Clocked out at ${lastOutLabel} — ${earlyMinutes} ${pluralMinutes(earlyMinutes)} past the ${formatCheckinTime(evidence.early_threshold)} cutoff, even after a ${grace}-minute grace period.`
+      : `Clocked out at ${lastOutLabel} — ${earlyMinutes} ${pluralMinutes(earlyMinutes)} before the ${formatCheckinTime(evidence.shift_end)} shift end.`;
 
-  const facts: FlagFact[] = [
-    { label: "Clocked out", value: lastOutLabel },
-    { label: "Shift end", value: formatCheckinTime(evidence.shift_end) },
-    { label: "Early by", value: formatDurationMinutes(earlyMinutes) },
-  ];
+  // Finding 1: evidenceTimeText (null on missing/unparsable) feeds fact(), so
+  // a missing `shift_end` drops the row instead of rendering "Shift end: —".
+  const facts =
+    grace > 0
+      ? buildFacts([
+          fact("Clocked out", evidenceTimeText(evidence.last_out)),
+          fact("Cutoff", evidenceTimeText(evidence.early_threshold)),
+          fact("Past cutoff", formatDurationMinutes(earlyMinutes)),
+        ])
+      : buildFacts([
+          fact("Clocked out", evidenceTimeText(evidence.last_out)),
+          fact("Shift end", evidenceTimeText(evidence.shift_end)),
+          fact("Early by", formatDurationMinutes(earlyMinutes)),
+        ]);
 
   return {
     headline,
@@ -526,22 +634,36 @@ function buildLateFromLunchTimeline(day: NarrativeDay, evidence: BoundaryEvidenc
 }
 
 function buildLateFromLunchNarrative(flag: Flag, day: NarrativeDay, dateKey: string): FlagNarrative {
-  const evidence = readBoundaryEvidence(flag);
+  const genericEvidence = readEvidence(flag);
+  const evidence = readBoundaryEvidence(genericEvidence);
+  // Finding 2: mirrors the other two builders' guard — without the out/in/
+  // deadline trio, there is no lunch-return story to state confidently.
+  if (!evidence.lunch_out || !evidence.lunch_in || !evidence.return_threshold) {
+    return boundaryFallback(flag, genericEvidence, day, dateKey);
+  }
+
   const outLabel = formatCheckinTime(evidence.lunch_out);
   const inLabel = formatCheckinTime(evidence.lunch_in);
   const lateMinutes = minutesBetweenIso(evidence.lunch_in, evidence.return_threshold);
 
-  const headline = `Left for lunch at ${outLabel}, back at ${inLabel} — ${lateMinutes} min past the return deadline.`;
+  // Copy consistency: spell out "minutes" like the other two headlines rather
+  // than abbreviating to "min".
+  const headline = `Left for lunch at ${outLabel}, back at ${inLabel} — ${lateMinutes} ${pluralMinutes(lateMinutes)} past the return deadline.`;
 
-  const facts: FlagFact[] = [
-    { label: "Actual lunch", value: `${outLabel} – ${inLabel}` },
-    {
-      label: "Scheduled",
-      value: `${formatCheckinTime(evidence.lunch_start)} – ${formatCheckinTime(evidence.lunch_end)}`,
-    },
-    { label: "Deadline", value: formatCheckinTime(evidence.return_threshold) },
-    { label: "Late by", value: formatDurationMinutes(lateMinutes) },
-  ];
+  // Finding 1: "Scheduled" reads lunch_start/lunch_end through evidenceTimeText
+  // so a missing half of the pair drops the whole fact instead of rendering a
+  // dash inside the range string.
+  const scheduledStart = evidenceTimeText(evidence.lunch_start);
+  const scheduledEnd = evidenceTimeText(evidence.lunch_end);
+  const scheduledValue =
+    scheduledStart != null && scheduledEnd != null ? `${scheduledStart} – ${scheduledEnd}` : null;
+
+  const facts = buildFacts([
+    fact("Actual lunch", `${outLabel} – ${inLabel}`),
+    fact("Scheduled", scheduledValue),
+    fact("Deadline", evidenceTimeText(evidence.return_threshold)),
+    fact("Late by", formatDurationMinutes(lateMinutes)),
+  ]);
 
   return {
     headline,

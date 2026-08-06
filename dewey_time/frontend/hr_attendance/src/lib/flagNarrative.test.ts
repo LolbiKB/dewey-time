@@ -439,7 +439,7 @@ test("flagNarrative: LATE_START timeline covers only the start boundary and firs
   assert.ok(timeline.window.endMin < timeline.band!.endMin);
 });
 
-test("flagNarrative: LEFT_EARLY states the raw shift end and folds grace into the magnitude, not a headline clause", () => {
+test("flagNarrative: LEFT_EARLY with grace states the cutoff, not the raw shift end, and measures against early_threshold in both the headline and the facts", () => {
   const leftEarly = boundaryFlag("LEFT_EARLY", {
     last_out: "2026-08-03T16:37:00",
     shift_end: "2026-08-03T17:00:00",
@@ -453,19 +453,21 @@ test("flagNarrative: LEFT_EARLY states the raw shift end and folds grace into th
 
   const narrative = flagNarrative(leftEarly, d, DATE_KEY);
 
-  // Unlike LATE_START, the design gives LEFT_EARLY a single headline shape — the
-  // grace figure never appears as a clause here, only folded into "Early by".
+  // Mirrors buildLateStartNarrative's grace>0 shape: the headline and the
+  // "Past cutoff" fact both measure against early_threshold, so the two
+  // numbers can never disagree the way "Shift end" + an early_threshold-based
+  // magnitude used to.
   assert.equal(
     narrative.headline,
-    "Clocked out at 4:37 PM, 13 minutes before their shift was scheduled to end."
+    "Clocked out at 4:37 PM — 13 minutes past the 4:50 PM cutoff, even after a 10-minute grace period."
   );
   assert.equal(narrative.subline, null);
   assert.deepEqual(narrative.facts, [
     { label: "Clocked out", value: "4:37 PM" },
-    { label: "Shift end", value: "5:00 PM" },
-    { label: "Early by", value: "13m" },
+    { label: "Cutoff", value: "4:50 PM" },
+    { label: "Past cutoff", value: "13m" },
   ]);
-  assert.ok(!narrative.facts.some((f) => /grace/i.test(f.label)));
+  assert.ok(!narrative.facts.some((f) => f.label === "Shift end"));
 
   const timeline = narrative.timeline!;
   assert.deepEqual(timeline.window, { startMin: 952, endMin: 1065 });
@@ -474,6 +476,104 @@ test("flagNarrative: LEFT_EARLY states the raw shift end and folds grace into th
   assert.equal(timeline.threshold, 1010);
   assert.deepEqual(timeline.spans, [{ startMin: 997, endMin: 1020, tone: "gap" }]);
   assert.deepEqual(timeline.marks, [{ atMin: 997, tone: "alert", label: "Clocked out" }]);
+});
+
+test("flagNarrative: LEFT_EARLY with zero grace names the shift end instead of a redundant cutoff", () => {
+  const leftEarly = boundaryFlag("LEFT_EARLY", {
+    last_out: "2026-08-03T16:45:00",
+    shift_end: "2026-08-03T17:00:00",
+    early_threshold: "2026-08-03T17:00:00",
+    effective_end_grace_minutes: 0,
+    grace_minutes: 0,
+  });
+  const d = day({
+    checkins: [checkin("2026-08-03T08:05:00"), checkin("2026-08-03T16:45:00")],
+  });
+
+  const narrative = flagNarrative(leftEarly, d, DATE_KEY);
+
+  assert.equal(
+    narrative.headline,
+    "Clocked out at 4:45 PM — 15 minutes before the 5:00 PM shift end."
+  );
+  assert.deepEqual(narrative.facts, [
+    { label: "Clocked out", value: "4:45 PM" },
+    { label: "Shift end", value: "5:00 PM" },
+    { label: "Early by", value: "15m" },
+  ]);
+  assert.ok(!narrative.facts.some((f) => f.label === "Cutoff"));
+});
+
+// Finding 1: a fact built directly from formatCheckinTime(undefined) would
+// render {label: "Shift end", value: "—"} — the exact dash row buildFacts/
+// fact() exist to suppress. Routing through evidenceTimeText instead means a
+// non-essential evidence field missing from an otherwise-complete blob drops
+// the row instead of rendering a placeholder dash.
+test("flagNarrative: LEFT_EARLY with zero grace and no shift_end in evidence drops the row instead of rendering a dash", () => {
+  const leftEarly = boundaryFlag("LEFT_EARLY", {
+    last_out: "2026-08-03T16:45:00",
+    early_threshold: "2026-08-03T17:00:00",
+    effective_end_grace_minutes: 0,
+    // shift_end deliberately absent — last_out and early_threshold (the
+    // guard's required pair) are still present.
+  });
+  const d = day({ checkins: [checkin("2026-08-03T16:45:00")] });
+
+  const narrative = flagNarrative(leftEarly, d, DATE_KEY);
+
+  assert.ok(
+    !narrative.facts.some((f) => f.value === "—"),
+    "a dash reached a fact row instead of being dropped",
+  );
+  assert.ok(!narrative.facts.some((f) => f.label === "Shift end"));
+  assert.deepEqual(
+    narrative.facts.map((f) => f.label),
+    ["Clocked out", "Early by"],
+  );
+});
+
+// Finding 5: computeExpectedWindowPct returns null for an overnight shift
+// (end < start), so shiftEndMin/thresholdMin fall back to raw minute-of-day
+// values that read as "before" a late-evening departure once the shift rolls
+// past midnight (06:00 -> 360, below a 23:40 departure at 1420). Left
+// unnormalised the gap span is silently dropped and the window spans ~19
+// hours instead of the ~90 minutes around the boundary.
+test("flagNarrative: LEFT_EARLY normalises an overnight shift's end and threshold past midnight so the gap span survives the rollover", () => {
+  const overnightShift: ShiftContext = {
+    shift_assigned: true,
+    start_time: "22:00",
+    end_time: "06:00",
+    grace_minutes: 10,
+    lunch_start: null,
+    lunch_end: null,
+  };
+  const leftEarly = boundaryFlag("LEFT_EARLY", {
+    last_out: "2026-08-03T23:40:00",
+    shift_end: "2026-08-04T06:00:00",
+    early_threshold: "2026-08-04T05:50:00",
+    effective_end_grace_minutes: 10,
+  });
+  const d = day({
+    shift: overnightShift,
+    checkins: [checkin("2026-08-03T22:05:00"), checkin("2026-08-03T23:40:00")],
+  });
+
+  const timeline = flagNarrative(leftEarly, d, DATE_KEY).timeline!;
+
+  // computeExpectedWindowPct returns null for this shift (end < start), so
+  // band stays null — the fix normalises the raw minute-of-day fallbacks
+  // instead of relying on a band that cannot exist for an overnight shift.
+  assert.equal(timeline.band, null);
+  // departureMin (23:40 -> 1420) stays put — it is already on the shift's
+  // start-day side of midnight — while shiftEndMin (06:00 next day -> raw 360)
+  // and thresholdMin (05:50 next day -> raw 350) roll onto the same frame:
+  // 360 + 1440 = 1800, 350 + 1440 = 1790.
+  assert.deepEqual(timeline.spans, [{ startMin: 1420, endMin: 1800, tone: "gap" }]);
+  assert.deepEqual(timeline.marks, [{ atMin: 1420, tone: "alert", label: "Clocked out" }]);
+  assert.equal(timeline.threshold, 1790);
+  // Pre-fix this window spanned ~19 hours (305 to the 1440 clamp) because the
+  // un-normalised anchors mixed pre- and post-midnight minute-of-day values.
+  assert.deepEqual(timeline.window, { startMin: 1375, endMin: 1440 });
 });
 
 test("flagNarrative: LATE_FROM_LUNCH draws both the scheduled band and the observed overshoot", () => {
@@ -508,7 +608,7 @@ test("flagNarrative: LATE_FROM_LUNCH draws both the scheduled band and the obser
 
   assert.equal(
     narrative.headline,
-    "Left for lunch at 12:05 PM, back at 1:23 PM — 13 min past the return deadline."
+    "Left for lunch at 12:05 PM, back at 1:23 PM — 13 minutes past the return deadline."
   );
   assert.deepEqual(narrative.facts, [
     { label: "Actual lunch", value: "12:05 PM – 1:23 PM" },
@@ -530,4 +630,91 @@ test("flagNarrative: LATE_FROM_LUNCH draws both the scheduled band and the obser
     { atMin: 803, tone: "alert", label: "Back" },
   ]);
   assert.deepEqual(timeline.window, { startMin: 675, endMin: 848 });
+});
+
+// Finding 2: emittedFallbackNarrative attaches EMPTY_EVIDENCE_NOTE when
+// hasEvidence(evidence) is false, but that guard is only reachable through
+// flagNarrative()'s existing no-builder path — a boundary builder that pushes
+// straight through with an evidence blob missing its essential keys renders a
+// confident-looking sentence built entirely from formatCheckinTime/
+// formatDurationMinutes's own "—"/"0 minutes" placeholders, with no caveat.
+test("flagNarrative: LATE_START with empty evidence falls back with the empty-evidence caveat instead of a confident dash-filled sentence", () => {
+  const late = boundaryFlag("LATE_START", {});
+  const d = day({ checkins: [checkin("2026-08-03T08:23:00")] });
+
+  const narrative = flagNarrative(late, d, DATE_KEY);
+
+  assert.equal(narrative.headline, "Late start");
+  assert.doesNotMatch(narrative.headline, /—/, "the empty blob must not reach the confident sentence");
+  assert.ok(narrative.subline != null && narrative.subline.includes(EMPTY_EVIDENCE_NOTE));
+  assert.deepEqual(narrative.facts, []);
+  assert.equal(narrative.timeline, null);
+});
+
+// Finding 4: every other timeline test's day.checkins are byte-identical to
+// the evidence timestamps, so a regression that swaps sorted[0].time for
+// evidence.first_in would leave those tests green. Give evidence and the
+// punch list different times and assert the timeline follows the punches.
+test("flagNarrative: LATE_START timeline follows the day's punch list, not the frozen evidence.first_in", () => {
+  const late = boundaryFlag("LATE_START", {
+    // Evidence says one thing (frozen at closeout)...
+    first_in: "2026-08-03T09:00:00",
+    shift_start: "2026-08-03T08:00:00",
+    late_threshold: "2026-08-03T08:10:00",
+    effective_start_grace_minutes: 10,
+  });
+  const d = day({
+    // ...but the live punch list disagrees (a later correction/backfill).
+    checkins: [checkin("2026-08-03T08:23:00"), checkin("2026-08-03T12:00:00")],
+  });
+
+  const timeline = flagNarrative(late, d, DATE_KEY).timeline!;
+
+  // arrivalMin must come from day.checkins[0] (8:23 AM -> 503), not
+  // evidence.first_in (9:00 AM -> 540).
+  assert.deepEqual(timeline.marks, [{ atMin: 503, tone: "alert", label: "Clocked in" }]);
+  assert.deepEqual(timeline.spans, [
+    { startMin: 480, endMin: 503, tone: "gap" },
+    { startMin: 503, endMin: 720, tone: "worked" },
+  ]);
+});
+
+test("flagNarrative: LATE_FROM_LUNCH timeline follows day.observedLunch, not the frozen evidence lunch pair", () => {
+  const observedLunch: ObservedLunch = {
+    // Observed (re-run against the live punch list) disagrees with evidence below.
+    lunch_out: "2026-08-03T12:10:00",
+    lunch_in: "2026-08-03T13:30:00",
+    minutes: 80,
+    lunch_start: "2026-08-03T12:00:00",
+    lunch_end: "2026-08-03T13:00:00",
+    return_threshold: "2026-08-03T13:10:00",
+    late_return: true,
+  };
+  const lateLunch = boundaryFlag("LATE_FROM_LUNCH", {
+    // Evidence frozen at closeout time — deliberately different from observedLunch.
+    lunch_out: "2026-08-03T12:05:00",
+    lunch_in: "2026-08-03T13:23:00",
+    lunch_start: "2026-08-03T12:00:00",
+    lunch_end: "2026-08-03T13:00:00",
+    return_threshold: "2026-08-03T13:10:00",
+  });
+  const d = day({
+    checkins: [
+      checkin("2026-08-03T08:00:00"),
+      checkin("2026-08-03T12:10:00"),
+      checkin("2026-08-03T13:30:00"),
+      checkin("2026-08-03T17:00:00"),
+    ],
+    observedLunch,
+  });
+
+  const timeline = flagNarrative(lateLunch, d, DATE_KEY).timeline!;
+
+  // outMin/inMin must come from day.observedLunch (12:10 PM -> 730, 1:30 PM ->
+  // 810), not evidence.lunch_out/lunch_in (12:05 PM -> 725, 1:23 PM -> 803).
+  assert.deepEqual(timeline.spans, [{ startMin: 730, endMin: 810, tone: "gap" }]);
+  assert.deepEqual(timeline.marks, [
+    { atMin: 730, tone: "normal", label: "Left for lunch" },
+    { atMin: 810, tone: "alert", label: "Back" },
+  ]);
 });
