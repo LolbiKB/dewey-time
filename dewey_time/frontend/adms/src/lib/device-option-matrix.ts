@@ -1,4 +1,4 @@
-import type { DeviceOptionEntry } from '@/services/device-service'
+import type { DeviceOptionEntry, KeyKind } from '@/services/device-service'
 
 /**
  * The fleet matrix: rows are option keys, columns are terminals.
@@ -38,54 +38,14 @@ export type DriftVerdict =
 /**
  * What KIND of thing a key is — the difference between drift and normality.
  *
- * The first version of this matrix compared everything and reported "10
+ * The first version of this matrix classified keys itself and reported "10
  * differ" on a healthy fleet: serial numbers, MAC addresses, IP addresses and
  * live counters were all flagged as configuration drift. Eight of the ten were
- * keys that MUST differ. Only firmware version and volume were real.
- *
- * Same failure as the capacity view before it — a confident claim on data that
- * does not support one — so keys are classified explicitly here.
+ * keys that MUST differ. The classification now lives on the BRIDGE — the
+ * enforcement point for write eligibility — and the API returns `kind` per
+ * row, so this module consumes it rather than deriving it a second time.
  */
-export type KeyKind =
-  /** Should be uniform across the fleet. Drift here is actionable. */
-  | 'setting'
-  /** Unique per terminal: serial, MAC, IP. */
-  | 'identity'
-  /** Changes with use: counters, free space, the clock. */
-  | 'counter'
-
-/** Unique to each unit. Comparing these produces noise, never a finding. */
-const IDENTITY_KEYS = new Set(
-  ['~SerialNumber', 'IPAddress', 'MAC'].map((k) => k.toLowerCase())
-)
-
-/**
- * Changes as the terminal is used, so a difference says nothing about
- * configuration. FreeFlashSize shrinks with data; FlashSize is the hardware
- * total and stays a setting. MainTime is a clock and differs by the second.
- */
-const COUNTER_KEYS = new Set(
-  [
-    'UserCount', 'FPCount', 'FaceCount', 'FvCount', 'PvCount',
-    'UserPhotoCount', 'UserCardCount', 'ATTPhotoCount', 'TransactionCount',
-    'FreeFlashSize', 'MainTime',
-  ].map((k) => k.toLowerCase())
-)
-
-/**
- * Anything unclassified is treated as a SETTING, so it gets compared.
- *
- * Deliberate direction to fail in: an unknown key that differs shows up as a
- * finding someone can classify away, whereas defaulting to 'counter' would
- * silently hide real drift on every key nobody has thought about yet. Noise is
- * recoverable; silence is not.
- */
-export function classifyKey(key: string): KeyKind {
-  const k = key.trim().toLowerCase()
-  if (IDENTITY_KEYS.has(k)) return 'identity'
-  if (COUNTER_KEYS.has(k)) return 'counter'
-  return 'setting'
-}
+export type { KeyKind } from '@/services/device-service'
 
 export interface MatrixCell {
   /** The device reported this key at all. */
@@ -128,12 +88,17 @@ export function buildOptionMatrix(
 
   const reporting = new Set<string>()
   const byKey = new Map<string, Record<string, MatrixCell>>()
+  const kindByKey = new Map<string, KeyKind>()
 
   for (const e of entries) {
     // Ignore rows for serials the caller did not ask about (e.g. a device
     // deleted or moved to rejected since it last reported).
     if (!deviceSns.includes(e.device_sn)) continue
     reporting.add(e.device_sn)
+    // First reporter wins. Devices agreeing on a key's KIND is not in question —
+    // the bridge classifies by name, so every row for a key carries the same
+    // value. Recording it per key keeps the lookup O(1) below.
+    if (!kindByKey.has(e.key)) kindByKey.set(e.key, e.kind)
 
     let row = byKey.get(e.key)
     if (!row) {
@@ -151,7 +116,9 @@ export function buildOptionMatrix(
       const cells: Record<string, MatrixCell> = {}
       for (const sn of deviceSns) cells[sn] = partial[sn] ?? ABSENT
 
-      const kind = classifyKey(key)
+      // Default 'setting' for the same fail-loud reason the bridge uses: an
+      // unclassified key gets COMPARED rather than silently excluded from drift.
+      const kind = kindByKey.get(key) ?? 'setting'
       return { key, cells, kind, verdict: verdictFor(cells, reportingDevices, kind) }
     })
     .sort((a, b) => a.key.localeCompare(b.key))

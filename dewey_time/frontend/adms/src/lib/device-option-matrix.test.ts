@@ -3,7 +3,6 @@ import {
   buildOptionMatrix,
   countDrift,
   hasDrift,
-  classifyKey,
   groupRowValues,
   deviceDeviations,
   deviceLabel,
@@ -28,12 +27,14 @@ const e = (
   device_sn: string,
   key: string,
   value: string | null,
-  redacted = false
+  redacted = false,
+  kind: 'setting' | 'identity' | 'counter' = 'setting'
 ): DeviceOptionEntry => ({
   device_sn,
   key,
   value,
   redacted,
+  kind,
   reported_at: '2026-08-05T08:05:03.000Z',
 })
 
@@ -181,23 +182,33 @@ const D4 = 'PYA8254100003'
 const FLEET = [D1, D2, D3, D4]
 
 const REAL_FLEET_ROWS: DeviceOptionEntry[] = [
-  ...[D1, D2, D3, D4].map((sn) => e(sn, '~SerialNumber', sn)),
-  ...[['70', D1], ['83', D2], ['67', D3], ['68', D4]].map(([v, sn]) => e(sn, 'FPCount', v)),
-  ...[['5076300', D1], ['5076100', D2], ['5075924', D3], ['5075920', D4]].map(([v, sn]) =>
-    e(sn, 'FreeFlashSize', v)
+  ...[D1, D2, D3, D4].map((sn) => e(sn, '~SerialNumber', sn, false, 'identity')),
+  ...[['70', D1], ['83', D2], ['67', D3], ['68', D4]].map(([v, sn]) =>
+    e(sn, 'FPCount', v, false, 'counter')
   ),
-  e(D1, 'FWVersion', 'ZAM70-NF43VA-Ver3.3.12'),
-  ...[D2, D3, D4].map((sn) => e(sn, 'FWVersion', 'ZAM70-NF43VA-Ver3.3.13')),
+  ...[['5076300', D1], ['5076100', D2], ['5075924', D3], ['5075920', D4]].map(([v, sn]) =>
+    e(sn, 'FreeFlashSize', v, false, 'counter')
+  ),
+  e(D1, 'FWVersion', 'ZAM70-NF43VA-Ver3.3.12', false, 'setting'),
+  ...[D2, D3, D4].map((sn) => e(sn, 'FWVersion', 'ZAM70-NF43VA-Ver3.3.13', false, 'setting')),
   ...[['192.168.1.202', D1], ['192.168.1.132', D2], ['192.168.1.11', D3], ['192.168.1.218', D4]].map(
-    ([v, sn]) => e(sn, 'IPAddress', v)
+    ([v, sn]) => e(sn, 'IPAddress', v, false, 'identity')
   ),
   ...[['00:17:61:12:d0:50', D1], ['00:17:61:12:d0:39', D2], ['00:17:61:11:7b:92', D3], ['00:17:61:10:d8:b6', D4]].map(
-    ([v, sn]) => e(sn, 'MAC', v)
+    ([v, sn]) => e(sn, 'MAC', v, false, 'identity')
   ),
-  ...[['5', D1], ['8', D2], ['116', D3], ['78', D4]].map(([v, sn]) => e(sn, 'TransactionCount', v)),
-  ...[['73', D1], ['85', D2], ['70', D3], ['71', D4]].map(([v, sn]) => e(sn, 'UserCount', v)),
-  ...[['65', D1], ['76', D2], ['65', D3], ['63', D4]].map(([v, sn]) => e(sn, 'UserPhotoCount', v)),
-  ...[['60', D1], ['60', D2], ['20', D3], ['70', D4]].map(([v, sn]) => e(sn, 'VOLUME', v)),
+  ...[['5', D1], ['8', D2], ['116', D3], ['78', D4]].map(([v, sn]) =>
+    e(sn, 'TransactionCount', v, false, 'counter')
+  ),
+  ...[['73', D1], ['85', D2], ['70', D3], ['71', D4]].map(([v, sn]) =>
+    e(sn, 'UserCount', v, false, 'counter')
+  ),
+  ...[['65', D1], ['76', D2], ['65', D3], ['63', D4]].map(([v, sn]) =>
+    e(sn, 'UserPhotoCount', v, false, 'counter')
+  ),
+  ...[['60', D1], ['60', D2], ['20', D3], ['70', D4]].map(([v, sn]) =>
+    e(sn, 'VOLUME', v, false, 'setting')
+  ),
 ]
 
 describe('the real four-terminal fleet', () => {
@@ -238,33 +249,6 @@ describe('the real four-terminal fleet', () => {
   test('still catches inconsistent volume', () => {
     const vol = matrix().rows.find((r) => r.key === 'VOLUME')!
     expect(vol.verdict).toBe('differ')
-  })
-})
-
-describe('classifyKey', () => {
-  test('treats an unknown key as a setting, so it gets compared', () => {
-    // Deliberate direction to fail in: noise is recoverable, silence is not.
-    // Defaulting to 'counter' would hide real drift on every unclassified key.
-    expect(classifyKey('SomeKeyNobodyHasClassified')).toBe('setting')
-    expect(classifyKey('Brightness')).toBe('setting')
-  })
-
-  test('keeps FlashSize a setting while FreeFlashSize is a counter', () => {
-    // Total flash is a hardware fact and should match across identical units;
-    // free flash shrinks with use.
-    expect(classifyKey('FlashSize')).toBe('setting')
-    expect(classifyKey('FreeFlashSize')).toBe('counter')
-  })
-
-  test('treats MainTime as volatile', () => {
-    // A clock differs by the second. It is also the key reporting 1970 on real
-    // hardware, so it must never read as configuration drift.
-    expect(classifyKey('MainTime')).toBe('counter')
-  })
-
-  test('is case-insensitive, since firmware casing is not guaranteed', () => {
-    expect(classifyKey('ipaddress')).toBe('identity')
-    expect(classifyKey('USERCOUNT')).toBe('counter')
   })
 })
 
@@ -338,7 +322,12 @@ describe('deviceDeviations', () => {
   test('ignores identity and counters, which are never anyones fault', () => {
     const sns = ['A', 'B']
     const m = buildOptionMatrix(
-      [e('A', 'MAC', 'x'), e('B', 'MAC', 'y'), e('A', 'UserCount', '1'), e('B', 'UserCount', '99')],
+      [
+        e('A', 'MAC', 'x', false, 'identity'),
+        e('B', 'MAC', 'y', false, 'identity'),
+        e('A', 'UserCount', '1', false, 'counter'),
+        e('B', 'UserCount', '99', false, 'counter'),
+      ],
       sns
     )
     expect(deviceDeviations(m.rows, m.reportingDevices)).toEqual([])

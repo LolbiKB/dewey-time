@@ -23,6 +23,7 @@ const opt = (key: string, value: string | null, redacted = false): DeviceOptionE
   key,
   value,
   redacted,
+  kind: 'setting',
   reported_at: '2026-08-05T08:05:03.000Z',
 })
 
