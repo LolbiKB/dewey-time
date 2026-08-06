@@ -40,6 +40,9 @@ export function describeLastError(code: string | null | undefined): string | nul
   if (code === 'set_not_delivered') {
     return 'The last write never reached the terminal, so nothing was learned about this key'
   }
+  if (code === 'never_answered') {
+    return 'The terminal never answered the last write, so nothing was learned about this key'
+  }
   if (code === 'reload_not_delivered') {
     return 'The terminal took the write but never reloaded its configuration, so the read-back proved nothing'
   }

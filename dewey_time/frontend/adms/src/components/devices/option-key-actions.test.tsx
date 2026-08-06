@@ -191,6 +191,14 @@ describe('describeLastError', () => {
     expect(reload).not.toMatch(/refus/i)
   })
 
+  test('says an unanswered write was never answered, not that it was refused', () => {
+    // The most common abandonment: the terminal was offline. Wording it as a
+    // refusal would send the operator to look at firmware support for the key.
+    const s = describeLastError('never_answered')
+    expect(s).toMatch(/never answered|no answer/i)
+    expect(s).not.toMatch(/refus/i)
+  })
+
   test('passes a device code through rather than inventing prose for it', () => {
     // Appendix 1 codes are the terminal's own words and the only actionable
     // part of a refusal. Never swallow one.
