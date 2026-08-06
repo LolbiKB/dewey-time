@@ -1,3 +1,4 @@
+[pre_model_sync]
 dewey_time.patches.reset_dewey_time_navigation
 dewey_time.patches.remove_broken_hr_workspace
 dewey_time.patches.sync_hr_attendance_assets
