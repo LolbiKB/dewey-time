@@ -114,7 +114,18 @@ class AttendanceFlag(Document):
         evidence = self._parsed_evidence()
         if isinstance(evidence, dict):
             reason = evidence.get("reason") or "issue"
-            punch = evidence.get("punch_time") or ""
+            # `delivery_failed` writes no punch_time (record_issue_flags.py:72-81
+            # carries only reason + undelivered), so before this fallback every
+            # undelivered item in one closeout produced the SAME docname and the
+            # second insert raised DuplicateEntryError. closeout.py's flag loop
+            # has no per-flag isolation, so that raise aborted every remaining
+            # flag for the employee-day. Falling back to the item's own
+            # identifier keeps the names distinct.
+            #
+            # `punch or delivery_key` in that order: a reason that does carry
+            # punch_time is unaffected, so no existing flag is renamed except
+            # the delivery-failure ones this fixes.
+            punch = evidence.get("punch_time") or self._delivery_failed_key() or ""
             return frappe.scrub(f"{reason}-{punch}")[:80]
         return None
 
