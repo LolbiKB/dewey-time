@@ -116,10 +116,10 @@ export function FlagDetailPanel(props: FlagDetailPanelProps) {
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
         {props.showDeskReview !== false ? (
-          <Button size="sm" className="gap-1.5" asChild>
+          <Button variant="link" size="sm" className="gap-1.5 px-0" asChild>
             <a href={flagDeskUrl(flag.name)} target="_blank" rel="noreferrer">
               <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
-              Review in Desk
+              Open record
             </a>
           </Button>
         ) : null}
