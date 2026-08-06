@@ -87,6 +87,8 @@ website_route_rules = [
     {"from_route": "/hr-attendance", "to_route": "hr-attendance"},
     {"from_route": "/hr-schedule/<path:app_path>", "to_route": "hr-schedule"},
     {"from_route": "/hr-schedule", "to_route": "hr-schedule"},
+    {"from_route": "/hr-flags/<path:app_path>", "to_route": "hr-flags"},
+    {"from_route": "/hr-flags", "to_route": "hr-flags"},
 ]
 
 # Ensure dewey_time's custom fields exist on install (and after every upgrade).

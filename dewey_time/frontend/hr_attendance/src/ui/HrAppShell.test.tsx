@@ -4,11 +4,17 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 
-// HrAppShell renders through useCalendarSession (react-query, hits the network)
-// and useIsMobile (reads window.innerWidth) — neither works under plain
-// node:test/renderToStaticMarkup with no DOM available. This file follows the
-// same source-assertion pattern already used for this component in
-// src/lib/queryKeys.test.ts:41-47 rather than mounting it.
+import { activeTab, tabHref } from "@/ui/HrAppShell";
+
+// HrAppShell itself renders through useCalendarSession (react-query, hits the
+// network) and useIsMobile (reads window.innerWidth) — neither works under
+// plain node:test/renderToStaticMarkup with no DOM available. But `activeTab`
+// and `tabHref` are plain, hook-free functions exported for exactly this
+// reason, so those are exercised directly below instead of grepping source.
+// The tabs-array shape (which entries exist, and in what gated block) has no
+// pure-function surface to call, so that part still asserts on source text,
+// following the same pattern already used elsewhere in this file for
+// src/lib/queryKeys.test.ts:41-47-style component wiring.
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SHELL_PATH = resolve(PKG, "src/ui/HrAppShell.tsx");
 
@@ -44,36 +50,47 @@ test("the Flags tab is absent from the tabs array's always-visible head (non-HR 
   );
 });
 
-test("FLAGS_INBOX_URL points at the in-app flag queue, not the retired Desk list view", () => {
+// The header used to carry a second, redundant "Flags" DeskLink (a bare <a>
+// full-page nav) pointed at a FLAGS_INBOX_URL constant. That constant and the
+// link were removed: the HR-only tab added above is the one route to
+// /hr-flags, and Frappe currently has no server route rule that would make a
+// bare <a href="/hr-flags"> land anywhere but a 404 outside the SPA shell.
+test("the redundant header Flags link and FLAGS_INBOX_URL constant are gone", () => {
   const src = shellSource();
-  const match = src.match(/FLAGS_INBOX_URL\s*=\s*"([^"]+)"/);
-  assert.ok(match, "expected a FLAGS_INBOX_URL constant");
-  assert.equal(match![1], "/hr-flags");
-  assert.ok(
-    !match![1].startsWith("/app/"),
-    `FLAGS_INBOX_URL still points at Desk: "${match![1]}"`
+  assert.doesNotMatch(src, /FLAGS_INBOX_URL/, "FLAGS_INBOX_URL should have been removed");
+  assert.doesNotMatch(
+    src,
+    /<DeskLink href=\{FLAGS_INBOX_URL\}/,
+    "the header should no longer render a second Flags DeskLink"
   );
 });
 
 // activeTab checks /hr-schedule/coverage before the plain /hr-schedule prefix,
 // because startsWith("/hr-schedule") alone also matches "/hr-schedule/coverage"
-// and would misclassify it (HrAppShell.tsx:27-28). Adding /hr-flags must not
-// disturb that order.
-test("activeTab keeps the coverage-before-schedule check and adds /hr-flags", () => {
-  const src = shellSource();
-  const fnStart = src.indexOf("function activeTab");
-  const fnEnd = src.indexOf("function tabHref");
-  assert.ok(fnStart !== -1 && fnEnd !== -1, "could not locate activeTab/tabHref");
-  const fn = src.slice(fnStart, fnEnd);
-  const coverageIdx = fn.indexOf('pathname.startsWith("/hr-schedule/coverage")');
-  const scheduleIdx = fn.indexOf('pathname.startsWith("/hr-schedule")');
-  const flagsIdx = fn.indexOf('pathname.startsWith("/hr-flags")');
-  assert.ok(coverageIdx !== -1, "missing the /hr-schedule/coverage check");
-  assert.ok(scheduleIdx !== -1, "missing the /hr-schedule check");
-  assert.ok(flagsIdx !== -1, "missing the new /hr-flags check");
-  assert.ok(
-    coverageIdx < scheduleIdx,
-    "the more specific /hr-schedule/coverage check must stay first"
+// and would misclassify it. Calling the real function (rather than grepping
+// for the substring) is what actually proves the return values are correct —
+// a wrong-but-present check (e.g. the /hr-flags branch returning "coverage")
+// would still pass a source-text assertion but fails this one.
+test("activeTab classifies every registered path, coverage-before-schedule", () => {
+  assert.equal(activeTab("/hr-attendance"), "attendance");
+  assert.equal(activeTab("/hr-schedule"), "schedule");
+  assert.equal(activeTab("/hr-schedule/import"), "schedule");
+  assert.equal(activeTab("/hr-schedule/coverage"), "coverage");
+  assert.equal(activeTab("/hr-flags"), "flags");
+  assert.equal(activeTab("/some-unknown-path"), "attendance");
+});
+
+test("tabHref resolves the canonical path per tab, with and without ?employee=", () => {
+  assert.equal(tabHref("attendance", null), "/hr-attendance");
+  assert.equal(tabHref("schedule", null), "/hr-schedule");
+  assert.equal(tabHref("coverage", null), "/hr-schedule/coverage");
+  assert.equal(tabHref("flags", null), "/hr-flags");
+  assert.equal(tabHref("flags", "EMP-0001"), "/hr-flags?employee=EMP-0001");
+  // Encoding matters — this is the one place tabHref's contract is exercised
+  // with a value that needs escaping.
+  assert.equal(
+    tabHref("flags", "EMP/0001 X"),
+    `/hr-flags?employee=${encodeURIComponent("EMP/0001 X")}`
   );
 });
 

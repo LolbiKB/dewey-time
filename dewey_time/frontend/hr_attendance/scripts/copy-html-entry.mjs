@@ -8,6 +8,7 @@ const builtHtmlPath = path.join(appRoot, "public/hr_attendance/index.html");
 const targetHtmlPaths = [
   path.join(appRoot, "www/hr-attendance.html"),
   path.join(appRoot, "www/hr-schedule.html"),
+  path.join(appRoot, "www/hr-flags.html"),
 ];
 const buildIdPath = path.join(appRoot, "public/hr_attendance/assets/build-id.txt");
 
