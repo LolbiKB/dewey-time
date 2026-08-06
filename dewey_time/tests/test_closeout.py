@@ -819,3 +819,71 @@ class TestNonPrimarySiteSeverity(unittest.TestCase):
         )
 
         self.assertEqual(FLAG_SEVERITY, DOCTYPE_SEVERITY)
+
+
+class TestFlagInsertIsolation(unittest.TestCase):
+    """One failing insert used to escape the flag loop entirely. The
+    isolated-generation wrapper caught it and logged, so the employee silently
+    lost every flag that had not been written yet -- which is how a duplicate
+    docname from two delivery failures cost a whole day."""
+
+    @patch("dewey_time.attendance_engine.closeout.evaluate_record_issue_flags")
+    @patch("dewey_time.attendance_engine.closeout.evaluate_missing_time_flags", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout.evaluate_lunch_flags", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_meta")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_one_failing_insert_does_not_cost_the_others(
+        self,
+        get_cached_doc,
+        get_shift,
+        _checkins,
+        get_shift_meta,
+        _delete_flags,
+        insert_flag,
+        _lunch,
+        _missing,
+        record_issues,
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        get_cached_doc.return_value = MagicMock(branch="BR-A", company="Test Co")
+        get_shift.return_value = {"shift_type": "Day"}
+        get_shift_meta.return_value = None
+
+        # Three flags queued; the middle one raises, as a duplicate docname did.
+        record_issues.return_value = [
+            ("ATTENDANCE_ISSUE", {"reason": "delivery_failed", "undelivered": {"pin": "1"}}),
+            ("ATTENDANCE_ISSUE", {"reason": "delivery_failed", "undelivered": {"pin": "2"}}),
+            ("ATTENDANCE_ISSUE", {"reason": "single_checkin", "punch_time": "2026-08-03T09:00:00"}),
+        ]
+
+        calls = {"n": 0}
+
+        def _maybe_raise(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise Exception("Duplicate entry")
+
+        insert_flag.side_effect = _maybe_raise
+
+        # Must not propagate — the caller's own isolation is the last resort,
+        # not the mechanism.
+        _generate_for_employee_date(employee="EMP-1", attendance_date=date(2026, 8, 3))
+
+        # Assert the PROPERTY, not a count: the flag queued after the failing
+        # one was still attempted. Counting total inserts couples the test to
+        # whichever branch the fixture happens to take (this one also prepends
+        # UNNOTIFIED_ABSENCE), which is how it passed under full discovery and
+        # failed in isolation.
+        attempted = [c.kwargs.get("evidence", {}).get("reason") for c in insert_flag.call_args_list]
+        self.assertIn(
+            "single_checkin",
+            attempted,
+            "the flag queued after the failure was never attempted -- "
+            "the raise escaped the loop instead of being contained to its own row",
+        )
+        self.assertGreaterEqual(calls["n"], 3, "the loop stopped early")

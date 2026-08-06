@@ -244,3 +244,46 @@ class TestFlagIdentity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeliveryFailedIdentityCollision(unittest.TestCase):
+    """delivery_failed is the only ATTENDANCE_ISSUE reason that writes no
+    punch_time (record_issue_flags.py:72-81), so a suffix of reason+punch_time
+    alone collapsed every undelivered item in a closeout onto ONE identity --
+    and onto one docname, which made the second insert raise. closeout.py's
+    flag loop had no per-flag isolation, so that raise cost the employee every
+    remaining flag for the day."""
+
+    def _identity(self, **evidence):
+        return flag_identity(
+            employee="HR-EMP-00042",
+            attendance_date="2026-08-03",
+            flag_code="ATTENDANCE_ISSUE",
+            evidence=evidence,
+        )
+
+    def test_two_delivery_failures_in_one_day_stay_distinct(self):
+        first = self._identity(reason="delivery_failed", undelivered={"pin": "1234"})
+        second = self._identity(reason="delivery_failed", undelivered={"pin": "9999"})
+        self.assertNotEqual(first, second, "both items collapsed onto one identity")
+        self.assertIn("1234", first)
+        self.assertIn("9999", second)
+
+    def test_a_reason_carrying_punch_time_is_untouched(self):
+        # The fallback must not re-key any other reason, or fixing delivery
+        # failures silently orphans every other ATTENDANCE_ISSUE decision.
+        self.assertEqual(
+            self._identity(reason="single_checkin", punch_time="2026-08-03T14:23:00"),
+            "AUTO-hr_emp_00042-2026-08-03-attendance-issue-single_checkin_2026_08_03t14:23:00",
+        )
+
+    def test_delivery_failure_with_no_identifiable_key_still_resolves(self):
+        identity = self._identity(reason="delivery_failed", undelivered={"unhelpful": "x"})
+        self.assertTrue(
+            identity.startswith("AUTO-hr_emp_00042-2026-08-03-attendance-issue-delivery_failed")
+        )
+
+    def test_a_top_level_item_key_works_when_undelivered_is_absent(self):
+        first = self._identity(reason="delivery_failed", supabase_log_id="log-a")
+        second = self._identity(reason="delivery_failed", supabase_log_id="log-b")
+        self.assertNotEqual(first, second)

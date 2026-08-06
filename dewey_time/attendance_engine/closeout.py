@@ -522,14 +522,13 @@ def _generate_for_employee_date(
         if checkins_count == 0:
             return
         flags_to_create.append(("OFF_SHIFT_PUNCH", {"reason": "holiday_has_checkins"}))
-        for flag_code, extra_evidence in flags_to_create:
-            _insert_flag(
-                employee=employee,
-                company=employee_company,
-                attendance_date=attendance_date,
-                flag_code=flag_code,
-                evidence={**evidence, **extra_evidence},
-            )
+        _insert_flags(
+            employee=employee,
+            company=employee_company,
+            attendance_date=attendance_date,
+            evidence=evidence,
+            flags_to_create=flags_to_create,
+        )
         return
 
     if not on_shift:
@@ -557,14 +556,13 @@ def _generate_for_employee_date(
             )
         else:
             flags_to_create.append(("OFF_SHIFT_PUNCH", {"reason": "off_shift_has_checkins"}))
-        for flag_code, extra_evidence in flags_to_create:
-            _insert_flag(
-                employee=employee,
-                company=employee_company,
-                attendance_date=attendance_date,
-                flag_code=flag_code,
-                evidence={**evidence, **extra_evidence},
-            )
+        _insert_flags(
+            employee=employee,
+            company=employee_company,
+            attendance_date=attendance_date,
+            evidence=evidence,
+            flags_to_create=flags_to_create,
+        )
         return
 
     if checkins_count == 0:
@@ -588,14 +586,13 @@ def _generate_for_employee_date(
             flags_to_create.insert(
                 0, ("UNNOTIFIED_ABSENCE", {"reason": "on_shift_no_checkins"})
             )
-        for flag_code, extra_evidence in flags_to_create:
-            _insert_flag(
-                employee=employee,
-                company=employee_company,
-                attendance_date=attendance_date,
-                flag_code=flag_code,
-                evidence={**evidence, **extra_evidence},
-            )
+        _insert_flags(
+            employee=employee,
+            company=employee_company,
+            attendance_date=attendance_date,
+            evidence=evidence,
+            flags_to_create=flags_to_create,
+        )
         return
 
     shift_meta = _early_shift_meta  # already resolved before _get_checkins_for_day
@@ -683,14 +680,13 @@ def _generate_for_employee_date(
         )
     )
 
-    for flag_code, extra_evidence in flags_to_create:
-        _insert_flag(
-            employee=employee,
-            company=employee_company,
-            attendance_date=attendance_date,
-            flag_code=flag_code,
-            evidence={**evidence, **extra_evidence},
-        )
+    _insert_flags(
+        employee=employee,
+        company=employee_company,
+        attendance_date=attendance_date,
+        evidence=evidence,
+        flags_to_create=flags_to_create,
+    )
 
 
 def _delete_auto_flags_for_employee_date(
@@ -710,6 +706,38 @@ def _delete_auto_flags_for_employee_date(
     if flag_codes:
         filters["flag_code"] = ["in", flag_codes]
     frappe.db.delete("Attendance Flag", filters)
+
+
+def _insert_flags(*, employee, company, attendance_date, evidence, flags_to_create):
+    """Insert each flag independently, so one bad row cannot cost the others.
+
+    Before this, all four call sites looped over `_insert_flag` bare. A single
+    raise escaped the loop and was caught by
+    `_generate_for_employee_date_isolated`, which logged it and moved to the
+    next employee -- silently dropping every flag for this one that had not
+    been written yet. Two delivery failures in one closeout did exactly that,
+    via a duplicate docname (fixed in attendance_flag.py), but any future
+    insert failure would have had the same blast radius.
+
+    Failures go to the Error Log rather than being swallowed; the batch
+    continues.
+    """
+    for flag_code, extra_evidence in flags_to_create:
+        try:
+            _insert_flag(
+                employee=employee,
+                company=company,
+                attendance_date=attendance_date,
+                flag_code=flag_code,
+                evidence={**evidence, **extra_evidence},
+            )
+        except Exception:
+            frappe.log_error(
+                title="Attendance flag insert failed",
+                message="employee={0} date={1} flag_code={2}\n{3}".format(
+                    employee, attendance_date, flag_code, frappe.get_traceback()
+                ),
+            )
 
 
 def _insert_flag(*, employee, company, attendance_date, flag_code, evidence, day_closed: int = 1):

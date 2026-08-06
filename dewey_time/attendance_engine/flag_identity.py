@@ -145,7 +145,20 @@ def _attendance_issue_suffix(evidence: dict):
     # accepted simplification, since ATTENDANCE_ISSUE evidence is always
     # engine-written and always a real dict in practice).
     reason = evidence.get("reason") or "issue"
-    punch = evidence.get("punch_time") or ""
+    # `delivery_failed` is the one reason that writes no punch_time
+    # (record_issue_flags.py:72-81 carries only reason + undelivered), so every
+    # undelivered item in one closeout collapsed onto the identical suffix
+    # "delivery_failed-". That is a docname collision as well as an identity
+    # one: attendance_flag.py builds the AUTO name from this same pair, so the
+    # second insert raised DuplicateEntryError, and closeout.py's flag loop has
+    # no per-flag isolation -- the raise aborted every remaining flag for that
+    # employee-day, silently. Falling back to the item's own identifier keeps
+    # them distinct.
+    #
+    # Ordered `punch or delivery_key` on purpose: a reason that DOES carry
+    # punch_time is untouched, so no existing identity moves except the
+    # delivery-failure ones this fixes.
+    punch = evidence.get("punch_time") or _delivery_failed_suffix(evidence) or ""
     return _scrub(f"{reason}-{punch}")[:80]
 
 
