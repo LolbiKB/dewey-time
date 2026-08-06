@@ -5,13 +5,15 @@ test.beforeEach(async ({ page }) => {
   await stubFrappe(page);
 });
 
-// `/hr-flags` is not in hooks.py's `website_route_rules` (only `/hr-attendance`
-// and `/hr-schedule` are — hooks.py:85-89) and has no `www/hr-flags.html`. That
-// gap is real but out of this task's file list; it does not affect these tests
-// because Playwright drives Vite's dev server (playwright.config.ts's
-// `webServer`), and Vite's SPA fallback serves `index.html` for any path with
-// no matching static file — direct navigation to `/hr-flags` works here
-// regardless of the Frappe-side routing gap.
+// `/hr-flags` routing is wired server-side (hooks.py:90-91's website_route_rules,
+// and the tracked `www/hr-flags.html` entry point) and guarded by
+// `dewey_time/tests/test_hr_flags_route_wiring.py`. These specs still prove
+// nothing about production routing either way: Playwright drives Vite's dev
+// server (playwright.config.ts's `webServer`), and Vite's SPA fallback serves
+// `index.html` for any path with no matching static file regardless of what
+// Frappe does — direct navigation to `/hr-flags` works here whether or not the
+// server-side route exists. That's exactly the gap the Python test above
+// covers and this file structurally cannot.
 
 test("the flag queue renders groups and person rows with toolbar counts for HR staff", async ({
   page,
@@ -207,12 +209,15 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   await expect(page.getByText(/^Decided/)).toBeVisible();
 });
 
-test("a single decision persists after the queue refetches", async ({ page }, testInfo) => {
-  // Same rationale as attendance.spec.ts:15-16's day-inspector test: deciding
-  // a flag is a click-through interaction whose surface (panel vs. bottom
-  // sheet) differs by breakpoint. Test 1 above already covers both projects
-  // for plain rendering.
-  test.skip(testInfo.project.name === "mobile", "decide interaction is desktop-only");
+test("a single decision persists after the queue refetches", async ({ page }) => {
+  // Unlike attendance.spec.ts's day inspector (a genuine separate mobile
+  // surface — DayInspectorSheet.tsx — covered instead by
+  // mobile-surfaces.spec.ts), the flag queue has no breakpoint-conditional
+  // component anywhere in this path: FlagQueuePage.tsx's grid just collapses
+  // to a single column below `md` with the panel stacked under the list, and
+  // FlagDecisionPanel.tsx/FlagQueueList.tsx have no useIsMobile, sheet, or
+  // other mobile branch. Same Decide button, same native <select>, same
+  // submit button at every viewport, so this runs on both projects.
 
   const FLAG_IDENTITY = "AUTO-EMP-201-2026-08-13-late_start";
   const undecidedFlag = {
@@ -345,8 +350,10 @@ test("a single decision persists after the queue refetches", async ({ page }, te
 
 test("a bulk decision with one stale row reports partial failure, politely", async ({
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name === "mobile", "group bulk-decide interaction is desktop-only");
+}) => {
+  // No mobile-only skip here either — same reasoning as the single-decision
+  // test above: GroupDecision (FlagDecisionPanel.tsx) has no breakpoint
+  // branch, so the bulk form is the same component tree on both projects.
 
   const GROUP_KEY = "grp-routine-LATE_START-2026-08-14-bulk";
   const names = ["Aiko Tan", "Ben Souza", "Cleo Marsh", "Dara Sok", "Elan Rios"];
