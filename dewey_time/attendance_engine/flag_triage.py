@@ -45,16 +45,27 @@ def _minutes(evidence) -> int | None:
     hasn't touched yet), the "minutes" key is absent, or its value isn't numeric.
     Every caller below treats None the same as "below the lowest threshold" — never a
     top band — because a value we cannot read is not evidence of urgency.
+
+    TOTAL by design: it returns None rather than raising for every input. `minutes`
+    comes out of a JSON column and json.loads accepts the bare tokens NaN, Infinity
+    and -Infinity, so a malformed row really can hold a non-finite float — and int()
+    raises ValueError on NaN and OverflowError on an infinity, on BOTH branches below.
+    This function sits on the queue read path, which ranks every flag in a range in
+    one pass, so a raised exception here 500s the whole queue for every employee
+    instead of degrading the one unreadable flag to its lowest band.
     """
     if not isinstance(evidence, dict):
         return None
     value = evidence.get("minutes")
     if isinstance(value, (int, float)):
-        return int(value)
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return None
     if isinstance(value, str):
         try:
             return int(float(value))
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
     return None
 

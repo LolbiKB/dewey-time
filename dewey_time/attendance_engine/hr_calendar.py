@@ -451,12 +451,44 @@ def _employee_nav_meta(employee: str) -> dict:
     }
 
 
-def _live_decisions_by_identity(*, employee: str, start, end) -> dict[str, dict]:
+# What the attach point below actually needs from a decision: the key to match it
+# to a flag, the fingerprint that decides matched vs needs_re_review, and the two
+# fields a non-HR viewer is allowed to see.
+_DECISION_FIELDS_EMPLOYEE_VIEW = (
+    "flag_identity",
+    "outcome",
+    "decided_at",
+    "evidence_fingerprint",
+)
+
+# Everything above plus HR's own working record: the free-text note, the reason
+# (which can read GENUINE_VIOLATION), who decided, and the batch it belonged to.
+_DECISION_FIELDS_HR_VIEW = (
+    "name",
+    "flag_identity",
+    "outcome",
+    "reason",
+    "note",
+    "decided_by",
+    "decided_at",
+    "group_key",
+    "evidence_fingerprint",
+)
+
+
+def _live_decisions_by_identity(*, employee: str, start, end, hr_view: bool) -> dict[str, dict]:
     """Live (superseded=0) Attendance Flag Decision rows for one employee's date
     range, as ONE batched query keyed by flag_identity — never per-day, never
     per-flag (Global Constraint 5). Called exactly once per get_employee_calendar
     request, regardless of how many days or flags are in range; the per-flag
-    attach below this is an in-memory dict lookup, not a query."""
+    attach below this is an in-memory dict lookup, not a query.
+
+    `hr_view` narrows the SELECT rather than the payload. The payload is already
+    safe — the attach point projects an allowlist for a non-HR viewer — but an
+    employee reading their own calendar is a first-class path here, and HR's
+    private note about them has no reason to be fetched into that request's memory
+    at all. Defence in depth: two things would have to break before it leaks.
+    """
     if not frappe.db.table_exists("Attendance Flag Decision"):
         return {}
 
@@ -468,17 +500,7 @@ def _live_decisions_by_identity(*, employee: str, start, end) -> dict[str, dict]
                 "attendance_date": ["between", [start, end]],
                 "superseded": 0,
             },
-            fields=[
-                "name",
-                "flag_identity",
-                "outcome",
-                "reason",
-                "note",
-                "decided_by",
-                "decided_at",
-                "group_key",
-                "evidence_fingerprint",
-            ],
+            fields=list(_DECISION_FIELDS_HR_VIEW if hr_view else _DECISION_FIELDS_EMPLOYEE_VIEW),
         )
         or []
     )
@@ -610,13 +632,16 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
             }
         )
 
-    decisions_by_identity = _live_decisions_by_identity(employee=employee, start=start, end=end)
     # Resolved once for the whole request — reads cached roles, no query, so this
     # does not touch the query budget (Global Constraint 5). An employee viewing
     # their own calendar (a first-class path: _require_calendar_access allows a
     # non-HR user through for their own linked Employee) must not receive HR's
-    # private `note`/`decided_by`/`reason` on their own flags.
+    # private `note`/`decided_by`/`reason` on their own flags. Resolved BEFORE the
+    # decision read so it can narrow the SELECT as well as the payload.
     hr_view = _is_hr_staff()
+    decisions_by_identity = _live_decisions_by_identity(
+        employee=employee, start=start, end=end, hr_view=hr_view
+    )
 
     flags_by_day_raw: dict[str, list[dict]] = defaultdict(list)
     for f in flags:

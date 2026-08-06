@@ -346,14 +346,20 @@ class TestCalendarDecisions(unittest.TestCase):
 
         get_all_calls = {"Attendance Flag Decision": 0}
         row = flag_row if flag_row is not None else self.FLAG_ROW
+        # The SELECT the decision read was issued with, for the tests that assert
+        # HR-private columns are never fetched for a non-HR viewer. Recorded rather
+        # than honoured: the fake still returns whole canned rows, so the allowlist
+        # projection stays the thing under test in the redaction cases below.
+        self.decision_fields = []
 
-        def _get_all(doctype, **_kwargs):
+        def _get_all(doctype, **kwargs):
             if doctype == "Employee Checkin":
                 return []
             if doctype == "Attendance Flag":
                 return [dict(row)]
             if doctype == "Attendance Flag Decision":
                 get_all_calls["Attendance Flag Decision"] += 1
+                self.decision_fields = list(kwargs.get("fields") or [])
                 return list(decision_rows)
             return []
 
@@ -494,6 +500,37 @@ class TestCalendarDecisions(unittest.TestCase):
         self.assertEqual(flag["decision"]["note"], "HR's private reasoning about this employee")
         self.assertEqual(flag["decision"]["decided_by"], "hr@example.com")
         self.assertEqual(flag["decision"]["reason"], "APPROVED_LEAVE")
+
+    def test_a_non_hr_viewer_never_fetches_hr_private_columns(self):
+        """Defence in depth behind the allowlist projection above. The payload is
+        already safe, but an employee reading their own calendar is a first-class
+        path, and HR's private note about them has no business being loaded into
+        that request at all — two things have to break before it can leak, not
+        one."""
+        self._call(decision_rows=[], hr_view=False)
+
+        for field in ("note", "decided_by", "reason", "group_key", "name"):
+            self.assertNotIn(field, self.decision_fields, f"{field} is HR-private")
+        # …while still fetching everything the attach point needs, or the flag
+        # would report "undecided" to the employee whose flag was excused.
+        for field in ("flag_identity", "outcome", "decided_at", "evidence_fingerprint"):
+            self.assertIn(field, self.decision_fields)
+
+    def test_an_hr_viewer_still_fetches_the_whole_row(self):
+        self._call(decision_rows=[], hr_view=True)
+
+        for field in (
+            "name",
+            "flag_identity",
+            "outcome",
+            "reason",
+            "note",
+            "decided_by",
+            "decided_at",
+            "group_key",
+            "evidence_fingerprint",
+        ):
+            self.assertIn(field, self.decision_fields)
 
     def test_non_auto_flag_never_attaches_a_decision(self):
         """Task 7 review Finding 2: flag_identity() always prefixes "AUTO-"

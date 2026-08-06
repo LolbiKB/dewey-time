@@ -1,5 +1,6 @@
 import unittest
 
+from dewey_time.attendance_engine.flag_identity import parse_evidence
 from dewey_time.attendance_engine.flag_triage import (
     TIER_ACT,
     TIER_REVIEW,
@@ -95,6 +96,49 @@ class TestTriageRankLateFromLunchBand(unittest.TestCase):
 
     def test_missing_minutes_falls_to_lowest_band(self):
         self.assertEqual(triage_rank("LATE_FROM_LUNCH", {}), 15)
+
+
+class TestTriageRankNonFiniteMinutes(unittest.TestCase):
+    """`minutes` is engine-written JSON, and json.loads accepts the bare tokens
+    NaN, Infinity and -Infinity — so a malformed row really can carry a non-finite
+    float. triage_rank sits on the queue read path, which reads EVERY flag in a
+    range in one pass, so raising here 500s the whole queue for every employee
+    instead of degrading one flag. Same rule as any other unreadable value: a
+    number we cannot use is not evidence of urgency, so it takes the lowest band.
+    """
+
+    NON_FINITE = (float("nan"), float("inf"), float("-inf"))
+    # The same three as they arrive from json.loads on a Long Text column that was
+    # never re-encoded — the string branch of _minutes.
+    NON_FINITE_TEXT = ("NaN", "Infinity", "-Infinity")
+
+    def test_non_finite_float_minutes_degrade_to_the_lowest_band(self):
+        for value in self.NON_FINITE:
+            with self.subTest(value=value):
+                self.assertEqual(triage_rank("MISSING_TIME", {"minutes": value}), 60)
+                self.assertEqual(triage_rank("LEFT_EARLY", {"minutes": value}), 25)
+                self.assertEqual(triage_rank("LATE_START", {"minutes": value}), 20)
+                self.assertEqual(triage_rank("LATE_FROM_LUNCH", {"minutes": value}), 15)
+
+    def test_non_finite_string_minutes_degrade_to_the_lowest_band(self):
+        for value in self.NON_FINITE_TEXT:
+            with self.subTest(value=value):
+                self.assertEqual(triage_rank("MISSING_TIME", {"minutes": value}), 60)
+                self.assertEqual(triage_rank("LEFT_EARLY", {"minutes": value}), 25)
+                self.assertEqual(triage_rank("LATE_START", {"minutes": value}), 20)
+                self.assertEqual(triage_rank("LATE_FROM_LUNCH", {"minutes": value}), 15)
+
+    def test_the_real_path_a_non_finite_value_arrives_by(self):
+        # parse_evidence is what the queue runs the Long Text column through before
+        # triage_rank ever sees it, and json.loads passes these tokens straight
+        # through — so this is not a hypothetical input shape.
+        evidence = parse_evidence('{"minutes": Infinity, "reason": "gap"}')
+        self.assertEqual(triage_rank("MISSING_TIME", evidence), 60)
+
+    def test_finite_string_minutes_still_band_normally(self):
+        # The widened except must not swallow values that parse perfectly well.
+        self.assertEqual(triage_rank("MISSING_TIME", {"minutes": "180"}), 133)
+        self.assertEqual(triage_rank("LATE_START", {"minutes": "60.4"}), 65)
 
 
 class TestTriageRankOrderings(unittest.TestCase):

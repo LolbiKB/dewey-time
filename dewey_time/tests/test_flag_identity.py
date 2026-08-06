@@ -198,6 +198,30 @@ class TestFlagIdentity(unittest.TestCase):
         # lowercase hex only
         self.assertTrue(all(ch in "0123456789abcdef" for ch in fp_a))
 
+    def test_fingerprint_is_pinned_to_a_golden_value(self):
+        # evidence_fingerprint is a PERSISTED format: every Attendance Flag
+        # Decision stores one and every read compares it against a freshly
+        # computed one. Change the payload's key set, its shape, sort_keys or
+        # separators and every stored decision stops matching at once — the whole
+        # estate turns needs_re_review — while the relative assertions above stay
+        # green, because they only ever compare this implementation with itself.
+        # Only a golden value can fail on that, so this is the one assertion in
+        # the module that must never be "fixed" by pasting in a new hash.
+        self.assertEqual(
+            evidence_fingerprint({"minutes": 12, "reason": "late_start"}),
+            "438109b069c827218bb68e66b3ae58fe",
+        )
+        # The constant-payload case is stored just as often (any code carrying
+        # neither key), so it is pinned too.
+        self.assertEqual(evidence_fingerprint({}), "621be9b340c762553e6e28a497547e67")
+        # Keys outside {minutes, reason} are deliberately NOT part of the hash:
+        # identity already separates those flags, and hashing them would make an
+        # unrelated evidence field invalidate a decision.
+        self.assertEqual(
+            evidence_fingerprint({"minutes": 12, "reason": "late_start", "shift": "Day"}),
+            "438109b069c827218bb68e66b3ae58fe",
+        )
+
     def test_flag_carrying_neither_minutes_nor_reason_has_a_constant_fingerprint(self):
         # UNNOTIFIED_ABSENCE-shaped evidence: no "minutes", no "reason" key
         # at all. Both should hash the same constant {"minutes": null,
