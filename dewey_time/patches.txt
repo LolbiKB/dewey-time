@@ -18,4 +18,6 @@ dewey_time.patches.cleanup_zkteco_hr_desk_artifacts
 dewey_time.patches.reset_shift_type_naming_to_prompt
 dewey_time.patches.disable_schedule_naming_server_scripts
 dewey_time.patches.non_primary_site_punch_severity_to_info
+
+[post_model_sync]
 dewey_time.patches.migrate_legacy_flag_decisions

@@ -16,6 +16,41 @@ _STATUS_TO_OUTCOME = {
 # equivalent. Inventing one would fabricate an HR judgment nobody made.
 _NO_DECISION_EQUIVALENT = {"CLOSED", "EXPLAINED"}
 
+# One fixed group_key for every row this patch ever writes, across every run
+# on every site. Two things depend on it being constant rather than
+# per-row/per-run:
+#   1. reverse_decision_group() (flag_decision_api.py) undoes a whole
+#      group_key at once -- a fixed key means an operator can bulk-undo the
+#      entire legacy migration through the same API a normal bulk decision
+#      uses, rather than months-old Desk state having no supported rollback
+#      at all.
+#   2. It is also the idempotency tag a re-run checks for (see the exists()
+#      check in execute() below): a row carrying this group_key, *even if
+#      superseded*, means this identity was already handled by this
+#      migration -- including the case where an operator deliberately
+#      reversed it. Without checking for the tag regardless of superseded,
+#      a second run would silently recreate the very decision the operator
+#      just undid.
+_MIGRATION_GROUP_KEY = "AFD-LEGACY-MIGRATION"
+
+
+def _note_for(row: dict, status: str) -> str:
+    """A note that satisfies the doctype's own required-note validation.
+
+    hr_note was never a required field on the Desk form (attendance_flag.json),
+    so a real slice of legacy APPROVED/REJECTED rows carry a blank one --
+    likely the majority, not an edge case. This migration always writes
+    reason="OTHER", which Attendance Flag Decision.validate() requires a note
+    for. Rather than lose the HR judgment itself for want of a sentence
+    nobody was ever forced to type, a blank hr_note is replaced with a
+    synthesised placeholder that says plainly it is synthesised, so nobody
+    downstream mistakes it for the reviewer's own words.
+    """
+    note = (row.get("hr_note") or "").strip()
+    if note:
+        return note
+    return "Migrated from legacy Desk decision (status={0}); no HR note recorded.".format(status)
+
 
 def execute():
     """Best-effort migration of legacy in-place Desk decisions into Attendance
@@ -36,22 +71,37 @@ def execute():
     regenerates that employee's date, with no trace and nothing left for this
     patch to find. The rows below are only the ones that happened to still be
     sitting in the table on the day this patch ran: whatever the deletion
-    cycle had not yet reached, plus any HR/EMPLOYEE-sourced rows the engine
-    never touches at all.
+    cycle had not yet reached.
+
+    Scoped to source == "AUTO" only, deliberately -- not a gap. flag_identity()
+    is hard-prefixed "AUTO-" (flag_identity.py:181), and both native readers of
+    a decision filter to source == "AUTO" for exactly that reason
+    (flag_queue_api.py:102-105, flag_decision_api.py:153): an HR-created flag
+    for the same employee/date/code would collide with the engine's row under
+    one identity. Migrating a non-AUTO row here would write a decision at an
+    identity that actually belongs to the engine's AUTO flag, not the
+    HR-created one it was really about -- silently attaching to the wrong
+    flag, or pre-deciding whatever the engine later creates at that identity.
+    Rescuing HR/EMPLOYEE-sourced rows would need a distinct, non-AUTO identity
+    scheme; this migration does not attempt that.
 
     A low migrated count on a given site is therefore not evidence this patch
-    is broken -- it is evidence of how much the deletion cycle had already
-    destroyed before the patch got a chance to run. Do not read the tally
-    below as a completeness signal; read it as a snapshot of what survived.
+    is broken -- it is evidence of (a) how much the deletion cycle had already
+    destroyed before the patch got a chance to run, and (b) the source ==
+    "AUTO" scope above deliberately excluding every HR/EMPLOYEE-created row.
+    Do not read the tally below as a completeness signal; read it as a
+    snapshot of what survived and was in scope.
 
-    Idempotent: an identity that already has a live (superseded=0) decision
-    -- from a prior run of this same patch, or from a fresh decision made
-    through decide_flags() in the meantime -- is skipped, so re-running never
-    creates a duplicate.
+    Idempotent: an identity that already has either (a) a live (superseded=0)
+    decision -- from a prior run of this same patch, or from a fresh decision
+    made through decide_flags() in the meantime -- or (b) any row this same
+    patch previously wrote (tagged with _MIGRATION_GROUP_KEY, live or not) is
+    skipped, so re-running never creates a duplicate and never resurrects a
+    migrated decision an operator has since reversed.
     """
     rows = frappe.get_all(
         "Attendance Flag",
-        filters={"status": ["!=", "OPEN"]},
+        filters={"status": ["!=", "OPEN"], "source": "AUTO"},
         fields=[
             "name",
             "employee",
@@ -114,7 +164,12 @@ def execute():
             )
             continue
 
-        if frappe.db.exists("Attendance Flag Decision", {"flag_identity": identity, "superseded": 0}):
+        if frappe.db.exists(
+            "Attendance Flag Decision", {"flag_identity": identity, "superseded": 0}
+        ) or frappe.db.exists(
+            "Attendance Flag Decision",
+            {"flag_identity": identity, "group_key": _MIGRATION_GROUP_KEY},
+        ):
             skipped += 1
             continue
 
@@ -143,20 +198,21 @@ def execute():
                     "employee_branch": branch,
                     "outcome": outcome,
                     "reason": "OTHER",
-                    "note": row.get("hr_note"),
+                    "note": _note_for(row, status),
                     "evidence_fingerprint": evidence_fingerprint(row.get("evidence")),
+                    "group_key": _MIGRATION_GROUP_KEY,
                     "decided_by": row.get("hr_user"),
                     "decided_at": row.get("hr_decided_at"),
                 }
             )
             doc.insert(ignore_permissions=True)
         except Exception:
-            # Covers, among other things, the doctype's own required-note
-            # validation (note is required when reason=OTHER, and this patch
-            # always sets reason=OTHER) rejecting a legacy row that was
-            # approved/rejected in Desk without an hr_note. That is a real
-            # or missing detail from the Desk-era record, not a bug in this
-            # patch -- count it as failed and keep going.
+            # _note_for() means a blank hr_note no longer reaches this point
+            # empty-handed, but the doctype's own required-note validation
+            # (or any other insert()-time failure -- a bad Employee link, a
+            # db-level error, etc.) can still land here. That is a real
+            # problem with the Desk-era record or the write, not a bug in
+            # this patch -- count it as failed and keep going.
             failed += 1
             frappe.log_error(
                 title="migrate_legacy_flag_decisions: write failed",
