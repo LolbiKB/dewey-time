@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronRight, EyeOff, Loader2, SlidersHorizontal } from 'lucide-react'
+import { Page } from '@lolbikb/dewey-ui'
 import { Input } from '@/components/ui/input'
 import { DeviceService, type DeviceOptionEntry } from '@/services/device-service'
 import { useDevices } from '@/hooks/use-core-data'
@@ -155,10 +156,12 @@ export function DeviceConfig() {
 
   if (devicesQuery.isLoading || optionsLoading) {
     return (
-      <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading fleet configuration…
-      </div>
+      <Page>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading fleet configuration…
+        </div>
+      </Page>
     )
   }
 
@@ -166,7 +169,11 @@ export function DeviceConfig() {
   const extraSilent = matrix.silentDevices.length - namedSilent.length
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    // <Page> is h-full flex-col, so the app's content inset does NOT scroll for
+    // us — a page that merely grows overflows with nowhere to go, which is what
+    // happened when a terminal row expanded and pushed its detail off-screen.
+    // Header and banners stay put; everything below scrolls in its own region.
+    <Page className="min-h-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
         <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
         {matrix.reportingDevices.length} terminal
@@ -203,6 +210,7 @@ export function DeviceConfig() {
         </div>
       )}
 
+      <div className="flex-1 min-h-0 space-y-4 overflow-y-auto">
       {matrix.rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No terminal has reported its configuration yet.
@@ -352,6 +360,7 @@ export function DeviceConfig() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </Page>
   )
 }
