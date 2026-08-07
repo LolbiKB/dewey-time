@@ -1372,6 +1372,36 @@ class CrossReferenceTests(unittest.TestCase):
         result = self._split_person()
         self.assertEqual(result["counts"]["people"], 2)
 
+    def test_a_person_in_two_group_entries_and_no_lone_row_has_zero_outliers(self):
+        # EMP-1 sits in a REPEAT_PATTERN group (their late starts) AND a
+        # ROUTINE_CODE group (a branch punch shared with EMP-3 on D4) — two
+        # entries, neither one a lone person row. This is the fixture that
+        # distinguishes counting `kind == "person"` from counting
+        # `kind == "group"`: with exactly one of each kind (the split-person
+        # fixture above) the two counting rules produce the same number by
+        # coincidence, so only an all-group appearance set actually pins which
+        # kind the outlier count is counting.
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+        for employee in ("EMP-1", "EMP-3"):
+            flags.append(_flag(employee, D4, "NON_PRIMARY_SITE_PUNCH"))
+
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3"),
+            outage_branch_dates=set(),
+        )
+
+        appearances = [p for p in _iter_all_people(result["entries"]) if p["employee"] == "EMP-1"]
+        self.assertEqual(len(appearances), 2)
+        self.assertTrue(all(p["entry_key"] != "p:EMP-1" for p in appearances))
+        for person in appearances:
+            self.assertEqual(person["also_count"], 1)
+            self.assertEqual(person["also_outlier_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
