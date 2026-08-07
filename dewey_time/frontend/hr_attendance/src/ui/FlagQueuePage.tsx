@@ -9,7 +9,7 @@ import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Button } from "@/components/ui/button";
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
-import { useFlagQueue } from "@/hooks/useFlagQueue";
+import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
@@ -112,6 +112,20 @@ function emptyDraft(): PendingDecision {
   return { outcome: "EXCUSED", reason: REASON_OPTIONS[0], note: "" };
 }
 
+/**
+ * The two strip inputs the list needs, derived from one payload.
+ *
+ * Exported and kept out of the component body for the same reason `decideEffect`
+ * is: this suite renders components with renderToStaticMarkup and has no harness
+ * for react-query, so a `buildOutageSet` call left inline here is a line nothing
+ * can reach. That matters more than it looks — swapping it for
+ * `buildOutageSet([])` would render every unmeasured day emerald, the exact lie
+ * the strip's grey state exists to stop, and `tsc` cannot tell the two apart.
+ */
+export function stripInputs(queue: Pick<FlagQueue, "outageDates" | "range">) {
+  return { range: queue.range, outage: buildOutageSet(queue.outageDates) };
+}
+
 export function FlagQueuePage() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
 
@@ -143,9 +157,10 @@ export function FlagQueuePage() {
     refresh,
   } = useFlagQueue({ ...requestedRange, includeDecided });
 
-  // Memoised once for the whole list rather than rebuilt per row: forty rows
-  // would otherwise each rebuild the same set on every render.
-  const outage = useMemo(() => buildOutageSet(outageDates), [outageDates]);
+  // Memoised once for the whole list rather than rebuilt per row: the list
+  // re-renders on every keystroke in the decision note, and forty rows would
+  // otherwise each rebuild the same set each time.
+  const stripProps = useMemo(() => stripInputs({ outageDates, range }), [outageDates, range]);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
@@ -320,8 +335,7 @@ export function FlagQueuePage() {
         list={
           <FlagQueueList
             entries={entries}
-            range={range}
-            outage={outage}
+            {...stripProps}
             selectedKey={selectedKey}
             expandedGroupKey={expandedGroupKey}
             onSelect={handleSelect}

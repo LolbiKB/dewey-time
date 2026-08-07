@@ -6,6 +6,7 @@ import {
   crossReferenceLabel,
   groupHeadline,
   groupSubline,
+  hiddenMemberLabel,
   personSubline,
   tierLabel,
 } from "@/lib/flagQueueLabels";
@@ -276,7 +277,7 @@ const GROUP_AVATAR_LIMIT = 4;
 function GroupRow(props: { entry: GroupEntry; selected: boolean; onSelect: () => void }) {
   const { entry } = props;
   const shown = entry.members.slice(0, GROUP_AVATAR_LIMIT);
-  const hidden = entry.members.length - shown.length;
+  const hidden = hiddenMemberLabel(entry.members.length - shown.length);
 
   return (
     <RowButton selected={props.selected} onSelect={props.onSelect}>
@@ -310,9 +311,9 @@ function GroupRow(props: { entry: GroupEntry; selected: boolean; onSelect: () =>
             className="size-7 ring-2 ring-background"
           />
         ))}
-        {hidden > 0 ? (
+        {hidden ? (
           <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] font-semibold tabular-nums text-muted-foreground ring-2 ring-background">
-            +{hidden}
+            {hidden}
           </span>
         ) : null}
       </DecorativeAvatars>

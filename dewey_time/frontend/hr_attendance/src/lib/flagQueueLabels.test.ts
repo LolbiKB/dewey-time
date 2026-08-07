@@ -12,6 +12,7 @@ import {
   earlierMarkerLabel,
   groupHeadline,
   groupSubline,
+  hiddenMemberLabel,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   OUTCOME_ACTION_LABELS,
@@ -646,6 +647,15 @@ test("flags older than the window are marked, and a clean window says nothing", 
   assert.equal(earlierMarkerLabel(3), "+3 earlier");
   assert.equal(earlierMarkerLabel(1), "+1 earlier");
   assert.equal(earlierMarkerLabel(0), null);
+});
+
+// The queue's other "+N": faces a group row had no room for. Same file and the
+// same null-at-zero rule as the marker above, so the row does not set two
+// precedents for the same affix.
+test("a group row's overflow count says nothing when every face fits", () => {
+  assert.equal(hiddenMemberLabel(2), "+2");
+  assert.equal(hiddenMemberLabel(164), "+164");
+  assert.equal(hiddenMemberLabel(0), null);
 });
 
 /** The same flag, moved to another day — `lateStart` fixes one date of its own. */

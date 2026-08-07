@@ -396,6 +396,17 @@ export function earlierMarkerLabel(count: number): string | null {
 }
 
 /**
+ * "+2" — the member faces a group row had no room for, beside
+ * `earlierMarkerLabel` so the queue's two "+N" affixes follow one rule from one
+ * file rather than setting two precedents in the same row. Bare on purpose: it
+ * sits at the end of a row of faces, where "+2 more people" would out-argue the
+ * headline, and `groupSubline` has already led with "N people".
+ */
+export function hiddenMemberLabel(count: number): string | null {
+  return count > 0 ? `+${count}` : null;
+}
+
+/**
  * The row's second line. A person row names the day; a member of a pattern group
  * does not, because naming one of four mornings would be wrong for the other
  * three. `dates.length === 1` is the honest test for which case this is.

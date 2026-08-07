@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
+import { outageKey } from "@/lib/flagStrip";
 import {
   DECIDE_AGAIN_LABEL,
   SAME_REASON_LABEL,
@@ -25,6 +26,7 @@ import { FlagQueueList, entryKey } from "./FlagQueueList";
 import {
   FlagQueueView,
   decideEffect,
+  stripInputs,
   type DecideArgs,
   type DecideEffect,
   type FlagQueueViewProps,
@@ -329,6 +331,8 @@ function slotText(html: string, marker: string): string {
 /** The two slots of a list row: the bold headline and the line under it. */
 const TITLE_SLOT = "text-sm font-medium text-foreground";
 const SUBLINE_SLOT = "text-xs text-muted-foreground tabular-nums";
+/** A person row's sub-line is its own slot — a group's carries `tabular-nums`. */
+const PERSON_SUBLINE_SLOT = "block truncate text-xs text-muted-foreground";
 
 function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisionPanelProps {
   return {
@@ -1300,26 +1304,31 @@ test("a dated group's panel header still names its day and its size", () => {
   assert.doesNotMatch(header, /mornings/, "only a repeat pattern counts occurrences");
 });
 
+// Asserted by slot, not by presence: a single-entry render makes every
+// whole-markup match trivially true, so "Thu 6 Aug" appearing SOMEWHERE would
+// still pass with the date leaked into the title slot beside the name.
 test("a person row leads with their photo and states the finding with its day", () => {
   const html = renderToStaticMarkup(
     <FlagQueueList entries={[missingTimePerson()]} {...listProps()} />
   );
   assert.match(html, /<img[^>]+src="\/files\/sokheng\.jpg"/);
-  assert.match(html, /Sokheng Hon/);
-  assert.match(html, /Thu 6 Aug/);
+  assert.equal(slotText(html, TITLE_SLOT), "Sokheng Hon");
+  assert.equal(slotText(html, PERSON_SUBLINE_SLOT), "Missing 3h 12m · Thu 6 Aug");
 });
 
 test("a person with several days of one code gets no single date", () => {
   // "4 late starts · worst 31 min" — naming one day would be wrong for the
   // other three.
   const html = renderToStaticMarkup(<FlagQueueList entries={[repeatPerson()]} {...listProps()} />);
-  assert.match(html, /4 late starts · worst 31 min/);
+  assert.equal(slotText(html, PERSON_SUBLINE_SLOT), "4 late starts · worst 31 min");
+  // Nowhere in the row, not merely out of the sub-line: a date pushed into the
+  // title slot instead would be just as wrong.
   assert.equal(/· \w{3} \d+ \w{3}/.test(html), false);
 });
 
 test("a person with no photo still leads with an avatar, not a gap", () => {
   const html = renderToStaticMarkup(<FlagQueueList entries={[repeatPerson()]} {...listProps()} />);
-  assert.match(html, />VL</);
+  assert.match(rowWith(html, "Vichea Lim"), />VL</, "the initials stand in for the photo");
   assert.equal(html.includes("<img"), false);
 });
 
@@ -1380,4 +1389,38 @@ test("a row's avatar is decoration to a screen reader, ring and all", () => {
   // …while the strip keeps its one summary: it carries a fact — how many days
   // of this fortnight are flagged — that appears nowhere else in the row.
   assert.match(row, /aria-label="1 flagged day in the last 14"/);
+});
+
+// The one line that feeds real outage data to the strip, and the reason it is
+// exported rather than inline: `buildOutageSet(outageDates)` sitting in the
+// component body is unreachable from a suite with no react-query harness, so
+// replacing it with `buildOutageSet([])` would paint every unmeasured day
+// emerald — the exact lie the grey state exists to stop — while `tsc` and every
+// other test in this file stayed green.
+test("the page hands the list the payload's outages, not an empty set", () => {
+  const payload = {
+    outageDates: [{ branch: "Phnom Penh HQ", date: "2026-08-04" }],
+    range: { startDate: "2026-07-25", endDate: "2026-08-07" },
+  };
+  const inputs = stripInputs(payload);
+
+  assert.deepEqual(inputs.range, payload.range, "the strip's window comes from the payload");
+  assert.equal(inputs.outage.has(outageKey("Phnom Penh HQ", "2026-08-04")), true);
+  assert.equal(inputs.outage.has(outageKey("Phnom Penh HQ", "2026-08-05")), false);
+
+  // …and end to end, because a set nobody renders proves nothing: Sokheng's
+  // branch is Phnom Penh HQ, so 4 Aug is grey in his row and green without it.
+  const withOutage = renderToStaticMarkup(
+    <FlagQueueList entries={[missingTimePerson()]} {...listProps()} {...inputs} />
+  );
+  assert.match(rowWith(withOutage, "Sokheng Hon"), /bg-muted-foreground\/30/);
+
+  const withoutOutage = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[missingTimePerson()]}
+      {...listProps()}
+      {...stripInputs({ ...payload, outageDates: [] })}
+    />
+  );
+  assert.doesNotMatch(rowWith(withoutOutage, "Sokheng Hon"), /bg-muted-foreground\/30/);
 });
