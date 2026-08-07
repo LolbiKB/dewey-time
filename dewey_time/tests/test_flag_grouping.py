@@ -7,7 +7,7 @@ from datetime import date, datetime
 # carries its own local `_scrub` rather than calling `frappe.scrub`, exactly so
 # these modules import without a bench. Same shape as test_flag_identity.py and
 # test_flag_triage.py, which mock nothing either.
-from dewey_time.attendance_engine.flag_grouping import build_queue
+from dewey_time.attendance_engine.flag_grouping import _flag_out, _person, build_queue
 from dewey_time.attendance_engine.flag_identity import evidence_fingerprint
 from dewey_time.attendance_engine.flag_triage import triage_rank
 
@@ -744,6 +744,12 @@ class FlagDateTests(unittest.TestCase):
     def test_person_attendance_date_is_the_worst_unresolved_flags_date(self):
         # A 3-hour gap on DATE2 outranks a 9-minute late start on DATE, so the
         # person's headline date is DATE2 even though DATE sorts first.
+        #
+        # NOTE: this does not discriminate the selection rule itself — `by_person`
+        # is keyed (employee, date_str) until Task 3, so `build_queue` never hands
+        # `_person` a `person_flags` list spanning two dates; this passes even
+        # under an "earliest date" rule. See `PersonUnitTests` below for coverage
+        # that actually pins "worst", by calling `_person` directly with a span.
         flags = [
             _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}),
             _flag("EMP-1", DATE2, "MISSING_TIME", evidence={"minutes": 192}),
@@ -755,6 +761,121 @@ class FlagDateTests(unittest.TestCase):
             outage_branch_dates=set(),
         )
         self.assertEqual(result["entries"][0]["attendance_date"], DATE2)
+
+
+class PersonUnitTests(unittest.TestCase):
+    """`_person` exercised directly, not through `build_queue`.
+
+    `build_queue` cannot hand `_person` a `person_flags` list spanning two dates
+    until Task 3 — `by_person` is keyed `(employee, date_str)`, so every list it
+    assembles today holds exactly one distinct date, which makes any
+    date-selection rule (worst, earliest, last-in-list) agree by construction.
+    `_person` itself already accepts a genuine span, so these tests build
+    FlagOut dicts (via `_flag_out`, the real shape) directly and call `_person`.
+    """
+
+    def test_attendance_date_is_the_worst_flags_own_date_not_its_list_position(self):
+        # Worst-first order (the precondition `_person` documents): the act-tier
+        # gap sorts ahead of the routine late start because it outranks it, and
+        # its OWN date happens to be the later one.
+        gap = _flag_out(
+            _flag("EMP-1", DATE2, "MISSING_TIME", evidence={"minutes": 192}), {}
+        )
+        late = _flag_out(_flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}), {})
+        person = _person("EMP-1", [gap, late], {}, entry_key="p:EMP-1")
+        self.assertEqual(person["attendance_date"], DATE2)
+
+        # Same worst-first order, but the two flags' dates are now swapped: the
+        # worst flag (still first in the list) now carries the EARLIER date. A
+        # rule that returned "the later date" or "whichever date is last" would
+        # still say DATE2 here; `_person` must instead say DATE, because it reads
+        # the worst flag's own `attendance_date`, not a position or a min/max
+        # over the list.
+        gap_on_the_earlier_date = _flag_out(
+            _flag("EMP-1", DATE, "MISSING_TIME", evidence={"minutes": 192}), {}
+        )
+        late_on_the_later_date = _flag_out(
+            _flag("EMP-1", DATE2, "LATE_START", evidence={"minutes": 9}), {}
+        )
+        swapped = _person(
+            "EMP-1", [gap_on_the_earlier_date, late_on_the_later_date], {}, entry_key="p:EMP-1"
+        )
+        self.assertEqual(swapped["attendance_date"], DATE)
+
+    def test_dates_is_every_distinct_date_sorted_ascending(self):
+        flags = [
+            _flag_out(_flag("EMP-1", DATE2, "MISSING_TIME", evidence={"minutes": 192}), {}),
+            _flag_out(_flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}), {}),
+            _flag_out(_flag("EMP-1", DATE2, "NON_PRIMARY_SITE_PUNCH"), {}),
+        ]
+        person = _person("EMP-1", flags, {}, entry_key="p:EMP-1")
+        self.assertEqual(person["dates"], [DATE, DATE2])
+
+    def test_a_fully_settled_person_still_gets_a_date_from_their_worst_flag_overall(self):
+        # flag_grouping.py:196 — every flag decided, so `unresolved` is empty and
+        # `top` falls back to `person_flags[0]`. Uncovered until now, and the
+        # branch most likely to silently regress to a bare `None`.
+        flag = _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9})
+        settled = _flag_out(flag, {flag["flag_identity"]: _decision(flag)})
+        self.assertEqual(settled["decision_state"], "matched")
+
+        person = _person("EMP-1", [settled], {}, entry_key="p:EMP-1")
+        self.assertEqual(person["attendance_date"], DATE)
+        self.assertEqual(person["rank"], 0)
+        self.assertEqual(person["undecided_count"], 0)
+
+
+class EntryKeyTests(unittest.TestCase):
+    def test_entry_keys_are_distinct_and_correctly_scoped(self):
+        # EMP-1/EMP-2 share a routine code -> a qualifying group of two.
+        # EMP-3 is act tier with no outage -> a lone entry.
+        # EMP-4 is the only holder of ITS routine code -> a would-be group of
+        # one that degrades to a lone entry, exercising the member-stamping
+        # loop's placement AFTER the `< GROUP_MIN_MEMBERS` demotion: a demoted
+        # member must keep its lone key, not a group-scoped one that was never
+        # assigned.
+        flags = [
+            _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}),
+            _flag("EMP-2", DATE, "LATE_START", evidence={"minutes": 9}),
+            _flag("EMP-3", DATE, "UNNOTIFIED_ABSENCE"),
+            _flag("EMP-4", DATE, "NON_PRIMARY_SITE_PUNCH"),
+        ]
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_employees(
+                ("EMP-1", "Ana", "BR-A"),
+                ("EMP-2", "Ben", "BR-A"),
+                ("EMP-3", "Cy", "BR-B"),
+                ("EMP-4", "Dee", "BR-C"),
+            ),
+            outage_branch_dates=set(),
+        )
+
+        routine = _groups(payload, "ROUTINE_CODE")
+        self.assertEqual(len(routine), 1)
+        group = routine[0]
+        self.assertEqual([m["employee"] for m in group["members"]], ["EMP-1", "EMP-2"])
+
+        loners = [e for e in payload["entries"] if e["kind"] == "person"]
+        self.assertEqual(sorted(e["employee"] for e in loners), ["EMP-3", "EMP-4"])
+
+        all_keys = [m["entry_key"] for m in group["members"]] + [e["entry_key"] for e in loners]
+        self.assertEqual(len(all_keys), len(set(all_keys)))
+
+        for member in group["members"]:
+            self.assertTrue(
+                member["entry_key"].startswith(group["group_key"] + "|p:"),
+                member["entry_key"],
+            )
+            self.assertEqual(
+                member["entry_key"], "{0}|p:{1}".format(group["group_key"], member["employee"])
+            )
+
+        # Current (Task 1) lone form is `p:<employee>:<date>`; Task 3 changes it
+        # to `p:<employee>` deliberately and will update this assertion.
+        for loner in loners:
+            self.assertEqual(loner["entry_key"], "p:{0}:{1}".format(loner["employee"], DATE))
 
 
 if __name__ == "__main__":
