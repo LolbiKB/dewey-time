@@ -1437,19 +1437,32 @@ class RecountAgreementTests(unittest.TestCase):
     hid in, since a shape drift between what `build_queue` assembles and what a
     hand-written recount expects would still agree on a fixture built by hand.
 
-    Comparing `recount(result["entries"])` against `result["counts"]` would be
-    tautological: `build_queue` sets its own counts VIA `recount`, so both
-    sides call the identical function over the identical input — f(x) == f(x),
-    which cannot fail while the consolidation holds, which is exactly when a
-    regression needs catching. Every assertion below is against an
-    INDEPENDENTLY KNOWN literal instead.
+    An AGREEMENT test needs two properties, checked TOGETHER against the SAME
+    independently known literal numbers — never against each other:
+      1. `recount(result["entries"])` is right. Pins `recount` itself.
+      2. `result["counts"]["rows"]`/`["people"]` are ALSO right. Pins that
+         `build_queue` actually CALLED `recount` to produce its own counts,
+         rather than computing them some other way that happens to agree
+         today.
+    Property 1 alone cannot catch `build_queue` silently drifting off of
+    `recount`: an inline, drifted recomputation living *inside* `build_queue`
+    leaves the standalone `recount` function — and therefore property 1 —
+    completely untouched, so a test that only calls `recount` directly stays
+    green while `result["counts"]` quietly goes wrong. Comparing
+    `recount(result["entries"])` against `result["counts"]` ALONE is
+    tautological in the other direction: `build_queue` sets its own counts VIA
+    `recount` today, so both sides call the identical function over the
+    identical input — f(x) == f(x), which cannot fail while the consolidation
+    holds, which is exactly when a regression needs catching. Asserting BOTH
+    sides against independently known literals is what closes both gaps at
+    once.
 
     The fixture also carries a fully DECIDED person (reachable only under
     include_decided), because a fixture with zero decided people leaves the
-    `undecided_count` filter — the only non-trivial half of `recount`'s
-    definition — untested no matter how the comparison is written: with
-    nobody decided, "count everyone" and "count only the undecided" produce
-    the same number by coincidence.
+    `undecided_count` filter — the only non-trivial half of the definition —
+    untested no matter how the comparison is written: with nobody decided,
+    "count everyone" and "count only the undecided" produce the same number
+    by coincidence.
     """
 
     def _fixture(self):
@@ -1482,7 +1495,18 @@ class RecountAgreementTests(unittest.TestCase):
 
         # 3 people: EMP-1, EMP-2 (the group) and EMP-3 (their own row) all
         # still owe HR something. EMP-4 is settled and must not count.
-        self.assertEqual(recount(result["entries"]), {"rows": 3, "people": 3})
+        expected = {"rows": 3, "people": 3}
+
+        # Property 1: `recount` itself is right over the real entries.
+        self.assertEqual(recount(result["entries"]), expected)
+        # Property 2: `build_queue` actually USED `recount` to set its own
+        # counts, rather than computing them some other way. A drifted inline
+        # recomputation living inside `build_queue` (dropping the
+        # undecided_count filter, say) would leave property 1 above green —
+        # `recount` itself is untouched — while THIS assertion catches
+        # `result["counts"]["people"]` coming back 4, not 3.
+        self.assertEqual(result["counts"]["rows"], expected["rows"])
+        self.assertEqual(result["counts"]["people"], expected["people"])
 
     def test_recount_over_a_tier_filtered_slice_excludes_the_settled_person(self):
         # The shape flag_queue_api.py's tier branch actually hands `recount`:
@@ -1491,6 +1515,11 @@ class RecountAgreementTests(unittest.TestCase):
         # pattern group both land in "routine" (a settled person's rank falls
         # to 0, which tiers routine) — EMP-3's UNNOTIFIED_ABSENCE is "act" and
         # is filtered out here regardless.
+        #
+        # Property 1 only: `build_queue` itself never computes a tier-sliced
+        # count (only the whole-range one, covered by property 2 above) — the
+        # slice-and-recount pairing this pins is flag_queue_api's own call,
+        # asserted from the other side of the boundary in test_flag_queue_api.py.
         result = self._fixture()
         routine_only = [entry for entry in result["entries"] if entry["tier"] == "routine"]
         self.assertEqual(len(routine_only), 2)
