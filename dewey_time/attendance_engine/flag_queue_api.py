@@ -38,7 +38,15 @@ _MAX_ENTRIES = 2000
 
 _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 
-_QUEUE_CACHE_PREFIX = "flag_queue:v1"
+# The version suffix is tied to the SHAPE of the cached payload, not to this module's
+# behaviour: BUMP IT WHENEVER A FIELD IS ADDED, RENAMED OR REMOVED anywhere in what
+# build_queue returns. A deploy does not clear Redis, so for the whole TTL afterwards a
+# key written by the OLD code answers requests from the NEW frontend — a payload missing
+# a field the new JavaScript reads without a guard, which is a blank page for a minute
+# after every release. A new prefix simply cannot be hit by pre-deploy entries.
+# v2: person entries gained entry_key/dates/also_count/also_outlier_count, flags gained
+# attendance_date, and counts gained rows (pattern nesting).
+_QUEUE_CACHE_PREFIX = "flag_queue:v2"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
 # below is best-effort only: the engine deletes flags with raw frappe.db.delete()

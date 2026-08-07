@@ -512,8 +512,8 @@ class TestIncludeDecided(unittest.TestCase):
             [key for key, _ttl in cache.set_calls],
             [
                 # The default key is unchanged — the suffix is only ever added.
-                "flag_queue:v1:2026-08-01:2026-08-07:all",
-                "flag_queue:v1:2026-08-01:2026-08-07:all:decided",
+                "flag_queue:v2:2026-08-01:2026-08-07:all",
+                "flag_queue:v2:2026-08-01:2026-08-07:all:decided",
             ],
         )
 
@@ -530,11 +530,11 @@ class TestQueueCache(unittest.TestCase):
     def test_cache_key_and_ttl_match_the_contract(self):
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-            self.assertEqual(h.cache.set_calls, [("flag_queue:v1:2026-08-01:2026-08-07:all", 60)])
+            self.assertEqual(h.cache.set_calls, [("flag_queue:v2:2026-08-01:2026-08-07:all", 60)])
 
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
-            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v1:2026-08-01:2026-08-07:act")
+            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v2:2026-08-01:2026-08-07:act")
 
     def test_a_different_range_is_a_different_cache_entry(self):
         cache = _FakeCache()
@@ -550,7 +550,7 @@ class TestQueueCache(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             self.assertEqual(len(cache.store), 1)
             flag_queue_api.invalidate_flag_queue_cache()
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v1"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
         self.assertEqual(cache.store, {})
 
     def test_invalidate_accepts_doc_event_args(self):
@@ -558,7 +558,7 @@ class TestQueueCache(unittest.TestCase):
         with _harness(cache=cache):
             # Frappe doc_events call handlers as (doc, method); must not raise.
             flag_queue_api.invalidate_flag_queue_cache(doc=object(), method="on_update")
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v1"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
 
 
 class TestDriverDateShapes(unittest.TestCase):
