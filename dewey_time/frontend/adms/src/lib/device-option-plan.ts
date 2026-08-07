@@ -65,8 +65,16 @@ function valuesMatchPreview(a: string, b: string): boolean {
  * value is null without `redacted` set is one too (the server only skips on the
  * redacted FLAG). Anything that diverges here makes the page withhold an action
  * the bridge would have accepted.
+ *
+ * Exported so `SettingDetail` can ask the same per-row question `targetCount`
+ * answers in aggregate — "is THIS terminal one an Apply would write to" — when
+ * deciding whether its Apply button may name a single value or must say "the
+ * stored values" instead (an override target does not receive the fleet
+ * standard; naming the standard there would overclaim). Re-deriving that
+ * from `verdict` in the display layer would be the exact divergence this
+ * comment already warns against, one file over.
  */
-function wouldBeWritten(t: TerminalPlan): boolean {
+export function wouldBeWritten(t: TerminalPlan): boolean {
   if (t.effective == null) return false
   if (t.redacted) return false
   return t.verdict !== 'matches'
