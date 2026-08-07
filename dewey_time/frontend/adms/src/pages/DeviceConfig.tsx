@@ -1,40 +1,57 @@
-import { Fragment, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronRight, EyeOff, Loader2, SlidersHorizontal } from 'lucide-react'
-import { Page } from '@lolbikb/dewey-ui'
-import { Input } from '@/components/ui/input'
+import { AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Page, PageHeader } from '@lolbikb/dewey-ui'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton } from '@/components/ui/skeleton'
+import { QueryErrorCard } from '@/components/shared/query-error-card'
 import { DeviceService, type DeviceOptionEntry, type OptionKeyState } from '@/services/device-service'
-import { OptionKeyActions } from '@/components/devices/option-key-actions'
-import { policyRefetchInterval, WATCH_WINDOW_MS } from '@/lib/device-option-polling'
 import { useDevices } from '@/hooks/use-core-data'
-import { signalText, signalAlert } from '@/lib/signal'
-import { cn } from '@/lib/utils'
+import { policyRefetchInterval, WATCH_WINDOW_MS } from '@/lib/device-option-polling'
+import { buildOptionMatrix, deviceLabel } from '@/lib/device-option-matrix'
+import { buildKeyPlan } from '@/lib/device-option-plan'
 import {
-  buildOptionMatrix,
-  hasDrift,
-  groupRowValues,
-  deviceDeviations,
-  deviceLabel,
-  type MatrixRow,
-  type MatrixCell,
-} from '@/lib/device-option-matrix'
+  CURATED_SETTINGS,
+  curatedLabel,
+  parseSelection,
+  type Selection,
+} from '@/lib/device-option-catalogue'
+import { signalAlert } from '@/lib/signal'
+import { cn } from '@/lib/utils'
+import { SettingList } from '@/components/devices/config/setting-list'
+import { SettingDetail } from '@/components/devices/config/setting-detail'
+import { DriftReport } from '@/components/devices/config/drift-report'
+import { AllKeysReference } from '@/components/devices/config/all-keys-reference'
+import {
+  settingListEntries,
+  uncuratedDriftRows,
+} from '@/components/devices/config/setting-list-entries'
+import { applyNote, rereadNote } from '@/components/devices/config/fleet-action-note'
 
 /**
- * Fleet configuration — "are my terminals the same?"
+ * Fleet configuration — CONFIGURE FIRST, with drift kept first-class.
  *
- * BUILT FOR TEN-PLUS TERMINALS, not four. Two things break as a fleet grows,
- * and both are structural rather than cosmetic:
+ * Master–detail, not a grid. A settings-by-devices matrix gets WIDER with every
+ * terminal, so the handful of settings that actually differ end up off-screen
+ * among seventy that do not; and it answers "are they the same?" while the job
+ * is usually "make them the same". The left rail is the five settings this
+ * fleet is actually configured through plus two reference views; the right pane
+ * is one setting at a time — its one value, what each terminal reports, and the
+ * evidence trail behind it.
  *
- *   A settings-by-devices grid gets WIDER with every terminal, so the handful
- *   of settings that actually differ end up off-screen among seventy that do
- *   not. Fixed by grouping on VALUE — values are few, devices are many, so
- *   `VOLUME` across twenty terminals is still three lines — and by transposing
- *   the comparison table to devices-as-rows with only the DRIFTING settings as
- *   columns. That table is bounded by the number of problems, not the fleet.
+ * The selection lives in the URL (`?key=` / `?view=`) because the page re-reads
+ * itself every 5s while a write is outstanding, and a reload or a shared link
+ * must not lose the operator's place.
  *
- *   Raw serials stop being readable. `PYA8261900039` and `PYA8261900038` differ
- *   in one character; twenty of them is noise. Operators know these boxes by
- *   where they are, so name and location lead and the serial is the subtitle.
+ * Every claim on this page is bounded by what was actually observed:
+ *   - A FAILED QUERY is never rendered as a fact about the hardware. An empty
+ *     fleet and an outage are different sentences.
+ *   - A QUEUED command is never called "applied" or "refreshed" — the terminal
+ *     has not been asked yet; it collects the command on its next poll.
+ *   - The number in an apply result is the SERVER's, never the page's preview.
  */
 
 /** Matches the bridge's MAX_DEVICE_OPTIONS_PAGE. */
@@ -43,78 +60,14 @@ const OPTIONS_PAGE_LIMIT = 500
 /** How many silent terminals to name before summarising the rest. */
 const MAX_NAMED_SILENT = 4
 
-function valueLabel(cell: MatrixCell | undefined): string {
-  if (!cell?.present) return 'Not reported'
-  if (cell.redacted) return 'Withheld'
-  return cell.value === '' || cell.value == null ? '(empty)' : cell.value
-}
-
-function isSoft(cell: MatrixCell | undefined): boolean {
-  return !cell?.present || cell.redacted
-}
-
-/** One drifting setting, its values grouped by how many terminals report each. */
-function FindingCard({
-  row,
-  reportingDevices,
-  label,
-  actions,
-}: {
-  row: MatrixRow
-  reportingDevices: string[]
-  label: (sn: string) => string
-  /** Write controls, when this key is one the bridge will accept a write for. */
-  actions?: React.ReactNode
-}) {
-  const groups = groupRowValues(row, reportingDevices)
-
-  return (
-    <div className="rounded-xl border border-border bg-card p-3 space-y-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="font-mono text-xs font-medium break-all">{row.key}</span>
-        <span className={cn('text-xs whitespace-nowrap', signalText.attention)}>
-          {groups.length} value{groups.length === 1 ? '' : 's'}
-        </span>
-      </div>
-
-      <div className="space-y-1">
-        {groups.map((g, i) => {
-          const sample = row.cells[g.devices[0]]
-          return (
-            <div key={i} className="flex items-baseline justify-between gap-3 text-xs">
-              <span className="flex items-baseline gap-1.5 font-mono break-all">
-                {sample?.present && sample.redacted && (
-                  <EyeOff className={cn('h-3 w-3 shrink-0', signalText.idle)} />
-                )}
-                <span className={cn(isSoft(sample) && signalText.idle)}>{valueLabel(sample)}</span>
-                {g.isMajority && (
-                  <span className={cn('text-[10px] uppercase tracking-wide', signalText.idle)}>
-                    most common
-                  </span>
-                )}
-              </span>
-              <span
-                className={cn(
-                  'whitespace-nowrap',
-                  g.isMajority ? signalText.idle : signalText.attention
-                )}
-                title={g.devices.map(label).join(', ')}
-              >
-                {g.devices.length} terminal{g.devices.length === 1 ? '' : 's'}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-
-      {actions}
-    </div>
-  )
-}
-
 export function DeviceConfig() {
-  const [search, setSearch] = useState('')
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selection = parseSelection(searchParams.get('key'), searchParams.get('view'))
+  const selectedKey = selection.kind === 'key' ? selection.key : null
+  // `replace` so a session of clicking through settings does not fill the back
+  // button with them — the URL is here to survive a reload, not to be history.
+  const select = (s: Selection) =>
+    setSearchParams(s.kind === 'key' ? { key: s.key } : { view: s.kind }, { replace: true })
 
   const devicesQuery = useDevices({ limit: 200 })
   const devices = useMemo(
@@ -130,8 +83,19 @@ export function DeviceConfig() {
   )
   const label = useMemo(() => (sn: string) => deviceLabel(sn, devices), [devices])
 
-  // Set when a write is queued, so a FLEET apply — whose writes are not
-  // canaries and raise no flag — is also watched to completion.
+  // The two reference views' expansion and filter state lives HERE, not inside
+  // them: this suite renders with `renderToStaticMarkup` and cannot click a row
+  // open, so state held internally would be unreachable by any test — which is
+  // exactly how a bug shipped in the all-keys reference once already. Separate
+  // filters per view, because a filter typed against one view's rows would be
+  // a surprise when it silently applied to the other's.
+  const [expandedTerminal, setExpandedTerminal] = useState<string | null>(null)
+  const [driftSearch, setDriftSearch] = useState('')
+  const [openKey, setOpenKey] = useState<string | null>(null)
+  const [referenceSearch, setReferenceSearch] = useState('')
+
+  // Set when a write is queued to HARDWARE, so a fleet apply — whose writes are
+  // not canaries and raise no flag — is also watched to completion.
   const [watchUntil, setWatchUntil] = useState<number | null>(null)
 
   const policyQuery = useQuery({
@@ -146,11 +110,7 @@ export function DeviceConfig() {
     refetchInterval: (query) =>
       policyRefetchInterval(query.state.data?.keys, watchUntil, Date.now()),
   })
-  const pollInterval = policyRefetchInterval(
-    policyQuery.data?.keys,
-    watchUntil,
-    Date.now()
-  )
+  const pollInterval = policyRefetchInterval(policyQuery.data?.keys, watchUntil, Date.now())
 
   // PER DEVICE, not one fleet-wide call. A single bounded query truncates once
   // the fleet outgrows it — ten terminals at ~78 keys is 780 rows against a 500
@@ -168,7 +128,17 @@ export function DeviceConfig() {
     })),
   })
 
+  // The write ledger is per-KEY, so it is fetched only while a key is on
+  // screen: one trail, whatever the fleet size.
+  const writesQuery = useQuery({
+    queryKey: ['device-option-writes', selectedKey],
+    queryFn: () => DeviceService.getKeyWrites(selectedKey as string),
+    enabled: selectedKey != null,
+    refetchInterval: pollInterval,
+  })
+
   const optionsLoading = optionQueries.some((q) => q.isLoading)
+  const loading = devicesQuery.isLoading || optionsLoading
   const stamp = optionQueries.map((q) => q.dataUpdatedAt).join(',')
   const entries: DeviceOptionEntry[] = useMemo(
     () => optionQueries.flatMap((q) => q.data ?? []),
@@ -177,69 +147,149 @@ export function DeviceConfig() {
   )
   const truncated = optionQueries.some((q) => (q.data?.length ?? 0) >= OPTIONS_PAGE_LIMIT)
 
-  /**
-   * The write ladder, fleet-wide and independent of any one device's rows.
-   *
-   * Separate from the per-device option queries because it is per-KEY, not per
-   * device — one call, whatever the fleet size.
-   */
+  const desired = useMemo(() => policyQuery.data?.desired ?? [], [policyQuery.data])
   const keyState = useMemo(() => {
     const map = new Map<string, OptionKeyState>()
     for (const k of policyQuery.data?.keys ?? []) map.set(k.key, k)
     return map
   }, [policyQuery.data])
 
+  const matrix = useMemo(() => buildOptionMatrix(entries, deviceSns), [entries, deviceSns])
+  const listEntries = useMemo(
+    () => settingListEntries(matrix.rows, matrix.reportingDevices),
+    [matrix.rows, matrix.reportingDevices]
+  )
+  const driftRows = useMemo(() => uncuratedDriftRows(matrix.rows), [matrix.rows])
+  const plan = useMemo(
+    () => (selectedKey ? buildKeyPlan(selectedKey, desired, entries, deviceSns) : null),
+    [selectedKey, desired, entries, deviceSns]
+  )
+
   const queryClient = useQueryClient()
   /**
-   * Invalidate the DEVICE rows as well as the policy.
+   * Invalidate the DEVICE rows and the write trail as well as the policy.
    *
-   * A write does not land until the terminal next polls, so neither cache is
-   * correct at this moment — but leaving the option rows stale is what makes the
-   * drift view disagree with the ladder, and an operator reading two panels that
+   * A write does not land until the terminal next polls, so no cache is correct
+   * at this moment — but leaving the option rows stale is what makes the drift
+   * view disagree with the ladder, and an operator reading two panels that
    * contradict each other trusts neither.
    */
-  const refetchAll = () => {
-    setWatchUntil(Date.now() + WATCH_WINDOW_MS)
+  const invalidateFleet = () => {
     void queryClient.invalidateQueries({ queryKey: ['device-option-policy'] })
-    for (const sn of deviceSns) void queryClient.invalidateQueries({ queryKey: ['device-options', sn] })
+    void queryClient.invalidateQueries({ queryKey: ['device-option-writes'] })
+    for (const sn of deviceSns) {
+      void queryClient.invalidateQueries({ queryKey: ['device-options', sn] })
+    }
+  }
+  /**
+   * For actions that queue a command to a TERMINAL, which then resolve on the
+   * device's terms. Storing a desired value does not: it is server-side state,
+   * complete the moment the request returns, so it invalidates without arming a
+   * thirty-minute 5s poll for hardware work that was never queued.
+   */
+  const watchQueuedWrite = () => {
+    setWatchUntil(Date.now() + WATCH_WINDOW_MS)
+    invalidateFleet()
   }
 
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionNote, setActionNote] = useState<string | null>(null)
+  const clearBanners = () => {
+    setActionError(null)
+    setActionNote(null)
+  }
+
+  const setStandardMutation = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: string }) =>
+      DeviceService.setFleetOption(key, value),
+    onMutate: clearBanners,
+    onSuccess: (_data, vars) => {
+      // Saving a value is not writing it. Nothing has been sent to a terminal.
+      setActionNote(
+        `Saved ${vars.value} as the fleet standard for ${vars.key}. Nothing is written to a terminal until you try it or apply it.`
+      )
+      invalidateFleet()
+    },
+    onError: (e: Error) => setActionError(e.message),
+  })
+
+  const overrideMutation = useMutation({
+    mutationFn: ({ key, sn, value }: { key: string; sn: string; value: string }) =>
+      DeviceService.setDeviceOption(sn, key, value),
+    onMutate: clearBanners,
+    onSuccess: (_data, vars) => {
+      setActionNote(
+        `Saved ${vars.value} for ${label(vars.sn)}, overriding the fleet standard for ${vars.key}. Nothing is written to a terminal until you apply it.`
+      )
+      invalidateFleet()
+    },
+    onError: (e: Error) => setActionError(e.message),
+  })
+
+  const clearOverrideMutation = useMutation({
+    mutationFn: ({ key, sn }: { key: string; sn: string }) =>
+      DeviceService.clearDeviceOption(sn, key),
+    onMutate: clearBanners,
+    onSuccess: (_data, vars) => {
+      setActionNote(
+        `${label(vars.sn)} follows the fleet standard for ${vars.key} again. Its current value is unchanged until you apply.`
+      )
+      invalidateFleet()
+    },
+    onError: (e: Error) => setActionError(e.message),
+  })
 
   const canaryMutation = useMutation({
     mutationFn: ({ key, sn, value }: { key: string; sn: string; value: string }) =>
       DeviceService.canaryOption(key, sn, value),
-    onMutate: () => {
-      setActionError(null)
-      setActionNote(null)
-    },
+    onMutate: clearBanners,
     onSuccess: (_data, vars) => {
       // "Queued", never "applied". The terminal has not been asked yet.
-      setActionNote(`${vars.key} queued for ${vars.sn} — it applies when that terminal next polls.`)
-      refetchAll()
+      setActionNote(
+        `${vars.key} queued for ${label(vars.sn)} — it applies when that terminal next polls.`
+      )
+      watchQueuedWrite()
     },
     onError: (e: Error) => setActionError(e.message),
   })
 
   const applyMutation = useMutation({
     mutationFn: (key: string) => DeviceService.applyOption(key),
-    onMutate: () => {
-      setActionError(null)
-      setActionNote(null)
-    },
+    onMutate: clearBanners,
     onSuccess: (result, key) => {
-      // `queued: 0` reaching here means every terminal already matched. The
-      // cases where nothing could be compared arrive as errors, not as this.
-      setActionNote(
-        result.queued === 0
-          ? (result.message ?? `Every terminal already matches ${key}.`)
-          : `${key} queued for ${result.queued} terminal${result.queued === 1 ? '' : 's'} — each applies when it next polls.`
-      )
-      refetchAll()
+      // The SERVER's count, not `plan.targetCount` — that one is a preview.
+      setActionNote(applyNote(key, result))
+      watchQueuedWrite()
     },
     onError: (e: Error) => setActionError(e.message),
   })
+
+  const [rereading, setRereading] = useState(false)
+  /**
+   * Ask every approved terminal to report its configuration.
+   *
+   * `allSettled`, not `all`: one unreachable terminal must not cancel the rest,
+   * and the ones that failed are NAMED — "3 of 4" leaves the operator to work
+   * out which box is missing from a column of near-identical serials.
+   */
+  const rereadAll = async () => {
+    setRereading(true)
+    clearBanners()
+    const settled = await Promise.allSettled(
+      deviceSns.map((sn) => DeviceService.refreshDeviceOptions(sn))
+    )
+    const outcomes = deviceSns.map((deviceSn, i) => ({
+      deviceSn,
+      queued: settled[i].status === 'fulfilled',
+    }))
+    const note = rereadNote(outcomes, label)
+    if (outcomes.some((o) => !o.queued)) setActionError(note)
+    else setActionNote(note)
+    // An INFO is outstanding on real hardware, so watch for the answer — the
+    // values only change once each terminal has polled and replied.
+    if (outcomes.some((o) => o.queued)) watchQueuedWrite()
+    setRereading(false)
+  }
 
   const pendingKey = canaryMutation.isPending
     ? canaryMutation.variables?.key
@@ -247,54 +297,169 @@ export function DeviceConfig() {
       ? applyMutation.variables
       : undefined
 
-  const matrix = useMemo(() => buildOptionMatrix(entries, deviceSns), [entries, deviceSns])
-  const driftRows = useMemo(() => matrix.rows.filter(hasDrift), [matrix.rows])
-  const outlierCount = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const d of deviceDeviations(matrix.rows, matrix.reportingDevices)) {
-      map.set(d.deviceSn, d.count)
-    }
-    return map
-  }, [matrix.rows, matrix.reportingDevices])
+  const optionsError = optionQueries.find((q) => q.isError)?.error as Error | undefined
+  const loadedNothing = optionQueries.every((q) => !q.data?.length)
+  const refetchAll = () => {
+    void devicesQuery.refetch()
+    for (const q of optionQueries) void q.refetch()
+  }
 
-  if (devicesQuery.isLoading || optionsLoading) {
+  // Nothing loaded AND something failed: an outage must not render as a fleet
+  // that has reported nothing. That was the defect — an options fetch that
+  // errored left the matrix empty and the page then stated "No terminal has
+  // reported its configuration yet", which is a claim about the hardware.
+  if ((devicesQuery.isError || optionsError) && loadedNothing) {
     return (
-      <Page>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading fleet configuration…
-        </div>
-      </Page>
+      <QueryErrorCard
+        title="Could not load fleet configuration"
+        error={devicesQuery.error ?? optionsError}
+        onRetry={refetchAll}
+      />
     )
   }
 
   const namedSilent = matrix.silentDevices.slice(0, MAX_NAMED_SILENT).map(label)
   const extraSilent = matrix.silentDevices.length - namedSilent.length
+  const keyLabel = selectedKey ? (curatedLabel(selectedKey) ?? selectedKey) : ''
+  const keyHint = CURATED_SETTINGS.find((s) => s.key === selectedKey)?.hint ?? ''
+
+  const detailPane = () => {
+    if (selectedKey && plan) {
+      const state = keyState.get(selectedKey)
+      const standard = desired.find((d) => d.device_sn === null && d.key === selectedKey)
+      return (
+        // NOT keyed by `selectedKey`. This pane and its children reset their own
+        // drafts in place when the key changes (see setting-detail.tsx); a
+        // remount would throw that logic away and reintroduce the stale-draft
+        // bug it was written for.
+        <SettingDetail
+          optionKey={selectedKey}
+          label={keyLabel}
+          hint={keyHint}
+          plan={plan}
+          status={state?.status ?? 'unproven'}
+          canaryInFlight={state?.canaryInFlight ?? false}
+          lastError={state?.lastError ?? null}
+          updatedBy={standard?.updated_by ?? null}
+          updatedAt={standard?.updated_at ?? null}
+          devices={devices}
+          writes={writesQuery.data ?? []}
+          writesLoading={writesQuery.isLoading}
+          writesError={(writesQuery.error as Error | null) ?? null}
+          saving={
+            setStandardMutation.isPending && setStandardMutation.variables?.key === selectedKey
+          }
+          pending={pendingKey === selectedKey}
+          onSaveStandard={(value) => setStandardMutation.mutate({ key: selectedKey, value })}
+          onOverride={(sn, value) => overrideMutation.mutate({ key: selectedKey, sn, value })}
+          onClearOverride={(sn) => clearOverrideMutation.mutate({ key: selectedKey, sn })}
+          onCanary={(sn, value) => canaryMutation.mutate({ key: selectedKey, sn, value })}
+          onApply={() => applyMutation.mutate(selectedKey)}
+        />
+      )
+    }
+
+    if (selection.kind === 'drift') {
+      // The guard the drift table cannot apply itself: with no rows at all it
+      // would draw a bare "By terminal" header over a column of "Not reported",
+      // which reads as a finding rather than as an absence of data.
+      if (matrix.rows.length === 0) {
+        return <EmptyState title="No terminal has reported its configuration yet" />
+      }
+      if (driftRows.length === 0) {
+        return (
+          <EmptyState
+            title="Nothing outside the listed settings differs"
+            description="Identity keys and live counters differ by nature and are not compared."
+          />
+        )
+      }
+      return (
+        <DriftReport
+          rows={driftRows}
+          deviceSns={deviceSns}
+          entries={entries}
+          silentDevices={matrix.silentDevices}
+          devices={devices}
+          expanded={expandedTerminal}
+          onExpand={setExpandedTerminal}
+          search={driftSearch}
+          onSearch={setDriftSearch}
+        />
+      )
+    }
+
+    return (
+      <AllKeysReference
+        rows={matrix.rows}
+        reportingDevices={matrix.reportingDevices}
+        search={referenceSearch}
+        onSearch={setReferenceSearch}
+        onConfigure={(key) => select({ kind: 'key', key })}
+        open={openKey}
+        onOpen={setOpenKey}
+      />
+    )
+  }
 
   return (
     // <Page> is h-full flex-col, so the app's content inset does NOT scroll for
-    // us — a page that merely grows overflows with nowhere to go, which is what
-    // happened when a terminal row expanded and pushed its detail off-screen.
-    // Header and banners stay put; everything below scrolls in its own region.
+    // us. Header and banners stay put; the two panes scroll in their own
+    // regions, so a page-level warning can never scroll away from the findings
+    // it qualifies.
     <Page className="min-h-0">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
-        <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-        {matrix.reportingDevices.length} terminal
-        {matrix.reportingDevices.length === 1 ? '' : 's'} · {matrix.rows.length} keys
-        {driftRows.length > 0 ? (
-          <span className={signalText.attention}>
-            · {driftRows.length} setting{driftRows.length === 1 ? '' : 's'} to review
-          </span>
-        ) : (
-          <span className={cn('inline-flex items-center gap-1', signalText.success)}>
-            <Check className="h-3.5 w-3.5" />
-            settings match
-          </span>
-        )}
-      </div>
+      <PageHeader
+        title="Fleet Configuration"
+        // Never "0 terminals" while the fleet is still loading — an absent
+        // statement, not a false one.
+        description={
+          loading
+            ? 'Loading…'
+            : `${deviceSns.length} terminal${deviceSns.length === 1 ? '' : 's'} · ${matrix.rows.length} keys reported`
+        }
+        actions={
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void rereadAll()}
+            disabled={rereading || loading}
+          >
+            <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', rereading && 'animate-spin')} />
+            Re-read all terminals
+          </Button>
+        }
+      />
 
-      {truncated && (
-        <div className={cn('flex gap-2 rounded-lg p-3 text-xs', signalAlert.danger)}>
+      {/* Rows are on screen but the latest fetch failed — say so rather than
+          showing silently stale data as if it were current. */}
+      {(devicesQuery.isError || optionsError) && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Could not refresh fleet configuration</AlertTitle>
+          <AlertDescription className="flex items-center justify-between">
+            <span>
+              Showing the values last loaded, which may no longer be what the terminals report.{' '}
+              {(devicesQuery.error ?? optionsError) instanceof Error
+                ? ((devicesQuery.error ?? optionsError) as Error).message
+                : 'An unknown error occurred'}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-4 bg-background hover:bg-background/80"
+              onClick={refetchAll}
+            >
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Both banners are suppressed while loading: mid-load every terminal is
+          silent, and saying so would be a statement about the hardware made
+          from an incomplete read. */}
+      {!loading && truncated && (
+        <div className={cn('flex gap-2 rounded-lg border p-3 text-xs', signalAlert.danger)}>
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>
             A terminal reported more than {OPTIONS_PAGE_LIMIT} keys, so some are missing here. A key
@@ -304,8 +469,8 @@ export function DeviceConfig() {
         </div>
       )}
 
-      {matrix.silentDevices.length > 0 && (
-        <div className={cn('rounded-lg p-3 text-xs', signalAlert.attention)}>
+      {!loading && matrix.silentDevices.length > 0 && (
+        <div className={cn('rounded-lg border p-3 text-xs', signalAlert.attention)}>
           {matrix.silentDevices.length} of {deviceSns.length} terminals have not reported yet (
           {namedSilent.join(', ')}
           {extraSilent > 0 ? ` and ${extraSilent} more` : ''}), so they are not compared. A terminal
@@ -314,195 +479,58 @@ export function DeviceConfig() {
       )}
 
       {/*
-        The result of the last write action, stated as what actually happened.
-        A queued command is not an applied one — the terminal has not been asked
-        yet — and the errors here include the two the bridge answers when a
-        fleet apply could not compare anything at all (409, the value is
-        withheld) or covers no approved terminal (400). Neither is success, and
-        neither may render as one.
-
-        OUTSIDE the scroll container below, deliberately, and for the same reason
-        the truncation and silent-terminal banners are: this is page-level state.
-        Inside it, "the apply failed on PYA8261900039" scrolls out of view the
-        moment the operator goes looking at the findings it refers to.
+        The result of the last action, stated as what actually happened. A
+        queued command is not an applied one, and the errors here include the
+        two the bridge answers when a fleet apply could not compare anything at
+        all (409, the value is withheld) or covers no approved terminal (400).
+        Neither is success, and neither may render as one.
       */}
       {actionError && (
-        <div className={cn('flex gap-2 rounded-lg p-3 text-xs', signalAlert.danger)}>
+        <div className={cn('flex gap-2 rounded-lg border p-3 text-xs', signalAlert.danger)}>
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>{actionError}</span>
         </div>
       )}
       {actionNote && !actionError && (
-        <div className={cn('rounded-lg p-3 text-xs', signalAlert.attention)}>{actionNote}</div>
+        <div className={cn('rounded-lg border p-3 text-xs', signalAlert.attention)}>
+          {actionNote}
+        </div>
       )}
 
-      <div className="flex-1 min-h-0 space-y-4 overflow-y-auto">
-      {matrix.rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No terminal has reported its configuration yet.
-        </p>
-      ) : driftRows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Every comparable setting matches across the fleet. Identity and live counters differ by
-          nature and are not compared.
-        </p>
-      ) : (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {driftRows.map((row) => (
-            <FindingCard
-              key={row.key}
-              row={row}
-              reportingDevices={matrix.reportingDevices}
-              label={label}
-              actions={
-                // Identity and live counters are not writable, and the bridge
-                // refuses them anyway — offering a control for MAC or UserCount
-                // would be an action that cannot succeed.
-                row.kind === 'setting' ? (
-                  <OptionKeyActions
-                    status={keyState.get(row.key)?.status ?? 'unproven'}
-                    optionKey={row.key}
-                    devices={deviceSns}
-                    lastError={keyState.get(row.key)?.lastError}
-                    pending={pendingKey === row.key}
-                    canaryInFlight={keyState.get(row.key)?.canaryInFlight}
-                    onCanary={(sn, value) => canaryMutation.mutate({ key: row.key, sn, value })}
-                    onApply={() => applyMutation.mutate(row.key)}
-                  />
-                ) : undefined
-              }
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <div className="min-h-0 overflow-y-auto rounded-xl border border-border">
+          {loading ? (
+            // The frame stays and fills with skeletons — a page replaced
+            // wholesale by a spinner is why this one did not feel like its
+            // siblings.
+            <div className="space-y-2 p-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </div>
+          ) : (
+            <SettingList
+              entries={listEntries}
+              driftCount={driftRows.length}
+              totalKeys={matrix.rows.length}
+              selected={selection}
+              onSelect={select}
             />
-          ))}
+          )}
         </div>
-      )}
 
-      {/*
-        TRANSPOSED comparison: devices are ROWS and only the DRIFTING settings
-        are columns. A settings-by-devices grid widens with the fleet; this one
-        is bounded by the number of problems, which is what an operator is
-        working through anyway. Expanding a row shows that terminal's full key
-        list, which is the "what does this box actually have" question the wide
-        grid used to answer badly.
-      */}
-      {matrix.rows.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-xs font-medium">By terminal</div>
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-left">
-              <thead className="border-b border-border bg-muted/40">
-                <tr>
-                  <th className="px-3 py-2 text-xs font-medium">Terminal</th>
-                  {driftRows.map((r) => (
-                    <th key={r.key} className="px-3 py-2 font-mono text-xs font-medium">
-                      {r.key}
-                    </th>
-                  ))}
-                  <th className="px-3 py-2 text-xs font-medium">Off majority</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {deviceSns.map((sn) => {
-                  const off = outlierCount.get(sn) ?? 0
-                  const isOpen = expanded === sn
-                  const own = entries
-                    .filter((e) => e.device_sn === sn)
-                    .sort((a, b) => a.key.localeCompare(b.key))
-
-                  return (
-                    // Key on the Fragment: a row expands into TWO <tr>s, and
-                    // keying the children instead makes React treat each render
-                    // as a fresh list.
-                    <Fragment key={sn}>
-                      <tr
-                        className={cn('cursor-pointer hover:bg-muted/30', off > 0 && 'bg-attention/5')}
-                        onClick={() => setExpanded(isOpen ? null : sn)}
-                      >
-                        <td className="px-3 py-2">
-                          <span className="flex items-center gap-1.5 text-xs font-medium">
-                            <ChevronRight
-                              className={cn('h-3 w-3 transition-transform', isOpen && 'rotate-90')}
-                            />
-                            {label(sn)}
-                          </span>
-                          <span className={cn('ml-4.5 block font-mono text-[10px]', signalText.idle)}>
-                            {sn}
-                          </span>
-                        </td>
-                        {driftRows.map((r) => (
-                          <td key={r.key} className="px-3 py-2">
-                            <span
-                              className={cn(
-                                'font-mono text-xs break-all',
-                                isSoft(r.cells[sn]) && signalText.idle
-                              )}
-                            >
-                              {valueLabel(r.cells[sn])}
-                            </span>
-                          </td>
-                        ))}
-                        <td
-                          className={cn(
-                            'px-3 py-2 text-xs whitespace-nowrap',
-                            off > 0 ? signalText.attention : signalText.idle
-                          )}
-                        >
-                          {matrix.silentDevices.includes(sn) ? 'Not reported' : off > 0 ? off : '—'}
-                        </td>
-                      </tr>
-
-                      {isOpen && (
-                        <tr className="bg-muted/20">
-                          <td colSpan={driftRows.length + 2} className="px-3 py-3">
-                            {own.length === 0 ? (
-                              <p className="text-xs text-muted-foreground">
-                                This terminal has not reported its configuration yet.
-                              </p>
-                            ) : (
-                              <>
-                                <Input
-                                  value={search}
-                                  onChange={(ev) => setSearch(ev.target.value)}
-                                  placeholder="Filter keys…"
-                                  className="mb-2 h-7 w-full sm:w-56"
-                                  onClick={(ev) => ev.stopPropagation()}
-                                />
-                                <div className="grid grid-cols-1 gap-x-6 gap-y-0.5 sm:grid-cols-2 lg:grid-cols-3">
-                                  {own
-                                    .filter((o) =>
-                                      o.key.toLowerCase().includes(search.trim().toLowerCase())
-                                    )
-                                    .map((o) => (
-                                      <div
-                                        key={o.key}
-                                        className="flex items-baseline justify-between gap-3 text-xs"
-                                      >
-                                        <span className="font-mono text-muted-foreground break-all">
-                                          {o.key}
-                                        </span>
-                                        <span
-                                          className={cn(
-                                            'text-right font-mono break-all',
-                                            o.redacted && signalText.idle
-                                          )}
-                                        >
-                                          {o.redacted ? 'Withheld' : o.value || '(empty)'}
-                                        </span>
-                                      </div>
-                                    ))}
-                                </div>
-                              </>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+        <div className="min-h-0 overflow-y-auto rounded-xl border border-border p-3">
+          {loading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-8 w-40" />
+              <Skeleton className="h-32 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : (
+            detailPane()
+          )}
         </div>
-      )}
       </div>
     </Page>
   )
