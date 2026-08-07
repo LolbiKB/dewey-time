@@ -357,13 +357,29 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
     )
 
     entries = queue.get("entries") or []
+    counts = dict(queue.get("counts") or {})
     if tier:
         entries = [entry for entry in entries if entry.get("tier") == tier]
+        # `people` and `rows` describe the LIST; leaving them whole-range would
+        # put "40 people · 12 rows" above three filtered rows, which is the same
+        # header-versus-list contradiction the nesting spec exists to fix.
+        # open/needs_re_review/decided stay whole-range on purpose: they are the
+        # size of the job and the toolbar renders them as such.
+        counts["rows"] = len(entries)
+        counts["people"] = len(
+            {
+                person["employee"]
+                for entry in entries
+                for person in (entry["members"] if entry["kind"] == "group" else [entry])
+                if person["undecided_count"]
+            }
+        )
 
     return {
         "entries": entries,
-        # counts/orphans stay whole-range: they are the toolbar totals, not a page count.
-        "counts": queue.get("counts") or {},
+        # counts/orphans stay whole-range for the state totals: they are the
+        # toolbar numbers, not a page count.
+        "counts": counts,
         "orphans": queue.get("orphans") or {},
         "alerts": alert_rows,
         "truncated": bool(flags_capped or decisions_capped),

@@ -122,7 +122,7 @@ class _Recorder:
 def _empty_queue():
     return {
         "entries": [],
-        "counts": {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0},
+        "counts": {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0, "rows": 0},
         "orphans": {"orphaned_flag_gone": 0, "orphaned_evidence_changed": 0},
     }
 
@@ -449,9 +449,12 @@ class TestAlerts(unittest.TestCase):
 
 class TestTierFilter(unittest.TestCase):
     def test_tier_filters_entries(self):
+        # undecided_count is present because the tier filter recounts `people`
+        # against it (TestTierFilterCounts) — a real build_queue person entry
+        # always carries it.
         entries = [
-            {"kind": "person", "employee": "A", "tier": "act"},
-            {"kind": "person", "employee": "B", "tier": "routine"},
+            {"kind": "person", "employee": "A", "tier": "act", "undecided_count": 1},
+            {"kind": "person", "employee": "B", "tier": "routine", "undecided_count": 1},
         ]
         with _harness(_roster(2), queue={**_empty_queue(), "entries": entries}):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
@@ -715,6 +718,80 @@ class TestSharedDateNormaliser(unittest.TestCase):
         # a later "finish the job" refactor of the two into one fails.
         self.assertEqual(flag_identity._format_date(datetime(2026, 8, 3, 14, 30)), "2026-08-03")
         self.assertEqual(flag_identity._format_date("2026-08-03 00:00:00"), "2026-08-03 00:00:00")
+
+
+class TestTierFilterCounts(unittest.TestCase):
+    """The header and the list must count the same thing — under a filter too."""
+
+    def _queue(self):
+        return {
+            **_empty_queue(),
+            "entries": [
+                {"kind": "person", "entry_key": "p:A", "employee": "A", "tier": "act",
+                 "undecided_count": 1},
+                {"kind": "person", "entry_key": "p:B", "employee": "B", "tier": "routine",
+                 "undecided_count": 1},
+            ],
+            "counts": {"open": 2, "needs_re_review": 0, "decided": 0, "people": 2, "rows": 2},
+        }
+
+    def test_a_tier_filter_recounts_people_and_rows(self):
+        with _harness(_roster(2), queue=self._queue()):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertEqual(len(payload["entries"]), 1)
+        self.assertEqual(payload["counts"]["people"], 1)
+        self.assertEqual(payload["counts"]["rows"], 1)
+
+    def test_state_totals_stay_whole_range_under_a_filter(self):
+        # open/needs_re_review/decided are the size of the job, not a description
+        # of the filtered list, and the toolbar renders them as such.
+        with _harness(_roster(2), queue=self._queue()):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertEqual(payload["counts"]["open"], 2)
+
+    def test_without_a_filter_counts_are_passed_through_untouched(self):
+        with _harness(_roster(2), queue=self._queue()):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["counts"]["people"], 2)
+        self.assertEqual(payload["counts"]["rows"], 2)
+
+    def test_group_members_count_toward_the_filtered_people(self):
+        # A person inside a pattern group is still a person with something open.
+        queue = {
+            **_empty_queue(),
+            "entries": [
+                {
+                    "kind": "group",
+                    "group_key": "REPEAT_PATTERN:LATE_START",
+                    "tier": "routine",
+                    "members": [
+                        {"employee": "A", "undecided_count": 2},
+                        {"employee": "B", "undecided_count": 1},
+                    ],
+                }
+            ],
+            "counts": {"open": 3, "needs_re_review": 0, "decided": 0, "people": 2, "rows": 1},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="routine")
+        self.assertEqual(payload["counts"]["people"], 2)
+        self.assertEqual(payload["counts"]["rows"], 1)
+
+    def test_a_settled_person_does_not_count_toward_filtered_people(self):
+        # Same rule as build_queue's own `people`: it means "people with something
+        # open", and include_decided must not inflate it.
+        queue = {
+            **_empty_queue(),
+            "entries": [
+                {"kind": "person", "entry_key": "p:A", "employee": "A", "tier": "act",
+                 "undecided_count": 0},
+            ],
+            "counts": {"open": 0, "needs_re_review": 0, "decided": 1, "people": 0, "rows": 1},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertEqual(payload["counts"]["people"], 0)
+        self.assertEqual(payload["counts"]["rows"], 1)
 
 
 class TestHooksWiring(unittest.TestCase):
