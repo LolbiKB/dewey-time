@@ -121,7 +121,12 @@ export function SettingDetail({
   // (device-option-apply-gate.ts), so `plan.fleetStandard` can be `null`
   // here while the button still has something true to say.
   const overrideIsTarget = plan.terminals.some((t) => t.isOverride && wouldBeWritten(t))
-  const namesSingleValue = plan.fleetStandard != null && !overrideIsTarget
+  // TRIMMED, not merely null-checked. A whitespace-only stored standard is
+  // non-null but renders as nothing, so the button reads "Apply    to 2
+  // terminals" — the same invisible-value defect as the null case, one step
+  // along. The UI cannot store one (the field saves trimmed) but an API row
+  // can carry one, which is why the Try guard on line 113 already trims.
+  const namesSingleValue = (plan.fleetStandard?.trim() ?? '') !== '' && !overrideIsTarget
   const targetNoun = `${plan.targetCount} terminal${plan.targetCount === 1 ? '' : 's'}`
 
   return (

@@ -99,6 +99,18 @@ describe('SettingDetail', () => {
       expect(applyButton).not.toMatch(/>Apply null/i)
     })
 
+    test('does not name a whitespace-only stored standard, which renders as nothing', () => {
+      // Non-null but invisible: "Apply    to 1 terminal" is the same promise
+      // with no visible value as the null case above, one step along. The UI
+      // cannot store one — the field saves trimmed — but an API row can.
+      const plan: KeyPlan = { ...PLAN, fleetStandard: '   ' }
+      const html = renderToStaticMarkup(<SettingDetail {...props} plan={plan} />)
+      const applyButton = buttonWithText(html, 'Apply')
+      expect(applyButton).not.toBeNull()
+      expect(applyButton).toMatch(/Apply the stored values to 1 terminal/i)
+      expect(applyButton).not.toMatch(/Apply\s\s+to/i)
+    })
+
     test('says "the stored values" rather than overclaiming when an override is also a target', () => {
       // A fleet standard of 50 does not land on terminal B — its override
       // (30) does. "Apply 50 to 2 terminals" would say the wrong thing for
