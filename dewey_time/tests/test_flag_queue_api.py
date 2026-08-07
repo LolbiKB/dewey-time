@@ -448,28 +448,32 @@ class TestOutageDatesInPayload(unittest.TestCase):
         self.assertIsInstance(payload["outage_dates"], list)
 
     def test_outage_dates_are_returned_in_a_stable_sorted_order(self):
-        # Three branch-days, deliberately built (and inserted) out of sorted
-        # order: a plain `list(a_set)` has no defined iteration order, so a
-        # missing `sorted()` would only match this expected order by
-        # coincidence — three elements makes that a 1-in-6 chance, not a
-        # plausible false pass. The payload is Redis-cached, so a cache hit
-        # and a cache miss have to hand the strip the identical array or two
-        # requests for the same range silently render the fortnight
-        # differently.
+        # Five branch-days, deliberately built (and inserted) out of sorted
+        # order: a plain `list(a_set)` has no defined iteration order — Python
+        # randomises str hashing per process, so a missing `sorted()` matches
+        # this expected order only by coincidence. Three elements gave that a
+        # 1-in-6 chance of a false pass (observed in practice); five brings it
+        # to 1-in-120. The payload is Redis-cached, so a cache hit and a cache
+        # miss have to hand the strip the identical array or two requests for
+        # the same range silently render the fortnight differently.
         rows = {
             "Attendance Flag": [
                 _flag_row("HR-EMP-00000", attendance_date="2026-08-05"),
                 _flag_row("HR-EMP-00001", attendance_date="2026-08-03"),
                 _flag_row("HR-EMP-00002", attendance_date="2026-08-04"),
+                _flag_row("HR-EMP-00003", attendance_date="2026-08-07"),
+                _flag_row("HR-EMP-00004", attendance_date="2026-08-06"),
             ],
             "Attendance Flag Decision": [],
             "Employee": [
                 _employee_row("HR-EMP-00000", branch="BR-Z"),
                 _employee_row("HR-EMP-00001", branch="BR-A"),
                 _employee_row("HR-EMP-00002", branch="BR-M"),
+                _employee_row("HR-EMP-00003", branch="BR-Y"),
+                _employee_row("HR-EMP-00004", branch="BR-C"),
             ],
             "Device Closeout Alert": [],
-            "Device Sync Status": [],  # none of the three branch-days ever reported
+            "Device Sync Status": [],  # none of the five branch-days ever reported
         }
         with _harness(rows):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
@@ -477,7 +481,9 @@ class TestOutageDatesInPayload(unittest.TestCase):
             payload["outage_dates"],
             [
                 {"branch": "BR-A", "date": "2026-08-03"},
+                {"branch": "BR-C", "date": "2026-08-06"},
                 {"branch": "BR-M", "date": "2026-08-04"},
+                {"branch": "BR-Y", "date": "2026-08-07"},
                 {"branch": "BR-Z", "date": "2026-08-05"},
             ],
         )
