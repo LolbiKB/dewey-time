@@ -30,6 +30,7 @@ function person(employee: string, flags: FlagOut[]): QueuePerson {
     employee,
     employee_name: employee,
     employee_branch: "HQ",
+    employee_image: null,
     attendance_date: flags[0]?.attendance_date ?? "2026-08-01",
     dates: flags.map((f) => f.attendance_date),
     rank: flags[0]?.rank ?? 0,

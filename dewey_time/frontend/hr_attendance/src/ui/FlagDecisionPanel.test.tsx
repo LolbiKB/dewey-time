@@ -55,6 +55,7 @@ const ENTRY: PersonEntry = {
   employee: "EMP-0002",
   employee_name: "Jane Doe",
   employee_branch: null,
+  employee_image: null,
   attendance_date: "2026-08-04",
   dates: ["2026-08-04"],
   rank: 140,

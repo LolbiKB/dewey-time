@@ -76,6 +76,8 @@ function makePerson(args: {
   tier: Tier;
   flags: FlagOut[];
   entryKey?: string;
+  /** Employee.image, or absent for the many employees who have no photo. */
+  image?: string | null;
   alsoCount?: number;
   alsoOutlierCount?: number;
 }): QueuePerson {
@@ -86,6 +88,7 @@ function makePerson(args: {
     employee: args.employee,
     employee_name: args.name,
     employee_branch: "Phnom Penh HQ",
+    employee_image: args.image ?? null,
     attendance_date: top?.attendance_date ?? DATE,
     dates: [...new Set(args.flags.map((f) => f.attendance_date))].sort(),
     rank: args.rank,
@@ -97,6 +100,21 @@ function makePerson(args: {
   };
 }
 
+/**
+ * The queried fortnight, and no device outages in it. Every list render needs
+ * both: the strip's window is cut from the range's recent end, and its grey
+ * cells come from the outage set.
+ */
+function listProps() {
+  return {
+    range: { startDate: "2026-07-25", endDate: "2026-08-07" },
+    outage: new Set<string>(),
+    selectedKey: null,
+    expandedGroupKey: null,
+    onSelect: () => {},
+  };
+}
+
 const PATTERN_KEY = "REPEAT_PATTERN:LATE_START";
 const PATTERN_DATES = ["2026-08-03", "2026-08-04", "2026-08-05"];
 
@@ -104,6 +122,7 @@ const PATTERN_DATES = ["2026-08-03", "2026-08-04", "2026-08-05"];
 function patternMember(args: {
   employee: string;
   name: string;
+  image?: string | null;
   alsoCount?: number;
   alsoOutlierCount?: number;
 }): QueuePerson {
@@ -113,6 +132,7 @@ function patternMember(args: {
     rank: 20,
     tier: "routine",
     entryKey: `${PATTERN_KEY}|p:${args.employee}`,
+    image: args.image,
     alsoCount: args.alsoCount,
     alsoOutlierCount: args.alsoOutlierCount,
     flags: PATTERN_DATES.map((date, i) =>
@@ -144,15 +164,70 @@ function patternGroupEntry(): GroupEntry {
     attendance_date: null,
     rank: 20,
     tier: "routine",
+    // Both members have a photo: a group header answers "who is in here?" with
+    // faces, so a fixture with none could not tell a working header from an
+    // empty one.
     members: [
       patternMember({
         employee: "HR-EMP-00001",
         name: "Ada Lovelace",
+        image: "/files/ada.jpg",
         alsoCount: 1,
         alsoOutlierCount: 1,
       }),
-      patternMember({ employee: "HR-EMP-00002", name: "Grace Hopper" }),
+      patternMember({
+        employee: "HR-EMP-00002",
+        name: "Grace Hopper",
+        image: "/files/grace.jpg",
+      }),
     ],
+  };
+}
+
+/** One act-tier gap on one day — the row that has a day worth naming. */
+function missingTimePerson(): PersonEntry {
+  return {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00011",
+      name: "Sokheng Hon",
+      image: "/files/sokheng.jpg",
+      rank: 132,
+      tier: "act",
+      flags: [
+        makeFlag({
+          identity: "id-gap-sokheng",
+          code: "MISSING_TIME",
+          date: "2026-08-06",
+          rank: 132,
+          tier: "act",
+          evidence: { minutes: 192 },
+        }),
+      ],
+    }),
+  };
+}
+
+/** Four late mornings that formed no group — and no photo on file. */
+function repeatPerson(): PersonEntry {
+  return {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00012",
+      name: "Vichea Lim",
+      rank: 20,
+      tier: "routine",
+      flags: [31, 12, 9, 15].map((minutes, i) =>
+        makeFlag({
+          identity: `id-late-vichea-${i}`,
+          code: "LATE_START",
+          date: `2026-08-0${3 + i}`,
+          rank: 20,
+          tier: "routine",
+          evidence: { minutes },
+        })
+      ),
+    }),
   };
 }
 
@@ -323,12 +398,7 @@ test("a person with a routine flag and an act flag appears once, under Act", () 
   };
 
   const html = renderToStaticMarkup(
-    <FlagQueueList
-      entries={[routineGroup, { kind: "person", ...ada }]}
-      selectedKey={null}
-      expandedGroupKey={null}
-      onSelect={() => {}}
-    />
+    <FlagQueueList entries={[routineGroup, { kind: "person", ...ada }]} {...listProps()} />
   );
 
   assert.equal(
@@ -931,18 +1001,15 @@ test("an expanded group can be put back together", () => {
     ],
   };
 
-  const collapsed = renderToStaticMarkup(
-    <FlagQueueList entries={[group]} selectedKey={null} expandedGroupKey={null} onSelect={() => {}} />
-  );
+  const collapsed = renderToStaticMarkup(<FlagQueueList entries={[group]} {...listProps()} />);
   assert.ok(!collapsed.includes("Grace Hopper"), "members are hidden inside the group row");
   assert.ok(!collapsed.includes(SHOW_AS_GROUP_LABEL), "nothing to collapse yet");
 
   const expanded = renderToStaticMarkup(
     <FlagQueueList
       entries={[group]}
-      selectedKey={null}
+      {...listProps()}
       expandedGroupKey={group.kind === "group" ? group.group_key : null}
-      onSelect={() => {}}
       onCollapseGroup={() => {}}
     />
   );
@@ -1074,11 +1141,10 @@ test("a person in two entries carries the cross-reference badge in both", () => 
   const html = renderToStaticMarkup(
     <FlagQueueList
       entries={[group, outlierPersonEntry()]}
-      selectedKey={null}
+      {...listProps()}
       // Expanded on purpose: a collapsed group renders no member rows at all,
       // so the member copy of the badge would have nowhere to appear.
       expandedGroupKey={group.group_key}
-      onSelect={() => {}}
     />
   );
 
@@ -1120,12 +1186,7 @@ test("the bulk panel's member list badges a member who is also in another entry"
 
 test("a repeat pattern row states its title and its two dimensions", () => {
   const html = renderToStaticMarkup(
-    <FlagQueueList
-      entries={[patternGroupEntry()]}
-      selectedKey={null}
-      expandedGroupKey={null}
-      onSelect={() => {}}
-    />
+    <FlagQueueList entries={[patternGroupEntry()]} {...listProps()} />
   );
   // Asserted by slot, not by presence: rendered into each other's places the
   // row would headline itself "2 people · 6 mornings" and demote the title to
@@ -1237,4 +1298,86 @@ test("a dated group's panel header still names its day and its size", () => {
   assert.ok(header.includes(formatFlagContextDate(DATE)), "a group with one day still names it");
   assert.match(header, /2 people/);
   assert.doesNotMatch(header, /mornings/, "only a repeat pattern counts occurrences");
+});
+
+test("a person row leads with their photo and states the finding with its day", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueList entries={[missingTimePerson()]} {...listProps()} />
+  );
+  assert.match(html, /<img[^>]+src="\/files\/sokheng\.jpg"/);
+  assert.match(html, /Sokheng Hon/);
+  assert.match(html, /Thu 6 Aug/);
+});
+
+test("a person with several days of one code gets no single date", () => {
+  // "4 late starts · worst 31 min" — naming one day would be wrong for the
+  // other three.
+  const html = renderToStaticMarkup(<FlagQueueList entries={[repeatPerson()]} {...listProps()} />);
+  assert.match(html, /4 late starts · worst 31 min/);
+  assert.equal(/· \w{3} \d+ \w{3}/.test(html), false);
+});
+
+test("a person with no photo still leads with an avatar, not a gap", () => {
+  const html = renderToStaticMarkup(<FlagQueueList entries={[repeatPerson()]} {...listProps()} />);
+  assert.match(html, />VL</);
+  assert.equal(html.includes("<img"), false);
+});
+
+test("every row's strip has the same cell count, so the column is stable", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueList entries={[missingTimePerson(), repeatPerson()]} {...listProps()} />
+  );
+  const counts = [...html.matchAll(/data-strip-cells="(\d+)"/g)].map((m) => m[1]);
+  assert.equal(counts.length, 2);
+  assert.equal(new Set(counts).size, 1);
+});
+
+test("a group header shows who is in it, not a strip", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueList entries={[patternGroupEntry()]} {...listProps()} />
+  );
+  assert.match(html, /<img/); // member avatars
+  assert.equal(html.includes("data-strip-cells"), false);
+  // The faces answer "who is in here?" by sight; the sub-line answers it in
+  // words. Exposing the cluster as well would read as a stray "+2" after the
+  // headline, so it stays out of the accessibility tree whole.
+  assert.match(html, /aria-hidden="true"[^>]*><span class="[^"]*size-7/);
+});
+
+// The strip is keyed by EMPLOYEE, not by the entry being rendered — that is
+// what makes the cross-reference badge visible rather than merely counted.
+// Ada's three-hour gap lives in a second entry, and if her member row's strip
+// were built from this entry's flags alone it would be four routine cells with
+// the act-tier day nowhere on screen: exactly the omission the badge exists to
+// prevent.
+test("a member's strip shows the flag from their other entry, and only on their row", () => {
+  const group = patternGroupEntry();
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[group, outlierPersonEntry()]}
+      {...listProps()}
+      expandedGroupKey={group.group_key}
+    />
+  );
+
+  const ada = rowWith(html, "Ada Lovelace", "late starts");
+  const grace = rowWith(html, "Grace Hopper");
+  assert.match(ada, /h-3\.5 bg-destructive/, "her gap shows as an act-tier cell inside the group");
+  assert.doesNotMatch(grace, /h-3\.5 bg-destructive/, "and it is on her row, not her colleague's");
+});
+
+// EmployeeAvatar's loading ring is a role="status" live region whose delay
+// timer starts at MOUNT, not at fetch start — forty rows would queue forty
+// "Loading" announcements for a photo that is `alt=""` beside a name already
+// rendered as text. The avatar tells a screen reader nothing the row does not
+// already say, so it is hidden whole rather than announced forty times.
+test("a row's avatar is decoration to a screen reader, ring and all", () => {
+  const row = rowWith(
+    renderToStaticMarkup(<FlagQueueList entries={[missingTimePerson()]} {...listProps()} />),
+    "Sokheng Hon"
+  );
+  assert.match(row, /aria-hidden="true"[^>]*><span class="[^"]*size-10/);
+  // …while the strip keeps its one summary: it carries a fact — how many days
+  // of this fortnight are flagged — that appears nowhere else in the row.
+  assert.match(row, /aria-label="1 flagged day in the last 14"/);
 });

@@ -9,6 +9,7 @@ import {
   DECISION_STATE_LABELS,
   decisionStateLabel,
   deviceAlertHeadline,
+  earlierMarkerLabel,
   groupHeadline,
   groupSubline,
   orphanedEvidenceChangedSummary,
@@ -20,14 +21,17 @@ import {
   outcomeLabel,
   partialFailureMessage,
   personHeadline,
+  personSubline,
   priorDecisionLabel,
   queueHeaderDescription,
   REASON_LABELS,
   REASON_OPTIONS,
   reasonLabel,
   routineCodeHeader,
+  stripAriaLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
+import type { Strip } from "@/lib/flagStrip";
 import type {
   DecisionState,
   FlagDecision,
@@ -81,6 +85,7 @@ function person(overrides: Partial<QueuePerson> = {}): QueuePerson {
     employee: "HR-EMP-1",
     employee_name: "HR-EMP-1",
     employee_branch: "Phnom Penh HQ",
+    employee_image: null,
     attendance_date: "2026-08-03",
     dates: ["2026-08-03"],
     rank: 20,
@@ -115,6 +120,7 @@ function patternMember(employee: string, flagCode: string, occurrences: number):
     employee,
     employee_name: employee,
     employee_branch: "Phnom Penh HQ",
+    employee_image: null,
     attendance_date: flags[flags.length - 1]?.attendance_date ?? patternDate(0),
     dates: flags.map((f) => f.attendance_date),
     rank: 50,
@@ -243,6 +249,30 @@ test("branchNoDeviceDataHeader names the branch and date, never a device serial"
   assert.doesNotMatch(header, /ZK-|SN-|\d{4,}/);
 });
 
+// `attendance_date` is nullable on every group in the contract, and date-fns
+// throws RangeError on a date it cannot parse — so a dateless group would take
+// the whole list down, not merely word its header badly. Dropping the clause is
+// the only honest degradation: there is no day to name.
+test("a dateless outage header drops the day rather than throwing on it", () => {
+  assert.equal(branchNoDeviceDataHeader("Phnom Penh HQ", null), "Phnom Penh HQ had no device data");
+  assert.equal(branchNoDeviceDataHeader("Phnom Penh HQ", ""), "Phnom Penh HQ had no device data");
+});
+
+test("a dateless outage group still gets a headline", () => {
+  const entry: Extract<QueueEntry, { kind: "group" }> = {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: "BRANCH_NO_DEVICE_DATA::",
+    branch: null,
+    flag_code: null,
+    attendance_date: null,
+    rank: 150,
+    tier: "act",
+    members: [],
+  };
+  assert.equal(groupHeadline(entry), "Unknown branch had no device data");
+});
+
 function routineFlag(flagCode: string, minutes: number): FlagOut {
   return {
     flag_identity: `AUTO-${flagCode}-${minutes}`,
@@ -264,6 +294,7 @@ function routinePerson(employee: string, flagCode: string, minutes: number): Que
     employee,
     employee_name: employee,
     employee_branch: "Phnom Penh HQ",
+    employee_image: null,
     attendance_date: "2026-08-03",
     dates: ["2026-08-03"],
     rank: 20,
@@ -576,4 +607,77 @@ test("a person with several MISSING_TIME flags renders the worst as a duration, 
   assert.equal(headline, `3 gaps in the day · worst ${formatMissingDuration(192).replace(/^Missing /, "")}`);
   assert.equal(headline, "3 gaps in the day · worst 3h 12m");
   assert.doesNotMatch(headline, /192 min\b/);
+});
+
+/** A strip of `cellCount` cells of which `flaggedCount` are flagged. The cells'
+ *  own states do not reach the label, which reports only the two counts. */
+function strip(flaggedCount: number, cellCount = 14, earlierCount = 0): Strip {
+  return {
+    cells: Array.from({ length: cellCount }, (_, i) => ({
+      date: `2026-08-${String(i + 1).padStart(2, "0")}`,
+      state: i < flaggedCount ? "flagged" : "clean",
+      tier: i < flaggedCount ? "routine" : null,
+    })),
+    flaggedCount,
+    earlierCount,
+  };
+}
+
+test("the strip's accessible name is one summary of the fortnight", () => {
+  assert.equal(stripAriaLabel(strip(4)), "4 flagged days in the last 14");
+});
+
+test("the strip's summary is singular for a single flagged day", () => {
+  assert.equal(stripAriaLabel(strip(1)), "1 flagged day in the last 14");
+  assert.equal(stripAriaLabel(strip(0)), "0 flagged days in the last 14");
+});
+
+// The window is cut from the range, so a week-long range gives seven cells —
+// and the label has to say seven. Hard-coding "14" would make the summary
+// disagree with the picture beside it the first time HR narrows the dates.
+test("the strip's summary counts the cells it actually has, not a fixed fortnight", () => {
+  assert.equal(stripAriaLabel(strip(2, 7)), "2 flagged days in the last 7");
+});
+
+// A widened range can leave a row whose sub-line names a serious flag while its
+// strip is all green, because the flag is older than the window. This marker is
+// what keeps that honest.
+test("flags older than the window are marked, and a clean window says nothing", () => {
+  assert.equal(earlierMarkerLabel(3), "+3 earlier");
+  assert.equal(earlierMarkerLabel(1), "+1 earlier");
+  assert.equal(earlierMarkerLabel(0), null);
+});
+
+/** The same flag, moved to another day — `lateStart` fixes one date of its own. */
+function on(flag: FlagOut, date: string): FlagOut {
+  return { ...flag, flag_identity: `${flag.flag_identity}-${date}`, attendance_date: date };
+}
+
+test("a person's sub-line names the day when the entry holds exactly one", () => {
+  const subline = personSubline(person({ dates: ["2026-08-06"], flags: [on(lateStart(31), "2026-08-06")] }));
+  assert.equal(subline, `${formatFlagLabel("LATE_START", { minutes: 31 })} · Thu 6 Aug`);
+});
+
+// Naming one of four mornings would be wrong for the other three, so a
+// multi-day entry gets the summary and no date at all.
+test("a person's sub-line names no day when the entry spans several", () => {
+  const dates = ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"];
+  const spanning = person({
+    dates,
+    flags: [31, 12, 9, 15].map((minutes, i) => on(lateStart(minutes), dates[i])),
+  });
+  assert.equal(personSubline(spanning), "4 late starts · worst 31 min");
+});
+
+// `dates` is the honest test for which case this is, and `flags.length` is not:
+// a person can hold two flags on a single day, and that day is still nameable.
+// The empty-headline case has no sub-line to date either — appending
+// " · Thu 6 Aug" to an empty string would render a bare dangling date.
+test("a person's sub-line dates by the entry's days, and stays empty when there is nothing to say", () => {
+  const oneDayTwoFlags = person({
+    dates: ["2026-08-06"],
+    flags: [on(lateStart(31), "2026-08-06"), on(lateStart(12), "2026-08-06")],
+  });
+  assert.equal(personSubline(oneDayTwoFlags), "2 late starts · worst 31 min · Thu 6 Aug");
+  assert.equal(personSubline(person({ dates: ["2026-08-06"], flags: [] })), "");
 });

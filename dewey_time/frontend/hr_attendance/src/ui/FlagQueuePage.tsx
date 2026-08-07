@@ -11,6 +11,7 @@ import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue } from "@/hooks/useFlagQueue";
 import type { PendingDecision } from "@/lib/flagDecisionState";
+import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
   DECIDE_FAILED_MESSAGE,
@@ -114,7 +115,7 @@ function emptyDraft(): PendingDecision {
 export function FlagQueuePage() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
 
-  const range = useMemo(() => {
+  const requestedRange = useMemo(() => {
     const today = new Date();
     return {
       startDate: format(subDays(today, QUEUE_DAYS - 1), "yyyy-MM-dd"),
@@ -127,10 +128,24 @@ export function FlagQueuePage() {
   // only route to a decision HR wants to replace.
   const [includeDecided, setIncludeDecided] = useState(false);
 
-  const { entries, counts, alerts, orphans, truncated, isLoading, error, refresh } = useFlagQueue({
-    ...range,
-    includeDecided,
-  });
+  // `range` here is the payload's own, not `requestedRange`: the strip's window
+  // is cut from the range the data actually covers.
+  const {
+    entries,
+    counts,
+    alerts,
+    orphans,
+    outageDates,
+    range,
+    truncated,
+    isLoading,
+    error,
+    refresh,
+  } = useFlagQueue({ ...requestedRange, includeDecided });
+
+  // Memoised once for the whole list rather than rebuilt per row: forty rows
+  // would otherwise each rebuild the same set on every render.
+  const outage = useMemo(() => buildOutageSet(outageDates), [outageDates]);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
@@ -305,6 +320,8 @@ export function FlagQueuePage() {
         list={
           <FlagQueueList
             entries={entries}
+            range={range}
+            outage={outage}
             selectedKey={selectedKey}
             expandedGroupKey={expandedGroupKey}
             onSelect={handleSelect}
