@@ -1,6 +1,7 @@
 import { test, expect, describe } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TerminalValuesTable } from './terminal-values-table'
+import { signalText } from '@/lib/signal'
 import type { TerminalPlan } from '@/lib/device-option-plan'
 
 const DEVICES = [{ serial_number: 'A', name: 'DIU', location: 'DIU' }]
@@ -23,11 +24,21 @@ describe('TerminalValuesTable', () => {
   })
 
   test('renders a withheld value as withheld, not as blank', () => {
+    // Anchored to the Reports column specifically, not the whole row. The
+    // verdict ("Then") column ALSO contains the word "withheld" in its own
+    // text ("withheld — cannot compare"), so a bare /withheld/i check passes
+    // even if the Reports cell regressed to the blank "—" placeholder — the
+    // exact regression this test's name forbids. The Reports cell is the
+    // only <td> whose class ends in "font-mono text-xs" (the verdict cell's
+    // tone class always comes first: `cn('text-xs', tone)`).
     const html = renderToStaticMarkup(
       <TerminalValuesTable terminals={[plan({ reported: null, redacted: true, verdict: 'withheld' })]}
         devices={DEVICES} optionKey="VOLUME" onOverride={() => {}} onClearOverride={() => {}} />
     )
-    expect(html).toMatch(/withheld/i)
+    const reportsCell = html.match(/<td[^>]*class="[^"]*font-mono text-xs"[^>]*>(.*?)<\/td>/)
+    expect(reportsCell).not.toBeNull()
+    expect(reportsCell?.[1]).toMatch(/withheld/i)
+    expect(reportsCell?.[1]).not.toBe('—')
   })
 
   test('distinguishes never-reported from disagreeing', () => {
@@ -57,8 +68,17 @@ describe('TerminalValuesTable', () => {
       <TerminalValuesTable terminals={[plan({ reported: null, verdict: 'not-reported' })]}
         devices={DEVICES} optionKey="VOLUME" onOverride={() => {}} onClearOverride={() => {}} />
     )
-    expect(html).toMatch(/class="[^"]*text-attention[^"]*"[^>]*>[^<]*not reported/i)
-    expect(html).not.toMatch(/class="[^"]*text-muted-foreground[^"]*"[^>]*>[^<]*not reported/i)
+    // Colour alone is not conveyance — it is invisible to a colour-blind
+    // operator and to anyone quoting the cell as text — so the WORDING must
+    // say a write is coming too, not just the tone.
+    expect(html).toMatch(/will be written/i)
+    expect(html).not.toMatch(/will change/i)
+    expect(html).toMatch(
+      new RegExp(`class="[^"]*${signalText.attention}[^"]*"[^>]*>[^<]*not reported`, 'i')
+    )
+    expect(html).not.toMatch(
+      new RegExp(`class="[^"]*${signalText.idle}[^"]*"[^>]*>[^<]*not reported`, 'i')
+    )
   })
 
   test('offers a clear only where an override exists', () => {

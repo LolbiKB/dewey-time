@@ -20,6 +20,9 @@ function verdictLabel(t: TerminalPlan): { text: string; tone: string } {
     // read as "nothing happens here" while the Apply button's count already
     // includes this row — the count and the table must agree, so this gets
     // the attention tone, not idle.
+    // Colour is not the only signal here — the words say "will be written"
+    // too, so a colour-blind reader (or anyone quoting this cell as text)
+    // gets the same fact the attention tone is carrying.
     'not-reported': { text: 'not reported — will be written', tone: signalText.attention },
     // Unknown is not different.
     withheld: { text: 'withheld — cannot compare', tone: signalText.idle },
@@ -39,6 +42,21 @@ export function TerminalValuesTable({
 }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [prevKey, setPrevKey] = useState(optionKey)
+
+  // Derived state during render, not an effect — same reuse-in-place issue
+  // as FleetStandardField (see fleet-standard-draft.ts): the page's
+  // selection lives in the URL and this component is not remounted across a
+  // key change. Without this, an open editor with a draft typed for the OLD
+  // key survives the switch and commits its value against the newly
+  // selected one. Unlike the standard field there is no "stored" value that
+  // can drift independently, so there is nothing to preserve here — always
+  // close the editor and clear the draft.
+  if (prevKey !== optionKey) {
+    setPrevKey(optionKey)
+    setEditing(null)
+    setDraft('')
+  }
 
   return (
     <Table>
@@ -47,7 +65,9 @@ export function TerminalValuesTable({
           <TableHead>Terminal</TableHead>
           <TableHead>Reports</TableHead>
           <TableHead>Then</TableHead>
-          <TableHead className="w-px" />
+          <TableHead className="w-px">
+            <span className="sr-only">Actions</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -70,7 +90,11 @@ export function TerminalValuesTable({
               </TableCell>
               <TableCell className={cn('text-xs', tone)}>
                 {text}
-                {t.isOverride && (
+                {/* Only where the verdict text does not already carry the
+                    value — `will-change` already reads "will change → 20";
+                    appending "(override 20)" there would say the same
+                    number twice. */}
+                {t.isOverride && t.verdict !== 'will-change' && (
                   <span className={cn('ml-1 font-mono', signalText.idle)}>
                     (override {t.effective})
                   </span>

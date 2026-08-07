@@ -26,6 +26,9 @@ describe('SettingList', () => {
     )
     expect(html).toMatch(/Unexpected differences/i)
     expect(html).toContain('80')
+    // Both reference views, not just the drift one — the bare '80' above was
+    // satisfied by either, so it did not actually pin "Everything reported".
+    expect(html).toMatch(/Everything reported/i)
   })
 
   test('does not offer the drift view when nothing unexpected differs', () => {

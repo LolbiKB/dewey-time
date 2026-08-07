@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { signalText } from '@/lib/signal'
 import { cn } from '@/lib/utils'
+import { nextDraft } from './fleet-standard-draft'
 
 /**
  * The one value on the page.
@@ -29,6 +30,24 @@ export function FleetStandardField({
   onSave: (value: string) => void
 }) {
   const [draft, setDraft] = useState(stored ?? '')
+  const [prevKey, setPrevKey] = useState(optionKey)
+  const [prevStored, setPrevStored] = useState(stored)
+
+  // Derived state during render (React's documented pattern for "adjust
+  // state when a prop changes"), not an effect: the page's selection lives
+  // in the URL and this component is reused IN PLACE across a selection
+  // change, so `useState(stored ?? '')` above only runs once, on first
+  // mount. Without this, a draft typed for one key survives into the next
+  // and can get saved against it. See fleet-standard-draft.ts for why a key
+  // switch and a `stored` value moving under an unchanged key resolve
+  // oppositely.
+  if (prevKey !== optionKey || prevStored !== stored) {
+    const resolved = nextDraft(prevKey, optionKey, draft, stored, prevStored)
+    setPrevKey(optionKey)
+    setPrevStored(stored)
+    if (resolved !== draft) setDraft(resolved)
+  }
+
   const changed = draft.trim() !== (stored ?? '').trim()
 
   return (
