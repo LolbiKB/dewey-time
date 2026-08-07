@@ -17,9 +17,15 @@ from dewey_time.attendance_engine.flag_identity import (
     evidence_fingerprint,
     parse_evidence,
 )
-from dewey_time.attendance_engine.flag_triage import TIER_ROUTINE, tier_for_rank, triage_rank
+from dewey_time.attendance_engine.flag_triage import (
+    TIER_REVIEW,
+    TIER_ROUTINE,
+    tier_for_rank,
+    triage_rank,
+)
 
 GROUP_BRANCH_NO_DEVICE_DATA = "BRANCH_NO_DEVICE_DATA"
+GROUP_REPEAT_PATTERN = "REPEAT_PATTERN"
 GROUP_ROUTINE_CODE = "ROUTINE_CODE"
 
 STATE_UNDECIDED = "undecided"
@@ -38,6 +44,18 @@ UNRESOLVED_STATES = (STATE_UNDECIDED, STATE_NEEDS_RE_REVIEW)
 # person row behind an expander and an all-checked member list for no gain, so a
 # would-be group of one degrades back to a lone person entry.
 GROUP_MIN_MEMBERS = 2
+
+# The same code from the same person on this many distinct dates is a pattern.
+# Judgement, not measurement (spec) — but nothing is persisted from it, so
+# changing it later is free.
+PATTERN_MIN_DAYS = 3
+
+# Only the expected compresses. An act-tier flag is never bulk-excusable as a
+# habit: "three no-shows in a fortnight is not a pattern to bulk-excuse; it is
+# three things to look at". This is the load-bearing rule of the whole feature —
+# pattern grouping must never be the mechanism by which something serious
+# disappears into a batch.
+PATTERN_TIERS = (TIER_ROUTINE, TIER_REVIEW)
 
 
 def build_queue(
@@ -224,6 +242,53 @@ def _person(employee: str, person_flags: list[dict], employees_by_id: dict, *, e
         "also_count": 0,
         "also_outlier_count": 0,
     }
+
+
+def _is_pattern_flag(flag_out: dict) -> bool:
+    """Can this flag be compressed into a repeat pattern?
+
+    Unresolved, because a decided flag is not work; and routine or review tier
+    only, because the pattern group's whole purpose is a bulk decision.
+    """
+    return (
+        flag_out["decision_state"] in UNRESOLVED_STATES
+        and flag_out["tier"] in PATTERN_TIERS
+    )
+
+
+def _pattern_codes(person_days: list[dict]) -> dict[str, set[str]]:
+    """flag_code -> the employees who hit it on PATTERN_MIN_DAYS or more dates.
+
+    Codes with fewer than GROUP_MIN_MEMBERS qualifying employees are dropped
+    here rather than downstream, so "one person late four times" never reaches
+    the assembler as a would-be group: it stays a person row reading
+    "4 late starts".
+    """
+    dates_by_pair: dict[tuple[str, str], set[str]] = {}
+    for person_day in person_days:
+        for flag_out in person_day["flags"]:
+            if not _is_pattern_flag(flag_out):
+                continue
+            key = (person_day["employee"], flag_out["flag_code"])
+            dates_by_pair.setdefault(key, set()).add(person_day["date"])
+
+    by_code: dict[str, set[str]] = {}
+    for (employee, code), dates in dates_by_pair.items():
+        if len(dates) >= PATTERN_MIN_DAYS:
+            by_code.setdefault(code, set()).add(employee)
+
+    return {code: employees for code, employees in by_code.items() if len(employees) >= GROUP_MIN_MEMBERS}
+
+
+def _day_tier(person_flags: list[dict]) -> str:
+    """Tier of the worst unresolved flag on a person-day — the ROUTINE_CODE guard.
+
+    Computed over the WHOLE day, before pattern claiming removes anything from
+    it, so the group's "and nothing else wrong that day" stays true: that clause
+    is about how bad the day was, not about which entry each flag ended up in.
+    """
+    ranks = [f["rank"] for f in person_flags if f["decision_state"] in UNRESOLVED_STATES]
+    return tier_for_rank(max(ranks, default=0))
 
 
 def _top_unresolved(person: dict) -> dict | None:

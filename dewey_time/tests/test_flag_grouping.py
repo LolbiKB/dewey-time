@@ -7,7 +7,7 @@ from datetime import date, datetime
 # carries its own local `_scrub` rather than calling `frappe.scrub`, exactly so
 # these modules import without a bench. Same shape as test_flag_identity.py and
 # test_flag_triage.py, which mock nothing either.
-from dewey_time.attendance_engine.flag_grouping import _flag_out, _person, build_queue
+from dewey_time.attendance_engine.flag_grouping import _flag_out, _pattern_codes, _person, build_queue
 from dewey_time.attendance_engine.flag_identity import evidence_fingerprint
 from dewey_time.attendance_engine.flag_triage import triage_rank
 
@@ -876,6 +876,81 @@ class EntryKeyTests(unittest.TestCase):
         # to `p:<employee>` deliberately and will update this assertion.
         for loner in loners:
             self.assertEqual(loner["entry_key"], "p:{0}:{1}".format(loner["employee"], DATE))
+
+
+def _days(employee, code, dates, *, evidence=None):
+    """person_day dicts for one employee hitting one code on several dates."""
+    return [
+        {
+            "employee": employee,
+            "date": d,
+            "flags": [_flag_out_for(_flag(employee, d, code, evidence=evidence or {}))],
+        }
+        for d in dates
+    ]
+
+
+def _flag_out_for(flag):
+    from dewey_time.attendance_engine.flag_grouping import _flag_out
+
+    return _flag_out(flag, {})
+
+
+D1, D2, D3, D4 = "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"
+
+
+class PatternDetectionTests(unittest.TestCase):
+    def test_three_days_two_people_qualifies(self):
+        person_days = (
+            _days("EMP-1", "LATE_START", [D1, D2, D3], evidence={"minutes": 9})
+            + _days("EMP-2", "LATE_START", [D1, D2, D3], evidence={"minutes": 12})
+        )
+        self.assertEqual(_pattern_codes(person_days), {"LATE_START": {"EMP-1", "EMP-2"}})
+
+    def test_two_days_is_not_a_pattern(self):
+        person_days = (
+            _days("EMP-1", "LATE_START", [D1, D2], evidence={"minutes": 9})
+            + _days("EMP-2", "LATE_START", [D1, D2], evidence={"minutes": 12})
+        )
+        self.assertEqual(_pattern_codes(person_days), {})
+
+    def test_one_person_alone_does_not_form_a_group(self):
+        person_days = _days("EMP-1", "LATE_START", [D1, D2, D3, D4], evidence={"minutes": 9})
+        self.assertEqual(_pattern_codes(person_days), {})
+
+    def test_an_act_tier_flag_never_forms_a_pattern(self):
+        # UNNOTIFIED_ABSENCE ranks 150 -> act. Four no-shows each for two people is
+        # four things to look at, not a batch to excuse. Spec rule 4.
+        person_days = (
+            _days("EMP-1", "UNNOTIFIED_ABSENCE", [D1, D2, D3, D4])
+            + _days("EMP-2", "UNNOTIFIED_ABSENCE", [D1, D2, D3, D4])
+        )
+        self.assertEqual(_pattern_codes(person_days), {})
+
+    def test_a_review_tier_flag_does_form_a_pattern(self):
+        # MISSING_TIME under 120 min ranks 60 -> review, which is pattern-eligible.
+        person_days = (
+            _days("EMP-1", "MISSING_TIME", [D1, D2, D3], evidence={"minutes": 45})
+            + _days("EMP-2", "MISSING_TIME", [D1, D2, D3], evidence={"minutes": 50})
+        )
+        self.assertEqual(_pattern_codes(person_days), {"MISSING_TIME": {"EMP-1", "EMP-2"}})
+
+    def test_act_tier_days_do_not_count_toward_a_pattern_of_the_same_code(self):
+        # Same code, but only the review-tier days count. EMP-1 has two review-tier
+        # MISSING_TIME days and one act-tier (3h) day: two days is not a pattern.
+        person_days = (
+            _days("EMP-1", "MISSING_TIME", [D1, D2], evidence={"minutes": 45})
+            + _days("EMP-1", "MISSING_TIME", [D3], evidence={"minutes": 192})
+            + _days("EMP-2", "MISSING_TIME", [D1, D2, D3], evidence={"minutes": 45})
+        )
+        self.assertEqual(_pattern_codes(person_days), {})
+
+    def test_a_decided_flag_does_not_count_toward_a_pattern(self):
+        person_days = _days("EMP-1", "LATE_START", [D1, D2, D3], evidence={"minutes": 9})
+        for pd in person_days:
+            pd["flags"][0]["decision_state"] = "matched"
+        person_days += _days("EMP-2", "LATE_START", [D1, D2, D3], evidence={"minutes": 12})
+        self.assertEqual(_pattern_codes(person_days), {})
 
 
 if __name__ == "__main__":
