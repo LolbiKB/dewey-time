@@ -41,6 +41,7 @@ export type StripCell = {
 
 export type Strip = {
   cells: StripCell[];
+  /** Days with at least one flag — not the flag count. */
   flaggedCount: number;
   /** Flags older than the window — the "+N earlier" marker. */
   earlierCount: number;
@@ -130,6 +131,10 @@ export function buildStrip(args: {
       earlierCount += 1;
       continue;
     }
+    // A flag dated after `args.endDate` would fall through both branches here —
+    // counted in neither `earlierCount` nor a cell. That is unreachable today:
+    // `get_flag_queue` filters flags to `[start, end]`, so the payload never
+    // carries a flag past `endDate`.
     const current = worstByDate.get(flag.attendance_date);
     if (!current || TIER_ORDER[flag.tier] > TIER_ORDER[current]) {
       worstByDate.set(flag.attendance_date, flag.tier);

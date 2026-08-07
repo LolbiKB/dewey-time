@@ -71,6 +71,18 @@ test("a range longer than 14 days keeps the most recent 14", () => {
   assert.equal(strip.cells[13].date, "2026-08-07");
 });
 
+test("an inverted range still produces one cell, not zero or negative", () => {
+  const strip = buildStrip({
+    flags: [],
+    branch: "HQ",
+    startDate: "2026-08-08",
+    endDate: "2026-08-07",
+    outage: NONE,
+  });
+  assert.equal(strip.cells.length, 1);
+  assert.equal(strip.cells[0].date, "2026-08-07");
+});
+
 test("flags older than the window are counted, not dropped", () => {
   const strip = buildStrip({
     flags: [flag("2026-07-16", "LATE_START", "routine", 20)],
@@ -110,6 +122,8 @@ test("a day with several flags renders the worst", () => {
     outage: NONE,
   });
   assert.equal(strip.cells.find((c) => c.date === "2026-08-03")?.tier, "act");
+  // flaggedCount counts flagged DAYS, not flags — two flags on one day is 1.
+  assert.equal(strip.flaggedCount, 1);
 });
 
 test("an in-range day with no flag renders clean", () => {
@@ -163,18 +177,24 @@ test("a flag outranks an outage on the same day", () => {
 });
 
 test("an employee with no branch is never greyed", () => {
+  // An empty branch string produces the same outage key as a null branch
+  // (outageKey does `branch ?? ""`), so this is the fixture that actually
+  // exercises the `branch !== null` guard: a `Device Closeout Alert` with an
+  // empty branch reaches the payload unfiltered, and without the guard this
+  // employee's day would grey.
   const strip = buildStrip({
     flags: [],
     branch: null,
     startDate: "2026-08-01",
     endDate: "2026-08-07",
-    outage: buildOutageSet([{ branch: "HQ", date: "2026-08-04" }]),
+    outage: buildOutageSet([{ branch: "", date: "2026-08-04" }]),
   });
   assert.deepEqual(new Set(strip.cells.map((c) => c.state)), new Set(["clean"]));
 });
 
 test("outage keys cannot collide across branch names", () => {
   assert.notEqual(outageKey("A", "B|2026-08-04"), outageKey("A|B", "2026-08-04"));
+  assert.notEqual(outageKey("A", "B:2026-08-04"), outageKey("A:B", "2026-08-04"));
 });
 
 test("buildOutageSet tolerates undefined or missing rows without throwing", () => {
