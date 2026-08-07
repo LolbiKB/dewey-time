@@ -31,6 +31,19 @@ export function describeKeyStatus(status: KeyStatus): string {
  * they would go looking at firmware support for a key when the actual problem
  * was the command queue.
  *
+ * The same is true of `set_queue_failed` / `reload_queue_failed` /
+ * `info_queue_failed` / `chain_link_failed` (queueOptionWrite's `abandon()`,
+ * device-option-write.ts) and `abandoned` (the sweep in device-option-verify.ts)
+ * — all five are the BRIDGE failing to get a command onto the wire or to keep
+ * track of the chain it queued, never the device saying no.
+ *
+ * `mismatched` and `rejected` are not codes at all — they are write STATUSES.
+ * The bridge falls back to `latest.status` when a write has no `error_code`
+ * (`error_code ?? status`), and `mismatched` never has one: every command
+ * succeeded and the value simply is not there, so the terminal said nothing to
+ * quote. "The terminal answered mismatched" invents an answer, and rendered one
+ * panel above an evidence line correctly reading "did not stick".
+ *
  * Anything else is passed through verbatim. Device codes are the terminal's own
  * words and the only actionable part of a real refusal, so they are never
  * swallowed into prose.
@@ -45,6 +58,31 @@ export function describeLastError(code: string | null | undefined): string | nul
   }
   if (code === 'reload_not_delivered') {
     return 'The terminal took the write but never reloaded its configuration, so the read-back proved nothing'
+  }
+  if (code === 'set_queue_failed') {
+    return 'The write could not even be queued, so nothing was ever sent to the terminal'
+  }
+  if (code === 'reload_queue_failed') {
+    return 'The write was queued but the bridge could not queue the reload that reads it back, so nothing was learned about this key'
+  }
+  if (code === 'info_queue_failed') {
+    return 'The write was queued but the bridge could not queue the read-back that would have confirmed it, so nothing was learned about this key'
+  }
+  if (code === 'chain_link_failed') {
+    return 'The write was queued but the bridge lost track of which commands belonged to it, so nothing was learned about this key'
+  }
+  if (code === 'abandoned') {
+    return 'The write was cancelled before it could reach the terminal, so nothing was learned about this key'
+  }
+  if (code === 'mismatched') {
+    // Every command succeeded and the value is still not there. The terminal
+    // refused nothing and answered nothing — there is no code to quote.
+    return 'The last write went through and the terminal still reports its old value, so it did not stick'
+  }
+  if (code === 'rejected') {
+    // The status without its code: the terminal did say no, but its own word
+    // for why did not survive, so none may be invented here.
+    return 'The terminal refused the last write, without a code saying why'
   }
   return `The terminal answered ${code}`
 }
