@@ -50,6 +50,57 @@ measured cost is about a third fewer rows per screen than a single-line layout.
 Group headers keep the same shape but carry **overlapping member avatars** instead of a
 strip, so "who is in here?" is answerable without expanding the group.
 
+## Avatar loading
+
+`EmployeeAvatar` today renders the photo **or** the initials:
+
+```tsx
+{props.employee?.image ? <img src={...} /> : employeeInitials(...)}
+```
+
+Three things follow from that `or`, and a list of forty photos is where all three become
+obvious:
+
+1. **The photo paints in half-drawn.** Until it loads, the circle is empty; then the browser
+   fills it top-down as bytes arrive.
+2. **A failed load leaves an empty circle.** `alt=""` means a 404 shows nothing at all —
+   not the initials, which are right there and would have been correct.
+3. **Decode can block.** Nothing marks the image as non-urgent.
+
+### The fix: initials underneath, photo fades in over them
+
+**Render the initials always, as the base layer.** Lay the `<img>` on top at zero opacity
+and fade it in on `load`. On `error`, leave it hidden and the initials simply remain.
+
+The avatar is then never empty, never half-painted, and never a broken-image icon. Every
+state is a real avatar.
+
+| State | What is on screen |
+|---|---|
+| No `image` | Initials. Unchanged from today. |
+| Photo loading | Initials. |
+| Photo loaded | Photo, faded in over ~150ms. |
+| Photo failed | Initials, permanently. |
+
+**No skeleton or shimmer.** A pulsing grey circle would replace meaningful content — whose
+initials these are — with a meaningless placeholder. The initials are a *better* loading
+state than a skeleton because they already carry the answer to "who is this row about".
+This is why the base layer is initials rather than the `bg-muted` circle.
+
+Also set `decoding="async"` so decode never blocks paint, and `loading="lazy"` so a queue
+of forty rows does not fetch every photo before the first is visible.
+
+The fade respects `prefers-reduced-motion` via Tailwind's `motion-reduce:transition-none` —
+under reduced motion the photo appears without animating, which is still an improvement
+because it appears *whole*.
+
+### Scope
+
+This changes one file. `EmployeeAvatar` is the only `<img>` in the SPA, and its props are
+unchanged, so the four existing callers — `EmployeePicker`, `ScheduleEmployeePicker`,
+`ClearEmployeeScheduleDialog`, `schedule-coverage/EmployeeLine` — inherit the improvement
+without edits.
+
 ## The strip
 
 **One cell per day, capped at the most recent 14 days of the queried range.** The window is
@@ -161,6 +212,11 @@ rows"), so the toolbar total and the list length cannot read as contradicting ea
 ## Testing
 
 - A person with no photo renders initials, not a broken image.
+- **The initials are in the DOM while the photo is still loading** — the property that stops
+  the half-drawn paint. Assert they are present before any `load` event, not merely that
+  they appear when `image` is absent.
+- **A photo that fails to load leaves the initials visible**, and no broken-image element.
+- The `<img>` carries `decoding="async"` and `loading="lazy"`.
 - A day with a flag renders at that flag's tier; a day with several renders the worst.
 - An in-range day with no flag renders clean.
 - **A day in the outage set renders as no-data, not clean** — the distinction the grey state
