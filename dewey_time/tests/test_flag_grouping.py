@@ -701,5 +701,61 @@ class TestProvisionalFinalCollision(unittest.TestCase):
                 self.assertEqual(payload["counts"]["open"], 1)
 
 
+class FlagDateTests(unittest.TestCase):
+    def test_each_flag_carries_its_own_date(self):
+        flag = _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9})
+        result = build_queue(
+            flags=[flag],
+            decisions_by_identity={},
+            employees_by_id={"EMP-1": {"employee_name": "Sokheng Hon", "branch": "HQ"}},
+            outage_branch_dates=set(),
+        )
+        person = result["entries"][0]
+        self.assertEqual(person["flags"][0]["attendance_date"], DATE)
+
+    def test_flag_date_is_normalised_from_a_date_object(self):
+        flag = _flag("EMP-1", date(2026, 8, 3), "LATE_START", evidence={"minutes": 9})
+        result = build_queue(
+            flags=[flag],
+            decisions_by_identity={},
+            employees_by_id={},
+            outage_branch_dates=set(),
+        )
+        self.assertEqual(result["entries"][0]["flags"][0]["attendance_date"], "2026-08-03")
+
+    @unittest.expectedFailure  # Task 3 merges a person's leftover days into one entry.
+    def test_person_dates_lists_every_date_its_flags_fall_on(self):
+        # One person, one code, two days — too few days to form a pattern, so this
+        # stays a single person entry and proves `dates` spans what the entry holds.
+        flags = [
+            _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}),
+            _flag("EMP-1", DATE2, "LATE_START", evidence={"minutes": 11}),
+        ]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id={"EMP-1": {"employee_name": "Sokheng Hon", "branch": "HQ"}},
+            outage_branch_dates=set(),
+        )
+        entries = result["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["dates"], [DATE, DATE2])
+
+    def test_person_attendance_date_is_the_worst_unresolved_flags_date(self):
+        # A 3-hour gap on DATE2 outranks a 9-minute late start on DATE, so the
+        # person's headline date is DATE2 even though DATE sorts first.
+        flags = [
+            _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}),
+            _flag("EMP-1", DATE2, "MISSING_TIME", evidence={"minutes": 192}),
+        ]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id={"EMP-1": {"employee_name": "Sokheng Hon", "branch": "HQ"}},
+            outage_branch_dates=set(),
+        )
+        self.assertEqual(result["entries"][0]["attendance_date"], DATE2)
+
+
 if __name__ == "__main__":
     unittest.main()

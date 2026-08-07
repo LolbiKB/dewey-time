@@ -102,7 +102,14 @@ def build_queue(
                 counts["needs_re_review"] += 1
             else:
                 counts["decided"] += 1
-        person = _person(employee, date_str, person_flags, employees_by_id)
+        # Still one Person per person-DAY here; Task 3 is what merges a person's
+        # days into one entry. The key carries the date for exactly that reason.
+        person = _person(
+            employee,
+            person_flags,
+            employees_by_id,
+            entry_key="p:{0}:{1}".format(employee, date_str),
+        )
         # A person leaves the queue only once every flag of theirs is settled —
         # unless the caller asked for the settled ones back, which is what makes
         # an applied decision reachable for replacement.
@@ -159,6 +166,11 @@ def _flag_out(flag: dict, decisions_by_identity: dict[str, dict]) -> dict:
     return {
         "flag_identity": identity,
         "flag_code": flag.get("flag_code"),
+        # The flag's OWN date. It used to live only on the person entry, because
+        # an entry WAS a person-day; once an entry spans dates (a repeat pattern,
+        # or a person's leftover flags) the person can no longer answer "when"
+        # for each flag it holds.
+        "attendance_date": _date_str(flag.get("attendance_date")),
         "severity": flag.get("severity"),
         "day_closed": int(flag.get("day_closed") or 0),
         "evidence": evidence,
@@ -169,30 +181,48 @@ def _flag_out(flag: dict, decisions_by_identity: dict[str, dict]) -> dict:
     }
 
 
-def _person(employee: str, date_str: str, person_flags: list[dict], employees_by_id: dict) -> dict:
-    """One Person. `person_flags` must already be worst-first."""
+def _person(employee: str, person_flags: list[dict], employees_by_id: dict, *, entry_key: str) -> dict:
+    """One Person: an employee and the flags of theirs that landed in ONE entry.
+
+    `person_flags` must already be worst-first. Under the per-flag invariant a
+    person may legitimately appear in more than one entry, so this no longer
+    stands for a person-DAY: `dates` is every date the flags in THIS entry fall
+    on, and `attendance_date` is the worst unresolved flag's date — kept because
+    the panel and the list still show a single headline day.
+
+    `entry_key` is stamped by the caller rather than derived here: it has to be
+    unique across the whole assembled set, and only the assembler knows whether
+    this person is a lone row or a member of a particular group.
+    """
     meta = employees_by_id.get(employee) or {}
     unresolved = [f for f in person_flags if f["decision_state"] in UNRESOLVED_STATES]
     # `default=0` is what a fully settled person ranks — reachable only under
     # include_decided, and correct: they sink to the foot of a worst-first queue
     # because they are not work, they are a record to correct if HR got it wrong.
     rank = max((f["rank"] for f in unresolved), default=0)
+    # Worst unresolved first; a fully settled person falls back to their worst
+    # flag overall so the headline date is never blank.
+    top = unresolved[0] if unresolved else (person_flags[0] if person_flags else None)
     return {
+        "entry_key": entry_key,
         "employee": employee,
         # An Employee row can be missing from the batch (deleted, or outside the
         # employee query's filters). Show the id rather than dropping someone who
         # still owes HR a decision.
         "employee_name": meta.get("employee_name") or employee,
         "employee_branch": meta.get("branch"),
-        "attendance_date": date_str,
+        "attendance_date": top["attendance_date"] if top else None,
+        "dates": sorted({f["attendance_date"] for f in person_flags}),
         # Rank and tier come from the worst *unresolved* flag only: a decided
         # absence must not keep its person out of tomorrow's routine group.
         "rank": rank,
         "tier": tier_for_rank(rank),
-        # Every flag that person has that day, decided ones included, so the right
-        # pane can show the whole day.
         "flags": person_flags,
         "undecided_count": len(unresolved),
+        # Stamped after assembly by _stamp_cross_references (Task 4) — a badge
+        # derived from the entry set cannot be computed before that set exists.
+        "also_count": 0,
+        "also_outlier_count": 0,
     }
 
 
@@ -261,6 +291,11 @@ def _entries_for(persons: list[dict], outage_branch_dates: set) -> list[dict]:
                 loners.extend(group["members"])
                 continue
             members = sorted(group["members"], key=_member_sort_key)
+            # Group-scoped: the same employee can be a member here AND hold a lone
+            # entry of their own once Task 3 lands, and two entries under one key
+            # would make selecting the outlier select the group member instead.
+            for member in members:
+                member["entry_key"] = "{0}|p:{1}".format(key, member["employee"])
             rank = max(member["rank"] for member in members)
             entries.append(
                 {
@@ -324,7 +359,7 @@ def _entry_sort_key(entry: dict) -> tuple:
     blast radius; then a stable string so two runs of the same data never reorder."""
     if entry["kind"] == "group":
         return (-entry["rank"], -len(entry["members"]), entry["group_key"])
-    return (-entry["rank"], -1, "{0}|{1}".format(entry["employee"], entry["attendance_date"]))
+    return (-entry["rank"], -1, entry["entry_key"])
 
 
 def _iter_people(entries: list[dict]):
