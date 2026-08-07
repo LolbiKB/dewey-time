@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatFlagLabel } from "@/lib/flagLabels";
+import { formatFlagLabel, formatMissingDuration } from "@/lib/flagLabels";
 import {
   appliedDecisionLabel,
   branchNoDeviceDataHeader,
@@ -55,6 +55,21 @@ function lateStart(minutes: number): FlagOut {
     evidence: { minutes },
     rank: 20,
     tier: "routine",
+    decision_state: "undecided",
+    decision: null,
+  };
+}
+
+function missingTime(minutes: number): FlagOut {
+  return {
+    flag_identity: `AUTO-MISSING_TIME-${minutes}`,
+    flag_code: "MISSING_TIME",
+    attendance_date: "2026-08-03",
+    severity: "INFO",
+    day_closed: 1,
+    evidence: { minutes },
+    rank: 50,
+    tier: "review",
     decision_state: "undecided",
     decision: null,
   };
@@ -477,6 +492,24 @@ test("routine code groups say one-off, because repeat offenders left by preceden
   assert.match(groupHeadline(entry), /one-off late starts/);
 });
 
+// groupSubline's early return is what keeps ROUTINE_CODE and
+// BRANCH_NO_DEVICE_DATA — the two group types that exist in production
+// today — from borrowing the pattern map's occurrence unit. Deleting that
+// return line is invisible to every test above: they only exercise
+// REPEAT_PATTERN. This is the only assertion in the file that would catch it.
+test("groupSubline reports only the people count for the two group types that are not a pattern", () => {
+  const routine = routineGroup("LATE_START", [9, 20]);
+  assert.equal(groupSubline(routine), "2 people");
+
+  const outage: Extract<QueueEntry, { kind: "group" }> = {
+    ...routine,
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    branch: "Phnom Penh HQ",
+    flag_code: null,
+  };
+  assert.equal(groupSubline(outage), "2 people");
+});
+
 test("a person whose other entries are all lone rows is badged as an outlier", () => {
   assert.equal(crossReferenceLabel(person({ also_count: 1, also_outlier_count: 1 })), "also 1 outlier");
   assert.equal(crossReferenceLabel(person({ also_count: 2, also_outlier_count: 2 })), "also 2 outliers");
@@ -529,4 +562,18 @@ test("a person with several flags of one code is summarised, not headlined by on
 
 test("a person with a single flag keeps the flag's own label", () => {
   assert.equal(personHeadline(person({ flags: [lateStart(31)] })), formatFlagLabel("LATE_START", { minutes: 31 }));
+});
+
+// MISSING_TIME's single-flag path (formatFlagLabel) renders a duration, e.g.
+// "Missing 3h 12m" — never raw minutes. The multi-flag "worst" figure has to
+// agree, or the same flag reads two different units on two screens: this
+// fixture's worst occurrence is 192 minutes, and a raw-minutes bug would print
+// "worst 192 min" where the correct output reads "worst 3h 12m".
+test("a person with several MISSING_TIME flags renders the worst as a duration, not raw minutes", () => {
+  const headline = personHeadline(
+    person({ flags: [missingTime(192), missingTime(45), missingTime(130)] }),
+  );
+  assert.equal(headline, `3 gaps in the day · worst ${formatMissingDuration(192).replace(/^Missing /, "")}`);
+  assert.equal(headline, "3 gaps in the day · worst 3h 12m");
+  assert.doesNotMatch(headline, /192 min\b/);
 });

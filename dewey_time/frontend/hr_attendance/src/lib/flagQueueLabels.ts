@@ -21,7 +21,7 @@
 import { format } from "date-fns";
 
 import { formatBranchLabel, parseDateKey } from "@/lib/attendanceTime";
-import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
+import { formatFlagLabel, formatMissingDuration, parseFlagEvidence } from "@/lib/flagLabels";
 import type {
   DecisionState,
   FlagDecision,
@@ -319,6 +319,14 @@ export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): st
  * person whose repeat did not reach a group). Naming only the worst would
  * report "five late mornings" as "Late by 31 min" — losing the very fact the
  * nesting spec says HR most wants to know.
+ *
+ * The "worst" figure renders through `formatMissingDuration` for MISSING_TIME
+ * — the same helper `formatFlagLabel` uses for its single-flag "Missing 3h
+ * 12m" — rather than the raw minute count. Without that, a repeat member
+ * would read "3 gaps in the day · worst 192 min" beside a panel that calls
+ * the identical flag "3h 12m": two names for the same flag on two screens.
+ * Codes that are genuinely minutes (late starts, early departures) keep plain
+ * minutes, because that IS their unit everywhere else.
  */
 export function personHeadline(person: QueuePerson): string {
   const unresolved = person.flags.filter((f) => f.decision_state !== "matched");
@@ -335,7 +343,14 @@ export function personHeadline(person: QueuePerson): string {
     .map((f) => f.evidence.minutes)
     .filter((value): value is number => typeof value === "number");
   const summary = `${sameCode.length} ${pluralFlagLabel(worst.flag_code)}`;
-  return minutes.length > 0 ? `${summary} · worst ${Math.max(...minutes)} min` : summary;
+  if (minutes.length === 0) return summary;
+
+  const worstMinutes = Math.max(...minutes);
+  const worstText =
+    worst.flag_code === "MISSING_TIME"
+      ? formatMissingDuration(worstMinutes).replace(/^Missing /, "")
+      : `${worstMinutes} min`;
+  return `${summary} · worst ${worstText}`;
 }
 
 /**
