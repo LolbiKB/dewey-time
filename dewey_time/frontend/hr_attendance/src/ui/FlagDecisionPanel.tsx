@@ -13,6 +13,7 @@ import {
   type PendingDecision,
 } from "@/lib/flagDecisionState";
 import { flagSummary, formatFlagContextDate, formatFlagEvidenceDetails } from "@/lib/flagDetails";
+import { flagNarrative, type NarrativeDay } from "@/lib/flagNarrative";
 import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
 import {
   DECIDE_AGAIN_LABEL,
@@ -31,9 +32,43 @@ import {
   reasonLabel,
 } from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
+import type { Flag } from "@/types/calendar";
 import type { FlagOut, QueueEntry, QueuePerson, Reason } from "@/types/flags";
+import { FlagEvidenceTimeline } from "@/ui/FlagEvidenceTimeline";
 
 type GroupEntry = Extract<QueueEntry, { kind: "group" }>;
+
+/**
+ * flag_queue_api.get_flag_queue (attendance_engine/flag_queue_api.py) never
+ * returns checkins, shift, holiday or observed_lunch — it is a flat queue
+ * payload, not a calendar day — and FlagQueuePage's only caller-supplied
+ * context, HrAccessOutletContext (lib/hrAccess.ts), carries just
+ * hrStaff/sessionLoading. Unlike FlagDetailPanel's DayInspectorSheet, there
+ * is no caller anywhere in this surface's chain to thread real day data
+ * from. flagNarrative() still needs *a* NarrativeDay — this is the honest
+ * empty one, so timelines on this card degrade to whatever flagNarrative()
+ * decides for zero checkins rather than crashing.
+ */
+const EMPTY_NARRATIVE_DAY: NarrativeDay = { checkins: [] };
+
+/**
+ * flagNarrative()'s signature takes Flag (types/calendar.ts, the shape
+ * hr_calendar.py's get_my_week returns), not FlagOut (types/flags.ts, what
+ * this queue payload returns): flag_identity where Flag has name, and no
+ * `source` field at all. Design rule 11's no-detector fallback reads
+ * flag.source to survive empty evidence; on this surface it is always
+ * undefined — a documented, harmless gap, since the fallback still shows its
+ * label and reason, just without a source line.
+ */
+function flagOutToFlag(flag: FlagOut): Flag {
+  return {
+    name: flag.flag_identity,
+    flag_code: flag.flag_code,
+    severity: flag.severity as Flag["severity"],
+    day_closed: flag.day_closed as 0 | 1,
+    evidence: flag.evidence,
+  };
+}
 
 export type FlagDecisionPanelProps = {
   entry: QueueEntry | null;
@@ -144,6 +179,7 @@ function FlagCard(props: {
 }) {
   const { flag } = props;
   const evidence = formatFlagEvidenceDetails(flag.evidence, props.dateKey);
+  const narrative = flagNarrative(flagOutToFlag(flag), EMPTY_NARRATIVE_DAY, props.dateKey);
   const decided = flag.decision_state === "matched";
 
   return (
@@ -169,18 +205,66 @@ function FlagCard(props: {
         </Badge>
       </div>
 
-      {/* Same dl/dt/dd shape as FlagDetailPanel.tsx — one evidence idiom across
-          both surfaces, so a change to formatFlagEvidenceDetails lands in both
-          without a second layout to keep in step. */}
-      {evidence.rows.length > 0 ? (
+      {/* The verdict, not the fields — same flagNarrative() idiom as
+          FlagDetailPanel.tsx, so a change there lands here too (was: same
+          dl/dt/dd idiom for the raw evidence.rows, unfiltered). This card
+          always computes against EMPTY_NARRATIVE_DAY (see above) — this
+          surface has no live calendar day. */}
+      <div className="space-y-1">
+        <p className="text-xs font-medium leading-relaxed text-foreground">{narrative.headline}</p>
+        {narrative.subline ? (
+          <p className="text-[11px] leading-relaxed text-muted-foreground">{narrative.subline}</p>
+        ) : null}
+      </div>
+
+      {narrative.timeline ? (
+        <FlagEvidenceTimeline
+          spec={narrative.timeline}
+          ariaLabel={`${narrative.headline} timeline`}
+        />
+      ) : null}
+
+      {narrative.facts.length > 0 ? (
         <dl className="space-y-1.5 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-2">
-          {evidence.rows.map((row) => (
-            <div key={row.label} className="grid grid-cols-[minmax(0,42%)_1fr] gap-2 text-xs">
-              <dt className="text-muted-foreground">{row.label}</dt>
-              <dd className="font-medium text-foreground">{row.value}</dd>
+          {narrative.facts.map((fact) => (
+            <div key={fact.label} className="grid grid-cols-[minmax(0,42%)_1fr] gap-2 text-xs">
+              <dt className="text-muted-foreground">{fact.label}</dt>
+              <dd className="font-medium text-foreground">{fact.value}</dd>
             </div>
           ))}
         </dl>
+      ) : null}
+
+      {/* Same dl/dt/dd shape as FlagDetailPanel.tsx's disclosure — one
+          evidence idiom across both surfaces, so a change to
+          formatFlagEvidenceDetails lands in both without a second layout to
+          keep in step. Both `.rows` AND `.fallbackJson` now live behind this
+          <details>; before this task `.fallbackJson` was read nowhere on
+          this card (only `.rows` was, rendered uncollapsed), so a flag with
+          leftover keys had no way to reach HR here at all. */}
+      {evidence.rows.length > 0 || evidence.fallbackJson ? (
+        <details className="rounded-lg border border-border/60 bg-muted/10 px-2.5 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+            Full evidence
+          </summary>
+          <div className="mt-2 space-y-2">
+            {evidence.rows.length > 0 ? (
+              <dl className="space-y-1.5 rounded-lg border border-border/60 bg-card px-2.5 py-2">
+                {evidence.rows.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[minmax(0,42%)_1fr] gap-2 text-xs">
+                    <dt className="text-muted-foreground">{row.label}</dt>
+                    <dd className="font-medium text-foreground">{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {evidence.fallbackJson ? (
+              <pre className="max-h-40 overflow-auto text-[11px] leading-relaxed text-muted-foreground">
+                {evidence.fallbackJson}
+              </pre>
+            ) : null}
+          </div>
+        </details>
       ) : null}
 
       {/* CONTEXT, not an outcome. The evidence fingerprint moved under this
