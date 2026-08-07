@@ -39,6 +39,15 @@ def _flag(employee, attendance_date, flag_code, *, evidence=None, identity=None,
     }
 
 
+def _iter_all_people(entries):
+    for entry in entries:
+        if entry["kind"] == "group":
+            for member in entry["members"]:
+                yield member
+        else:
+            yield entry
+
+
 def _decision(flag, *, name="AFD-0001", outcome="EXCUSED", reason="DEVICE_OR_DATA_FAULT",
               fingerprint=_MATCH, group_key=None):
     """One live (superseded=0) `Attendance Flag Decision` row.
@@ -71,13 +80,7 @@ def _employees(*rows):
 
 def _people_in(payload):
     """Every Person in the payload, groups flattened — the dedup invariant's subject."""
-    people = []
-    for entry in payload["entries"]:
-        if entry["kind"] == "group":
-            people.extend(entry["members"])
-        else:
-            people.append(entry)
-    return people
+    return list(_iter_all_people(payload["entries"]))
 
 
 def _person_days(payload):
@@ -253,7 +256,12 @@ class TestPersonDedup(unittest.TestCase):
         )
         self.assertEqual([len(e["members"]) for e in payload["entries"]], [2, 3])
 
-    def test_one_employee_flagged_on_two_days_is_two_entries_but_one_person(self):
+    def test_one_employee_flagged_on_two_days_is_one_entry_spanning_both(self):
+        # This test used to assert TWO entries, under the retired person-day
+        # invariant ("a person-DAY appears in exactly one entry"). Task 3 replaced
+        # that with "a FLAG appears in exactly one entry", so a person's leftover
+        # flags — whatever days they fall on — now merge into a single row. The
+        # change is deliberate, not a weakened assertion.
         payload = build_queue(
             flags=[
                 _flag("EMP-1", DATE, "UNNOTIFIED_ABSENCE"),
@@ -264,8 +272,16 @@ class TestPersonDedup(unittest.TestCase):
             outage_branch_dates=set(),
         )
 
-        self.assertEqual(len(payload["entries"]), 2)
-        self.assertEqual(sorted(e["attendance_date"] for e in payload["entries"]), [DATE, DATE2])
+        self.assertEqual(len(payload["entries"]), 1)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["dates"], [DATE, DATE2])
+        # Both absences rank 150, so "worst" is a tie that `_flag_sort_key` breaks
+        # on flag_identity — which puts DATE first. (The worst-flag rule itself is
+        # discriminated by PersonUnitTests, where the ranks genuinely differ.)
+        self.assertEqual(entry["attendance_date"], DATE)
+        # Both flags are still on the entry and still owed an answer: merging days
+        # must not drop one.
+        self.assertEqual(entry["undecided_count"], 2)
         self.assertEqual(payload["counts"]["people"], 1)
 
     def test_unknown_employee_row_still_yields_a_person(self):
@@ -574,7 +590,10 @@ class TestCounts(unittest.TestCase):
             outage_branch_dates={("Phnom Penh HQ", DATE)},
         )
 
-        self.assertEqual(len(_person_days(payload)), 6)
+        # 6 flags over 6 person-days, but 5 Persons: EMP-1's absence on DATE and
+        # their late start on DATE2 are both leftovers, so they merge into one row
+        # (this was 6 under the retired person-day invariant).
+        self.assertEqual(len(_person_days(payload)), 5)
         self.assertEqual(payload["counts"]["people"], 5)
         self.assertEqual(
             payload["counts"]["people"], len({p["employee"] for p in _people_in(payload)})
@@ -729,7 +748,6 @@ class FlagDateTests(unittest.TestCase):
         )
         self.assertEqual(result["entries"][0]["flags"][0]["attendance_date"], "2026-08-03")
 
-    @unittest.expectedFailure  # Task 3 merges a person's leftover days into one entry.
     def test_person_dates_lists_every_date_its_flags_fall_on(self):
         # One person, one code, two days — too few days to form a pattern, so this
         # stays a single person entry and proves `dates` spans what the entry holds.
@@ -878,10 +896,10 @@ class EntryKeyTests(unittest.TestCase):
                 member["entry_key"], "{0}|p:{1}".format(group["group_key"], member["employee"])
             )
 
-        # Current (Task 1) lone form is `p:<employee>:<date>`; Task 3 changes it
-        # to `p:<employee>` deliberately and will update this assertion.
+        # The lone form is `p:<employee>`: one entry now holds every leftover flag
+        # of theirs, whatever date each falls on, so the key cannot carry a date.
         for loner in loners:
-            self.assertEqual(loner["entry_key"], "p:{0}:{1}".format(loner["employee"], DATE))
+            self.assertEqual(loner["entry_key"], "p:{0}".format(loner["employee"]))
 
 
 def _days(employee, code, dates, *, evidence=None):
@@ -1025,6 +1043,153 @@ class DayTierTests(unittest.TestCase):
         flag = _flag("EMP-1", D1, "LATE_START", evidence={"minutes": 9})
         decided = _flag_out(flag, {flag["flag_identity"]: _decision(flag)})
         self.assertEqual(_day_tier([decided]), "routine")
+
+
+def _emps(*ids):
+    return {e: {"employee_name": "Name {0}".format(e), "branch": "HQ"} for e in ids}
+
+
+def _entries_by_kind(result, group_type=None):
+    out = []
+    for entry in result["entries"]:
+        if group_type is None:
+            out.append(entry)
+        elif entry["kind"] == "group" and entry["group_type"] == group_type:
+            out.append(entry)
+    return out
+
+
+class RepeatPatternTests(unittest.TestCase):
+    def _late_pattern(self):
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+        return flags
+
+    def test_a_person_with_flags_on_five_days_appears_once(self):
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3, D4, "2026-08-07"):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+        appearances = [
+            person
+            for person in _iter_all_people(result["entries"])
+            if person["employee"] == "EMP-1"
+        ]
+        self.assertEqual(len(appearances), 1)
+        self.assertEqual(len(appearances[0]["flags"]), 5)
+
+    def test_every_flag_appears_in_exactly_one_entry(self):
+        # The invariant that replaced "a person appears once". Asserted over the
+        # whole assembled set, not per entry.
+        flags = self._late_pattern() + [
+            _flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192}),
+            _flag("EMP-3", D1, "UNNOTIFIED_ABSENCE"),
+        ]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3"),
+            outage_branch_dates=set(),
+        )
+        seen = []
+        for person in _iter_all_people(result["entries"]):
+            seen.extend(f["flag_identity"] for f in person["flags"])
+        self.assertEqual(len(seen), len(flags))
+        self.assertEqual(len(set(seen)), len(flags))
+
+    def test_a_pattern_group_holds_the_patterned_code_only(self):
+        flags = self._late_pattern() + [_flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192})]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+        groups = _entries_by_kind(result, "REPEAT_PATTERN")
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["flag_code"], "LATE_START")
+        self.assertIsNone(groups[0]["attendance_date"])
+        self.assertIsNone(groups[0]["branch"])
+        codes = {f["flag_code"] for m in groups[0]["members"] for f in m["flags"]}
+        self.assertEqual(codes, {"LATE_START"})
+
+    def test_the_outlier_becomes_its_own_person_entry(self):
+        flags = self._late_pattern() + [_flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192})]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+        loners = [e for e in result["entries"] if e["kind"] == "person"]
+        self.assertEqual(len(loners), 1)
+        self.assertEqual(loners[0]["employee"], "EMP-1")
+        self.assertEqual([f["flag_code"] for f in loners[0]["flags"]], ["MISSING_TIME"])
+
+    def test_a_pattern_group_ranks_at_its_worst_members_rank(self):
+        flags = self._late_pattern()
+        # EMP-2's third late start is 90 minutes -> rank 65, above the 20s.
+        flags[-1] = _flag("EMP-2", D3, "LATE_START", evidence={"minutes": 90})
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+        group = _entries_by_kind(result, "REPEAT_PATTERN")[0]
+        self.assertEqual(group["rank"], 65)
+        self.assertEqual(group["tier"], "review")
+
+    def test_a_branch_outage_claims_the_day_ahead_of_a_pattern(self):
+        # Precedence 1 beats precedence 2: a device outage explains the flags
+        # regardless of whether the people involved are also repeat offenders.
+        flags = self._late_pattern()
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates={("HQ", D1)},
+        )
+        branch_groups = _entries_by_kind(result, "BRANCH_NO_DEVICE_DATA")
+        self.assertEqual(len(branch_groups), 1)
+        dates = {f["attendance_date"] for m in branch_groups[0]["members"] for f in m["flags"]}
+        self.assertEqual(dates, {D1})
+        # D1 is gone, so only D2 and D3 remain — two days, no longer a pattern.
+        self.assertEqual(_entries_by_kind(result, "REPEAT_PATTERN"), [])
+
+    def test_one_person_late_four_times_is_a_person_row_not_a_group(self):
+        flags = [_flag("EMP-1", d, "LATE_START", evidence={"minutes": 9}) for d in (D1, D2, D3, D4)]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1"),
+            outage_branch_dates=set(),
+        )
+        self.assertEqual(_entries_by_kind(result, "REPEAT_PATTERN"), [])
+        self.assertEqual(len(result["entries"]), 1)
+        self.assertEqual(len(result["entries"][0]["flags"]), 4)
+
+    def test_entry_keys_are_unique_across_the_assembled_set(self):
+        flags = self._late_pattern() + [_flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192})]
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+        keys = [p["entry_key"] for p in _iter_all_people(result["entries"])]
+        self.assertEqual(len(keys), len(set(keys)))
+        # EMP-1 is in two entries and must not collide with themselves.
+        emp1 = sorted(p["entry_key"] for p in _iter_all_people(result["entries"]) if p["employee"] == "EMP-1")
+        self.assertEqual(emp1, ["REPEAT_PATTERN:LATE_START|p:EMP-1", "p:EMP-1"])
 
 
 if __name__ == "__main__":

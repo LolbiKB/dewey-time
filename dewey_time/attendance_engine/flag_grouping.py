@@ -3,8 +3,9 @@
 Pure module: no frappe import, no queries, no I/O. `flag_queue_api` owns every
 read (its query budget is O(1) in employee count) and hands the result sets in as
 plain dicts; everything here is a transformation over those dicts. That is what
-lets the invariant this module exists to guarantee — a person-day appears in
-exactly one entry — be tested without a bench.
+lets the invariant this module exists to guarantee — a FLAG appears in exactly
+one entry — be tested without a bench. A person may appear in more than one:
+see `_entries_for`.
 
 Spec: docs/superpowers/specs/2026-08-05-hr-flag-management-design.md, sections
 "Triage ranking — additive, computed on read" and "Cause grouping — branch level".
@@ -110,7 +111,7 @@ def build_queue(
         if previous is None or flag_out["day_closed"] > previous["day_closed"]:
             bucket[flag_out["flag_identity"]] = flag_out
 
-    persons = []
+    person_days = []
     for (employee, date_str), bucket in by_person.items():
         person_flags = sorted(bucket.values(), key=_flag_sort_key)
         for flag_out in person_flags:
@@ -120,21 +121,14 @@ def build_queue(
                 counts["needs_re_review"] += 1
             else:
                 counts["decided"] += 1
-        # Still one Person per person-DAY here; Task 3 is what merges a person's
-        # days into one entry. The key carries the date for exactly that reason.
-        person = _person(
-            employee,
-            person_flags,
-            employees_by_id,
-            entry_key="p:{0}:{1}".format(employee, date_str),
-        )
-        # A person leaves the queue only once every flag of theirs is settled —
-        # unless the caller asked for the settled ones back, which is what makes
-        # an applied decision reachable for replacement.
-        if person["undecided_count"] or include_decided:
-            persons.append(person)
+        # A day leaves the queue only once every flag on it is settled — unless
+        # the caller asked for the settled ones back, which is what makes an
+        # applied decision reachable for replacement.
+        unresolved = any(f["decision_state"] in UNRESOLVED_STATES for f in person_flags)
+        if unresolved or include_decided:
+            person_days.append({"employee": employee, "date": date_str, "flags": person_flags})
 
-    entries = _entries_for(persons, outage_branch_dates)
+    entries = _entries_for(person_days, employees_by_id, outage_branch_dates)
     entries.sort(key=_entry_sort_key)
     # Only people who still owe HR an answer, so `people` keeps meaning "people
     # with something open" (which is what the toolbar renders it as) when settled
@@ -291,82 +285,140 @@ def _day_tier(person_flags: list[dict]) -> str:
     return tier_for_rank(max(ranks, default=0))
 
 
-def _top_unresolved(person: dict) -> dict | None:
-    for flag_out in person["flags"]:  # already worst-first
+def _top_unresolved(person_flags: list[dict]) -> dict | None:
+    for flag_out in person_flags:  # already worst-first
         if flag_out["decision_state"] in UNRESOLVED_STATES:
             return flag_out
     return None
 
 
-def _entries_for(persons: list[dict], outage_branch_dates: set) -> list[dict]:
-    """Place each person in the first group that claims them, else on their own.
+def _entries_for(
+    person_days: list[dict],
+    employees_by_id: dict,
+    outage_branch_dates: set,
+) -> list[dict]:
+    """Assign every flag to exactly one entry. First claim wins.
 
-    Precedence is BRANCH_NO_DEVICE_DATA, then ROUTINE_CODE, then ungrouped —
-    a person is claimed once and never considered again.
+    Precedence, per the spec's taxonomy table:
+      1. BRANCH_NO_DEVICE_DATA — branch + date, claims the whole day
+      2. REPEAT_PATTERN        — flag code, one person across >= PATTERN_MIN_DAYS dates
+      3. ROUTINE_CODE          — flag code + date, across people
+      4. (none)                — everything left, one entry per person
+
+    The invariant this guarantees is "a flag appears in exactly one entry", NOT
+    "a person appears in exactly one entry". A person may legitimately appear
+    twice — once in a pattern group holding their four late starts, once as
+    their own row holding a three-hour gap — because those are two different
+    judgements and bundling them forced one decision onto two unrelated things.
     """
     branch_groups: dict[str, dict] = {}
-    routine_groups: dict[str, dict] = {}
-    loners: list[dict] = []
+    unclaimed_days: list[dict] = []
 
-    for person in persons:
-        date_str = person["attendance_date"]
-        branch = person["employee_branch"]
-
-        if branch and (branch, date_str) in outage_branch_dates:
-            key = "{0}:{1}:{2}".format(GROUP_BRANCH_NO_DEVICE_DATA, branch, date_str)
+    # --- 1. A device outage claims the whole day, before anything else looks at it.
+    for person_day in person_days:
+        branch = (employees_by_id.get(person_day["employee"]) or {}).get("branch")
+        if branch and (branch, person_day["date"]) in outage_branch_dates:
+            key = "{0}:{1}:{2}".format(GROUP_BRANCH_NO_DEVICE_DATA, branch, person_day["date"])
             group = branch_groups.setdefault(
                 key,
-                {"branch": branch, "flag_code": None, "attendance_date": date_str, "members": []},
+                {
+                    "group_type": GROUP_BRANCH_NO_DEVICE_DATA,
+                    "group_key": key,
+                    "branch": branch,
+                    "flag_code": None,
+                    "attendance_date": person_day["date"],
+                    "by_employee": {},
+                },
             )
-            group["members"].append(person)
+            group["by_employee"].setdefault(person_day["employee"], []).extend(person_day["flags"])
             continue
+        unclaimed_days.append(person_day)
 
-        # Routine grouping keys off the person's WORST unresolved flag, never off
-        # a routine flag they merely also have: someone 9 minutes late who also
-        # has a 3h gap must land under the gap. person["tier"] is that worst
-        # flag's tier by construction (_person). `top` is None for a fully settled
-        # person (only reachable under include_decided): a cause group is a
-        # bulk-decide affordance, and there is nothing of theirs to bulk-decide,
-        # so they fall through to a lone entry rather than pad a group whose
-        # action would skip them.
-        top = _top_unresolved(person)
-        if top is not None and person["tier"] == TIER_ROUTINE:
-            key = "{0}:{1}:{2}".format(GROUP_ROUTINE_CODE, top["flag_code"], date_str)
+    # --- 2. Repeat patterns, computed over what the outage groups left behind.
+    pattern_codes = _pattern_codes(unclaimed_days)
+    pattern_groups: dict[str, dict] = {}
+    leftover_days: list[dict] = []
+
+    for person_day in unclaimed_days:
+        # Over the WHOLE day, before pattern claiming removes anything — see _day_tier.
+        day_tier = _day_tier(person_day["flags"])
+        kept: list[dict] = []
+        for flag_out in person_day["flags"]:
+            code = flag_out["flag_code"]
+            if _is_pattern_flag(flag_out) and person_day["employee"] in pattern_codes.get(code, ()):
+                key = "{0}:{1}".format(GROUP_REPEAT_PATTERN, code)
+                group = pattern_groups.setdefault(
+                    key,
+                    {
+                        "group_type": GROUP_REPEAT_PATTERN,
+                        "group_key": key,
+                        "branch": None,
+                        # A pattern spans dates by definition, so it has no single
+                        # one. Consumers must read the members' `dates` instead.
+                        "attendance_date": None,
+                        "flag_code": code,
+                        "by_employee": {},
+                    },
+                )
+                group["by_employee"].setdefault(person_day["employee"], []).append(flag_out)
+            else:
+                kept.append(flag_out)
+        if kept:
+            leftover_days.append({**person_day, "flags": kept, "day_tier": day_tier})
+
+    # --- 3. Routine code groups over what is still unclaimed.
+    routine_groups: dict[str, dict] = {}
+    leftover_by_employee: dict[str, list[dict]] = {}
+
+    for person_day in leftover_days:
+        top = _top_unresolved(person_day["flags"])
+        # Keyed off the worst REMAINING unresolved flag, so the group is always
+        # named after something it actually contains — but guarded on the whole
+        # day's tier, so "nothing else wrong that day" stays true. `top` is None
+        # for a fully settled leftover day (only reachable under include_decided):
+        # a cause group is a bulk-decide affordance and there is nothing of
+        # theirs to bulk-decide, so they fall through to a person entry.
+        if top is not None and person_day["day_tier"] == TIER_ROUTINE:
+            key = "{0}:{1}:{2}".format(GROUP_ROUTINE_CODE, top["flag_code"], person_day["date"])
             group = routine_groups.setdefault(
                 key,
                 {
+                    "group_type": GROUP_ROUTINE_CODE,
+                    "group_key": key,
                     "branch": None,
                     "flag_code": top["flag_code"],
-                    "attendance_date": date_str,
-                    "members": [],
+                    "attendance_date": person_day["date"],
+                    "by_employee": {},
                 },
             )
-            group["members"].append(person)
+            group["by_employee"].setdefault(person_day["employee"], []).extend(person_day["flags"])
             continue
+        leftover_by_employee.setdefault(person_day["employee"], []).extend(person_day["flags"])
 
-        loners.append(person)
-
+    # --- 4. Assemble. A group of one degrades back to its member's leftovers.
     entries: list[dict] = []
-    for group_type, holder in (
-        (GROUP_BRANCH_NO_DEVICE_DATA, branch_groups),
-        (GROUP_ROUTINE_CODE, routine_groups),
-    ):
-        for key, group in holder.items():
-            if len(group["members"]) < GROUP_MIN_MEMBERS:
-                loners.extend(group["members"])
+    for holder in (branch_groups, pattern_groups, routine_groups):
+        for group in holder.values():
+            if len(group["by_employee"]) < GROUP_MIN_MEMBERS:
+                for employee, flags in group["by_employee"].items():
+                    leftover_by_employee.setdefault(employee, []).extend(flags)
                 continue
-            members = sorted(group["members"], key=_member_sort_key)
-            # Group-scoped: the same employee can be a member here AND hold a lone
-            # entry of their own once Task 3 lands, and two entries under one key
-            # would make selecting the outlier select the group member instead.
-            for member in members:
-                member["entry_key"] = "{0}|p:{1}".format(key, member["employee"])
+            members = [
+                _person(
+                    employee,
+                    sorted(flags, key=_flag_sort_key),
+                    employees_by_id,
+                    entry_key="{0}|p:{1}".format(group["group_key"], employee),
+                )
+                for employee, flags in group["by_employee"].items()
+            ]
+            members.sort(key=_member_sort_key)
             rank = max(member["rank"] for member in members)
             entries.append(
                 {
                     "kind": "group",
-                    "group_type": group_type,
-                    "group_key": key,
+                    "group_type": group["group_type"],
+                    "group_key": group["group_key"],
                     "branch": group["branch"],
                     "flag_code": group["flag_code"],
                     "attendance_date": group["attendance_date"],
@@ -376,7 +428,13 @@ def _entries_for(persons: list[dict], outage_branch_dates: set) -> list[dict]:
                 }
             )
 
-    for person in loners:
+    for employee, flags in leftover_by_employee.items():
+        person = _person(
+            employee,
+            sorted(flags, key=_flag_sort_key),
+            employees_by_id,
+            entry_key="p:{0}".format(employee),
+        )
         entries.append({"kind": "person", **person})
 
     return entries
