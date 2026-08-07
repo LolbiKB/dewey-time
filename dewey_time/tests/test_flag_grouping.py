@@ -1092,11 +1092,16 @@ class RepeatPatternTests(unittest.TestCase):
         flags = self._late_pattern() + [
             _flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192}),
             _flag("EMP-3", D1, "UNNOTIFIED_ABSENCE"),
+            # A would-be routine group of ONE, so the fixture exercises the
+            # degradation path too. Without it this asserts only that no flag is
+            # duplicated; a group that dropped its members' flags on demotion
+            # instead of handing them back would slip through.
+            _flag("EMP-4", D1, "NON_PRIMARY_SITE_PUNCH"),
         ]
         result = build_queue(
             flags=flags,
             decisions_by_identity={},
-            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3"),
+            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3", "EMP-4"),
             outage_branch_dates=set(),
         )
         seen = []
@@ -1176,6 +1181,79 @@ class RepeatPatternTests(unittest.TestCase):
         self.assertEqual(_entries_by_kind(result, "REPEAT_PATTERN"), [])
         self.assertEqual(len(result["entries"]), 1)
         self.assertEqual(len(result["entries"][0]["flags"]), 4)
+
+    def test_the_routine_guard_reads_the_whole_day_not_what_the_pattern_left(self):
+        # `_day_tier` is computed over the WHOLE day, BEFORE pattern claiming
+        # removes anything, and carried on the leftover record. That is what keeps
+        # the ROUTINE_CODE group's "and nothing else wrong that day" true — the
+        # clause is about how bad the day was, not about which entry each flag
+        # ended up in.
+        #
+        # D1 holds a review-tier MISSING_TIME (45 min -> rank 60) that the pattern
+        # claims, plus a routine LATE_START that it does not. The day was review
+        # tier, so the surviving late start must NOT be bulk-clearable in a
+        # ROUTINE_CODE group; it falls through to its person's own row. Recompute
+        # the tier on the leftovers instead and the day looks routine, which is the
+        # bug this pins.
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "MISSING_TIME", evidence={"minutes": 45}))
+            flags.append(_flag(employee, D1, "LATE_START", evidence={"minutes": 9}))
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+
+        # The pattern forms and takes all six gaps.
+        pattern = _entries_by_kind(result, "REPEAT_PATTERN")
+        self.assertEqual(len(pattern), 1)
+        self.assertEqual(pattern[0]["flag_code"], "MISSING_TIME")
+
+        # …and the two late starts stay OUT of a routine group.
+        self.assertEqual(_entries_by_kind(result, "ROUTINE_CODE"), [])
+        loners = [e for e in result["entries"] if e["kind"] == "person"]
+        self.assertEqual(sorted(e["employee"] for e in loners), ["EMP-1", "EMP-2"])
+        for loner in loners:
+            self.assertEqual([f["flag_code"] for f in loner["flags"]], ["LATE_START"])
+
+    def test_a_routine_group_is_named_after_a_code_it_actually_contains(self):
+        # The ROUTINE_CODE key comes from the worst REMAINING unresolved flag, not
+        # the worst flag of the whole day: the day's worst may already have been
+        # claimed by the pattern, and a group labelled with a code none of its
+        # flags carry is a lie on the card and an unfindable bulk decision.
+        #
+        # D1 holds LATE_START (rank 20, the day's worst) which the pattern claims,
+        # and NON_PRIMARY_SITE_PUNCH (rank 10) which survives. The group must be
+        # named for the punch, not the late start.
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+            flags.append(_flag(employee, D1, "NON_PRIMARY_SITE_PUNCH"))
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+
+        routine = _entries_by_kind(result, "ROUTINE_CODE")
+        self.assertEqual(len(routine), 1)
+        self.assertEqual(routine[0]["flag_code"], "NON_PRIMARY_SITE_PUNCH")
+        self.assertEqual(
+            routine[0]["group_key"], "ROUTINE_CODE:NON_PRIMARY_SITE_PUNCH:" + D1
+        )
+
+        # The general property, not just this fixture: every cause group named
+        # after a code holds at least one flag bearing it.
+        for group in _entries_by_kind(result, "ROUTINE_CODE") + _entries_by_kind(
+            result, "REPEAT_PATTERN"
+        ):
+            codes = {f["flag_code"] for m in group["members"] for f in m["flags"]}
+            self.assertIn(group["flag_code"], codes, group["group_key"])
 
     def test_entry_keys_are_unique_across_the_assembled_set(self):
         flags = self._late_pattern() + [_flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192})]
