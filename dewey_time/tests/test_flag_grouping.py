@@ -133,6 +133,39 @@ class TestPersonDedup(unittest.TestCase):
         self.assertNotIn("EMP-1", [m["employee"] for m in routine[0]["members"]])
         self.assertEqual(_person_days(payload).count(("EMP-1", DATE)), 1)
 
+    def test_a_routine_group_is_keyed_off_the_worst_of_two_routine_codes(self):
+        # Both employees hold the same TWO routine codes on the same day, so a
+        # group of two forms whichever code is chosen and "named after a code it
+        # actually contains" cannot tell the choices apart. What separates them is
+        # which one: the key comes from the worst unresolved flag (LATE_START,
+        # rank 20), never the least bad (NON_PRIMARY_SITE_PUNCH, rank 10).
+        # `_top_unresolved` scanned from the wrong end files everyone under the
+        # most trivial thing they did that day, which is the same failure as the
+        # retired "someone 9 minutes late who also has a 3h gap must land under
+        # the gap" — just below the tier guard, where both codes are routine.
+        flags = []
+        for emp in ("EMP-1", "EMP-2"):
+            flags.append(_flag(emp, DATE, "LATE_START", evidence={"minutes": 9}))
+            flags.append(_flag(emp, DATE, "NON_PRIMARY_SITE_PUNCH"))
+
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-A")),
+            outage_branch_dates=set(),
+        )
+
+        routine = _groups(payload, "ROUTINE_CODE")
+        self.assertEqual(len(routine), 1)
+        self.assertEqual(routine[0]["flag_code"], "LATE_START")
+        self.assertEqual(routine[0]["group_key"], "ROUTINE_CODE:LATE_START:" + DATE)
+        # The key names the worst flag; it does not filter the entry down to it.
+        # Both codes still travel with their members for the detail panel.
+        self.assertEqual(
+            {f["flag_code"] for m in routine[0]["members"] for f in m["flags"]},
+            {"LATE_START", "NON_PRIMARY_SITE_PUNCH"},
+        )
+
     def test_no_person_day_appears_in_two_entries(self):
         flags = [
             _flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9}),

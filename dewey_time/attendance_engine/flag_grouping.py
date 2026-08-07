@@ -335,6 +335,19 @@ def _entries_for(
         unclaimed_days.append(person_day)
 
     # --- 2. Repeat patterns, computed over what the outage groups left behind.
+    #
+    # KNOWN COUPLING, not a bug. This reads `unclaimed_days`, but an undersized
+    # branch group is not demoted until assembly below, so a day claimed by a
+    # group that later degrades never comes back for pattern detection. The
+    # observable effect is that an outage at a branch can change how employees who
+    # do NOT work there are grouped: two people late on the same three days form
+    # one pattern, and adding an outage at a branch where only the first of them
+    # works drops the pair below the two-person gate, so the second is regrouped
+    # too. No flag is lost or duplicated either way — the partition is total at
+    # every stage — and the degradation is always toward MORE rows, never toward
+    # something being hidden inside a batch, which is the direction that would
+    # matter. Resolving it would mean iterating claim and demotion to a fixed
+    # point for a strictly worse-looking queue.
     pattern_codes = _pattern_codes(unclaimed_days)
     pattern_groups: dict[str, dict] = {}
     leftover_days: list[dict] = []
