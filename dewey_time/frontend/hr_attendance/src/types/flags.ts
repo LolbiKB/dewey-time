@@ -36,6 +36,8 @@ export type FlagDecision = {
 export type FlagOut = {
   flag_identity: string;
   flag_code: string;
+  /** The flag's own date. An entry can span dates, so the person cannot answer this. */
+  attendance_date: string;
   severity?: string;
   day_closed: number;
   evidence: Record<string, unknown>;
@@ -47,26 +49,41 @@ export type FlagOut = {
 };
 
 export type QueuePerson = {
+  /**
+   * Unique across the whole assembled entry set, stamped by the backend.
+   * `p:<employee>` for a lone row, `<group_key>|p:<employee>` for a group
+   * member. A person can appear in two entries under the per-flag invariant,
+   * so a key derived from employee alone would collide with itself.
+   */
+  entry_key: string;
   employee: string;
   employee_name: string;
   employee_branch: string | null;
+  /** The worst unresolved flag's date — the row's headline day. */
   attendance_date: string;
+  /** Every distinct date THIS entry's flags fall on, ascending. */
+  dates: string[];
   rank: number;
   tier: Tier;
-  /** Worst-first, ALL that person's flags that day. */
+  /** Worst-first, all of this person's flags **in this entry**. */
   flags: FlagOut[];
   undecided_count: number;
+  /** Other entries this person also appears in. 0 means no badge. */
+  also_count: number;
+  /** How many of those other entries are lone person rows. */
+  also_outlier_count: number;
 };
 
 export type QueueEntry =
   | ({ kind: "person" } & QueuePerson)
   | {
       kind: "group";
-      group_type: "BRANCH_NO_DEVICE_DATA" | "ROUTINE_CODE";
+      group_type: "BRANCH_NO_DEVICE_DATA" | "REPEAT_PATTERN" | "ROUTINE_CODE";
       group_key: string;
       branch: string | null;
       flag_code: string | null;
-      attendance_date: string;
+      /** null for REPEAT_PATTERN, which spans dates by definition. */
+      attendance_date: string | null;
       rank: number;
       tier: Tier;
       members: QueuePerson[];
@@ -74,7 +91,7 @@ export type QueueEntry =
 
 export type QueuePayload = {
   entries: QueueEntry[];
-  counts: { open: number; needs_re_review: number; decided: number; people: number };
+  counts: { open: number; needs_re_review: number; decided: number; people: number; rows: number };
   orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number };
   alerts: { branch: string; local_date: string; status: string; last_error?: string | null }[];
   truncated: boolean;

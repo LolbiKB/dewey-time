@@ -10,6 +10,7 @@ const EMPTY_COUNTS: QueuePayload["counts"] = {
   needs_re_review: 0,
   decided: 0,
   people: 0,
+  rows: 0,
 };
 
 const EMPTY_ORPHANS: QueuePayload["orphans"] = {

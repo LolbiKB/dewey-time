@@ -77,18 +77,56 @@ export function branchNoDeviceDataHeader(branch: string, attendanceDate: string)
   return `${label} had no device data on ${formatDayMonth(attendanceDate)}`;
 }
 
-// The five flag codes that can appear in a ROUTINE_CODE group (design doc
-// "Triage ranking" table, Routine tier). A dedicated plural phrase per code,
-// rather than a generic `formatFlagLabel(...) + "s"`, because naive
-// suffixing turns "left early" into "left earlys" and "missing lunch" into
-// "missing lunchs".
-const ROUTINE_CODE_PLURAL_LABELS: Record<string, string> = {
+/**
+ * A dedicated plural phrase per code, rather than a generic
+ * `formatFlagLabel(...) + "s"`, because naive suffixing turns "left early" into
+ * "left earlys" and "missing lunch" into "missing lunchs".
+ */
+const FLAG_CODE_PLURAL_LABELS: Record<string, string> = {
   LEFT_EARLY: "early departures",
   LATE_START: "late starts",
   LATE_FROM_LUNCH: "late returns from lunch",
   NON_PRIMARY_SITE_PUNCH: "other-site punches",
   MISSING_LUNCH: "missing lunches",
+  MISSING_TIME: "gaps in the day",
+  OFF_SHIFT_PUNCH: "off-shift punches",
+  DELIVERY_FAILED: "delivery failures",
+  UNKNOWN_DEVICE_BRANCH: "unknown-device punches",
 };
+
+function pluralFlagLabel(flagCode: string): string {
+  return FLAG_CODE_PLURAL_LABELS[flagCode] ?? `${flagCode.replaceAll("_", " ").toLowerCase()}s`;
+}
+
+/**
+ * Repeat-pattern group titles. `unit` is what one occurrence is called — a late
+ * start happens in the morning, a gap does not, and "8 people · 34 mornings"
+ * only reads as English when the noun fits the code.
+ *
+ * Every code here is one whose flags can reach routine or review tier; act-tier
+ * flags never form patterns (`PATTERN_TIERS` in flag_grouping.py), so
+ * UNNOTIFIED_ABSENCE and ATTENDANCE_ISSUE are deliberately absent.
+ */
+const REPEAT_PATTERN_LABELS: Record<string, { title: string; unit: string }> = {
+  LATE_START: { title: "Repeatedly late", unit: "mornings" },
+  LEFT_EARLY: { title: "Repeatedly leaving early", unit: "days" },
+  LATE_FROM_LUNCH: { title: "Repeatedly late back from lunch", unit: "days" },
+  NON_PRIMARY_SITE_PUNCH: { title: "Repeatedly punching at another site", unit: "days" },
+  MISSING_TIME: { title: "Repeated gaps in the day", unit: "days" },
+  OFF_SHIFT_PUNCH: { title: "Repeatedly punching off shift", unit: "days" },
+  MISSING_LUNCH: { title: "Repeatedly no lunch recorded", unit: "days" },
+  DELIVERY_FAILED: { title: "Repeated delivery failures", unit: "days" },
+  UNKNOWN_DEVICE_BRANCH: { title: "Repeated unknown-device punches", unit: "days" },
+};
+
+function repeatPatternLabel(flagCode: string): { title: string; unit: string } {
+  return (
+    REPEAT_PATTERN_LABELS[flagCode] ?? {
+      title: `Repeated ${flagCode.replaceAll("_", " ").toLowerCase()}`,
+      unit: "days",
+    }
+  );
+}
 
 function minutesRange(members: QueuePerson[], flagCode: string): { min: number; max: number } | null {
   let min: number | null = null;
@@ -106,17 +144,66 @@ function minutesRange(members: QueuePerson[], flagCode: string): { min: number; 
 }
 
 /**
- * "168 late starts, 6–20 min — and nothing else wrong that day" — the
- * ROUTINE_CODE group header. The minute range is scanned from the members'
- * own flags rather than passed in separately, so the header can never drift
- * from what the group actually contains.
+ * "168 one-off late starts, 6–20 min — and nothing else wrong that day".
+ *
+ * "one-off" is true by construction, not decoration: a repeat offender leaves
+ * this pool by precedence (REPEAT_PATTERN outranks ROUTINE_CODE), so everyone
+ * left here hit this code on fewer than PATTERN_MIN_DAYS days.
  */
 export function routineCodeHeader(flagCode: string, members: QueuePerson[]): string {
-  const label =
-    ROUTINE_CODE_PLURAL_LABELS[flagCode] ?? `${flagCode.replaceAll("_", " ").toLowerCase()}s`;
+  const label = pluralFlagLabel(flagCode);
   const range = minutesRange(members, flagCode);
   const rangeText = range ? `, ${range.min}–${range.max} min` : "";
-  return `${members.length} ${label}${rangeText} — and nothing else wrong that day`;
+  return `${members.length} one-off ${label}${rangeText} — and nothing else wrong that day`;
+}
+
+/** "Repeatedly late" — a pattern group's title. Its size goes in the subline. */
+export function repeatPatternHeader(flagCode: string): string {
+  return repeatPatternLabel(flagCode).title;
+}
+
+/**
+ * The second line of a group row. Both dimensions where both matter — "8 people
+ * · 34 mornings" — because a pattern group's size is two numbers and reporting
+ * only one is how the header started disagreeing with the list in the first
+ * place.
+ */
+export function groupSubline(entry: Extract<QueueEntry, { kind: "group" }>): string {
+  const people = `${entry.members.length} ${entry.members.length === 1 ? "person" : "people"}`;
+  if (entry.group_type !== "REPEAT_PATTERN") return people;
+  const occurrences = entry.members.reduce((total, member) => total + member.flags.length, 0);
+  const { unit } = repeatPatternLabel(entry.flag_code ?? "");
+  return `${people} · ${occurrences} ${unit}`;
+}
+
+/**
+ * "also 1 outlier" / "also 2 elsewhere" — the safeguard that makes the per-flag
+ * invariant safe in practice. Without it, HR excuses the repeatedly-late group,
+ * believes a person is dealt with, and never sees their three-hour absence.
+ *
+ * "outlier" only when EVERY other entry is a lone person row, because that is
+ * the only case where the word is true: a lone row holds the flags that fitted
+ * no pattern. Mixed, or another group, reads as the vaguer "elsewhere" rather
+ * than claiming a precision the count does not have.
+ */
+export function crossReferenceLabel(person: QueuePerson): string | null {
+  if (person.also_count < 1) return null;
+  if (person.also_outlier_count === person.also_count) {
+    return `also ${person.also_count} outlier${person.also_count === 1 ? "" : "s"}`;
+  }
+  return `also ${person.also_count} elsewhere`;
+}
+
+/**
+ * "40 people · 12 rows". The header and the list must count the same thing:
+ * before nesting, `people` counted distinct employees while the list showed one
+ * row per person-DAY, so the toolbar read "40 people with something open" above
+ * two hundred rows.
+ */
+export function queueHeaderDescription(counts: QueuePayload["counts"]): string {
+  const people = `${counts.people} ${counts.people === 1 ? "person" : "people"}`;
+  const rows = `${counts.rows} ${counts.rows === 1 ? "row" : "rows"}`;
+  return `${people} · ${rows}`;
 }
 
 /**
@@ -204,37 +291,51 @@ export function decisionStateLabel(state: DecisionState): string {
 
 /**
  * The headline for a cause group, dispatched on `group_type` to whichever of
- * the two headers above fits. Both fallbacks below are unreachable against
- * `build_queue`'s output — it always sets `branch` for BRANCH_NO_DEVICE_DATA
- * and `flag_code` for ROUTINE_CODE — but the contract types both as nullable
- * because the *other* group type leaves them null, so they are handled rather
- * than asserted away.
+ * the headers above fits. The BRANCH_NO_DEVICE_DATA and ROUTINE_CODE
+ * fallbacks below are unreachable against `build_queue`'s output — it always
+ * sets `branch` for BRANCH_NO_DEVICE_DATA and `flag_code` for the other two
+ * group types — but the contract types both as nullable because some *other*
+ * group type leaves them null, so they are handled rather than asserted away.
  */
 export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): string {
   if (entry.group_type === "BRANCH_NO_DEVICE_DATA") {
-    return branchNoDeviceDataHeader(entry.branch ?? "Unknown branch", entry.attendance_date);
+    return branchNoDeviceDataHeader(entry.branch ?? "Unknown branch", entry.attendance_date ?? "");
+  }
+  if (entry.group_type === "REPEAT_PATTERN") {
+    return repeatPatternHeader(entry.flag_code ?? "flag");
   }
   return routineCodeHeader(entry.flag_code ?? "flag", entry.members);
 }
 
 /**
- * The one line that stands for a person in the list: their worst flag that is
- * still waiting on someone. `flags` arrives worst-first from `build_queue`, so
- * the first non-`matched` entry is the worst unresolved one; a fully decided
- * person — which the queue does list when HR asks for decided people, so they
- * can replace a decision — falls back to their worst flag overall rather than
- * rendering blank.
+ * The one line that stands for a person in the list.
  *
- * Reuses `formatFlagLabel` rather than defining a second set of flag-code
- * labels — that helper already renders `MISSING_TIME` as "Missing 3h 12m",
- * distinguishes a holiday punch from a day-off punch, and carries
- * `ATTENDANCE_ISSUE`'s reason sub-label. A divergent second set would have HR
- * reading two different names for the same flag on two screens.
+ * `flags` arrives worst-first from `build_queue`, so the first non-`matched`
+ * entry is the worst unresolved one; a fully decided person — which the queue
+ * does list when HR asks for decided people — falls back to their worst flag
+ * overall rather than rendering blank.
+ *
+ * An entry can now hold several days of the same code (a pattern member, or a
+ * person whose repeat did not reach a group). Naming only the worst would
+ * report "five late mornings" as "Late by 31 min" — losing the very fact the
+ * nesting spec says HR most wants to know.
  */
 export function personHeadline(person: QueuePerson): string {
-  const worst = person.flags.find((f) => f.decision_state !== "matched") ?? person.flags[0];
+  const unresolved = person.flags.filter((f) => f.decision_state !== "matched");
+  const shown = unresolved.length > 0 ? unresolved : person.flags;
+  const worst = shown[0];
   if (!worst) return "";
-  return formatFlagLabel(worst.flag_code, parseFlagEvidence(worst.evidence));
+
+  const sameCode = shown.filter((f) => f.flag_code === worst.flag_code);
+  if (sameCode.length < 2) {
+    return formatFlagLabel(worst.flag_code, parseFlagEvidence(worst.evidence));
+  }
+
+  const minutes = sameCode
+    .map((f) => f.evidence.minutes)
+    .filter((value): value is number => typeof value === "number");
+  const summary = `${sameCode.length} ${pluralFlagLabel(worst.flag_code)}`;
+  return minutes.length > 0 ? `${summary} · worst ${Math.max(...minutes)} min` : summary;
 }
 
 /**
