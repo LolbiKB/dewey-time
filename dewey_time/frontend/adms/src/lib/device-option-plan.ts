@@ -40,6 +40,10 @@ export interface KeyPlan {
    * How many terminals an apply would write to — A PREVIEW, never a claim. The
    * server recomputes against current state and its result message carries the
    * real number.
+   *
+   * Mirrors `selectApplyTargets` (device-option-write.ts) step for step, via
+   * `wouldBeWritten` below — NOT derived from `verdict`, which is honest for
+   * DISPLAY but softer than what the server actually writes to.
    */
   targetCount: number
 }
@@ -53,6 +57,19 @@ export interface KeyPlan {
  */
 function valuesMatchPreview(a: string, b: string): boolean {
   return a.trim() === b.trim()
+}
+
+/**
+ * Mirrors selectApplyTargets step for step. Deliberately NOT derived from the
+ * display verdict: `not-reported` is a target on the server, and a row whose
+ * value is null without `redacted` set is one too (the server only skips on the
+ * redacted FLAG). Anything that diverges here makes the page withhold an action
+ * the bridge would have accepted.
+ */
+function wouldBeWritten(t: TerminalPlan): boolean {
+  if (t.effective == null) return false
+  if (t.redacted) return false
+  return t.verdict !== 'matches'
 }
 
 export function buildKeyPlan(
@@ -97,6 +114,6 @@ export function buildKeyPlan(
     key,
     fleetStandard,
     terminals,
-    targetCount: terminals.filter((t) => t.verdict === 'will-change').length,
+    targetCount: terminals.filter(wouldBeWritten).length,
   }
 }

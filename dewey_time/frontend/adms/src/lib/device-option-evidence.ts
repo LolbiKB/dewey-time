@@ -18,7 +18,7 @@ export interface EvidenceLine {
   detail: string | null
 }
 
-function describeOutcome(status: string): string {
+function describeOutcome(status: OptionWriteRecord['status']): string {
   switch (status) {
     case 'applied':
       return 'applied'
@@ -32,8 +32,12 @@ function describeOutcome(status: string): string {
     case 'pending':
       // Not a failure and not a success — it has not happened yet.
       return 'waiting for the terminal'
-    default:
-      return status
+    default: {
+      // A future status addition fails HERE at compile time, rather than
+      // leaking a raw DB token (`status` itself) to the operator.
+      const exhaustive: never = status
+      return exhaustive
+    }
   }
 }
 

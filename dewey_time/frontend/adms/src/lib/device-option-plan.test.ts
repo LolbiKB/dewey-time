@@ -58,21 +58,37 @@ describe('buildKeyPlan', () => {
   })
 
   test('a null value counts as withheld even if the flag says otherwise', () => {
-    // Fails safe. `value: null` with `redacted: false` should not happen, and
-    // if it ever does, "unknown" is the honest reading — not "differs".
+    // Fails safe for DISPLAY. `value: null` with `redacted: false` should not
+    // happen, and if it ever does, "unknown" is the honest reading — not
+    // "differs" — so the verdict still reads withheld.
     const plan = buildKeyPlan('VOLUME', desired([[null, '50']]),
       observed([['A', null, false], ['B', '50'], ['C', '50']]), SNS)
 
     expect(plan.terminals[0].verdict).toBe('withheld')
-    expect(plan.targetCount).toBe(0)
+    // But the COUNT mirrors selectApplyTargets, which only skips on the
+    // `redacted` flag — not on `value === null` — so this row (flag false)
+    // is still a target on the server. targetCount says so even though the
+    // verdict above reads withheld.
+    expect(plan.targetCount).toBe(1)
   })
 
-  test('a terminal that has never reported is not a mismatch', () => {
+  test('a terminal that has never reported is still a target', () => {
+    // selectApplyTargets treats "never reported" as a target: it cannot show
+    // agreement, and the write ledger records whatever the device says. The
+    // verdict stays `not-reported` for display — that is not a mismatch — but
+    // withholding the apply here would refuse a write the server would accept.
     const plan = buildKeyPlan('VOLUME', desired([[null, '50']]),
       observed([['A', '50'], ['B', '50']]), SNS)
 
     expect(plan.terminals[2].verdict).toBe('not-reported')
-    expect(plan.targetCount).toBe(0)
+    expect(plan.targetCount).toBe(1)
+  })
+
+  test('a key no terminal has reported, with a fleet standard set, counts every terminal', () => {
+    const plan = buildKeyPlan('VOLUME', desired([[null, '50']]), [], SNS)
+
+    expect(plan.terminals.every((t) => t.verdict === 'not-reported')).toBe(true)
+    expect(plan.targetCount).toBe(3)
   })
 
   test('surrounding whitespace is not a difference', () => {

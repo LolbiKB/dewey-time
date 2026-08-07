@@ -52,4 +52,26 @@ describe('toEvidenceLine', () => {
     const line = toEvidenceLine({ ...BASE, status: 'pending', resolved_at: null })
     expect(line.outcome.toLowerCase()).not.toContain('applied')
   })
+
+  test('shows no duration when the resolved timestamp is somehow before created', () => {
+    // Same "never fabricate" rule as the unparsable case — a negative duration
+    // is not a real elapsed time either.
+    const line = toEvidenceLine({ ...BASE, created_at: '2026-08-06T14:22:13.000Z', resolved_at: '2026-08-06T14:22:00.000Z' })
+    expect(line.elapsed).toBeNull()
+  })
+
+  test('marks a canary attempt as a try', () => {
+    expect(toEvidenceLine({ ...BASE, is_canary: true }).what).toContain('(try)')
+  })
+
+  test('does not mark a fleet apply as a try', () => {
+    expect(toEvidenceLine({ ...BASE, is_canary: false }).what).not.toContain('(try)')
+  })
+
+  test('passes a delivery-failure detail through describeLastError rather than restating it', () => {
+    expect(toEvidenceLine({ ...BASE, status: 'abandoned', error_code: 'set_not_delivered' }).detail)
+      .toMatch(/never reached the terminal/i)
+    expect(toEvidenceLine({ ...BASE, status: 'abandoned', error_code: 'reload_not_delivered' }).detail)
+      .toMatch(/never reloaded its configuration/i)
+  })
 })
