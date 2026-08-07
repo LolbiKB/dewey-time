@@ -7,7 +7,13 @@ from datetime import date, datetime
 # carries its own local `_scrub` rather than calling `frappe.scrub`, exactly so
 # these modules import without a bench. Same shape as test_flag_identity.py and
 # test_flag_triage.py, which mock nothing either.
-from dewey_time.attendance_engine.flag_grouping import _flag_out, _pattern_codes, _person, build_queue
+from dewey_time.attendance_engine.flag_grouping import (
+    _day_tier,
+    _flag_out,
+    _pattern_codes,
+    _person,
+    build_queue,
+)
 from dewey_time.attendance_engine.flag_identity import evidence_fingerprint
 from dewey_time.attendance_engine.flag_triage import triage_rank
 
@@ -951,6 +957,74 @@ class PatternDetectionTests(unittest.TestCase):
             pd["flags"][0]["decision_state"] = "matched"
         person_days += _days("EMP-2", "LATE_START", [D1, D2, D3], evidence={"minutes": 12})
         self.assertEqual(_pattern_codes(person_days), {})
+
+    def test_several_flags_on_one_day_count_as_one_date_not_several(self):
+        # flag_identity gives MISSING_TIME an evidence-keyed suffix, so several
+        # mid-shift gaps on the SAME day survive build_queue's dedup as distinct
+        # flags with distinct flag_identity values -- this is reachable in
+        # production, not hypothetical. EMP-1 has three same-code flags on D1 and
+        # one more on D2: four flags, but only two DISTINCT dates, which is one
+        # short of PATTERN_MIN_DAYS. EMP-2 is a genuine 3-distinct-day qualifier so
+        # the GROUP_MIN_MEMBERS gate doesn't itself hide a "counted flags, not
+        # dates" bug -- if EMP-1 wrongly qualified too, the code would clear both
+        # gates and this would stop being {}.
+        day_one_gaps = [
+            _flag_out_for(_flag(
+                "EMP-1", D1, "MISSING_TIME", evidence={"minutes": 45},
+                identity="AUTO-emp-1-{0}-missing-time-1".format(D1),
+            )),
+            _flag_out_for(_flag(
+                "EMP-1", D1, "MISSING_TIME", evidence={"minutes": 40},
+                identity="AUTO-emp-1-{0}-missing-time-2".format(D1),
+            )),
+            _flag_out_for(_flag(
+                "EMP-1", D1, "MISSING_TIME", evidence={"minutes": 35},
+                identity="AUTO-emp-1-{0}-missing-time-3".format(D1),
+            )),
+        ]
+        person_days = [
+            {"employee": "EMP-1", "date": D1, "flags": day_one_gaps},
+            {
+                "employee": "EMP-1",
+                "date": D2,
+                "flags": [_flag_out_for(_flag("EMP-1", D2, "MISSING_TIME", evidence={"minutes": 45}))],
+            },
+        ] + _days("EMP-2", "MISSING_TIME", [D1, D2, D3], evidence={"minutes": 45})
+
+        self.assertEqual(_pattern_codes(person_days), {})
+
+
+class DayTierTests(unittest.TestCase):
+    """`_day_tier` exercised directly. It has no coverage through `build_queue` or
+    `_pattern_codes` -- both tasks that consume it land in Task 3 -- so without
+    tests of its own the unresolved-only filter (the whole point of the function:
+    the ROUTINE_CODE guard's "and nothing else wrong that day") is unprotected.
+    """
+
+    def test_the_worst_unresolved_flag_sets_the_tier(self):
+        gap = _flag_out_for(_flag("EMP-1", D1, "MISSING_TIME", evidence={"minutes": 45}))  # review
+        late = _flag_out_for(_flag("EMP-1", D1, "LATE_START", evidence={"minutes": 9}))  # routine
+        self.assertEqual(_day_tier([late, gap]), "review")
+        self.assertEqual(_day_tier([gap, late]), "review")
+
+    def test_a_decided_act_flag_does_not_raise_the_day_tier(self):
+        # This is the case a filter-less `_day_tier` (ranking every flag on the day
+        # regardless of decision_state) would get wrong: an already-dismissed
+        # UNNOTIFIED_ABSENCE (act, rank 150) must not out-rank the still-open
+        # LATE_START (routine, rank 20) just because it is on the same day.
+        absence = _flag("EMP-1", D1, "UNNOTIFIED_ABSENCE")
+        decided_absence = _flag_out(absence, {absence["flag_identity"]: _decision(absence)})
+        self.assertEqual(decided_absence["decision_state"], "matched")
+        late = _flag_out_for(_flag("EMP-1", D1, "LATE_START", evidence={"minutes": 9}))
+
+        self.assertEqual(_day_tier([decided_absence, late]), "routine")
+
+    def test_a_day_with_no_unresolved_flags_is_routine(self):
+        # tier_for_rank(0) == "routine" -- the permissive answer for "nothing left
+        # to look at today" is intentional; pin it rather than leaving it implicit.
+        flag = _flag("EMP-1", D1, "LATE_START", evidence={"minutes": 9})
+        decided = _flag_out(flag, {flag["flag_identity"]: _decision(flag)})
+        self.assertEqual(_day_tier([decided]), "routine")
 
 
 if __name__ == "__main__":
