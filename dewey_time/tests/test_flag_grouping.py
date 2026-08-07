@@ -464,7 +464,8 @@ class TestDecisionState(unittest.TestCase):
         self.assertEqual(out["decision"]["outcome"], "EXCUSED")
         self.assertEqual(person["undecided_count"], 1)
         self.assertEqual(
-            payload["counts"], {"open": 0, "needs_re_review": 1, "decided": 0, "people": 1}
+            payload["counts"],
+            {"open": 0, "needs_re_review": 1, "decided": 0, "people": 1, "rows": 1},
         )
         self.assertEqual(
             payload["orphans"], {"orphaned_flag_gone": 0, "orphaned_evidence_changed": 0}
@@ -482,7 +483,8 @@ class TestDecisionState(unittest.TestCase):
 
         self.assertEqual(payload["entries"], [])
         self.assertEqual(
-            payload["counts"], {"open": 0, "needs_re_review": 0, "decided": 1, "people": 0}
+            payload["counts"],
+            {"open": 0, "needs_re_review": 0, "decided": 1, "people": 0, "rows": 0},
         )
 
     def test_decision_without_a_stored_fingerprint_is_needs_re_review(self):
@@ -525,7 +527,8 @@ class TestDecisionState(unittest.TestCase):
         self.assertEqual([f["flag_code"] for f in member["flags"]], ["UNNOTIFIED_ABSENCE", "LATE_START"])
         self.assertEqual(member["flags"][0]["decision_state"], "matched")
         self.assertEqual(
-            payload["counts"], {"open": 2, "needs_re_review": 0, "decided": 2, "people": 2}
+            payload["counts"],
+            {"open": 2, "needs_re_review": 0, "decided": 2, "people": 2, "rows": 1},
         )
 
     def test_evidence_arrives_as_json_text_from_the_database(self):
@@ -654,7 +657,8 @@ class TestCounts(unittest.TestCase):
         # EMP-2 has cleared the queue, but their decided flag still counts — the
         # toolbar reports work done over the range, not just work outstanding.
         self.assertEqual(
-            payload["counts"], {"open": 1, "needs_re_review": 1, "decided": 1, "people": 2}
+            payload["counts"],
+            {"open": 1, "needs_re_review": 1, "decided": 1, "people": 2, "rows": 2},
         )
         self.assertNotIn("EMP-2", [p["employee"] for p in _people_in(payload)])
 
@@ -711,9 +715,19 @@ class TestIncludeDecided(unittest.TestCase):
     def test_counts_still_mean_the_same_thing_with_decided_people_in_view(self):
         # `people` is "people with something open" (it backs the header's "N
         # people with something open"), so surfacing settled people must not
-        # inflate it — and no other count moves either.
-        self.assertEqual(self._fixture()["counts"], self._fixture(include_decided=True)["counts"])
-        self.assertEqual(self._fixture(include_decided=True)["counts"]["people"], 1)
+        # inflate it, and neither do the flag-state counts, which are already
+        # computed over the whole input either way. `rows` is the one count
+        # that IS supposed to move: it is a literal len(entries), so it grows
+        # by exactly the settled person now on screen.
+        default_counts = self._fixture()["counts"]
+        with_decided_counts = self._fixture(include_decided=True)["counts"]
+        self.assertEqual(
+            {k: v for k, v in default_counts.items() if k != "rows"},
+            {k: v for k, v in with_decided_counts.items() if k != "rows"},
+        )
+        self.assertEqual(default_counts["rows"], 1)
+        self.assertEqual(with_decided_counts["rows"], 2)
+        self.assertEqual(with_decided_counts["people"], 1)
 
     def test_a_settled_person_does_not_join_a_cause_group(self):
         # Cause groups are a bulk-decide affordance; a person with nothing
@@ -1301,6 +1315,62 @@ class RepeatPatternTests(unittest.TestCase):
         # EMP-1 is in two entries and must not collide with themselves.
         emp1 = sorted(p["entry_key"] for p in _iter_all_people(result["entries"]) if p["employee"] == "EMP-1")
         self.assertEqual(emp1, ["REPEAT_PATTERN:LATE_START|p:EMP-1", "p:EMP-1"])
+
+
+class CrossReferenceTests(unittest.TestCase):
+    def _split_person(self):
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+        flags.append(_flag("EMP-1", D4, "MISSING_TIME", evidence={"minutes": 192}))
+        return build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2"),
+            outage_branch_dates=set(),
+        )
+
+    def test_a_person_in_two_entries_is_badged_in_both(self):
+        result = self._split_person()
+        appearances = [p for p in _iter_all_people(result["entries"]) if p["employee"] == "EMP-1"]
+        self.assertEqual(len(appearances), 2)
+        for person in appearances:
+            self.assertEqual(person["also_count"], 1)
+
+    def test_the_group_member_names_the_other_entry_as_an_outlier(self):
+        result = self._split_person()
+        member = next(
+            p for p in _iter_all_people(result["entries"])
+            if p["employee"] == "EMP-1" and p["entry_key"].startswith("REPEAT_PATTERN")
+        )
+        # The other entry is a lone person row — an outlier by construction.
+        self.assertEqual(member["also_outlier_count"], 1)
+
+    def test_the_outlier_row_does_not_count_itself(self):
+        result = self._split_person()
+        loner = next(
+            p for p in _iter_all_people(result["entries"])
+            if p["employee"] == "EMP-1" and p["entry_key"] == "p:EMP-1"
+        )
+        self.assertEqual(loner["also_count"], 1)
+        # The OTHER entry is a group, not an outlier.
+        self.assertEqual(loner["also_outlier_count"], 0)
+
+    def test_a_person_in_one_entry_is_not_badged(self):
+        result = self._split_person()
+        emp2 = next(p for p in _iter_all_people(result["entries"]) if p["employee"] == "EMP-2")
+        self.assertEqual(emp2["also_count"], 0)
+        self.assertEqual(emp2["also_outlier_count"], 0)
+
+    def test_counts_rows_equals_the_number_of_entries(self):
+        result = self._split_person()
+        self.assertEqual(result["counts"]["rows"], len(result["entries"]))
+        self.assertEqual(result["counts"]["rows"], 2)
+
+    def test_counts_people_counts_distinct_employees_including_group_members(self):
+        result = self._split_person()
+        self.assertEqual(result["counts"]["people"], 2)
 
 
 if __name__ == "__main__":

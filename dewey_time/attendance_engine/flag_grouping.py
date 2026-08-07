@@ -88,7 +88,7 @@ def build_queue(
     `counts["people"]` counts distinct employees who still owe HR an answer,
     whether or not settled people are also on show.
     """
-    counts = {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0}
+    counts = {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0, "rows": 0}
     by_person: dict[tuple[str, str], dict[str, dict]] = {}
     live_identities: set[str] = set()
     live_code_keys: set[tuple] = set()
@@ -130,6 +130,8 @@ def build_queue(
 
     entries = _entries_for(person_days, employees_by_id, outage_branch_dates)
     entries.sort(key=_entry_sort_key)
+    _stamp_cross_references(entries)
+
     # Only people who still owe HR an answer, so `people` keeps meaning "people
     # with something open" (which is what the toolbar renders it as) when settled
     # people are on show. Under the default every person in `entries` is
@@ -137,6 +139,10 @@ def build_queue(
     counts["people"] = len(
         {person["employee"] for person in _iter_people(entries) if person["undecided_count"]}
     )
+    # The header states people AND rows so the toolbar total and the list length
+    # cannot read as contradicting each other — "40 people · 12 rows", not "40
+    # people with something open" above 200 rows.
+    counts["rows"] = len(entries)
 
     return {
         "entries": entries,
@@ -451,6 +457,37 @@ def _entries_for(
         entries.append({"kind": "person", **person})
 
     return entries
+
+
+def _stamp_cross_references(entries: list[dict]) -> None:
+    """Badge every person who appears in more than one entry, in all of them.
+
+    Derived from the ASSEMBLED entry set rather than from a flag count, so the
+    badge cannot disagree with what is actually on screen. This is what makes
+    the per-flag invariant safe in practice rather than only in principle: the
+    failure mode it prevents is HR excusing the repeatedly-late group, believing
+    a person is dealt with, and never seeing their three-hour absence.
+
+    Mutates in place. A person entry is `{"kind": "person", **person}` — a fresh
+    dict built by _entries_for — so writing to it writes to what is returned.
+    """
+    appearances: dict[str, list[tuple[dict, str]]] = {}
+    for entry in entries:
+        people = entry["members"] if entry["kind"] == "group" else [entry]
+        for person in people:
+            appearances.setdefault(person["employee"], []).append((person, entry["kind"]))
+
+    for places in appearances.values():
+        if len(places) < 2:
+            continue
+        loners = sum(1 for _, kind in places if kind == "person")
+        for person, kind in places:
+            person["also_count"] = len(places) - 1
+            # How many of the OTHER entries are lone person rows. An entry that
+            # holds one person's leftovers is an outlier by construction — a flag
+            # that fitted no pattern — which is what lets the copy say "also 1
+            # outlier" rather than the vaguer "also 1 elsewhere".
+            person["also_outlier_count"] = loners - (1 if kind == "person" else 0)
 
 
 def _orphans(
