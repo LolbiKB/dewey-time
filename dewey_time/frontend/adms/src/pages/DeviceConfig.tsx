@@ -5,6 +5,7 @@ import { Page } from '@lolbikb/dewey-ui'
 import { Input } from '@/components/ui/input'
 import { DeviceService, type DeviceOptionEntry, type OptionKeyState } from '@/services/device-service'
 import { OptionKeyActions } from '@/components/devices/option-key-actions'
+import { policyRefetchInterval, WATCH_WINDOW_MS } from '@/lib/device-option-polling'
 import { useDevices } from '@/hooks/use-core-data'
 import { signalText, signalAlert } from '@/lib/signal'
 import { cn } from '@/lib/utils'
@@ -129,6 +130,28 @@ export function DeviceConfig() {
   )
   const label = useMemo(() => (sn: string) => deviceLabel(sn, devices), [devices])
 
+  // Set when a write is queued, so a FLEET apply — whose writes are not
+  // canaries and raise no flag — is also watched to completion.
+  const [watchUntil, setWatchUntil] = useState<number | null>(null)
+
+  const policyQuery = useQuery({
+    queryKey: ['device-option-policy'],
+    queryFn: () => DeviceService.getOptionPolicy(),
+    // A write resolves ASYNCHRONOUSLY, on the device's terms — the verdict only
+    // exists once the terminal has polled, run all three commands, and its INFO
+    // has come back. Refetching once on mutation success looked at the single
+    // worst moment: the write is still `pending` then, so the ladder reports the
+    // PREVIOUS verdict and the page sits frozen on it while the real answer
+    // arrives seconds later.
+    refetchInterval: (query) =>
+      policyRefetchInterval(query.state.data?.keys, watchUntil, Date.now()),
+  })
+  const pollInterval = policyRefetchInterval(
+    policyQuery.data?.keys,
+    watchUntil,
+    Date.now()
+  )
+
   // PER DEVICE, not one fleet-wide call. A single bounded query truncates once
   // the fleet outgrows it — ten terminals at ~78 keys is 780 rows against a 500
   // cap — and a cut key looks absent everywhere, which reads as drift that is
@@ -138,6 +161,10 @@ export function DeviceConfig() {
     queries: deviceSns.map((sn) => ({
       queryKey: ['device-options', sn],
       queryFn: () => DeviceService.getDeviceOptions(sn),
+      // Kept in step with the policy query: when a write lands, the terminal's
+      // reported value is what proves it, so a stale grid beside a fresh ladder
+      // is two panels disagreeing about the same device.
+      refetchInterval: pollInterval,
     })),
   })
 
@@ -156,10 +183,6 @@ export function DeviceConfig() {
    * Separate from the per-device option queries because it is per-KEY, not per
    * device — one call, whatever the fleet size.
    */
-  const policyQuery = useQuery({
-    queryKey: ['device-option-policy'],
-    queryFn: () => DeviceService.getOptionPolicy(),
-  })
   const keyState = useMemo(() => {
     const map = new Map<string, OptionKeyState>()
     for (const k of policyQuery.data?.keys ?? []) map.set(k.key, k)
@@ -176,6 +199,7 @@ export function DeviceConfig() {
    * contradict each other trusts neither.
    */
   const refetchAll = () => {
+    setWatchUntil(Date.now() + WATCH_WINDOW_MS)
     void queryClient.invalidateQueries({ queryKey: ['device-option-policy'] })
     for (const sn of deviceSns) void queryClient.invalidateQueries({ queryKey: ['device-options', sn] })
   }
