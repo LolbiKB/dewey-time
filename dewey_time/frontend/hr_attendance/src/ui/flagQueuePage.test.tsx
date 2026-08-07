@@ -1353,6 +1353,27 @@ test("a group header shows who is in it, not a strip", () => {
   assert.match(html, /aria-hidden="true"[^>]*><span class="[^"]*size-7/);
 });
 
+// GROUP_AVATAR_LIMIT is 4: past that the faces out-argue the row's own headline,
+// so the rest become a count. Every other group fixture here has two members, so
+// only this one renders the overflow chip at all — without it, the limit and the
+// count behind it are both decoration.
+test("a group with more faces than fit shows four and counts the rest", () => {
+  const group = patternGroupEntry();
+  const members = [
+    ...group.members,
+    ...["Katherine Johnson", "Mary Jackson", "Dorothy Vaughan", "Annie Easley"].map((name, i) =>
+      patternMember({ employee: `HR-EMP-0002${i}`, name, image: `/files/member-${i}.jpg` })
+    ),
+  ];
+  assert.equal(members.length, 6, "the fixture is over the limit");
+
+  const html = renderToStaticMarkup(
+    <FlagQueueList entries={[{ ...group, members }]} {...listProps()} />
+  );
+  assert.equal(html.split("<img").length - 1, 4, "four faces, not six");
+  assert.match(html, />\+2</, "and the two that did not fit are counted");
+});
+
 // The strip is keyed by EMPLOYEE, not by the entry being rendered — that is
 // what makes the cross-reference badge visible rather than merely counted.
 // Ada's three-hour gap lives in a second entry, and if her member row's strip
