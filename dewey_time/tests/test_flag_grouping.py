@@ -13,6 +13,7 @@ from dewey_time.attendance_engine.flag_grouping import (
     _pattern_codes,
     _person,
     build_queue,
+    recount,
 )
 from dewey_time.attendance_engine.flag_identity import evidence_fingerprint
 from dewey_time.attendance_engine.flag_triage import triage_rank
@@ -1401,6 +1402,66 @@ class CrossReferenceTests(unittest.TestCase):
         for person in appearances:
             self.assertEqual(person["also_count"], 1)
             self.assertEqual(person["also_outlier_count"], 0)
+
+
+class EmployeeImageTests(unittest.TestCase):
+    def test_a_persons_photo_reaches_the_entry(self):
+        result = build_queue(
+            flags=[_flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9})],
+            decisions_by_identity={},
+            employees_by_id={
+                "EMP-1": {
+                    "employee_name": "Sokheng Hon",
+                    "branch": "HQ",
+                    "image": "/files/sokheng.jpg",
+                }
+            },
+            outage_branch_dates=set(),
+        )
+        self.assertEqual(result["entries"][0]["employee_image"], "/files/sokheng.jpg")
+
+    def test_an_employee_with_no_photo_carries_none_not_a_missing_key(self):
+        result = build_queue(
+            flags=[_flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9})],
+            decisions_by_identity={},
+            employees_by_id={"EMP-1": {"employee_name": "Sokheng Hon", "branch": "HQ"}},
+            outage_branch_dates=set(),
+        )
+        self.assertIsNone(result["entries"][0]["employee_image"])
+
+
+class RecountAgreementTests(unittest.TestCase):
+    """flag_queue_api's tier filter calls `recount()` over a SLICE of the exact
+    entries `build_queue` returns. Synthetic entry dicts can't close the gap the
+    two-definitions bug hid in — a shape drift between what `build_queue`
+    assembles and what a hand-written recount expects would still agree on
+    fixtures built by hand. This runs `recount` over REAL `build_queue` output
+    instead, on a fixture with at least one group AND one lone entry so
+    `iter_people` has to walk both shapes it supports.
+    """
+
+    def test_recount_over_real_entries_matches_build_queues_own_counts(self):
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+        flags.append(_flag("EMP-3", D1, "UNNOTIFIED_ABSENCE"))
+
+        result = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3"),
+            outage_branch_dates=set(),
+        )
+
+        # A REPEAT_PATTERN group (EMP-1, EMP-2) and a lone person entry (EMP-3):
+        # the two entry shapes `iter_people` has to flatten identically.
+        self.assertEqual({e["kind"] for e in result["entries"]}, {"group", "person"})
+
+        self.assertEqual(
+            recount(result["entries"]),
+            {"rows": result["counts"]["rows"], "people": result["counts"]["people"]},
+        )
 
 
 if __name__ == "__main__":

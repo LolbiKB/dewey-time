@@ -19,7 +19,7 @@ from __future__ import annotations
 import frappe
 from frappe.utils import getdate
 
-from dewey_time.attendance_engine.flag_grouping import build_queue
+from dewey_time.attendance_engine.flag_grouping import build_queue, recount
 from dewey_time.attendance_engine.flag_identity import date_key, flag_identity, parse_evidence
 from dewey_time.attendance_engine.flag_triage import TIER_ACT, TIER_REVIEW, TIER_ROUTINE
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
@@ -239,14 +239,19 @@ def _employees_by_id(employee_ids: set[str]) -> dict[str, dict]:
         frappe.get_all(
             "Employee",
             filters={"name": ["in", sorted(employee_ids)]},
-            fields=["name", "employee_name", "branch"],
+            fields=["name", "employee_name", "branch", "image"],
         )
         or []
     )
-    # Keyed "branch", not "employee_branch": flag_grouping._person reads meta["branch"]
-    # (flag_grouping.py:157), and a mismatch silently drops every branch group.
+    # Keyed "branch"/"image", not "employee_branch"/"employee_image":
+    # flag_grouping._person reads meta["branch"] and meta["image"], and a
+    # mismatch silently drops every branch group / every photo.
     return {
-        row["name"]: {"employee_name": row.get("employee_name"), "branch": row.get("branch")}
+        row["name"]: {
+            "employee_name": row.get("employee_name"),
+            "branch": row.get("branch"),
+            "image": row.get("image"),
+        }
         for row in rows
     }
 
@@ -351,16 +356,18 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
     branches = {info.get("branch") for info in employees_by_id.values() if info.get("branch")}
     sync_pairs = _device_sync_pairs(branches, start, end)
 
+    outage_branch_dates = _outage_branch_dates(
+        flags=flags,
+        employees_by_id=employees_by_id,
+        alert_rows=alert_rows,
+        sync_pairs=sync_pairs,
+    )
+
     queue = build_queue(
         flags=flags,
         decisions_by_identity=decisions_by_identity,
         employees_by_id=employees_by_id,
-        outage_branch_dates=_outage_branch_dates(
-            flags=flags,
-            employees_by_id=employees_by_id,
-            alert_rows=alert_rows,
-            sync_pairs=sync_pairs,
-        ),
+        outage_branch_dates=outage_branch_dates,
         include_decided=include_decided,
     )
 
@@ -373,15 +380,12 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
         # header-versus-list contradiction the nesting spec exists to fix.
         # open/needs_re_review/decided stay whole-range on purpose: they are the
         # size of the job and the toolbar renders them as such.
-        counts["rows"] = len(entries)
-        counts["people"] = len(
-            {
-                person["employee"]
-                for entry in entries
-                for person in (entry["members"] if entry["kind"] == "group" else [entry])
-                if person["undecided_count"]
-            }
-        )
+        #
+        # recount(), not a hand-inlined comprehension: it is the SAME definition
+        # build_queue uses for its own whole-range counts, so this filtered
+        # header and the unfiltered one can never silently disagree about what
+        # "N people" means.
+        counts.update(recount(entries))
 
     return {
         "entries": entries,
@@ -393,6 +397,17 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
         "truncated": bool(flags_capped or decisions_capped),
         "start_date": str(start),
         "end_date": str(end),
+        # The assembled (branch, date) outage set, so the strip can render "no
+        # data" grey rather than clean green. `alerts` alone is not enough:
+        # _outage_branch_dates combines unresolved closeout alerts AND branch-days
+        # with no device-sync watermark at all, and a naive "no flag -> green"
+        # would tell HR someone was fine on a day nobody measured them.
+        #
+        # A sorted list of objects, not a set of tuples: the payload is cached
+        # and JSON-encoded, and a set is neither serialisable nor stably ordered.
+        "outage_dates": [
+            {"branch": branch, "date": day} for branch, day in sorted(outage_branch_dates)
+        ],
     }
 
 
