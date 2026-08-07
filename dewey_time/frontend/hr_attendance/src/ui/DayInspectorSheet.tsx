@@ -32,6 +32,7 @@ import {
 } from "@/lib/segmentInspector";
 import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
 import { flagDialogTitle, formatFlagContextDate, formatFlagStatusLabel, flagIsProvisional } from "@/lib/flagDetails";
+import type { NarrativeDay } from "@/lib/flagNarrative";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { DeviceAlertRow } from "@/ui/DeviceAlerts";
@@ -41,6 +42,24 @@ type Checkin = NonNullable<Day["checkins"]>[number];
 type Severity = "INFO" | "WARNING" | "CRITICAL";
 
 const SEVERITY_ORDER: Severity[] = ["CRITICAL", "WARNING", "INFO"];
+
+/**
+ * Day (types/calendar.ts, from hr_calendar.py's get_my_week) already carries
+ * everything flagNarrative() needs — checkins, shift, holiday, and the
+ * punch-derived lunch pair — just under a different field name for the one
+ * that doesn't match: observed_lunch here, observedLunch on NarrativeDay.
+ * `day` is undefined for the gap between a date being picked and its week's
+ * calendar payload landing, so this always returns a valid NarrativeDay
+ * rather than making FlagDetailPanel handle that gap itself.
+ */
+export function narrativeDayFrom(day: Day | undefined): NarrativeDay {
+  return {
+    checkins: day?.checkins ?? [],
+    shift: day?.shift ?? null,
+    holiday: day?.holiday ?? null,
+    observedLunch: day?.observed_lunch ?? null,
+  };
+}
 
 export type DayInspectorSheetProps = {
   inspectingDate: string | null;
@@ -84,6 +103,14 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
       props.syncByDate,
       segments,
     ]
+  );
+
+  // flagNarrative()'s day-context argument — built once per inspected day,
+  // not per flag, since HR can open several flags on the same day without
+  // the checkins/shift/holiday/lunch underneath it changing.
+  const narrativeDay = useMemo(
+    () => narrativeDayFrom(props.inspectingDay),
+    [props.inspectingDay]
   );
 
   const punches = sortCheckinsByTime(props.inspectingDay?.checkins ?? []);
@@ -160,10 +187,7 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
               employeeLabel={props.employeeLabel}
               employeeId={props.employeeId}
               showDeskReview={props.showDeskReview !== false}
-              onViewTimeline={() => {
-                props.onReviewingFlagChange(null);
-                setActiveTab("timeline");
-              }}
+              day={narrativeDay}
             />
           ) : (
           <div className="grid h-full grid-rows-[auto_1fr_auto] gap-3">
