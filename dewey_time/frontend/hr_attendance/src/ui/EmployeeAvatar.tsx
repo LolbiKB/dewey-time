@@ -80,13 +80,28 @@ export function EmployeeAvatar(props: EmployeeAvatarProps) {
   const image = props.employee?.image ?? null;
   const [phase, setPhase] = useState(() => initialAvatarPhase(image));
   const [delayElapsed, setDelayElapsed] = useState(false);
+  const [renderedImage, setRenderedImage] = useState(image);
 
-  // Keyed on `src`: the same rendered avatar can be handed a different employee
-  // as a list refetches, and a stale "loaded" would show the previous person's
-  // photo under the new person's initials.
-  useEffect(() => {
+  // A new `src` starts over, and the reset happens DURING render rather than in an
+  // effect. The same avatar is handed a different employee without remounting — a
+  // picker trigger changes on every selection — and an effect only runs after the
+  // commit that already installed the new `src`. That commit would take its opacity
+  // from the stale "loaded" phase, and an <img> keeps painting its previous image
+  // until the new one decodes, so the previous employee's photo would flash at full
+  // opacity before the fade: exactly the defect this reset exists to prevent.
+  // Effect ordering is racy besides — a memory-cached `load` firing before the
+  // passive flush would be undone by the reset, stranding the photo at opacity-0
+  // under a ring that never clears, because no second `load` is coming. Adjusting
+  // state in render (React's documented pattern for props-derived state) re-renders
+  // before anything is committed, so a `src` is only ever painted from its own phase.
+  if (renderedImage !== image) {
+    setRenderedImage(image);
     setPhase(initialAvatarPhase(image));
     setDelayElapsed(false);
+  }
+
+  // Only the delay is left in an effect, because a timer genuinely is one.
+  useEffect(() => {
     if (!image) return;
     const timer = setTimeout(() => setDelayElapsed(true), AVATAR_RING_DELAY_MS);
     return () => clearTimeout(timer);
@@ -94,7 +109,14 @@ export function EmployeeAvatar(props: EmployeeAvatarProps) {
 
   return (
     <span className={cn("relative shrink-0", props.className)}>
+      {/* Decoration, not content: every caller renders the employee's name as
+          adjacent text, so initials in the accessibility tree only pad the
+          computed name of whatever contains them — `EmployeePicker`'s trigger is
+          a combobox that names itself from its contents. The photo is already
+          `alt=""`, and the ring is a SIBLING of this span, so its `role="status"`
+          stays exposed. */}
       <span
+        aria-hidden="true"
         className={cn(
           "flex size-full items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold text-muted-foreground",
           props.imageClassName
@@ -110,8 +132,12 @@ export function EmployeeAvatar(props: EmployeeAvatarProps) {
             referrerPolicy="no-referrer"
             onLoad={() => setPhase((current) => nextAvatarPhase(current, "load"))}
             onError={() => setPhase((current) => nextAvatarPhase(current, "error"))}
+            // `bg-muted` because `object-cover` promises the photo covers the box
+            // geometrically, not that it is opaque: a PNG with an alpha channel
+            // would leave the initials legible through it forever. Same colour as
+            // the empty circle, so the photo self-occludes without a seam.
             className={cn(
-              "absolute inset-0 size-full rounded-full object-cover transition-opacity duration-150 motion-reduce:transition-none",
+              "absolute inset-0 size-full rounded-full bg-muted object-cover transition-opacity duration-150 motion-reduce:transition-none",
               showsPhoto(phase) ? "opacity-100" : "opacity-0"
             )}
           />

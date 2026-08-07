@@ -9,6 +9,11 @@ function employee(overrides: Partial<CalendarEmployee> = {}): CalendarEmployee {
   return { id: "EMP-1", label: "EMP-1 · Sokheng Hon", employee_name: "Sokheng Hon", ...overrides };
 }
 
+/** The circle's own classes carry `bg-muted` too, so assert on the tag itself. */
+function imgTag(html: string): string {
+  return html.match(/<img[^>]*>/)?.[0] ?? "";
+}
+
 test("an employee with no photo renders initials, not a broken image", () => {
   const html = renderToStaticMarkup(<EmployeeAvatar employee={employee()} className="size-10" />);
   assert.match(html, />SH</);
@@ -73,6 +78,26 @@ test("each photo starts from scratch — the pending state is derived from the c
   assert.equal(html.includes('role="status"'), false);
 });
 
+test("a photo with transparency does not leave the initials showing through it", () => {
+  // `object-cover` promises the photo covers the box geometrically, not that it is
+  // opaque. A PNG with an alpha channel would show the layer underneath forever —
+  // the one state where layering would be worse than the `or` it replaced.
+  const html = renderToStaticMarkup(
+    <EmployeeAvatar employee={employee({ image: "/files/sokheng.png" })} className="size-10" />,
+  );
+  assert.match(imgTag(html), /bg-muted/);
+});
+
+test("the initials are decoration — the name is already in the row", () => {
+  // Every caller renders the employee's name as adjacent text, and one of them
+  // (EmployeePicker's trigger) is a combobox whose accessible name is computed
+  // from its contents — unhidden initials would prepend "SH" to it.
+  const html = renderToStaticMarkup(
+    <EmployeeAvatar employee={employee({ image: "/files/sokheng.jpg" })} className="size-10" />,
+  );
+  assert.match(html, /<span[^>]*aria-hidden="true"[^>]*>SH</);
+});
+
 test("the ring carries Spinner's accessibility contract even though it cannot take its shape", () => {
   const html = renderToStaticMarkup(<AvatarLoadingRing />);
   assert.match(html, /role="status"/);
@@ -83,4 +108,7 @@ test("the ring spins, and stops rather than vanishing under reduced motion", () 
   const html = renderToStaticMarkup(<AvatarLoadingRing />);
   assert.match(html, /animate-spin/);
   assert.match(html, /motion-reduce:animate-none/);
+  // Stopped, and dimmed rather than gone: a still ring at full strength would read
+  // as a decorative border instead of "still arriving".
+  assert.match(html, /motion-reduce:text-muted-foreground\/60/);
 });
