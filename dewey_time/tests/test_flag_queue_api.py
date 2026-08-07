@@ -793,6 +793,22 @@ class TestTierFilterCounts(unittest.TestCase):
         self.assertEqual(payload["counts"]["people"], 0)
         self.assertEqual(payload["counts"]["rows"], 1)
 
+    def test_a_filtered_read_does_not_corrupt_counts_for_a_later_unfiltered_read(self):
+        # build_queue is stubbed to a single fixed return value for the life of this
+        # harness (the real function is pure and allocates a fresh dict every call —
+        # test_flag_grouping.py:91 — but nothing here should rely on that). If the
+        # tier branch recomputed `people`/`rows` into queue["counts"] IN PLACE instead
+        # of a copy, the mutation would still be sitting in that shared dict when the
+        # next request reads it back — exactly what the 60s cache serves to whichever
+        # request (filtered or not) asks next.
+        queue = self._queue()
+        with _harness(_roster(2), queue=queue):
+            filtered = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+            self.assertEqual(filtered["counts"]["people"], 1)
+            unfiltered = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(unfiltered["counts"]["people"], 2)
+        self.assertEqual(unfiltered["counts"]["rows"], 2)
+
 
 class TestHooksWiring(unittest.TestCase):
     def test_decision_writes_invalidate_the_queue_cache(self):
