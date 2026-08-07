@@ -77,22 +77,46 @@ state is a real avatar.
 
 | State | What is on screen |
 |---|---|
-| No `image` | Initials. Unchanged from today. |
-| Photo loading | Initials. |
+| No `image` | Initials, still. |
+| Photo loading, under 150ms | Initials, still. Nothing animates. |
+| Photo loading, over 150ms | Initials **plus a spinning ring** on the circle's edge. |
 | Photo loaded | Photo, faded in over ~150ms. |
-| Photo failed | Initials, permanently. |
+| Photo failed | Initials, still, permanently. |
 
 **No skeleton or shimmer.** A pulsing grey circle would replace meaningful content — whose
 initials these are — with a meaningless placeholder. The initials are a *better* loading
 state than a skeleton because they already carry the answer to "who is this row about".
 This is why the base layer is initials rather than the `bg-muted` circle.
 
+### The loading ring
+
+Initials alone are ambiguous: at a glance they read identically whether a photo is still
+arriving or none exists. A **2px arc travelling the circle's perimeter** resolves that
+without spending what the layering just bought — the initials stay fully legible underneath,
+so the row still says whose it is while the photo is in flight.
+
+It is deliberately *not* the shared `Spinner` component. `Spinner` is a centred
+`Loader2Icon`, and at 40px there is no room for a centred spinner and readable initials at
+the same time — it would cover the very thing the base layer exists to show. The ring takes
+`Spinner`'s accessibility contract even though it cannot take its shape: `role="status"` and
+`aria-label="Loading"`.
+
+**The ring is delayed ~150ms.** A cached photo resolves in tens of milliseconds, and an
+indicator that appears and disappears inside 50ms reads as a flicker — across forty rows, as
+the page malfunctioning. Nothing animates unless the photo is *still* loading when the delay
+elapses, so the common fast case is completely still.
+
 Also set `decoding="async"` so decode never blocks paint, and `loading="lazy"` so a queue
 of forty rows does not fetch every photo before the first is visible.
 
-The fade respects `prefers-reduced-motion` via Tailwind's `motion-reduce:transition-none` —
-under reduced motion the photo appears without animating, which is still an improvement
-because it appears *whole*.
+Under `prefers-reduced-motion` both animations change rather than vanish:
+
+- The fade becomes instant (`motion-reduce:transition-none`). Still an improvement, because
+  the photo appears *whole*.
+- **The ring stops rotating but stays on screen** as a static dimmed ring. The signal is
+  what matters; spinning is only how it is usually delivered. Dropping it entirely would
+  hand reduced-motion users back exactly the loading-versus-no-photo ambiguity the ring
+  exists to remove.
 
 ### Scope
 
@@ -217,6 +241,13 @@ rows"), so the toolbar total and the list length cannot read as contradicting ea
   they appear when `image` is absent.
 - **A photo that fails to load leaves the initials visible**, and no broken-image element.
 - The `<img>` carries `decoding="async"` and `loading="lazy"`.
+- **No ring renders before the delay elapses** — the anti-flicker property. Assert on a photo
+  that resolves immediately: initials present, ring absent, nothing animated.
+- **A photo still loading after the delay renders the ring**, and the initials remain readable
+  underneath it rather than being replaced.
+- **The ring disappears on both `load` and `error`** — a failed photo must not leave a row
+  spinning forever.
+- The ring carries `role="status"` and an accessible name.
 - A day with a flag renders at that flag's tier; a day with several renders the worst.
 - An in-range day with no flag renders clean.
 - **A day in the outage set renders as no-data, not clean** — the distinction the grey state
