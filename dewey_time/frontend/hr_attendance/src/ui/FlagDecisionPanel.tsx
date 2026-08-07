@@ -235,13 +235,15 @@ function FlagCard(props: {
         </dl>
       ) : null}
 
-      {/* Same dl/dt/dd shape as FlagDetailPanel.tsx's disclosure — one
-          evidence idiom across both surfaces, so a change to
-          formatFlagEvidenceDetails lands in both without a second layout to
-          keep in step. Both `.rows` AND `.fallbackJson` now live behind this
-          <details>; before this task `.fallbackJson` was read nowhere on
-          this card (only `.rows` was, rendered uncollapsed), so a flag with
-          leftover keys had no way to reach HR here at all. */}
+      {/* Deliberately the same disclosure structure as FlagDetailPanel.tsx's,
+          but a SECOND, INDEPENDENT copy of it — the two panels no longer
+          share a layout, so a change here (or to what
+          formatFlagEvidenceDetails returns) must be mirrored there by hand
+          or the two surfaces will drift apart. Both `.rows` AND
+          `.fallbackJson` now live behind this <details>; before this task
+          `.fallbackJson` was read nowhere on this card (only `.rows` was,
+          rendered uncollapsed), so a flag with leftover keys had no way to
+          reach HR here at all. */}
       {evidence.rows.length > 0 || evidence.fallbackJson ? (
         <details className="rounded-lg border border-border/60 bg-muted/10 px-2.5 py-1.5">
           <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">

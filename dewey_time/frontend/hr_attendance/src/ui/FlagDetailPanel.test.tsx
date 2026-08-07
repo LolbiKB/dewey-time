@@ -146,6 +146,10 @@ test("FlagDetailPanel renders the flagNarrative headline as primary content, con
   // the primary region — pin this by counting <dt> rows, since the raw
   // evidence fixture above has 13 keys and the facts list must not be that.
   const primaryFactCount = (primaryRegion.match(/<dt/g) ?? []).length;
+  // Guard against fixture drift: without this, a narrative that stopped
+  // returning facts would make the equality below pass as 0 === 0 — the
+  // assertion would fail OPEN rather than catching the regression.
+  assert.ok(expected.facts.length > 0, "fixture must produce at least one curated fact");
   assert.equal(primaryFactCount, expected.facts.length);
   assert.ok(primaryFactCount <= 4, "design caps the fact list at four rows");
 
@@ -160,6 +164,12 @@ test("FlagDetailPanel renders the flagNarrative headline as primary content, con
   // The embedded timeline (design rule 8) replaces the old click-through —
   // its aria-label is wired to the computed headline, which also proves
   // FlagEvidenceTimeline actually received the narrative's spec.
+  //
+  // This is the only coverage anywhere that FlagEvidenceTimeline is rendered
+  // by a panel at all, so the fixture must keep earning a timeline: assert it
+  // before the branch, or a drifted fixture would skip the check silently
+  // instead of failing.
+  assert.ok(expected.timeline, "fixture must produce a timeline for this scenario");
   if (expected.timeline) {
     assert.ok(
       primaryRegion.includes(`${expected.headline} timeline`),
