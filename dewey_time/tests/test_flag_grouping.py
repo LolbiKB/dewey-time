@@ -13,6 +13,7 @@ from dewey_time.attendance_engine.flag_grouping import (
     _pattern_codes,
     _person,
     build_queue,
+    iter_people,
     recount,
 )
 from dewey_time.attendance_engine.flag_identity import evidence_fingerprint
@@ -40,13 +41,13 @@ def _flag(employee, attendance_date, flag_code, *, evidence=None, identity=None,
     }
 
 
-def _iter_all_people(entries):
-    for entry in entries:
-        if entry["kind"] == "group":
-            for member in entry["members"]:
-                yield member
-        else:
-            yield entry
+# Alias, not a second definition: this file asserted its dedup and
+# cross-reference invariants against a hand-copied flattening loop until a
+# review caught that the copy could silently drift from the production walk
+# `iter_people` performs — the exact failure mode promoting it to public was
+# meant to close. `_iter_all_people` is kept as the call-site name because it
+# reads better at each of the ~10 assertions below than the shorter one.
+_iter_all_people = iter_people
 
 
 def _decision(flag, *, name="AFD-0001", outcome="EXCUSED", reason="DEVICE_OR_DATA_FAULT",
@@ -1431,37 +1432,73 @@ class EmployeeImageTests(unittest.TestCase):
 
 
 class RecountAgreementTests(unittest.TestCase):
-    """flag_queue_api's tier filter calls `recount()` over a SLICE of the exact
-    entries `build_queue` returns. Synthetic entry dicts can't close the gap the
-    two-definitions bug hid in — a shape drift between what `build_queue`
-    assembles and what a hand-written recount expects would still agree on
-    fixtures built by hand. This runs `recount` over REAL `build_queue` output
-    instead, on a fixture with at least one group AND one lone entry so
-    `iter_people` has to walk both shapes it supports.
+    """`recount` exercised over REAL `build_queue` output, not a hand-built
+    entries list — synthetic dicts can't close the gap the two-definitions bug
+    hid in, since a shape drift between what `build_queue` assembles and what a
+    hand-written recount expects would still agree on a fixture built by hand.
+
+    Comparing `recount(result["entries"])` against `result["counts"]` would be
+    tautological: `build_queue` sets its own counts VIA `recount`, so both
+    sides call the identical function over the identical input — f(x) == f(x),
+    which cannot fail while the consolidation holds, which is exactly when a
+    regression needs catching. Every assertion below is against an
+    INDEPENDENTLY KNOWN literal instead.
+
+    The fixture also carries a fully DECIDED person (reachable only under
+    include_decided), because a fixture with zero decided people leaves the
+    `undecided_count` filter — the only non-trivial half of `recount`'s
+    definition — untested no matter how the comparison is written: with
+    nobody decided, "count everyone" and "count only the undecided" produce
+    the same number by coincidence.
     """
 
-    def test_recount_over_real_entries_matches_build_queues_own_counts(self):
+    def _fixture(self):
         flags = []
         for employee in ("EMP-1", "EMP-2"):
             for d in (D1, D2, D3):
                 flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
         flags.append(_flag("EMP-3", D1, "UNNOTIFIED_ABSENCE"))
+        # EMP-4's only flag is decided and its fingerprint matches, so this
+        # person is fully settled — undecided_count 0 — and reachable in
+        # `entries` only because include_decided=True.
+        settled = _flag("EMP-4", D1, "LATE_START", evidence={"minutes": 9})
+        flags.append(settled)
 
-        result = build_queue(
+        return build_queue(
             flags=flags,
-            decisions_by_identity={},
-            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3"),
+            decisions_by_identity={settled["flag_identity"]: _decision(settled)},
+            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3", "EMP-4"),
             outage_branch_dates=set(),
+            include_decided=True,
         )
 
-        # A REPEAT_PATTERN group (EMP-1, EMP-2) and a lone person entry (EMP-3):
-        # the two entry shapes `iter_people` has to flatten identically.
+    def test_recount_over_the_real_entries_matches_an_independently_known_total(self):
+        result = self._fixture()
+        # A REPEAT_PATTERN group (EMP-1, EMP-2), EMP-3's own act-tier row, and
+        # EMP-4's fully-settled row: both entry kinds, plus a settled person,
+        # in one real assembly — 3 entries, not built or counted by hand.
         self.assertEqual({e["kind"] for e in result["entries"]}, {"group", "person"})
+        self.assertEqual(len(result["entries"]), 3)
 
-        self.assertEqual(
-            recount(result["entries"]),
-            {"rows": result["counts"]["rows"], "people": result["counts"]["people"]},
-        )
+        # 3 people: EMP-1, EMP-2 (the group) and EMP-3 (their own row) all
+        # still owe HR something. EMP-4 is settled and must not count.
+        self.assertEqual(recount(result["entries"]), {"rows": 3, "people": 3})
+
+    def test_recount_over_a_tier_filtered_slice_excludes_the_settled_person(self):
+        # The shape flag_queue_api.py's tier branch actually hands `recount`:
+        # a SLICE of real entries, not the whole list (already covered above)
+        # and not a hand-built one. EMP-4's settled row and the LATE_START
+        # pattern group both land in "routine" (a settled person's rank falls
+        # to 0, which tiers routine) — EMP-3's UNNOTIFIED_ABSENCE is "act" and
+        # is filtered out here regardless.
+        result = self._fixture()
+        routine_only = [entry for entry in result["entries"] if entry["tier"] == "routine"]
+        self.assertEqual(len(routine_only), 2)
+
+        # 2 rows (the group + EMP-4's settled row); 2 people, not 3 — EMP-4's
+        # undecided_count is 0, so a filter that drops the undecided_count
+        # check would wrongly count them alongside EMP-1 and EMP-2.
+        self.assertEqual(recount(routine_only), {"rows": 2, "people": 2})
 
 
 if __name__ == "__main__":
