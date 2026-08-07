@@ -23,6 +23,7 @@ import {
   SAME_REASON_LABEL,
   appliedDecisionLabel,
   applyToRemainingLabel,
+  crossReferenceLabel,
   decisionStateLabel,
   flagDayLabel,
   groupHeadline,
@@ -391,21 +392,34 @@ function GroupDecision(props: FlagDecisionPanelProps & { entry: GroupEntry }) {
       <section className="space-y-1.5">
         <div className="text-xs font-medium text-muted-foreground">Who this covers</div>
         <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 px-2 py-1.5">
-          {entry.members.map((member) => (
-            <li key={member.employee} className="flex items-center gap-2 py-1">
-              <Checkbox
-                checked={!props.excluded.has(member.employee)}
-                onCheckedChange={() => props.onToggleMember(member.employee)}
-                aria-label={`Include ${member.employee_name}`}
-              />
-              <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-                {member.employee_name}
-              </span>
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {personHeadline(member)}
-              </span>
-            </li>
-          ))}
+          {entry.members.map((member) => {
+            const crossReference = crossReferenceLabel(member);
+            return (
+              <li key={member.employee} className="flex items-center gap-2 py-1">
+                <Checkbox
+                  checked={!props.excluded.has(member.employee)}
+                  onCheckedChange={() => props.onToggleMember(member.employee)}
+                  aria-label={`Include ${member.employee_name}`}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                  {member.employee_name}
+                </span>
+                {/* The safeguard's primary surface. This list, with its exclude
+                    checkboxes, is what HR reads immediately before a bulk
+                    excuse — the exact moment the badge is for. Reaching it only
+                    through "Decide one by one" would mean it never appears on
+                    the path it exists to guard. */}
+                {crossReference ? (
+                  <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                    {crossReference}
+                  </span>
+                ) : null}
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {personHeadline(member)}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>

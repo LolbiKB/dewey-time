@@ -209,6 +209,52 @@ function panelHeader(html: string): string {
   return html.slice(0, html.indexOf("<section"));
 }
 
+// Whole-markup matching cannot tell a title from a subline, or one person's
+// row from another's — "Repeatedly late" being present somewhere does not make
+// it the row's headline, and two correctly worded badges could both be on the
+// same row. Everything below slices first and asserts inside one slot.
+
+/** Each row button's markup, in render order. */
+function rowButtons(html: string): string[] {
+  return html
+    .split("<button")
+    .slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf("</button>")));
+}
+
+/**
+ * The one row button containing every one of `texts`. It takes several because
+ * one fragment is not always enough to name a row: the same person can hold two
+ * rows, and two people can share a headline.
+ */
+function rowWith(html: string, ...texts: string[]): string {
+  const matches = rowButtons(html).filter((row) => texts.every((text) => row.includes(text)));
+  assert.equal(matches.length, 1, `expected exactly one row containing ${JSON.stringify(texts)}`);
+  return matches[0];
+}
+
+/** The `<li>`s of the group panel's "Who this covers" list, in render order. */
+function memberListItems(html: string): string[] {
+  const list = html.slice(html.indexOf("<ul"), html.indexOf("</ul>"));
+  return list.split("<li").slice(1);
+}
+
+/**
+ * The text of the first element whose class attribute contains `marker` — the
+ * slot, not the string. Asserting a slot is what makes it possible to fail when
+ * the title and the subline are rendered into each other's places.
+ */
+function slotText(html: string, marker: string): string {
+  const at = html.indexOf(marker);
+  assert.notEqual(at, -1, `no element carrying the class fragment ${JSON.stringify(marker)}`);
+  const open = html.indexOf(">", at) + 1;
+  return html.slice(open, html.indexOf("<", open));
+}
+
+/** The two slots of a list row: the bold headline and the line under it. */
+const TITLE_SLOT = "text-sm font-medium text-foreground";
+const SUBLINE_SLOT = "text-xs text-muted-foreground tabular-nums";
+
 function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisionPanelProps {
   return {
     entry: null,
@@ -1036,13 +1082,40 @@ test("a person in two entries carries the cross-reference badge in both", () => 
     />
   );
 
-  // Worded from each side's own counts. Seen from inside the group, Ada's other
-  // entry is a lone row — an outlier by construction. Seen from that lone row,
-  // her other entry is a group, which "outlier" would misdescribe.
-  assert.equal(html.split("also 1 outlier").length - 1, 1, "the group member is badged");
-  assert.equal(html.split("also 1 elsewhere").length - 1, 1, "and so is the lone row");
+  // Worded from each side's own counts, and each on its OWN row — scoped per
+  // button, because two correctly worded badges both sitting on the lone row
+  // would satisfy a whole-markup count while telling HR nothing about the
+  // group. Ada's two rows are told apart by their headlines: three late starts
+  // in the group, the unpatterned three-hour gap on her own.
+  const member = rowWith(html, "Ada Lovelace", "late starts");
+  const lone = rowWith(html, "Ada Lovelace", "Missing 3h");
+  assert.match(member, /also 1 outlier/, "the group member is badged");
+  assert.match(lone, /also 1 elsewhere/, "and so is the lone row");
   // Grace is in one entry only, and a badge on her would be a false alarm.
-  assert.equal(html.split("also ").length - 1, 2, "nobody else is badged");
+  assert.doesNotMatch(rowWith(html, "Grace Hopper"), /also /, "nobody else is badged");
+  assert.equal(html.split("also ").length - 1, 2, "…and no badge anywhere else either");
+});
+
+// The badge's primary surface, and the one it was missing. "Who this covers" is
+// the list HR reads immediately before a bulk excuse — the exact moment the
+// safeguard is for. A member only reaches PersonRow after clicking "Decide one
+// by one", i.e. after abandoning the bulk path the badge exists to guard.
+test("the bulk panel's member list badges a member who is also in another entry", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: patternGroupEntry() })} />
+  );
+  const items = memberListItems(html);
+  assert.equal(items.length, 2, "both members are listed");
+
+  const ada = items.find((item) => item.includes("Ada Lovelace"));
+  const grace = items.find((item) => item.includes("Grace Hopper"));
+  assert.ok(ada && grace, "both members are identifiable");
+  assert.match(ada, /also 1 outlier/, "the member with a second entry is badged here too");
+  assert.doesNotMatch(grace, /also /, "and the member with only this one is not");
+
+  // Once, on her row — not on the group header, where it would read as a fact
+  // about the group rather than about one person in it.
+  assert.equal(html.split("also 1 outlier").length - 1, 1);
 });
 
 test("a repeat pattern row states its title and its two dimensions", () => {
@@ -1054,10 +1127,13 @@ test("a repeat pattern row states its title and its two dimensions", () => {
       onSelect={() => {}}
     />
   );
-  assert.match(html, /Repeatedly late/);
+  // Asserted by slot, not by presence: rendered into each other's places the
+  // row would headline itself "2 people · 6 mornings" and demote the title to
+  // the subline, and a pair of whole-markup matches would still pass.
+  assert.equal(slotText(html, TITLE_SLOT), "Repeatedly late");
   // Both numbers. "2 people" alone is how the header started disagreeing with
   // the list: six mornings are hiding behind those two members.
-  assert.match(html, /2 people · 6 mornings/);
+  assert.equal(slotText(html, SUBLINE_SLOT), "2 people · 6 mornings");
 });
 
 test("the same person in two entries produces two distinct row keys", () => {
