@@ -27,6 +27,32 @@ import type { FlagTimelineSpec } from "@/lib/flagNarrative";
  * percentage math itself is left alone rather than clamped, so a partially
  * visible span still starts at its true position.
  */
+/**
+ * Half the mark dot's own box (`size-2` = 8px, so 4px) plus the `ring-2`
+ * ring drawn around it (2px) — the distance a mark's CENTER must stay from
+ * either edge for the full dot, ring included, to stay inside the strip.
+ *
+ * A mark exactly at `window.startMin`/`endMin` is a real shape, not a
+ * hypothetical: LEFT_EARLY-style specs anchor the window on their own last
+ * mark (see `buildLeftEarlyTimeline`), so a dot at precisely `left:100%`
+ * would sit centered ON the clip edge and `overflow-hidden` would shear off
+ * its far half plus the ring — the same defect this constant exists to
+ * prevent for `left:0%` on the opposite edge.
+ */
+const MARK_EDGE_GUARD_PX = 6;
+
+/**
+ * `left` for a mark's dot: the percentage its minute truly implies, pulled
+ * back from either edge by `MARK_EDGE_GUARD_PX` so the dot never clips.
+ * Unlike spans/band/lunch/threshold (rule: clip to the window via
+ * `overflow-hidden`, not by adjusting the math), a mark is a symmetric
+ * `-translate-x-1/2` dot, so leaving its raw percentage unclamped would
+ * shear it asymmetrically right at the strip's own boundary.
+ */
+function markLeft(pct: number): string {
+  return `clamp(${MARK_EDGE_GUARD_PX}px, ${pct}%, calc(100% - ${MARK_EDGE_GUARD_PX}px))`;
+}
+
 export function FlagEvidenceTimeline(props: { spec: FlagTimelineSpec; ariaLabel: string }) {
   const { spec } = props;
   const ticks = hourTicks(spec.window.startMin, spec.window.endMin);
@@ -130,7 +156,7 @@ export function FlagEvidenceTimeline(props: { spec: FlagTimelineSpec; ariaLabel:
               "absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-background shadow-sm",
               mark.tone === "alert" ? "bg-destructive" : "bg-primary"
             )}
-            style={{ left: `${pct(mark.atMin)}%` }}
+            style={{ left: markLeft(pct(mark.atMin)) }}
           />
         ))}
       </div>

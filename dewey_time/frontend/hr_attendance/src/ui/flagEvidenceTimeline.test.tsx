@@ -110,15 +110,23 @@ test("marks sit at the exact percentage of the window their minute implies", () 
     lunch: null,
     threshold: null,
     spans: [],
-    marks: [{ atMin: 540, tone: "alert" }], // 9:00 AM — the window's exact midpoint
+    // 555 (9:15 AM) is deliberately NOT a whole hour: hourTicks only emits
+    // whole-hour marks, so a whole-hour minute here (e.g. 540/9:00 AM, the
+    // window's midpoint) would land an axis tick AND an hour label at the
+    // same left:50% offset as the mark, and a regex keyed on that offset
+    // alone would still match with the marks block deleted entirely.
+    marks: [{ atMin: 555, tone: "alert" }],
   };
   const html = renderToStaticMarkup(
-    <FlagEvidenceTimeline spec={spec} ariaLabel="Punched once at 9:00 AM, then never again" />
+    <FlagEvidenceTimeline spec={spec} ariaLabel="Punched once at 9:15 AM, then never again" />
   );
   assert.match(
     html,
-    /left:50%/,
-    "9:00 AM is the midpoint of an 8:00 AM-10:00 AM window, so the mark must sit at 50%"
+    // Anchored to the mark's own dot (its tone class immediately precedes
+    // its style attribute), not to any element that merely happens to sit
+    // at this offset, so deleting the marks block fails this assertion.
+    /bg-destructive" style="left:clamp\(6px, 62\.5%, calc\(100% - 6px\)\)"/,
+    "555 is 62.5% of the 480-600 window, and the mark's dot must sit there (pulled back from either edge by the edge-guard clamp)"
   );
 });
 
@@ -279,4 +287,91 @@ test("a span reaching past the window's own end still renders without overflowin
   // this is the mechanism that keeps an out-of-window span from blowing out
   // the panel's layout, so assert it is actually present rather than assumed.
   assert.match(html, /overflow-hidden/, "the strip must clip content that overflows its bounds");
+  // overflow-hidden alone is a static class present on every render — even
+  // an empty spec — so it cannot by itself detect a regression that clamps
+  // percentages to 100 or drops out-of-window geometry instead of clipping
+  // it visually. Pin the actual unclamped numbers this window computes for
+  // the gap span and the threshold, so a future change to either fails here.
+  assert.match(
+    html,
+    /style="left:69\.23076923076923%;width:584\.6153846153845%/,
+    "the gap span's left/width must be the raw, unclamped percentages this window implies, not clipped by the math itself"
+  );
+  assert.match(
+    html,
+    /bg-destructive\/70" style="left:638\.4615384615385%"/,
+    "the threshold line's left must be the raw, unclamped percentage this window implies"
+  );
+});
+
+test("a band and a lunch window that start before window.startMin render with a negative left and an unclamped width, not pulled to the visible edge", () => {
+  // Requirement 3(e) names band and lunch, not just span/threshold, as able
+  // to extend outside window — and FlagEvidenceTimeline.tsx's band/lunch
+  // branches take a different code path (Math.max(0, ...) on the width,
+  // no clamp on the left) than spans/threshold do, so this needs its own
+  // fixture rather than reusing the span/threshold case above.
+  const spec: FlagTimelineSpec = {
+    window: { startMin: 600, endMin: 720 }, // 10 AM - 12 PM
+    band: { startMin: 540, endMin: 660 }, // starts 60 min before window.startMin
+    lunch: { startMin: 570, endMin: 630 }, // starts 30 min before window.startMin
+    threshold: null,
+    spans: [],
+    marks: [],
+  };
+  const html = renderToStaticMarkup(
+    <FlagEvidenceTimeline spec={spec} ariaLabel="Band and lunch both start before this window" />
+  );
+  assert.doesNotMatch(html, /NaN/, "no coordinate should ever compute to NaN");
+  assert.match(
+    html,
+    /border-2 border-dashed border-muted-foreground\/80 bg-muted\/50" style="left:-50%;width:100%"/,
+    "the band's left goes negative and its width is the raw Math.max(0, ...) difference, not pulled to the visible edge"
+  );
+  assert.match(
+    html,
+    /border border-muted-foreground\/45 bg-muted\/35" style="left:-25%;width:50%"/,
+    "the lunch band's left goes negative the same way, on its own separate code path"
+  );
+});
+
+test("a mark at either edge of the window keeps its full dot inside the strip, instead of being sheared by overflow-hidden", () => {
+  // A mark at exactly window.endMin (or window.startMin) is a real shape,
+  // not a hypothetical: LEFT_EARLY-style specs anchor the window on their
+  // own last mark (buildLeftEarlyTimeline), so a dot centered via
+  // -translate-x-1/2 at a bare left:100%/0% would sit ON the clip edge and
+  // overflow-hidden would shear off its far half plus its ring-2 ring.
+  const spec: FlagTimelineSpec = {
+    window: { startMin: 480, endMin: 600 },
+    band: null,
+    lunch: null,
+    threshold: null,
+    spans: [],
+    marks: [
+      { atMin: 600, tone: "alert" }, // window.endMin
+      { atMin: 480, tone: "normal" }, // window.startMin
+    ],
+  };
+  const html = renderToStaticMarkup(
+    <FlagEvidenceTimeline spec={spec} ariaLabel="Marks at both edges" />
+  );
+  assert.match(
+    html,
+    /bg-destructive" style="left:clamp\(6px, 100%, calc\(100% - 6px\)\)"/,
+    "the mark at window.endMin must be pulled back from the edge by the guard clamp, not sit at a bare left:100%"
+  );
+  assert.match(
+    html,
+    /bg-primary" style="left:clamp\(6px, 0%, calc\(100% - 6px\)\)"/,
+    "the mark at window.startMin must be pulled forward from the edge by the same clamp"
+  );
+  assert.doesNotMatch(
+    html,
+    /bg-destructive" style="left:100%"/,
+    "the old unclamped bare percentage must not appear for the end-edge mark"
+  );
+  assert.doesNotMatch(
+    html,
+    /bg-primary" style="left:0%"/,
+    "the old unclamped bare percentage must not appear for the start-edge mark"
+  );
 });
