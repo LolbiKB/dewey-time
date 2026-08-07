@@ -71,9 +71,10 @@ export function outageKey(branch: string | null, date: string): string {
 export function buildOutageSet(
   rows: { branch: string; date: string }[] | null | undefined
 ): ReadonlySet<string> {
-  // Task 1 added `outage_dates` to the payload, but the queue cache prefix
-  // stayed `flag_queue:v1`, so for up to 60 seconds after deploy a cached
-  // payload can come back without that key. Tolerate it rather than throw.
+  // Nullable on the way in because a caller may not have a payload yet, not
+  // because a payload may lack the key — the cache prefix is versioned by
+  // payload shape, so a response that exists always carries `outage_dates`.
+  // An absent set greys nothing, which is the right answer for "not known yet".
   if (!rows) return new Set();
   return new Set(rows.map((row) => outageKey(row.branch, row.date)));
 }

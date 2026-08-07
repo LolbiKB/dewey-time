@@ -59,9 +59,11 @@ export function useFlagQueue(params: FlagQueueParams): FlagQueue {
       counts: data?.counts ?? EMPTY_COUNTS,
       orphans: data?.orphans ?? EMPTY_ORPHANS,
       alerts: data?.alerts ?? [],
-      // `?? []` is not only for the pre-first-payload render: the queue's cache
-      // prefix stayed `flag_queue:v1` when `outage_dates` was added, so for up
-      // to 60 seconds after a deploy a cached response arrives without the key.
+      // `?? []` is for the pre-first-payload render, where `data` is undefined —
+      // the same reason as every other line in this block. A *present* payload
+      // always carries the key: the cache prefix is versioned by payload shape
+      // (flag_queue_api.py's `_QUEUE_CACHE_PREFIX`), so no pre-deploy entry
+      // written under an older shape survives into new code.
       outageDates: data?.outage_dates ?? [],
       range: {
         startDate: data?.start_date ?? startDate,

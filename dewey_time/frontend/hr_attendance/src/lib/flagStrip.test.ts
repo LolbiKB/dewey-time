@@ -199,9 +199,9 @@ test("outage keys cannot collide across branch names", () => {
 });
 
 test("buildOutageSet tolerates undefined or missing rows without throwing", () => {
-  // Task 1 added outage_dates to the payload, but the queue cache prefix
-  // stayed flag_queue:v1, so for up to 60 seconds after deploy a cached
-  // payload can come back without that key.
+  // Callers hold a payload that may not have arrived yet — useFlagQueue zero-fills
+  // before the first fetch resolves — so "no rows" has to mean "grey nothing"
+  // rather than throw on the loading render.
   assert.deepEqual(buildOutageSet(undefined), new Set());
   assert.deepEqual(buildOutageSet(null), new Set());
 });

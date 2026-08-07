@@ -103,11 +103,12 @@ export type QueuePayload = {
   /**
    * (branch, date) pairs where no device data arrived — the strip's grey cells.
    *
-   * Declared required because `get_flag_queue` always sends it, but consumers
-   * must still tolerate its absence: the queue's cache prefix stayed
-   * `flag_queue:v1` when the key was added, so for up to 60 seconds after a
-   * deploy a cached response can come back without it. `buildOutageSet` takes
-   * null/undefined for exactly this reason.
+   * Required, and safe to rely on: the queue's cache prefix is versioned by
+   * payload shape (`flag_queue:v2`, flag_queue_api.py) and was bumped when this
+   * key and the person fields above were added, so a pre-deploy entry can never
+   * be served to code that expects them. Adding a field here without bumping
+   * that prefix reintroduces a 60-second window where cached responses arrive
+   * one field short and the page throws.
    */
   outage_dates: { branch: string; date: string }[];
   truncated: boolean;
