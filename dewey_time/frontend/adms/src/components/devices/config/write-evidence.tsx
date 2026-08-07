@@ -49,12 +49,6 @@ export function WriteEvidence({
 
   return (
     <ul className="space-y-1.5">
-      {records.length >= MAX_KEY_WRITE_HISTORY && (
-        <li className={cn('text-xs', signalText.idle)}>
-          Showing the {MAX_KEY_WRITE_HISTORY} most recent writes for this key across the fleet — the
-          trail may be incomplete beyond this point.
-        </li>
-      )}
       {records.map((r) => {
         const line = toEvidenceLine(r)
         return (
@@ -74,6 +68,14 @@ export function WriteEvidence({
           </li>
         )
       })}
+      {/* Below the list, not above it: the trail is newest-first, so the cut
+          (if there is one) falls at the OLDEST record — the bottom. */}
+      {records.length >= MAX_KEY_WRITE_HISTORY && (
+        <li className={cn('text-xs', signalText.idle)}>
+          Showing the {MAX_KEY_WRITE_HISTORY} most recent writes for this key, fleet-wide. Earlier
+          writes may exist but are not shown, so this trail may be incomplete.
+        </li>
+      )}
     </ul>
   )
 }

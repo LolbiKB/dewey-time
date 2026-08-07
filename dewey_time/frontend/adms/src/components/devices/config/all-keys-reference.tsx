@@ -1,20 +1,37 @@
-import { Fragment, useState } from 'react'
+import { Fragment } from 'react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { signalText } from '@/lib/signal'
 import { cn } from '@/lib/utils'
-import { groupRowValues, type MatrixCell, type MatrixRow } from '@/lib/device-option-matrix'
+import { groupRowValues, type MatrixCell, type MatrixRow, type ValueGroup } from '@/lib/device-option-matrix'
+import { valueLabel, isSoft } from '@/lib/device-option-cell-label'
 
-function valueLabel(cell: MatrixCell | undefined): string {
-  if (!cell?.present) return 'Not reported'
-  if (cell.redacted) return 'Withheld'
-  return cell.value === '' || cell.value == null ? '(empty)' : cell.value
-}
-
-function isSoft(cell: MatrixCell | undefined): boolean {
-  return !cell?.present || cell.redacted
+/**
+ * The fleet-agreement summary for one key, from its `groupRowValues` output.
+ *
+ * A single group is NOT the same claim as agreement. `groupRowValues` puts
+ * every withheld cell in one bucket and every absent cell in another — so a
+ * key withheld on every terminal groups down to exactly one bucket, same as
+ * a key every terminal genuinely agrees on. Saying "all N agree · Withheld"
+ * for the withheld case would be a fabricated agreement about a value nobody
+ * can see (device-option-matrix.ts's whole reason for calling such a row
+ * INCOMPARABLE) — so a single-group row only reads as agreement when its
+ * sample cell is actually a known, comparable value.
+ */
+function summaryLabel(
+  groups: ValueGroup[],
+  sample: MatrixCell | undefined,
+  reportingDeviceCount: number
+): string {
+  if (groups.length !== 1) return `${groups.length} values`
+  if (isSoft(sample)) {
+    return sample?.present
+      ? `withheld on all ${reportingDeviceCount}`
+      : `not reported by any of ${reportingDeviceCount}`
+  }
+  return `all ${reportingDeviceCount} agree · ${valueLabel(sample)}`
 }
 
 /**
@@ -23,17 +40,23 @@ function isSoft(cell: MatrixCell | undefined): boolean {
  * `groupRowValues`; expanding shows the value each reporting terminal
  * actually sent, withheld and absent kept distinct as everywhere else on
  * this page.
+ *
+ * `open` is a controlled prop, not local state: there is no jsdom in this
+ * suite to click a row open with, so the expansion — the one place the
+ * withheld/absent distinction actually renders per terminal — has to be
+ * reachable by passing a value in, the same way DriftReport's `expanded` is.
  */
 export function AllKeysReference({
-  rows, reportingDevices, search, onSearch, onConfigure,
+  rows, reportingDevices, search, onSearch, onConfigure, open, onOpen,
 }: {
   rows: MatrixRow[]
   reportingDevices: string[]
   search: string
   onSearch: (s: string) => void
   onConfigure: (key: string) => void
+  open: string | null
+  onOpen: (key: string | null) => void
 }) {
-  const [open, setOpen] = useState<string | null>(null)
   const visible = rows.filter((r) => r.key.toLowerCase().includes(search.trim().toLowerCase()))
 
   return (
@@ -41,7 +64,13 @@ export function AllKeysReference({
       <Input value={search} onChange={(e) => onSearch(e.target.value)}
         placeholder="Filter keys…" className="h-8 w-full sm:w-56" />
       {visible.length === 0 ? (
-        <EmptyState title="No key matches that filter" />
+        // Do not blame a filter the operator never touched: an empty ROW SET
+        // (no terminal has reported anything yet) and an empty FILTER RESULT
+        // (something has reported, but nothing matches the search) are
+        // different situations with different next steps.
+        <EmptyState
+          title={rows.length === 0 ? 'No terminal has reported any keys yet' : 'No key matches that filter'}
+        />
       ) : (
         <Table>
           <TableHeader>
@@ -59,12 +88,10 @@ export function AllKeysReference({
               return (
                 <Fragment key={row.key}>
                   <TableRow className="cursor-pointer hover:bg-muted/30"
-                    onClick={() => setOpen(open === row.key ? null : row.key)}>
+                    onClick={() => onOpen(open === row.key ? null : row.key)}>
                     <TableCell className="font-mono text-xs break-all">{row.key}</TableCell>
                     <TableCell className="text-xs">
-                      {groups.length === 1
-                        ? `all ${reportingDevices.length} agree · ${valueLabel(sample)}`
-                        : `${groups.length} values`}
+                      {summaryLabel(groups, sample, reportingDevices.length)}
                     </TableCell>
                     <TableCell>
                       {/* Only where a write could succeed. The bridge refuses

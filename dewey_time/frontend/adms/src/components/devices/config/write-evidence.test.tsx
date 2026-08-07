@@ -44,6 +44,15 @@ describe('WriteEvidence', () => {
     expect(html).not.toMatch(/incomplete/i)
   })
 
+  test('a trail one record short of the bound still makes no claim about completeness', () => {
+    // Pins the boundary itself, not just "more than one record" — a
+    // `records.length >= 2` check would satisfy the two-vs-fifty test above
+    // without actually reading the real bound.
+    const records = Array.from({ length: 49 }, (_, i) => ({ ...REC, id: i + 1 }))
+    const html = renderToStaticMarkup(<WriteEvidence records={records} loading={false} error={null} />)
+    expect(html).not.toMatch(/incomplete/i)
+  })
+
   test('a trail at the bound says it may be incomplete, not that it is the full history', () => {
     // The endpoint gives no truncation signal, so exactly 50 rows is
     // indistinguishable from "the history was cut" — the panel must not claim
