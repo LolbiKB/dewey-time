@@ -64,6 +64,21 @@ export interface OptionPolicy {
   keys: OptionKeyState[]
 }
 
+/** One row of the write ledger — the evidence behind a key's ladder status. */
+export interface OptionWriteRecord {
+  id: number
+  device_sn: string
+  key: string
+  desired_value: string
+  /** What the terminal reported back. Null while unresolved, or if withheld. */
+  observed_value: string | null
+  status: 'pending' | 'applied' | 'mismatched' | 'rejected' | 'abandoned'
+  is_canary: boolean
+  error_code: string | null
+  created_at: string
+  resolved_at: string | null
+}
+
 export interface ApplyResult {
   success: boolean
   queued: number
