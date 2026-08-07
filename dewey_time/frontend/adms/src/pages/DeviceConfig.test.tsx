@@ -61,12 +61,33 @@ function option(device_sn: string, key: string, value: string): DeviceOptionEntr
   return { device_sn, key, value, redacted: false, reported_at: '2026-01-01T00:00:00Z', kind: 'setting' }
 }
 
-function seedFleet(qc: QueryClient) {
-  seedDevices(qc)
-  qc.setQueryData(['device-options', 'PYA001'], [option('PYA001', 'VOLUME', '50')])
-  qc.setQueryData(['device-options', 'PYA002'], [option('PYA002', 'VOLUME', '20')])
+function seedOptions(qc: QueryClient, extra: DeviceOptionEntry[] = []) {
+  qc.setQueryData(
+    ['device-options', 'PYA001'],
+    [option('PYA001', 'VOLUME', '50'), ...extra.filter((e) => e.device_sn === 'PYA001')]
+  )
+  qc.setQueryData(
+    ['device-options', 'PYA002'],
+    [option('PYA002', 'VOLUME', '20'), ...extra.filter((e) => e.device_sn === 'PYA002')]
+  )
+}
+
+function seedPolicy(qc: QueryClient) {
   qc.setQueryData(['device-option-policy'], { desired: [], keys: [] })
   qc.setQueryData(['device-option-writes', 'VOLUME'], [])
+}
+
+function seedFleet(qc: QueryClient) {
+  seedDevices(qc)
+  seedOptions(qc)
+  seedPolicy(qc)
+}
+
+/** The same fleet plus a key that differs and is NOT one of the curated five. */
+function seedFleetWithUncuratedDrift(qc: QueryClient) {
+  seedDevices(qc)
+  seedOptions(qc, [option('PYA001', 'IsSupportNFC', '1'), option('PYA002', 'IsSupportNFC', '0')])
+  seedPolicy(qc)
 }
 
 describe('DeviceConfig', () => {
@@ -111,5 +132,36 @@ describe('DeviceConfig', () => {
     expect(html).toContain('Across the fleet')
     // …and the detail pane it replaced is gone.
     expect(html).not.toContain('Fleet standard')
+  })
+
+  test('?view=drift renders the drift report, listing what differs outside the five', () => {
+    const html = render(seedFleetWithUncuratedDrift, '/device-config?view=drift')
+    // "By terminal" and the uncurated key are DriftReport-only: the rail lists
+    // the curated five and counts the rest without naming any of them.
+    expect(html).toContain('By terminal')
+    expect(html).toContain('IsSupportNFC')
+    expect(html).not.toContain('Fleet standard')
+  })
+
+  test('the drift view states an absence rather than drawing an empty table', () => {
+    // Only VOLUME differs here, and VOLUME is curated — so this view has
+    // nothing to show, and a bare "By terminal" header over a column of
+    // "Not reported" would read as a finding.
+    const html = render(seedFleet, '/device-config?view=drift')
+    expect(html).toContain('Nothing outside the listed settings differs')
+    expect(html).not.toContain('By terminal')
+  })
+
+  test('a policy still in flight is never rendered as "nothing is stored"', () => {
+    // Devices and option rows in hand, the POLICY query still loading. Without
+    // it in `loading`, the pane rendered "No fleet standard yet — save one
+    // first" from a read that had not answered, inviting the operator to
+    // overwrite a standard they could not yet see.
+    const html = render((qc) => {
+      seedDevices(qc)
+      seedOptions(qc)
+    })
+    expect(html).not.toMatch(/No fleet standard yet/i)
+    expect(headerDescription(html)).toBe('Loading…')
   })
 })

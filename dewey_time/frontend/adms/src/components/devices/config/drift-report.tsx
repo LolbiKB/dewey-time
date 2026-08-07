@@ -21,6 +21,7 @@ export function DriftReport({
   deviceSns,
   entries,
   silentDevices,
+  unreadableDevices,
   devices,
   expanded,
   onExpand,
@@ -30,7 +31,17 @@ export function DriftReport({
   rows: MatrixRow[]
   deviceSns: string[]
   entries: DeviceOptionEntry[]
+  /** Terminals with nothing on hand — the silent AND the unreadable together. */
   silentDevices: string[]
+  /**
+   * The subset whose READ FAILED, so nothing whatever is known about them.
+   *
+   * Required rather than optional: the two "nothing here" statements below are
+   * about the TERMINAL, and getting the reason wrong sends an operator to check
+   * the health and poll schedule of a box that may have reported perfectly
+   * well. A caller who has not thought about it should not be able to skip it.
+   */
+  unreadableDevices: string[]
   devices: { serial_number: string; name?: string | null; location?: string | null }[]
   expanded: string | null
   onExpand: (sn: string | null) => void
@@ -109,7 +120,18 @@ export function DriftReport({
                       off > 0 ? signalText.attention : signalText.idle
                     )}
                   >
-                    {silentDevices.includes(sn) ? 'Not reported' : off > 0 ? off : '—'}
+                    {/* "—" means "no deviations", so it may never stand for a
+                        terminal nothing is known about: that would claim it
+                        matches the majority everywhere. The two causes are
+                        named apart for the same reason the expansion below
+                        names them apart. */}
+                    {unreadableDevices.includes(sn)
+                      ? 'Not read'
+                      : silentDevices.includes(sn)
+                        ? 'Not reported'
+                        : off > 0
+                          ? off
+                          : '—'}
                   </TableCell>
                 </TableRow>
 
@@ -118,7 +140,15 @@ export function DriftReport({
                     <TableCell colSpan={rows.length + 2}>
                       {own.length === 0 ? (
                         <p className="text-xs text-muted-foreground">
-                          This terminal has not reported its configuration yet.
+                          {/* A read that FAILED is not a terminal that stayed
+                              quiet. Saying it "has not reported" here would
+                              contradict the page's own banner, which says the
+                              dashboard could not load this terminal — and it
+                              would send the operator to check a box that may
+                              have reported perfectly well. */}
+                          {unreadableDevices.includes(sn)
+                            ? 'This terminal’s configuration could not be loaded, so none is on hand to show.'
+                            : 'This terminal has not reported its configuration yet.'}
                         </p>
                       ) : (
                         <>

@@ -29,6 +29,25 @@ describe('describeLastError', () => {
     expect(describeLastError('-1002')).toBe('The terminal answered -1002')
   })
 
+  describe('write STATUSES, which the bridge falls back to when there is no code', () => {
+    // `error_code ?? status`, so these two arrive here looking like codes.
+    test('mismatched is not something a terminal ever answered', () => {
+      // There IS no device code for this: every command succeeded and the
+      // value simply is not there. "The terminal answered mismatched" invents
+      // an answer — and rendered one panel above an evidence line correctly
+      // reading "did not stick".
+      const text = describeLastError('mismatched')
+      expect(text).toMatch(/did not stick/i)
+      expect(text).not.toMatch(/answered mismatched/i)
+    })
+
+    test('rejected without a code says so rather than inventing one', () => {
+      const text = describeLastError('rejected')
+      expect(text).toMatch(/refused the last write/i)
+      expect(text).not.toMatch(/answered rejected/i)
+    })
+  })
+
   describe('delivery failures — never worded as a device refusal', () => {
     test('set_not_delivered', () => {
       const text = describeLastError('set_not_delivered')

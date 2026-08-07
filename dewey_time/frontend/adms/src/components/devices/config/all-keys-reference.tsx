@@ -5,34 +5,13 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { signalText } from '@/lib/signal'
 import { cn } from '@/lib/utils'
-import { groupRowValues, type MatrixCell, type MatrixRow, type ValueGroup } from '@/lib/device-option-matrix'
+import { type MatrixRow } from '@/lib/device-option-matrix'
 import { valueLabel, isSoft } from '@/lib/device-option-cell-label'
-
-/**
- * The fleet-agreement summary for one key, from its `groupRowValues` output.
- *
- * A single group is NOT the same claim as agreement. `groupRowValues` puts
- * every withheld cell in one bucket and every absent cell in another — so a
- * key withheld on every terminal groups down to exactly one bucket, same as
- * a key every terminal genuinely agrees on. Saying "all N agree · Withheld"
- * for the withheld case would be a fabricated agreement about a value nobody
- * can see (device-option-matrix.ts's whole reason for calling such a row
- * INCOMPARABLE) — so a single-group row only reads as agreement when its
- * sample cell is actually a known, comparable value.
- */
-function summaryLabel(
-  groups: ValueGroup[],
-  sample: MatrixCell | undefined,
-  reportingDeviceCount: number
-): string {
-  if (groups.length !== 1) return `${groups.length} values`
-  if (isSoft(sample)) {
-    return sample?.present
-      ? `withheld on all ${reportingDeviceCount}`
-      : `not reported by any of ${reportingDeviceCount}`
-  }
-  return `all ${reportingDeviceCount} agree · ${valueLabel(sample)}`
-}
+// The summary sentence lives in its own module: it is a judgement about what
+// may be CLAIMED from partial data (see fleet-summary-label.ts), and this
+// suite renders statically, so it is pinned by unit tests rather than by
+// reading it back out of a table.
+import { fleetSummaryLabel } from './fleet-summary-label'
 
 /**
  * Every key any terminal has reported — the audit view beneath the curated
@@ -79,19 +58,13 @@ export function AllKeysReference({
           </TableHeader>
           <TableBody>
             {visible.map((row) => {
-              const groups = groupRowValues(row, reportingDevices)
-              // The group's own `value` is null for BOTH withheld and absent
-              // buckets — it cannot say which. The sample cell can, so a single
-              // agreeing group is described from one of its member cells, the
-              // same way FindingCard reads a group.
-              const sample = groups[0] ? row.cells[groups[0].devices[0]] : undefined
               return (
                 <Fragment key={row.key}>
                   <TableRow className="cursor-pointer hover:bg-muted/30"
                     onClick={() => onOpen(open === row.key ? null : row.key)}>
                     <TableCell className="font-mono text-xs break-all">{row.key}</TableCell>
                     <TableCell className="text-xs">
-                      {summaryLabel(groups, sample, reportingDevices.length)}
+                      {fleetSummaryLabel(row, reportingDevices)}
                     </TableCell>
                     <TableCell>
                       {/* Only where a write could succeed. The bridge refuses

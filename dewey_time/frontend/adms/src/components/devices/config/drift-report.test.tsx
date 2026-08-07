@@ -49,7 +49,7 @@ describe('DriftReport', () => {
     // reported" for a silent terminal), so a bare substring match would pass
     // even if this cell regressed.
     const html = renderToStaticMarkup(
-      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']}
+      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']} unreadableDevices={[]}
         devices={DEVICES} expanded={null} onExpand={() => {}} search="" onSearch={() => {}} />
     )
     const bRowStart = html.indexOf('>B<')
@@ -59,7 +59,7 @@ describe('DriftReport', () => {
 
   test('an absent cell reads Not reported, not the same word choice as withheld', () => {
     const html = renderToStaticMarkup(
-      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={[]}
+      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={[]} unreadableDevices={[]}
         devices={DEVICES} expanded={null} onExpand={() => {}} search="" onSearch={() => {}} />
     )
     // C is a REPORTING device here (not in silentDevices) that simply never
@@ -76,7 +76,7 @@ describe('DriftReport', () => {
     // deviation), never "Not reported" — this isolates the silentDevices
     // branch from the absent-cell branch the previous test covers.
     const html = renderToStaticMarkup(
-      <DriftReport rows={rowsAllAgree} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']}
+      <DriftReport rows={rowsAllAgree} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']} unreadableDevices={[]}
         devices={DEVICES} expanded={null} onExpand={() => {}} search="" onSearch={() => {}} />
     )
     const cRowStart = html.indexOf('>C<')
@@ -86,7 +86,7 @@ describe('DriftReport', () => {
 
   test('expanding a terminal shows its own key list, with a withheld entry read as Withheld', () => {
     const html = renderToStaticMarkup(
-      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']}
+      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']} unreadableDevices={[]}
         devices={DEVICES} expanded="A" onExpand={() => {}} search="" onSearch={() => {}} />
     )
     expect(html).toContain('authKey')
@@ -96,9 +96,39 @@ describe('DriftReport', () => {
 
   test('a terminal with nothing reported says so instead of showing an empty expansion', () => {
     const html = renderToStaticMarkup(
-      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']}
+      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']} unreadableDevices={[]}
         devices={DEVICES} expanded="C" onExpand={() => {}} search="" onSearch={() => {}} />
     )
     expect(html).toMatch(/has not reported its configuration yet/i)
+  })
+
+  test('a terminal whose READ FAILED is never described as one that stayed quiet', () => {
+    // The page's banner says the dashboard could not load this terminal. The
+    // expansion saying "has not reported its configuration yet" underneath it
+    // put two contradicting sentences on one screen — and the false one sends
+    // the operator to check the health of a box that may have reported
+    // perfectly well.
+    const html = renderToStaticMarkup(
+      <DriftReport rows={rows} deviceSns={['A', 'B', 'C']} entries={entries} silentDevices={['C']}
+        unreadableDevices={['C']} devices={DEVICES} expanded="C" onExpand={() => {}} search=""
+        onSearch={() => {}} />
+    )
+    expect(html).toMatch(/could not be loaded/i)
+    expect(html).not.toMatch(/has not reported its configuration yet/i)
+  })
+
+  test('an unreadable terminal is not shown as matching the majority either', () => {
+    // "—" in the Off majority column means "no deviations". A terminal nothing
+    // is known about has no such count, and rendering one would claim it
+    // agrees with the fleet everywhere.
+    const html = renderToStaticMarkup(
+      <DriftReport rows={rowsAllAgree} deviceSns={['A', 'B', 'C']} entries={entries}
+        silentDevices={['C']} unreadableDevices={['C']} devices={DEVICES} expanded={null}
+        onExpand={() => {}} search="" onSearch={() => {}} />
+    )
+    const cRowStart = html.indexOf('>C<')
+    const cRow = html.slice(cRowStart, html.indexOf('</tr>', cRowStart))
+    expect(cRow).toContain('Not read')
+    expect(cRow).not.toContain('Not reported')
   })
 })

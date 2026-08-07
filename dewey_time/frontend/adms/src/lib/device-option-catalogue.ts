@@ -15,9 +15,15 @@
  *
  * The labels are our own naming, inferred from the key names. They are a
  * convenience and never a claim about the protocol, so the raw key is always
- * rendered beside its label rather than replaced by it. The hints say what the
- * fleet reports today and nothing about what a value MEANS: nothing here
- * establishes that `Language=69` is English.
+ * rendered beside its label rather than replaced by it.
+ *
+ * The hints say nothing about what a value MEANS — nothing here establishes
+ * that `Language=69` is English — and they are worded in the PAST TENSE
+ * deliberately. Each is a snapshot taken when this list was compiled, rendered
+ * beside a live table of what the terminals report now. "Every terminal
+ * reports 0" is a present-tense claim a hard-coded file cannot keep: the
+ * moment one terminal changes, the hint contradicts the table three inches
+ * below it, and the table is the one that is actually looking.
  */
 export interface CuratedSetting {
   key: string
@@ -26,11 +32,31 @@ export interface CuratedSetting {
 }
 
 export const CURATED_SETTINGS: readonly CuratedSetting[] = [
-  { key: 'VOLUME', label: 'Speaker volume', hint: 'This fleet reports values between 20 and 60.' },
-  { key: 'Brightness', label: 'Screen brightness', hint: 'Every terminal reports 0.' },
-  { key: 'Language', label: 'Language', hint: 'Every terminal reports 69.' },
-  { key: 'DtFmt', label: 'Date format', hint: 'Every terminal reports 9.' },
-  { key: '~DSTF', label: 'Daylight saving', hint: 'Every terminal reports the same value.' },
+  {
+    key: 'VOLUME',
+    label: 'Speaker volume',
+    hint: 'When this list was compiled, terminals here reported values between 20 and 60.',
+  },
+  {
+    key: 'Brightness',
+    label: 'Screen brightness',
+    hint: 'When this list was compiled, every terminal reported 0.',
+  },
+  {
+    key: 'Language',
+    label: 'Language',
+    hint: 'When this list was compiled, every terminal reported 69.',
+  },
+  {
+    key: 'DtFmt',
+    label: 'Date format',
+    hint: 'When this list was compiled, every terminal reported 9.',
+  },
+  {
+    key: '~DSTF',
+    label: 'Daylight saving',
+    hint: 'When this list was compiled, every terminal reported the same value.',
+  },
 ]
 
 /**

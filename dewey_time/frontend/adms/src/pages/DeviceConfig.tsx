@@ -37,6 +37,7 @@ import {
   standardStoredNote,
 } from '@/components/devices/config/fleet-action-note'
 import { splitSilentTerminals } from '@/components/devices/config/silent-terminals'
+import { policyAvailability } from '@/components/devices/config/policy-availability'
 
 /**
  * Fleet configuration — CONFIGURE FIRST, with drift kept first-class.
@@ -145,7 +146,9 @@ export function DeviceConfig() {
   })
 
   const optionsLoading = optionQueries.some((q) => q.isLoading)
-  const loading = devicesQuery.isLoading || optionsLoading
+  // The policy query counts too: without it the first render claims "No fleet
+  // standard yet" for a key whose standard is merely still in flight.
+  const loading = devicesQuery.isLoading || optionsLoading || policyQuery.isLoading
   const stamp = optionQueries.map((q) => q.dataUpdatedAt).join(',')
   const entries: DeviceOptionEntry[] = useMemo(
     () => optionQueries.flatMap((q) => q.data ?? []),
@@ -306,8 +309,24 @@ export function DeviceConfig() {
   const optionsError = optionQueries.find((q) => q.isError)?.error as Error | undefined
   const loadedNothing = optionQueries.every((q) => !q.data?.length)
   const fleetUnreadable = (devicesQuery.isError || optionsError !== undefined) && loadedNothing
+  /**
+   * The STORED side of the page is a separate read from the observed side.
+   *
+   * A failed policy query leaves `desired` empty and the ladder blank, and
+   * every claim built on that inverts: "No fleet standard yet — save one
+   * first" invites overwriting a standard the operator could not see. It does
+   * NOT blank the whole page, though — the drift and reference views are built
+   * from the option rows alone and remain entirely true. See
+   * policy-availability.ts.
+   */
+  const policyState = policyAvailability({
+    loading: policyQuery.isLoading,
+    failed: policyQuery.isError,
+    hasData: policyQuery.data != null,
+  })
   const refetchAll = () => {
     void devicesQuery.refetch()
+    void policyQuery.refetch()
     for (const q of optionQueries) void q.refetch()
   }
 
@@ -386,6 +405,19 @@ export function DeviceConfig() {
   const keyHint = CURATED_SETTINGS.find((s) => s.key === selectedKey)?.hint ?? ''
 
   const detailPane = () => {
+    // Nothing stored is in hand, so nothing about stored state may be stated —
+    // not the standard, not the ladder, not the refusal reason. The whole pane
+    // is built from those, so the pane says why instead of guessing.
+    if (selectedKey && policyState === 'unavailable') {
+      return (
+        <QueryErrorCard
+          title={`Could not load what is stored for ${selectedKey}`}
+          error={policyQuery.error}
+          onRetry={() => void policyQuery.refetch()}
+        />
+      )
+    }
+
     if (selectedKey && plan) {
       const state = keyState.get(selectedKey)
       const standard = desired.find((d) => d.device_sn === null && d.key === selectedKey)
@@ -446,8 +478,11 @@ export function DeviceConfig() {
           // column says "Not reported" or a deviation count, and a terminal
           // whose read failed has no count that could be true: dropping it from
           // this list would render "—", which claims it matches the majority
-          // everywhere. The banner above is what says WHY each one is missing.
+          // everywhere. `unreadableDevices` is what tells the two APART, in the
+          // column and in the row expansion, so neither says "has not reported"
+          // about a terminal this page merely failed to load.
           silentDevices={matrix.silentDevices}
+          unreadableDevices={unreadable}
           devices={devices}
           expanded={expandedTerminal}
           onExpand={setExpandedTerminal}
@@ -480,15 +515,16 @@ export function DeviceConfig() {
 
       {/* Rows are on screen but the latest fetch failed — say so rather than
           showing silently stale data as if it were current. */}
-      {(devicesQuery.isError || optionsError) && (
+      {(devicesQuery.isError || optionsError || policyQuery.isError) && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Could not refresh fleet configuration</AlertTitle>
           <AlertDescription className="flex items-center justify-between">
             <span>
-              Showing the values last loaded, which may no longer be what the terminals report.{' '}
-              {(devicesQuery.error ?? optionsError) instanceof Error
-                ? ((devicesQuery.error ?? optionsError) as Error).message
+              Showing the values last loaded, which may no longer be what the terminals report or
+              what is stored.{' '}
+              {(devicesQuery.error ?? optionsError ?? policyQuery.error) instanceof Error
+                ? ((devicesQuery.error ?? optionsError ?? policyQuery.error) as Error).message
                 : 'An unknown error occurred'}
             </span>
             <Button
