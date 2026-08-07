@@ -44,6 +44,19 @@ describe('buildKeyPlan', () => {
     expect(plan.targetCount).toBe(0)
   })
 
+  test('a redacted value with content is still withheld, not compared', () => {
+    // DeviceOptionEntry permits redacted:true alongside a non-null value. The
+    // `redacted` flag is the only thing stopping a comparison against a value
+    // the bridge deliberately did not vouch for — every other withheld test
+    // here uses value:null, which would still read as withheld even if the
+    // redacted check were deleted. This one would not.
+    const plan = buildKeyPlan('VOLUME', desired([[null, '50']]),
+      observed([['A', '20', true], ['B', '50'], ['C', '50']]), SNS)
+
+    expect(plan.terminals[0].verdict).toBe('withheld')
+    expect(plan.terminals[0].reported).toBeNull()
+  })
+
   test('a null value counts as withheld even if the flag says otherwise', () => {
     // Fails safe. `value: null` with `redacted: false` should not happen, and
     // if it ever does, "unknown" is the honest reading — not "differs".
@@ -81,13 +94,22 @@ describe('buildKeyPlan', () => {
   })
 
   test('ignores desired and observed rows for other keys', () => {
+    // Placed FIRST: OptionPolicy.desired is fleet-wide, not key-scoped, so an
+    // unfiltered `find((d) => d.device_sn === null)` would adopt this row's
+    // value as the VOLUME fleet standard the moment it sorts ahead of the real
+    // one. Asserting fleetStandard pins that the key filter runs before the
+    // standard is picked, not just that the wrong key never SHOWS UP.
+    const foreignDesired: DesiredOptionEntry = {
+      device_sn: null, key: 'Brightness', value: '0', updated_by: null, updated_at: '2026-08-06T00:00:00Z',
+    }
     const other: DeviceOptionEntry[] = [{
       device_sn: 'A', key: 'Brightness', value: '0', redacted: false,
       reported_at: '2026-08-06T00:00:00Z', kind: 'setting',
     }]
-    const plan = buildKeyPlan('VOLUME', desired([[null, '50']]),
+    const plan = buildKeyPlan('VOLUME', [foreignDesired, ...desired([[null, '50']])],
       [...observed([['A', '50'], ['B', '50'], ['C', '50']]), ...other], SNS)
 
+    expect(plan.fleetStandard).toBe('50')
     expect(plan.targetCount).toBe(0)
   })
 })
