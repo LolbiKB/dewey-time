@@ -3,6 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { PendingDecision } from "@/lib/flagDecisionState";
+import { formatFlagContextDate } from "@/lib/flagDetails";
 import {
   DECIDE_AGAIN_LABEL,
   SAME_REASON_LABEL,
@@ -20,16 +21,27 @@ import type { DecisionState, FlagDecision, FlagOut, QueueEntry, QueuePerson, Tie
 import { SHOW_AS_GROUP_LABEL } from "@/lib/flagQueueLabels";
 
 import { FlagDecisionPanel, type FlagDecisionPanelProps } from "./FlagDecisionPanel";
-import { FlagQueueList } from "./FlagQueueList";
-import { FlagQueueView, decideEffect, type DecideArgs, type DecideEffect } from "./FlagQueuePage";
+import { FlagQueueList, entryKey } from "./FlagQueueList";
+import {
+  FlagQueueView,
+  decideEffect,
+  type DecideArgs,
+  type DecideEffect,
+  type FlagQueueViewProps,
+} from "./FlagQueuePage";
 
 const DATE = "2026-08-03";
+
+type GroupEntry = Extract<QueueEntry, { kind: "group" }>;
+type PersonEntry = Extract<QueueEntry, { kind: "person" }>;
 
 function makeFlag(args: {
   identity: string;
   code: string;
   rank: number;
   tier: Tier;
+  /** A flag carries its own day: an entry can now span several of them. */
+  date?: string;
   state?: DecisionState;
   decision?: FlagDecision | null;
   evidence?: Record<string, unknown>;
@@ -37,6 +49,7 @@ function makeFlag(args: {
   return {
     flag_identity: args.identity,
     flag_code: args.code,
+    attendance_date: args.date ?? DATE,
     severity: "WARNING",
     day_closed: 1,
     evidence: args.evidence ?? {},
@@ -50,26 +63,153 @@ function makeFlag(args: {
 // rank/tier are passed in rather than derived: build_queue computes them
 // server-side from the person's UNDECIDED flags, and a fixture that recomputes
 // them here would be testing the fixture, not the component.
+//
+// `dates`, `attendance_date` and `entry_key` ARE derived, because each is a
+// mechanical restatement of the flags this entry holds and _person() derives
+// them the same way — `dates` is every date in the entry, the headline day is
+// the worst unresolved flag's (they arrive worst-first), and a lone row's key
+// is `p:<employee>`. Group members are stamped with the group's key instead.
 function makePerson(args: {
   employee: string;
   name: string;
   rank: number;
   tier: Tier;
   flags: FlagOut[];
+  entryKey?: string;
+  alsoCount?: number;
+  alsoOutlierCount?: number;
 }): QueuePerson {
+  const unresolved = args.flags.filter((f) => f.decision_state !== "matched");
+  const top = unresolved[0] ?? args.flags[0];
   return {
+    entry_key: args.entryKey ?? `p:${args.employee}`,
     employee: args.employee,
     employee_name: args.name,
     employee_branch: "Phnom Penh HQ",
-    attendance_date: DATE,
+    attendance_date: top?.attendance_date ?? DATE,
+    dates: [...new Set(args.flags.map((f) => f.attendance_date))].sort(),
     rank: args.rank,
     tier: args.tier,
     flags: args.flags,
-    undecided_count: args.flags.filter((f) => f.decision_state !== "matched").length,
+    undecided_count: unresolved.length,
+    also_count: args.alsoCount ?? 0,
+    also_outlier_count: args.alsoOutlierCount ?? 0,
   };
 }
 
-function panelProps(overrides: Partial<FlagDecisionPanelProps>): FlagDecisionPanelProps {
+const PATTERN_KEY = "REPEAT_PATTERN:LATE_START";
+const PATTERN_DATES = ["2026-08-03", "2026-08-04", "2026-08-05"];
+
+/** One member of the repeatedly-late group: the same code, three mornings. */
+function patternMember(args: {
+  employee: string;
+  name: string;
+  alsoCount?: number;
+  alsoOutlierCount?: number;
+}): QueuePerson {
+  return makePerson({
+    employee: args.employee,
+    name: args.name,
+    rank: 20,
+    tier: "routine",
+    entryKey: `${PATTERN_KEY}|p:${args.employee}`,
+    alsoCount: args.alsoCount,
+    alsoOutlierCount: args.alsoOutlierCount,
+    flags: PATTERN_DATES.map((date, i) =>
+      makeFlag({
+        identity: `id-late-${args.employee}-${i}`,
+        code: "LATE_START",
+        date,
+        rank: 20,
+        tier: "routine",
+        evidence: { minutes: 12 + i },
+      })
+    ),
+  });
+}
+
+// Ada is in two entries at once — the per-flag invariant's whole point. Her
+// three late mornings are a pattern; her three-hour gap is not, so it stayed a
+// row of its own. also_count/also_outlier_count are stamped exactly as
+// _stamp_cross_references does it: from inside the group her other entry is a
+// lone row (an outlier), from the lone row her other entry is a group.
+function patternGroupEntry(): GroupEntry {
+  return {
+    kind: "group",
+    group_type: "REPEAT_PATTERN",
+    group_key: PATTERN_KEY,
+    branch: null,
+    flag_code: "LATE_START",
+    // A pattern spans dates by definition, so the backend sends no single one.
+    attendance_date: null,
+    rank: 20,
+    tier: "routine",
+    members: [
+      patternMember({
+        employee: "HR-EMP-00001",
+        name: "Ada Lovelace",
+        alsoCount: 1,
+        alsoOutlierCount: 1,
+      }),
+      patternMember({ employee: "HR-EMP-00002", name: "Grace Hopper" }),
+    ],
+  };
+}
+
+function outlierPersonEntry(): PersonEntry {
+  return {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00001",
+      name: "Ada Lovelace",
+      rank: 132,
+      tier: "act",
+      alsoCount: 1,
+      alsoOutlierCount: 0,
+      flags: [
+        makeFlag({
+          identity: "id-missing",
+          code: "MISSING_TIME",
+          rank: 132,
+          tier: "act",
+          evidence: { minutes: 180 },
+        }),
+      ],
+    }),
+  };
+}
+
+/** The same pattern member, opened in the panel: three mornings, three cards. */
+function spanPersonEntry(): PersonEntry {
+  return {
+    kind: "person",
+    ...patternMember({
+      employee: "HR-EMP-00001",
+      name: "Ada Lovelace",
+      alsoCount: 1,
+      alsoOutlierCount: 1,
+    }),
+  };
+}
+
+/** Everything FlagQueueView needs except `counts`, which each test supplies. */
+function viewProps(): Omit<FlagQueueViewProps, "counts"> {
+  return {
+    isLoading: false,
+    error: null,
+    onRetry: () => {},
+    bulkFailure: null,
+    list: <div />,
+    panel: <div />,
+  };
+}
+
+/** The panel's header, up to the first flag card — where the day is named. */
+function panelHeader(html: string): string {
+  return html.slice(0, html.indexOf("<section"));
+}
+
+function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisionPanelProps {
   return {
     entry: null,
     draft: { outcome: "EXCUSED", reason: "APPROVED_LEAVE", note: "" },
@@ -85,9 +225,11 @@ function panelProps(overrides: Partial<FlagDecisionPanelProps>): FlagDecisionPan
   };
 }
 
-// Person-dedup is the whole point of build_queue's "a person appears in exactly
-// one entry" rule, and this is where it becomes visible: Ada has a routine
-// LATE_START that would otherwise pull her into the routine group as well.
+// build_queue assigns each FLAG to exactly one entry, and Ada's routine
+// LATE_START went with her act-tier day rather than into the routine group —
+// so the list must render her once, where the backend put her. (A person can
+// now legitimately hold two entries; when that happens they arrive as two, and
+// the cross-reference badge below is what ties them together.)
 test("a person with a routine flag and an act flag appears once, under Act", () => {
   const ada = makePerson({
     employee: "HR-EMP-00001",
@@ -427,7 +569,7 @@ test("a decided flag can be decided again, with the decision it replaces in view
 });
 
 test("the Decided count doubles as the control that surfaces decided people", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40 };
+  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
 
   const off = renderToStaticMarkup(
     <FlagQueueView
@@ -493,7 +635,7 @@ test("a load failure renders exactly one assertive alert", () => {
 test("a partial bulk failure is reported politely, with the failures disclosed", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40 }}
+      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -524,7 +666,7 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
 test("the toolbar reports open, needs re-review and decided counts", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40 }}
+      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -549,7 +691,7 @@ test("the toolbar reports open, needs re-review and decided counts", () => {
 test("device alert cards render from alerts, with no flags present", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0 }}
+      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -576,7 +718,7 @@ test("device alert cards render from alerts, with no flags present", () => {
 test("device alert cards never render a device serial", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0 }}
+      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -603,7 +745,7 @@ test("device alert cards never render a device serial", () => {
 test("device alert cards carry no decide action", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0 }}
+      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -691,7 +833,7 @@ test("an over-threshold decide asks for confirmation and settles nothing", () =>
 test("a decide that fails outright is reported, politely, without hiding the queue", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40 }}
+      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -767,7 +909,7 @@ test("an expanded group can be put back together", () => {
 test("no alert cards render when the array is empty", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0 }}
+      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -789,7 +931,7 @@ test("no alert cards render when the array is empty", () => {
 // rate is on screen. Before this, get_flag_queue computed both counts and
 // nothing rendered them.
 test("orphaned decisions are reported, so the rate is visible rather than inferred", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40 };
+  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
 
   const html = renderToStaticMarkup(
     <FlagQueueView
@@ -814,7 +956,7 @@ test("orphaned decisions are reported, so the rate is visible rather than inferr
 // is noise on the overwhelmingly common day, and each line is independent —
 // one count being zero must not suppress the other.
 test("an orphan line appears only when its own count is non-zero", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40 };
+  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
   const render = (orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number }) =>
     renderToStaticMarkup(
       <FlagQueueView
@@ -874,4 +1016,149 @@ test("orphan lines are withheld while loading and on failure", () => {
   );
   assert.doesNotMatch(failed, /no longer have a matching flag|changed since/);
   void orphans;
+});
+
+// The safeguard that makes the per-flag invariant safe in practice. Ada is in
+// the repeatedly-late group AND in a row of her own for a three-hour gap;
+// excusing the group, believing she is dealt with, and never seeing the gap is
+// the exact failure this badge exists to prevent — so it has to be on BOTH of
+// her rows, not just the one HR happens to open first.
+test("a person in two entries carries the cross-reference badge in both", () => {
+  const group = patternGroupEntry();
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[group, outlierPersonEntry()]}
+      selectedKey={null}
+      // Expanded on purpose: a collapsed group renders no member rows at all,
+      // so the member copy of the badge would have nowhere to appear.
+      expandedGroupKey={group.group_key}
+      onSelect={() => {}}
+    />
+  );
+
+  // Worded from each side's own counts. Seen from inside the group, Ada's other
+  // entry is a lone row — an outlier by construction. Seen from that lone row,
+  // her other entry is a group, which "outlier" would misdescribe.
+  assert.equal(html.split("also 1 outlier").length - 1, 1, "the group member is badged");
+  assert.equal(html.split("also 1 elsewhere").length - 1, 1, "and so is the lone row");
+  // Grace is in one entry only, and a badge on her would be a false alarm.
+  assert.equal(html.split("also ").length - 1, 2, "nobody else is badged");
+});
+
+test("a repeat pattern row states its title and its two dimensions", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[patternGroupEntry()]}
+      selectedKey={null}
+      expandedGroupKey={null}
+      onSelect={() => {}}
+    />
+  );
+  assert.match(html, /Repeatedly late/);
+  // Both numbers. "2 people" alone is how the header started disagreeing with
+  // the list: six mornings are hiding behind those two members.
+  assert.match(html, /2 people · 6 mornings/);
+});
+
+test("the same person in two entries produces two distinct row keys", () => {
+  // A collision would make selecting the outlier select the group member: the
+  // page holds one string as its selection, and these two rows are the same
+  // employee on the same headline day.
+  const group = patternGroupEntry();
+  const loner = outlierPersonEntry();
+  const member = group.members[0];
+  assert.equal(member.employee, loner.employee, "the fixture is the collision case");
+  assert.equal(member.attendance_date, loner.attendance_date, "…on one headline day");
+
+  assert.notEqual(entryKey(loner), entryKey({ kind: "person", ...member }));
+});
+
+test("the header states people and rows", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 40, rows: 12 }}
+      {...viewProps()}
+    />
+  );
+  // Not "40 people with something open": before nesting, the header counted
+  // employees while the list showed one row per person-day, so the two numbers
+  // described different things and disagreed on screen.
+  assert.match(html, /40 people · 12 rows/);
+});
+
+test("a flag card is dated by its own flag, not by the person's headline day", () => {
+  // A pattern member spans dates; dating every card by person.attendance_date
+  // would label three different mornings as the same day.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: spanPersonEntry() })} />
+  );
+  assert.match(html, /3 Aug/);
+  assert.match(html, /4 Aug/);
+  assert.match(html, /5 Aug/);
+});
+
+test("a multi-day entry's header names the range, not just the headline day", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: spanPersonEntry() })} />
+  );
+  assert.ok(
+    panelHeader(html).includes(
+      `${formatFlagContextDate("2026-08-03")} – ${formatFlagContextDate("2026-08-05")}`
+    ),
+    "the span is stated end to end, so the last two mornings are not mislabelled"
+  );
+});
+
+test("a single-day entry's header still names one day", () => {
+  const header = panelHeader(
+    renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry: outlierPersonEntry() })} />)
+  );
+  assert.ok(header.includes(formatFlagContextDate(DATE)));
+  assert.ok(!header.includes(" – "), "no range where there is only one day");
+});
+
+// REPEAT_PATTERN carries attendance_date: null — it spans dates by definition —
+// and date-fns throws on an invalid date. Handing that null to a date formatter
+// is a crash on the first pattern group HR opens, not a cosmetic wobble, so
+// this pins that the header degrades to the span instead.
+test("a repeat pattern group's panel header survives its null date", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: patternGroupEntry() })} />
+  );
+  assert.match(html, /Repeatedly late/);
+  assert.match(html, /2 people · 6 mornings/);
+});
+
+test("a dated group's panel header still names its day and its size", () => {
+  const group: QueueEntry = {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
+    branch: "Phnom Penh HQ",
+    flag_code: null,
+    attendance_date: DATE,
+    rank: 150,
+    tier: "act",
+    members: [
+      makePerson({
+        employee: "HR-EMP-00002",
+        name: "Grace Hopper",
+        rank: 150,
+        tier: "act",
+        flags: [makeFlag({ identity: "id-a", code: "UNNOTIFIED_ABSENCE", rank: 150, tier: "act" })],
+      }),
+      makePerson({
+        employee: "HR-EMP-00003",
+        name: "Katherine Johnson",
+        rank: 150,
+        tier: "act",
+        flags: [makeFlag({ identity: "id-b", code: "UNNOTIFIED_ABSENCE", rank: 150, tier: "act" })],
+      }),
+    ],
+  };
+
+  const header = panelHeader(renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry: group })} />));
+  assert.ok(header.includes(formatFlagContextDate(DATE)), "a group with one day still names it");
+  assert.match(header, /2 people/);
+  assert.doesNotMatch(header, /mornings/, "only a repeat pattern counts occurrences");
 });

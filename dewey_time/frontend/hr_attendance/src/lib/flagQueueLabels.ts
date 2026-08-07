@@ -66,6 +66,19 @@ function formatDayMonth(attendanceDate: string): string {
 }
 
 /**
+ * "3 Aug" — which day one flag card is deciding.
+ *
+ * An entry can now hold several days of the same code, so each card has to name
+ * its own: without it a pattern member is three identical "Late by 12 min"
+ * cards and HR cannot tell which morning they are excusing. Short form because
+ * it sits beside the flag label, under a header that already spells the range
+ * out in full (`formatFlagContextDate`).
+ */
+export function flagDayLabel(attendanceDate: string): string {
+  return formatDayMonth(attendanceDate);
+}
+
+/**
  * "Phnom Penh HQ had no device data on 3 Aug" — the BRANCH_NO_DEVICE_DATA
  * group header. `branch` is expected pre-resolved to a display name
  * (`Employee.branch`, run through `formatBranchLabel` for the `BRANCH-`

@@ -24,7 +24,9 @@ import {
   appliedDecisionLabel,
   applyToRemainingLabel,
   decisionStateLabel,
+  flagDayLabel,
   groupHeadline,
+  groupSubline,
   outcomeActionLabel,
   outcomeLabel,
   personHeadline,
@@ -116,7 +118,12 @@ function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson })
       <header>
         <div className="text-base font-semibold tracking-tight">{person.employee_name}</div>
         <div className="mt-1 text-sm text-muted-foreground">
-          {formatFlagContextDate(person.attendance_date)}
+          {/* An entry can span dates now — a pattern member holds several
+              mornings. Naming only the headline day would label the others
+              wrongly, so a multi-day entry states its range end to end. */}
+          {person.dates.length > 1
+            ? `${formatFlagContextDate(person.dates[0])} – ${formatFlagContextDate(person.dates[person.dates.length - 1])}`
+            : formatFlagContextDate(person.attendance_date)}
           {person.employee_branch ? (
             <span className="text-muted-foreground/80"> · {person.employee_branch}</span>
           ) : null}
@@ -150,7 +157,9 @@ function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson })
         <FlagCard
           key={flag.flag_identity}
           flag={flag}
-          dateKey={person.attendance_date}
+          // The flag's own day, not the person's headline one: an entry can
+          // hold four mornings, and the card is a decision about exactly one.
+          dateKey={flag.attendance_date}
           open={props.activeIdentity === flag.flag_identity}
           draft={props.draft}
           onDraftChange={props.onDraftChange}
@@ -186,8 +195,16 @@ function FlagCard(props: {
     <section className="space-y-2.5 rounded-xl border border-border/60 bg-card px-3 py-3">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-foreground">
-            {formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))}
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+            <span className="text-sm font-medium text-foreground">
+              {formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))}
+            </span>
+            {/* Which day this card decides. Three "Late by 12 min" cards in one
+                entry are three different mornings, and the header above only
+                gives the range. */}
+            <span className="text-[11px] text-muted-foreground tabular-nums">
+              {flagDayLabel(props.dateKey)}
+            </span>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {flagSummary(flag.flag_code)}
@@ -339,12 +356,23 @@ function GroupDecision(props: FlagDecisionPanelProps & { entry: GroupEntry }) {
     <div className="space-y-4 pb-4">
       <header>
         <div className="text-base font-semibold tracking-tight">{groupHeadline(entry)}</div>
+        {/* REPEAT_PATTERN spans dates by definition and carries no single one,
+            so the day is conditional — handing that null to a date formatter
+            throws, which would take the whole panel down the first time HR
+            opened a pattern group. The size line is never conditional, and it
+            is groupSubline's job so the panel and the list row agree. */}
         <div className="mt-1 text-sm text-muted-foreground">
-          {formatFlagContextDate(entry.attendance_date)}
-          <span className="text-muted-foreground/80 tabular-nums">
-            {" "}
-            · {entry.members.length} people
-          </span>
+          {entry.attendance_date ? (
+            <>
+              {formatFlagContextDate(entry.attendance_date)}
+              <span className="text-muted-foreground/80 tabular-nums">
+                {" "}
+                · {groupSubline(entry)}
+              </span>
+            </>
+          ) : (
+            <span className="tabular-nums">{groupSubline(entry)}</span>
+          )}
         </div>
       </header>
 
