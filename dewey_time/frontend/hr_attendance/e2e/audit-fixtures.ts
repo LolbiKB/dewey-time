@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 
+import type { CalendarEmployee, CalendarPayload, Day, Flag } from "@/types/calendar";
+
 import { stubFrappe } from "./fixtures";
 
 /**
@@ -64,22 +66,22 @@ function flag(date: string, code: string) {
     is_provisional: false,
     rule_version: "v0",
     evidence: { audit_scenario: true },
-  };
+  } satisfies Flag;
 }
 
 /** Day shells for a range; `mutate` customises each day (index = 0-based). */
 function buildAuditDays(
   start: string,
   end: string,
-  mutate: (day: Record<string, unknown>, index: number, date: string) => void
+  mutate: (day: Day, index: number, date: string) => void
 ) {
-  const days: Record<string, unknown>[] = [];
+  const days: Day[] = [];
   const cur = new Date(`${start}T00:00:00Z`);
   const last = new Date(`${end}T00:00:00Z`);
   let i = 0;
   while (cur <= last) {
     const date = ymd(cur);
-    const day: Record<string, unknown> = {
+    const day: Day = {
       date,
       shift: {
         shift_assigned: true,
@@ -100,7 +102,7 @@ function buildAuditDays(
       last_out: `${date} 17:05:00`,
       gross_minutes: 534,
       observed_lunch: null,
-      flags: [] as unknown[],
+      flags: [],
     };
     mutate(day, i, date);
     days.push(day);
@@ -110,7 +112,14 @@ function buildAuditDays(
   return days;
 }
 
-function calendarPayload(url: URL, mutate: Parameters<typeof buildAuditDays>[2], extra: Record<string, unknown> = {}) {
+// `extra` is a Partial of the payload rather than an open bag: the scenarios
+// below reach in to override `device_sync` and `has_shift_assignment`, and
+// those overrides are exactly the kind of thing that drifts silently.
+function calendarPayload(
+  url: URL,
+  mutate: Parameters<typeof buildAuditDays>[2],
+  extra: Partial<CalendarPayload> = {}
+) {
   const start = url.searchParams.get("start_date") ?? "2026-06-01";
   const end = url.searchParams.get("end_date") ?? "2026-06-30";
   return {
@@ -124,14 +133,14 @@ function calendarPayload(url: URL, mutate: Parameters<typeof buildAuditDays>[2],
     schedule_max_date: "2026-12-31",
     has_shift_assignment: true,
     ...extra,
-  };
+  } satisfies CalendarPayload;
 }
 
 function crowdedEmployees() {
   const first = ["Srey", "Dara", "Sokha", "Chan", "Vanna", "Rith", "Maly", "Piseth", "Nita", "Kunthea"];
   const last = ["Nita", "Sok", "Chea", "Vong", "Kim", "Heng", "Lim", "Sao"];
   const types = ["Full-time", "Part-time Fixed", "Intern", "Part-time Flexible", ""];
-  const employees = [] as Record<string, unknown>[];
+  const employees: CalendarEmployee[] = [];
   for (let i = 0; i < 40; i += 1) {
     const name = `${first[i % first.length]} ${last[i % last.length]}`;
     employees.push({
@@ -149,7 +158,7 @@ function crowdedEmployees() {
       schedule_min_date: "2026-01-01",
       schedule_max_date: "2026-12-31",
       first_checkin_date: "2026-01-01",
-    });
+    } satisfies CalendarEmployee);
   }
   employees.push({
     id: "HR-EMP-ADMS",
@@ -166,7 +175,7 @@ function crowdedEmployees() {
     schedule_min_date: null,
     schedule_max_date: null,
     first_checkin_date: null,
-  });
+  } satisfies CalendarEmployee);
   employees.push({
     id: "DI-0999",
     label: "DI-0999 · Maria Alejandra Fernanda de los Angeles Rodriguez-Villanueva",
@@ -182,7 +191,7 @@ function crowdedEmployees() {
     schedule_min_date: "2026-01-01",
     schedule_max_date: "2026-12-31",
     first_checkin_date: "2026-01-01",
-  });
+  } satisfies CalendarEmployee);
   return employees;
 }
 
@@ -246,7 +255,7 @@ export async function stubAuditScenario(page: Page, scenario: AuditScenario): Pr
               schedule_min_date: null,
               schedule_max_date: null,
               first_checkin_date: "2026-01-01",
-            },
+            } satisfies CalendarEmployee,
           ],
           current_user_employee: "EMP-001",
         });

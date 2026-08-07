@@ -1,4 +1,8 @@
 import { test, expect } from "@playwright/test";
+
+import type { DecideFlagsResult } from "@/services/flags";
+import type { FlagOut, QueueEntry, QueuePayload, QueuePerson } from "@/types/flags";
+
 import { stubFrappe } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
@@ -17,9 +21,21 @@ test.beforeEach(async ({ page }) => {
 //
 // Every queue payload below is hand-built and must match `QueuePayload` in
 // src/types/flags.ts field for field — including the ones nothing here asserts
-// on. Nothing checks that for you: `tsconfig.json` includes only `src`, so
-// `tsc --noEmit` never sees this file, and Playwright transpiles without type
-// checking. A payload that has drifted does not fail as a type error, it fails
+// on. Two things enforce that, and BOTH are needed (issue #133):
+//
+//   1. `tsconfig.json` includes `e2e`, so `tsc --noEmit` sees this file at all.
+//      It used to include only `src`. Playwright transpiles without type
+//      checking, so nothing else ever would.
+//   2. Every literal below carries a `satisfies` clause naming its contract
+//      type. Without one, the payload's only consumer is
+//      `JSON.stringify(...)` — an `unknown`-shaped sink — so the literal is
+//      merely *inferred* and never *checked*, and step 1 alone catches nothing.
+//
+// `satisfies` rather than a `:` annotation on purpose: it checks the literal
+// against the type while keeping the narrow inferred shape, so the property
+// reads further down (`members[3].flags[0].flag_identity`) still resolve.
+//
+// A drifted payload does not fail as a type error without those two; it fails
 // as "the row never rendered" — which is exactly how the person fields
 // (`entry_key`, `dates`, `employee_image`, `also_count`, `also_outlier_count`)
 // and `FlagOut.attendance_date` came to be missing here while the whole unit
@@ -210,7 +226,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
-  };
+  } satisfies QueuePayload;
 
   await page.route("**/api/method/**", (route) => {
     const url = new URL(route.request().url());
@@ -280,7 +296,7 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
     tier: "review",
     decision_state: "undecided",
     decision: null,
-  };
+  } satisfies FlagOut;
   const decidedFlag = {
     ...undecidedFlag,
     decision_state: "matched",
@@ -293,12 +309,15 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
       decided_at: "2026-08-13 09:00:00",
       group_key: "grp-single-0001",
     },
-  };
+  } satisfies FlagOut;
 
   // `p:<employee>`, with no group prefix: a lone person row is exactly what
   // `flag_grouping._entries_for` stamps that way, and it is the key the page
-  // holds as its selection across the refetch this test is about.
-  function personEntry(flag: typeof undecidedFlag, undecidedCount: number) {
+  // holds as its selection across the refetch this test is about. The parameter
+  // is the contract type rather than `typeof undecidedFlag`: `satisfies` keeps
+  // each literal's narrow shape, so the undecided one's `decision: null` would
+  // otherwise reject the decided one.
+  function personEntry(flag: FlagOut, undecidedCount: number) {
     return {
       kind: "person",
       entry_key: "p:EMP-201",
@@ -316,9 +335,11 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
       // In one entry only, so no cross-reference badge.
       also_count: 0,
       also_outlier_count: 0,
-    };
+    } satisfies QueueEntry;
   }
 
+  // Everything a `QueuePayload` carries except the two keys that differ between
+  // the two responses below; those are checked where the halves are assembled.
   const basePayload = {
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
@@ -326,7 +347,7 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
-  };
+  } satisfies Omit<QueuePayload, "entries" | "counts">;
 
   // Stateful mock: the queue reads undecided on the first GET (page load) and
   // decided on every GET after — the second call is the refetch the decide
@@ -344,16 +365,16 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
       // decided even though the row is still on screen.
       const payload =
         queueCalls === 1
-          ? {
+          ? ({
               ...basePayload,
               entries: [personEntry(undecidedFlag, 1)],
               counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 },
-            }
-          : {
+            } satisfies QueuePayload)
+          : ({
               ...basePayload,
               entries: [personEntry(decidedFlag, 0)],
               counts: { open: 0, needs_re_review: 0, decided: 1, people: 0, rows: 1 },
-            };
+            } satisfies QueuePayload);
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -366,7 +387,12 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          message: { ok: true, written: 1, group_key: "grp-single-0001", errors: [] },
+          message: {
+            ok: true,
+            written: 1,
+            group_key: "grp-single-0001",
+            errors: [],
+          } satisfies DecideFlagsResult,
         }),
       });
     }
@@ -447,7 +473,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
       tier: "routine",
       decision_state: "undecided",
       decision: null,
-    };
+    } satisfies FlagOut;
   }
 
   // `<group_key>|p:<employee>`, the form `flag_grouping._entries_for` stamps on a
@@ -469,7 +495,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
       // Each of these five is in this group and nowhere else.
       also_count: 0,
       also_outlier_count: 0,
-    };
+    } satisfies QueuePerson;
   }
 
   const members = names.map((name, i) => member(i, name));
@@ -502,7 +528,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
-  };
+  } satisfies QueuePayload;
 
   await page.route("**/api/method/**", (route) => {
     const url = new URL(route.request().url());
@@ -532,7 +558,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
               flag_identity,
               error: "Flag no longer matches recorded evidence",
             })),
-          },
+          } satisfies DecideFlagsResult,
         }),
       });
     }
@@ -608,7 +634,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
       decided_at: "2026-08-13 09:00:00",
       group_key: "grp-single-0001",
     },
-  };
+  } satisfies FlagOut;
 
   const settledPerson = {
     kind: "person",
@@ -627,7 +653,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     undecided_count: 0,
     also_count: 0,
     also_outlier_count: 0,
-  };
+  } satisfies QueueEntry;
 
   const basePayload = {
     // `people` is 0 in both views: it counts employees with something still
@@ -641,6 +667,8 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
+  } satisfies Omit<QueuePayload, "entries" | "counts"> & {
+    counts: Omit<QueuePayload["counts"], "rows">;
   };
 
   const queueParams: (string | null)[] = [];
@@ -665,7 +693,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
             ...basePayload,
             entries,
             counts: { ...basePayload.counts, rows: entries.length },
-          },
+          } satisfies QueuePayload,
         }),
       });
     }
@@ -675,7 +703,12 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          message: { ok: true, written: 1, group_key: "grp-single-0002", errors: [] },
+          message: {
+            ok: true,
+            written: 1,
+            group_key: "grp-single-0002",
+            errors: [],
+          } satisfies DecideFlagsResult,
         }),
       });
     }
