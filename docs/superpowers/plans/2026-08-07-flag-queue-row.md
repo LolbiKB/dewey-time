@@ -22,17 +22,23 @@
    A test in `src/lib/` must end `.test.ts` (NOT `.tsx`); a test in `src/ui/` must end `.test.tsx`. Wrong directory or wrong extension → it silently never runs and the suite still exits 0.
 5. **There is no DOM in the unit suite.** Every `.test.tsx` renders with `renderToStaticMarkup` — no jsdom, no `happy-dom`, no `react-dom/test-utils`, no `createRoot`. React state transitions therefore **cannot** be driven from a unit test. That is why the avatar's phase logic lives in a pure `src/lib` module: it is the only way the spec's `load` / `error` / delay assertions can actually fail. Do not add a DOM library to make a component test interactive.
 6. **Baseline: `npm run test:web` reports `ℹ tests N` where N is whatever the nesting plan left it at.** Every frontend task must paste the `ℹ tests` / `ℹ pass` / `ℹ fail` lines. The count only ever goes up. An exit code alone is not evidence.
-7. **`node_modules` is absent from a fresh worktree** and `npm install` returns **401** (private `@lolbikb/dewey-ui`). Before any frontend command, from `dewey_time/frontend/hr_attendance/`:
+7. **Run every command from the repo root, and use `python3.13` for Python tests.**
+   The Bash working directory persists between calls, so a `cd` into the frontend leaks
+   into the next command — `cd "$(git rev-parse --show-toplevel)"` first when unsure.
+   This machine's `python3` is **3.9.6**, which cannot import `test_flag_queue_api` at all
+   (it pulls in `hooks.py`, whose `str | None` annotations are evaluated at runtime).
+   `python3.13` is installed and is the only interpreter these commands work under.
+8. **`node_modules` is absent from a fresh worktree** and `npm install` returns **401** (private `@lolbikb/dewey-ui`). Before any frontend command, from `dewey_time/frontend/hr_attendance/`:
    `ln -sfn /Users/lolbikb/projects/dewey-time/dewey_time/frontend/hr_attendance/node_modules node_modules`
    Never run `npm install` or `npm ci`.
-8. **`EmployeeAvatar`'s props do not change.** It is the only `<img>` in the SPA and has four existing callers — `EmployeePicker`, `ScheduleEmployeePicker`, `ClearEmployeeScheduleDialog`, `schedule-coverage/EmployeeLine`. They inherit the improvement without edits, and any prop change turns a one-file task into a five-file one.
-9. **No skeleton, no shimmer.** A pulsing grey circle replaces meaningful content (whose initials these are) with a meaningless placeholder. The initials are a *better* loading state than a skeleton because they already answer "who is this row about".
-10. **Severity never rests on hue alone** — every strip cell encodes its tier in height as well as colour.
-11. **Strip cells are not interactive.** At 6px they are not a click target; the row is. Cells are `aria-hidden`; the strip carries one summarising `aria-label`.
-12. **Exact geometry, verbatim from the spec:** strip capped at **14 cells**; cells **6px** wide with **2.5px** gaps; avatar **40px**; ring **2px**; ring delay and fade both **~150ms**.
-13. **Reduced motion changes both animations rather than removing them.** The fade becomes instant (`motion-reduce:transition-none`) — still an improvement, because the photo appears whole. The ring **stops rotating but stays on screen** as a static dimmed ring; dropping it would hand reduced-motion users back exactly the loading-versus-no-photo ambiguity it exists to remove.
-14. **Built assets are the deployed artifact.** Frappe Cloud never builds this SPA. The final task rebuilds and commits `dewey_time/public/hr_attendance/**` and `dewey_time/www/hr-{attendance,schedule}.html`.
-15. **`dewey_time/public/hr_attendance/assets/index-*.css` must be ≥ 150,000 bytes after a build.** Tailwind's `@source` is a filesystem glob; with no `node_modules` it silently emits ~90 kB and exits 0. `scripts/copy-html-entry.mjs` enforces the floor — do not weaken it.
+9. **`EmployeeAvatar`'s props do not change.** It is the only `<img>` in the SPA and has four existing callers — `EmployeePicker`, `ScheduleEmployeePicker`, `ClearEmployeeScheduleDialog`, `schedule-coverage/EmployeeLine`. They inherit the improvement without edits, and any prop change turns a one-file task into a five-file one.
+10. **No skeleton, no shimmer.** A pulsing grey circle replaces meaningful content (whose initials these are) with a meaningless placeholder. The initials are a *better* loading state than a skeleton because they already answer "who is this row about".
+11. **Severity never rests on hue alone** — every strip cell encodes its tier in height as well as colour.
+12. **Strip cells are not interactive.** At 6px they are not a click target; the row is. Cells are `aria-hidden`; the strip carries one summarising `aria-label`.
+13. **Exact geometry, verbatim from the spec:** strip capped at **14 cells**; cells **6px** wide with **2.5px** gaps; avatar **40px**; ring **2px**; ring delay and fade both **~150ms**.
+14. **Reduced motion changes both animations rather than removing them.** The fade becomes instant (`motion-reduce:transition-none`) — still an improvement, because the photo appears whole. The ring **stops rotating but stays on screen** as a static dimmed ring; dropping it would hand reduced-motion users back exactly the loading-versus-no-photo ambiguity it exists to remove.
+15. **Built assets are the deployed artifact.** Frappe Cloud never builds this SPA. The final task rebuilds and commits `dewey_time/public/hr_attendance/**` and `dewey_time/www/hr-{attendance,schedule}.html`.
+16. **`dewey_time/public/hr_attendance/assets/index-*.css` must be ≥ 150,000 bytes after a build.** Tailwind's `@source` is a filesystem glob; with no `node_modules` it silently emits ~90 kB and exits 0. `scripts/copy-html-entry.mjs` enforces the floor — do not weaken it.
 
 ---
 
@@ -210,8 +216,8 @@ class TestOutageDatesInPayload(unittest.TestCase):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping.EmployeeImageTests -v
-python3 -m unittest dewey_time.tests.test_flag_queue_api -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping.EmployeeImageTests -v
+python3.13 -m unittest dewey_time.tests.test_flag_queue_api -v
 ```
 Expected: FAIL — `KeyError: 'employee_image'`, and `KeyError: 'outage_dates'`.
 
@@ -294,7 +300,7 @@ and add to the returned dict, beside `alerts`:
 - [ ] **Step 6: Run the tests to verify they pass**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping dewey_time.tests.test_flag_queue_api -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping dewey_time.tests.test_flag_queue_api -v
 ```
 Expected: PASS both. Report the `Ran N tests` lines.
 
@@ -501,7 +507,7 @@ three become obvious.
 
 **Interfaces:**
 - Consumes: Task 2's `avatarLoading` module.
-- Produces: nothing new. `EmployeeAvatarProps` is byte-identical (Global Constraint 8).
+- Produces: nothing new. `EmployeeAvatarProps` is byte-identical (Global Constraint 9).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1047,11 +1053,11 @@ function dateKeyOf(value: Date): string {
 }
 
 /**
- * ` ` rather than ":" or "|": a branch name is free text and either of
+ * `\u0000` rather than ":" or "|": a branch name is free text and either of
  * those could appear in one, which would silently grey the wrong person's day.
  */
 export function outageKey(branch: string | null, date: string): string {
-  return `${branch ?? ""} ${date}`;
+  return `${branch ?? ""}\u0000${date}`;
 }
 
 export function buildOutageSet(rows: { branch: string; date: string }[]): ReadonlySet<string> {
@@ -1639,7 +1645,7 @@ or Tailwind did not scan it — stop and report it.
 - [ ] **Step 3: Run both suites once more on the built tree**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping dewey_time.tests.test_flag_queue_api -v 2>&1 | tail -5
+python3.13 -m unittest dewey_time.tests.test_flag_grouping dewey_time.tests.test_flag_queue_api -v 2>&1 | tail -5
 cd dewey_time/frontend/hr_attendance && npm run test:web 2>&1 | tail -8
 ```
 Expected: both green. Paste both counts.
@@ -1664,7 +1670,7 @@ git commit -m "build(hr-attendance): rebuild assets for the flag queue row"
 | Group headers carry overlapping member avatars | 5 |
 | Avatar loading — the fix (initials underneath, photo fades in) | 2, 3 |
 | Avatar loading — the loading ring (delay, reduced motion, `role="status"`) | 2, 3 |
-| Avatar loading — scope (one file, props unchanged) | Global Constraint 8 |
+| Avatar loading — scope (one file, props unchanged) | Global Constraint 9 |
 | The strip — three states | 4 |
 | The strip — ranges longer than 14 days, "+N earlier" | 4, 5 |
 | The strip — a group member's strip shows all their flags | 4 (`buildEmployeeFlagIndex`) |
@@ -1672,7 +1678,7 @@ git commit -m "build(hr-attendance): rebuild assets for the flag queue row"
 | The API stays unbounded and window-free | Global Constraint 3 |
 | Counts | Nesting plan, Task 6 |
 | Accessibility | 4, 5 (`stripAriaLabel`, `aria-hidden` cells, height + colour) |
-| What this does not change | Global Constraints 1–3, 8 |
+| What this does not change | Global Constraints 1–3, 9 |
 | Testing (14 bullets) | 2 (5 avatar-transition bullets), 3 (4 avatar-markup bullets), 4 (5 strip bullets), 5 (strip aria, stable column, group member) |
 
 **Type consistency.** `AvatarPhase`, `showsRing`, `StripCell`, `Strip`, `buildStrip`,

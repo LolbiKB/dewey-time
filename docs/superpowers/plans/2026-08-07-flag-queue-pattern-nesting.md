@@ -20,19 +20,28 @@
    `tsx --test src/lib/*.test.ts src/brand/*.test.ts src/brand/*.test.tsx src/pwa/*.test.ts src/pwa/*.test.tsx src/components/*.test.tsx src/components/ui/*.test.tsx src/ui/*.test.tsx`.
    A test in `src/lib/` must end `.test.ts` (NOT `.tsx`); a test in `src/ui/` must end `.test.tsx`. A file placed anywhere else, or with the wrong extension, silently never runs and the suite still exits 0.
 4. **Baseline: `npm run test:web` reports `ℹ tests 487` on `main`.** Every task that touches the frontend must paste the `ℹ tests N` / `ℹ pass N` / `ℹ fail N` lines in its report. The count only ever goes up. An exit code alone is not evidence.
-5. **`node_modules` is absent from a fresh worktree** and `npm install` returns **401** (the private `@lolbikb/dewey-ui` package needs a `NODE_AUTH_TOKEN`). Before running any frontend command, from `dewey_time/frontend/hr_attendance/`:
+5. **Run every command from the repo root, and use `python3.13` for Python tests.**
+   The Bash working directory persists between calls, so a `cd` into the frontend leaks
+   into the next command — `cd "$(git rev-parse --show-toplevel)"` first when unsure.
+   This machine's `python3` is **3.9.6**, which cannot import `test_flag_queue_api` at all
+   (it pulls in `hooks.py`, whose `str | None` annotations are evaluated at runtime).
+   `python3.13` is installed and is the only interpreter these commands work under.
+   Baseline: `python3.13 -m unittest dewey_time.tests.test_flag_grouping
+   dewey_time.tests.test_flag_queue_api dewey_time.tests.test_flag_triage
+   dewey_time.tests.test_flag_identity` reports **`Ran 114 tests` / `OK`**.
+6. **`node_modules` is absent from a fresh worktree** and `npm install` returns **401** (the private `@lolbikb/dewey-ui` package needs a `NODE_AUTH_TOKEN`). Before running any frontend command, from `dewey_time/frontend/hr_attendance/`:
    `ln -sfn /Users/lolbikb/projects/dewey-time/dewey_time/frontend/hr_attendance/node_modules node_modules`
    Never run `npm install` or `npm ci`.
-6. **Do not change `severity`, either `FLAG_SEVERITY` dict, or `flag_triage.py`.** Triage ranks are read, never computed here. `tier_for_rank` and `triage_rank` are imported as-is.
-7. **No change to `Attendance Flag Decision`, `flag_identity`, or `evidence_fingerprint`.** This is a grouping change in a pure module plus its read API.
-8. **`groupPayload` and `remainingIdentities` in `src/lib/flagDecisionState.ts` are not modified.** They operate per entry over the members handed to them, which is already correct under the per-flag invariant.
-9. **No HR-facing copy may name a device serial.** No device↔branch registry exists; branch is the finest granularity the data supports.
-10. **Exact threshold values, verbatim from the spec:**
+7. **Do not change `severity`, either `FLAG_SEVERITY` dict, or `flag_triage.py`.** Triage ranks are read, never computed here. `tier_for_rank` and `triage_rank` are imported as-is.
+8. **No change to `Attendance Flag Decision`, `flag_identity`, or `evidence_fingerprint`.** This is a grouping change in a pure module plus its read API.
+9. **`groupPayload` and `remainingIdentities` in `src/lib/flagDecisionState.ts` are not modified.** They operate per entry over the members handed to them, which is already correct under the per-flag invariant.
+10. **No HR-facing copy may name a device serial.** No device↔branch registry exists; branch is the finest granularity the data supports.
+11. **Exact threshold values, verbatim from the spec:**
     - a pattern needs the same code from the same person on **3 or more distinct dates**;
     - a group of any type needs **2 or more members** — a would-be group of one degrades to a person row;
     - **only `routine` and `review` tier flags** form patterns; an `act`-tier flag never does, however many days it spans.
-11. **Built assets are the deployed artifact.** Frappe Cloud never builds this SPA. The final task rebuilds and commits `dewey_time/public/hr_attendance/**` and `dewey_time/www/hr-{attendance,schedule}.html`. A merged PR that changes `frontend/` but not `public/hr_attendance/` ships nothing.
-12. **`dewey_time/public/hr_attendance/assets/index-*.css` must be ≥ 150,000 bytes after a build.** Tailwind's `@source` is a filesystem glob; with no `node_modules` it silently emits ~90 kB and exits 0. `scripts/copy-html-entry.mjs` enforces the floor — do not weaken it.
+12. **Built assets are the deployed artifact.** Frappe Cloud never builds this SPA. The final task rebuilds and commits `dewey_time/public/hr_attendance/**` and `dewey_time/www/hr-{attendance,schedule}.html`. A merged PR that changes `frontend/` but not `public/hr_attendance/` ships nothing.
+13. **`dewey_time/public/hr_attendance/assets/index-*.css` must be ≥ 150,000 bytes after a build.** Tailwind's `@source` is a filesystem glob; with no `node_modules` it silently emits ~90 kB and exits 0. `scripts/copy-html-entry.mjs` enforces the floor — do not weaken it.
 
 ---
 
@@ -178,7 +187,7 @@ class FlagDateTests(unittest.TestCase):
 
 Run from the repo root:
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping.FlagDateTests -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping.FlagDateTests -v
 ```
 Expected: FAIL — `KeyError: 'attendance_date'` on the two FlagOut assertions and
 `KeyError: 'dates'` on `test_person_dates_lists_every_date_its_flags_fall_on`.
@@ -312,7 +321,7 @@ construction, so it is a better stable tie-break than the employee/date pair it 
 - [ ] **Step 7: Run the new tests and the whole module**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping -v
 ```
 Expected: PASS — **except** `test_person_dates_lists_every_date_its_flags_fall_on`, which
 asserts one entry spanning two days and still gets two entries, because entries are still
@@ -437,7 +446,7 @@ class PatternDetectionTests(unittest.TestCase):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping.PatternDetectionTests -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping.PatternDetectionTests -v
 ```
 Expected: FAIL at import — `ImportError: cannot import name '_pattern_codes'`.
 
@@ -537,7 +546,7 @@ def _day_tier(person_flags: list[dict]) -> str:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping -v
 ```
 Expected: PASS for `PatternDetectionTests`; the Task 1 `expectedFailure` still reports as
 an expected failure; everything else passes. Report the `Ran N tests` line.
@@ -731,7 +740,7 @@ def _iter_all_people(entries):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping.RepeatPatternTests -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping.RepeatPatternTests -v
 ```
 Expected: FAIL — no `REPEAT_PATTERN` entries exist yet, so `_entries_by_kind(result, "REPEAT_PATTERN")` is `[]` and `groups[0]` raises `IndexError`; `test_a_person_with_flags_on_five_days_appears_once` finds 5 appearances.
 
@@ -945,7 +954,7 @@ Delete the `@unittest.expectedFailure` decorator and its comment from
 - [ ] **Step 7: Run the whole module**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping -v
 ```
 Expected: PASS, with no expected-failures remaining. If any of the 27 pre-existing tests
 now fails, **do not edit it to match** — report it as a finding with the test name and its
@@ -1036,7 +1045,7 @@ class CrossReferenceTests(unittest.TestCase):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping.CrossReferenceTests -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping.CrossReferenceTests -v
 ```
 Expected: FAIL — `also_count` is 0 everywhere (Task 1 stamps zeros), and
 `counts["rows"]` raises `KeyError`.
@@ -1108,7 +1117,7 @@ and replace the tail (currently `:112-126`) with:
 - [ ] **Step 5: Run the whole module**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping -v
 ```
 Expected: PASS. Report the `Ran N tests` line.
 
@@ -1225,7 +1234,7 @@ class TestTierFilterCounts(unittest.TestCase):
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_queue_api -v
+python3.13 -m unittest dewey_time.tests.test_flag_queue_api -v
 ```
 Expected: FAIL — under the act filter the stubbed counts pass straight through, so
 `counts["people"]` is 2 where 1 is asserted and `counts["rows"]` is 2 where 1 is asserted.
@@ -1272,8 +1281,8 @@ In `_build_queue_payload`, replace the tail:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_queue_api -v
-python3 -m unittest dewey_time.tests.test_flag_grouping -v
+python3.13 -m unittest dewey_time.tests.test_flag_queue_api -v
+python3.13 -m unittest dewey_time.tests.test_flag_grouping -v
 ```
 Expected: PASS for both. Report both `Ran N tests` lines.
 
@@ -1917,7 +1926,7 @@ empty grep means the build did not pick up the source — stop and report it.
 - [ ] **Step 3: Run both suites once more on the built tree**
 
 ```bash
-python3 -m unittest dewey_time.tests.test_flag_grouping dewey_time.tests.test_flag_queue_api -v 2>&1 | tail -5
+python3.13 -m unittest dewey_time.tests.test_flag_grouping dewey_time.tests.test_flag_queue_api -v 2>&1 | tail -5
 cd dewey_time/frontend/hr_attendance && npm run test:web 2>&1 | tail -8
 ```
 Expected: both green. Paste both counts.
@@ -1945,7 +1954,7 @@ to a task:
 | What forms a pattern (rules 1–4) | 2 |
 | The safeguard (cross-reference badge) | 4, 6, 7 |
 | Counts ("40 people · 12 rows") | 4, 5, 6, 7 |
-| What this does not change (`groupPayload`, decision record, triage ranks, `BRANCH_NO_DEVICE_DATA` precedence) | Global Constraints 6–8; Task 3's precedence order |
+| What this does not change (`groupPayload`, decision record, triage ranks, `BRANCH_NO_DEVICE_DATA` precedence) | Global Constraints 7–9; Task 3's precedence order |
 | Testing (8 bullets) | 3 (bullets 1, 2, 4, 5), 4 (3, 6, 7), 3+4 (8 — covered by "every flag appears in exactly one entry" plus `groupPayload` being unchanged) |
 
 **Type consistency.** `entry_key`, `dates`, `also_count`, `also_outlier_count`,
