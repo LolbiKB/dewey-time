@@ -658,5 +658,35 @@ export class DeviceService {
     )
   }
 
+  /**
+   * The write ledger for one key — the working behind its ladder status.
+   *
+   * Fetched only while a key is on screen: it is per-KEY, so the page pays for
+   * one trail rather than the whole fleet's history.
+   */
+  static async getKeyWrites(key: string): Promise<OptionWriteRecord[]> {
+    const json = await this.fetchApi<{ success: boolean; data: OptionWriteRecord[] }>(
+      `/admin/device-options/${encodeURIComponent(key)}/writes`,
+      {},
+      'Failed to load the write history'
+    )
+    return json.data ?? []
+  }
+
+  /**
+   * Remove a per-device override, so the terminal follows the fleet standard again.
+   *
+   * Setting the override back to the fleet value is NOT an undo — the row
+   * survives and keeps pinning that terminal, so a later change to the standard
+   * skips it silently.
+   */
+  static async clearDeviceOption(sn: string, key: string): Promise<void> {
+    await this.fetchApi<{ success: boolean }>(
+      `/admin/devices/${encodeURIComponent(sn)}/options/${encodeURIComponent(key)}`,
+      { method: 'DELETE' },
+      'Failed to clear the device value'
+    )
+  }
+
 }
 
