@@ -444,16 +444,29 @@ function buildLateStartTimeline(
 ): FlagTimelineSpec {
   // Rule 11: spans/marks come from the day's real punches, not evidence.first_in.
   const sorted = sortCheckinsByTime(day.checkins, parseDateTimeLocal);
-  const arrivalMin = sorted[0]
+  let arrivalMin = sorted[0]
     ? minutesFromDateTime(sorted[0].time)
     : minutesFromDateTime(evidence.first_in);
-  const nextMin = sorted[1] ? minutesFromDateTime(sorted[1].time) : null;
+  let nextMin = sorted[1] ? minutesFromDateTime(sorted[1].time) : null;
 
   const band = day.shift ? toMinuteRange(computeExpectedWindowPct(day.shift)) : null;
-  const shiftStartMin = band?.startMin ?? minutesFromDateTime(evidence.shift_start);
+  let shiftStartMin = band?.startMin ?? minutesFromDateTime(evidence.shift_start);
   // The threshold line must match the headline's "past cutoff" number exactly
   // (voice rule 2), so both are read from the same frozen evidence field.
-  const thresholdMin = minutesFromDateTime(evidence.late_threshold);
+  let thresholdMin = minutesFromDateTime(evidence.late_threshold);
+
+  // Mirrors buildLeftEarlyTimeline's overnight rollover (:544-548): an
+  // overnight shift has no `band` (computeExpectedWindowPct returns null for
+  // end < start), so a post-midnight arrival decodes to a small minute-of-day
+  // value that reads as "before" a late-evening shift start (22:00 -> 1320)
+  // unless every anchor this timeline compares is rolled onto the same
+  // overnight frame first.
+  const overnight = isOvernightShift(day.shift);
+  const rawShiftStartMin = parseTimeToMinutes(day.shift?.start_time ?? null);
+  arrivalMin = normalizeOvernightAnchor(arrivalMin, rawShiftStartMin, overnight);
+  nextMin = normalizeOvernightAnchor(nextMin, rawShiftStartMin, overnight);
+  shiftStartMin = normalizeOvernightAnchor(shiftStartMin, rawShiftStartMin, overnight);
+  thresholdMin = normalizeOvernightAnchor(thresholdMin, rawShiftStartMin, overnight);
 
   const spans: TimelineSpan[] = [];
   if (shiftStartMin != null && arrivalMin != null && arrivalMin > shiftStartMin) {
@@ -619,14 +632,33 @@ function buildLateFromLunchTimeline(day: NarrativeDay, evidence: BoundaryEvidenc
   // re-run against the live punch list; evidence.lunch_out/lunch_in are only the
   // fallback for a caller that has not populated observedLunch.
   const observed = observedLunchMinuteRange(day.observedLunch);
-  const outMin = observed?.startMin ?? minutesFromDateTime(evidence.lunch_out);
-  const inMin = observed?.endMin ?? minutesFromDateTime(evidence.lunch_in);
+  let outMin = observed?.startMin ?? minutesFromDateTime(evidence.lunch_out);
+  let inMin = observed?.endMin ?? minutesFromDateTime(evidence.lunch_in);
 
   // Raw scheduled window, no grace — grace lives in `threshold` alone (rule 4),
   // so the "Scheduled" fact and this band never disagree with each other.
-  const lunch = day.shift ? toMinuteRange(computeLunchWindowPct(day.shift)) : null;
+  const rawLunch = day.shift ? toMinuteRange(computeLunchWindowPct(day.shift)) : null;
   const band = day.shift ? toMinuteRange(computeExpectedWindowPct(day.shift)) : null;
-  const thresholdMin = minutesFromDateTime(evidence.return_threshold);
+  let thresholdMin = minutesFromDateTime(evidence.return_threshold);
+
+  // Mirrors buildLeftEarlyTimeline's overnight rollover (:544-548) and
+  // narrateMissingTime's lunch-window rollover (:742-751): unlike
+  // computeExpectedWindowPct, computeLunchWindowPct has no notion of the
+  // overnight shift the lunch belongs to, so a lunch scheduled on the far
+  // side of midnight (e.g. 00:00-00:30 for a 22:00 shift start) decodes to a
+  // raw minute-of-day pair that reads as "before" the shift instead of after
+  // it. Roll every anchor this timeline compares onto the same frame.
+  const overnight = isOvernightShift(day.shift);
+  const shiftStartMin = parseTimeToMinutes(day.shift?.start_time ?? null);
+  outMin = normalizeOvernightAnchor(outMin, shiftStartMin, overnight);
+  inMin = normalizeOvernightAnchor(inMin, shiftStartMin, overnight);
+  thresholdMin = normalizeOvernightAnchor(thresholdMin, shiftStartMin, overnight);
+  const lunch = rawLunch
+    ? {
+        startMin: normalizeOvernightAnchor(rawLunch.startMin, shiftStartMin, overnight) ?? rawLunch.startMin,
+        endMin: normalizeOvernightAnchor(rawLunch.endMin, shiftStartMin, overnight) ?? rawLunch.endMin,
+      }
+    : null;
 
   const spans: TimelineSpan[] = [];
   if (outMin != null && inMin != null && inMin > outMin) {

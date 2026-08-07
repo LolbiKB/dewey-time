@@ -581,6 +581,53 @@ test("flagNarrative: LEFT_EARLY normalises an overnight shift's end and threshol
   assert.deepEqual(timeline.window, { startMin: 1375, endMin: 1440 });
 });
 
+// buildLateStartTimeline's own overnight counterpart to the LEFT_EARLY test
+// above: computeExpectedWindowPct returns null for this shift (end < start),
+// so shiftStartMin falls back to evidence.shift_start's raw minute-of-day
+// value, and a post-midnight arrival (00:15 -> 15) reads as "before" a
+// 22:00 shift start (1320) unless every anchor is rolled onto the same frame.
+test("flagNarrative: LATE_START normalises an overnight shift's arrival and threshold past midnight so the gap span survives the rollover", () => {
+  const overnightShift: ShiftContext = {
+    shift_assigned: true,
+    start_time: "22:00",
+    end_time: "06:00",
+    lunch_start: null,
+    lunch_end: null,
+  };
+  const late = boundaryFlag("LATE_START", {
+    first_in: "2026-08-07T00:15:00",
+    shift_start: "2026-08-06T22:00:00",
+    late_threshold: "2026-08-07T00:10:00",
+    effective_start_grace_minutes: 130,
+  });
+  const d = day({
+    shift: overnightShift,
+    checkins: [checkin("2026-08-07T00:15:00"), checkin("2026-08-07T01:00:00")],
+  });
+
+  const timeline = flagNarrative(late, d, DATE_KEY).timeline!;
+
+  // computeExpectedWindowPct returns null for this shift (end < start), so
+  // band stays null — same as the LEFT_EARLY overnight fix above.
+  assert.equal(timeline.band, null);
+  // arrivalMin (00:15 -> raw 15) and nextMin (01:00 -> raw 60) both roll onto
+  // the shift-start frame: 15 + 1440 = 1455, 60 + 1440 = 1500. shiftStartMin
+  // (22:00 -> 1320) is already on that frame and is left untouched.
+  // late_threshold (00:10 -> raw 10) rolls the same way: 10 + 1440 = 1450.
+  assert.deepEqual(timeline.spans, [
+    { startMin: 1320, endMin: 1455, tone: "gap" },
+    { startMin: 1455, endMin: 1500, tone: "worked" },
+  ]);
+  assert.deepEqual(timeline.marks, [{ atMin: 1455, tone: "alert", label: "Clocked in" }]);
+  assert.equal(timeline.threshold, 1450);
+  // Pre-fix, arrivalMin (15) read as "before" shiftStartMin (1320), so the
+  // gap span guard (`arrivalMin > shiftStartMin`) silently failed, dropping
+  // the whole gap span, and the window ballooned to {startMin: 0, endMin:
+  // 1365} — nearly the entire day — instead of the ~90 minutes around the
+  // boundary.
+  assert.deepEqual(timeline.window, { startMin: 1275, endMin: 1440 });
+});
+
 test("flagNarrative: LATE_FROM_LUNCH draws both the scheduled band and the observed overshoot", () => {
   const observedLunch: ObservedLunch = {
     lunch_out: "2026-08-03T12:05:00",
@@ -635,6 +682,55 @@ test("flagNarrative: LATE_FROM_LUNCH draws both the scheduled band and the obser
     { atMin: 803, tone: "alert", label: "Back" },
   ]);
   assert.deepEqual(timeline.window, { startMin: 675, endMin: 848 });
+});
+
+// buildLateFromLunchTimeline's own overnight counterpart to the LEFT_EARLY
+// test above: computeLunchWindowPct has no notion of the overnight shift the
+// lunch belongs to, so a lunch scheduled just after midnight (00:00-00:30 for
+// a 22:00 shift start) decodes to a raw minute-of-day pair that reads as
+// "before" the shift instead of after it, unless every anchor is rolled onto
+// the same frame.
+test("flagNarrative: LATE_FROM_LUNCH normalises an overnight shift's lunch window past midnight so the gap span survives the rollover", () => {
+  const overnightShift: ShiftContext = {
+    shift_assigned: true,
+    start_time: "22:00",
+    end_time: "06:00",
+    lunch_start: "00:00",
+    lunch_end: "00:30",
+  };
+  const lateLunch = boundaryFlag("LATE_FROM_LUNCH", {
+    lunch_out: "2026-08-07T00:05:00",
+    lunch_in: "2026-08-07T00:55:00",
+    lunch_start: "2026-08-07T00:00:00",
+    lunch_end: "2026-08-07T00:30:00",
+    return_threshold: "2026-08-07T00:40:00",
+  });
+  const d = day({
+    shift: overnightShift,
+    checkins: [checkin("2026-08-06T22:05:00"), checkin("2026-08-07T00:05:00"), checkin("2026-08-07T00:55:00")],
+  });
+
+  const timeline = flagNarrative(lateLunch, d, DATE_KEY).timeline!;
+
+  // computeExpectedWindowPct returns null for this shift (end < start), so
+  // band stays null — same as the LEFT_EARLY overnight fix above.
+  assert.equal(timeline.band, null);
+  // The scheduled lunch window (00:00-00:30 -> raw 0/30) and the actual
+  // out/in pair (00:05/00:55 -> raw 5/55) all roll onto the shift-start frame:
+  // 0 + 1440 = 1440, 30 + 1440 = 1470, 5 + 1440 = 1445, 55 + 1440 = 1495.
+  assert.deepEqual(timeline.lunch, { startMin: 1440, endMin: 1470 });
+  assert.deepEqual(timeline.spans, [{ startMin: 1445, endMin: 1495, tone: "gap" }]);
+  assert.deepEqual(timeline.marks, [
+    { atMin: 1445, tone: "normal", label: "Left for lunch" },
+    { atMin: 1495, tone: "alert", label: "Back" },
+  ]);
+  // return_threshold (00:40 -> raw 40) rolls the same way: 40 + 1440 = 1480.
+  assert.equal(timeline.threshold, 1480);
+  // Pre-fix, the raw minute-of-day pair (5, 55) read as "before" the shift's
+  // 22:00 start and the whole scheduled/actual comparison was on the wrong
+  // frame from the raw evidence pair, producing a window nowhere near the
+  // real boundary.
+  assert.deepEqual(timeline.window, { startMin: 1395, endMin: 1440 });
 });
 
 // Finding 2: emittedFallbackNarrative attaches EMPTY_EVIDENCE_NOTE when
