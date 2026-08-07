@@ -750,10 +750,21 @@ class TestTierFilterCounts(unittest.TestCase):
         self.assertEqual(payload["counts"]["open"], 2)
 
     def test_without_a_filter_counts_are_passed_through_untouched(self):
-        with _harness(_roster(2), queue=self._queue()):
+        # Sentinel values a recount over these two entries could never produce
+        # (two entries recount to people<=2, rows==2) — deliberately
+        # inconsistent with the entries on purpose, so this test can only pass
+        # via pass-through and not by coincidence. Do NOT "fix" these to be
+        # consistent with the entries; that would silently reopen the gap this
+        # test exists to close (a recompute-always bug would then read back
+        # the same numbers and this test would stay green either way).
+        queue = {
+            **self._queue(),
+            "counts": {"open": 2, "needs_re_review": 0, "decided": 0, "people": 7, "rows": 9},
+        }
+        with _harness(_roster(2), queue=queue):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-        self.assertEqual(payload["counts"]["people"], 2)
-        self.assertEqual(payload["counts"]["rows"], 2)
+        self.assertEqual(payload["counts"]["people"], 7)
+        self.assertEqual(payload["counts"]["rows"], 9)
 
     def test_group_members_count_toward_the_filtered_people(self):
         # A person inside a pattern group is still a person with something open.
@@ -792,6 +803,32 @@ class TestTierFilterCounts(unittest.TestCase):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
         self.assertEqual(payload["counts"]["people"], 0)
         self.assertEqual(payload["counts"]["rows"], 1)
+
+    def test_an_employee_in_both_a_group_and_a_lone_entry_counts_once(self):
+        # flag_grouping._stamp_cross_references exists because one employee can
+        # occupy two entries at once, and a group's tier is tier_for_rank(max
+        # member rank) — so both entries can land in the same tier. `people`
+        # means distinct EMPLOYEES, not distinct appearances: A must count once
+        # even though A shows up in both the group and the lone entry.
+        queue = {
+            **_empty_queue(),
+            "entries": [
+                {
+                    "kind": "group",
+                    "group_key": "REPEAT_PATTERN:LATE_START",
+                    "tier": "routine",
+                    "members": [{"employee": "A", "undecided_count": 1}],
+                },
+                {"kind": "person", "entry_key": "p:A", "employee": "A", "tier": "routine",
+                 "undecided_count": 1},
+                {"kind": "person", "entry_key": "p:B", "employee": "B", "tier": "routine",
+                 "undecided_count": 1},
+            ],
+            "counts": {"open": 3, "needs_re_review": 0, "decided": 0, "people": 2, "rows": 3},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="routine")
+        self.assertEqual(payload["counts"]["people"], 2)
 
     def test_a_filtered_read_does_not_corrupt_counts_for_a_later_unfiltered_read(self):
         # build_queue is stubbed to a single fixed return value for the life of this
