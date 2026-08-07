@@ -1,14 +1,40 @@
 import type { ApplyResult } from '@/services/device-service'
 
 /**
- * What to tell the operator after a fleet-wide action.
+ * What to tell the operator after an action on this page.
  *
- * Both sentences below are about NOT OVERCLAIMING, which is why they are here
+ * Every sentence below is about NOT OVERCLAIMING, which is why they live here
  * rather than inline in the page: nothing this page does reaches a terminal at
- * the moment you click it. A command is queued; the terminal collects it on
- * its next poll. "Applied" and "refreshed" are both past-tense claims about
- * hardware that has not been asked yet.
+ * the moment you click it. A desired value is stored and no command is sent at
+ * all; a write is queued and the terminal collects it on its next poll.
+ * "Applied", "refreshed" and "set" are all past-tense claims about hardware
+ * that has not been asked yet.
  */
+
+/**
+ * A value was STORED. Nothing was sent anywhere.
+ *
+ * These three sit beside the two below rather than inline in the page because
+ * they make the same class of claim and carry the same risk: a stored desired
+ * value changes a row in the bridge's table and touches no terminal. An
+ * operator who reads "saved" as "set" believes the fleet changed while every
+ * terminal still reports what it did before — so each sentence says where the
+ * value has got to and what is still needed to move it.
+ */
+export function standardStoredNote(key: string, value: string): string {
+  return `Saved ${value} as the fleet standard for ${key}. Nothing is written to a terminal until you try it or apply it.`
+}
+
+export function overrideStoredNote(key: string, terminal: string, value: string): string {
+  return `Saved ${value} for ${terminal}, overriding the fleet standard for ${key}. Nothing is written to a terminal until you apply it.`
+}
+
+export function overrideClearedNote(key: string, terminal: string): string {
+  // Clearing an override changes what WOULD be pushed, never what the terminal
+  // currently reports — the row that was pinning it is gone; the value on the
+  // box is not.
+  return `${terminal} follows the fleet standard for ${key} again. Its current value is unchanged until you apply.`
+}
 
 /**
  * The result of an apply, stated in the SERVER's numbers.

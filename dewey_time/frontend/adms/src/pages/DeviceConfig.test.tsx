@@ -27,7 +27,21 @@ function render(seed?: (qc: QueryClient) => void, path = '/device-config') {
   )
 }
 
-/** Mirrors `useDevices({ limit: 200 })`'s cache entry. */
+/**
+ * The header description, read from the one element that renders it.
+ *
+ * `PageHeader` puts it in the <p> immediately after its <h1>. Matching the
+ * bare text anywhere in the document would let the rail — which renders every
+ * key and summary on the page — satisfy an assertion about the header.
+ */
+function headerDescription(html: string): string | null {
+  return html.match(/<h1[^>]*>Fleet Configuration<\/h1><p[^>]*>([^<]*)<\/p>/)?.[1] ?? null
+}
+
+/**
+ * Mirrors `useDevices({ limit: 200 })`'s cache entry — the filter shape comes
+ * from `useDevices` in `src/hooks/use-core-data.ts`, which builds this key.
+ */
 function seedDevices(qc: QueryClient) {
   qc.setQueryData(
     queryKeys.devices.list({ page: 1, limit: 200, sortBy: 'created_at', sortOrder: 'desc' }),
@@ -58,37 +72,44 @@ function seedFleet(qc: QueryClient) {
 describe('DeviceConfig', () => {
   test('keeps its frame while loading instead of replacing the page with a spinner', () => {
     const html = render()
-    expect(html).toContain('Fleet Configuration')
+    // The header and its action survive the load — both are rendered only by
+    // this page's frame — and the panes fill with skeletons rather than the
+    // page being swapped for a centred spinner.
+    expect(html).toMatch(/<h1[^>]*>Fleet Configuration<\/h1>/)
     expect(html).toContain('Re-read all terminals')
+    expect(html).toContain('data-slot="skeleton"')
   })
 
   test('says Loading rather than stating a fleet size it does not know yet', () => {
     // "0 terminals · 0 keys reported" is a FALSE statement about the fleet,
-    // where "Loading…" is merely an absent one.
-    const html = render()
-    expect(html).toContain('Loading')
-    expect(html).not.toContain('0 terminals')
+    // where "Loading…" is merely an absent one. Read from the header element
+    // itself, so nothing elsewhere on the page can satisfy this.
+    expect(headerDescription(render())).toBe('Loading…')
   })
 
   test('describes the fleet from what actually loaded', () => {
-    const html = render(seedFleet)
-    expect(html).toContain('2 terminals · 1 keys reported')
+    expect(headerDescription(render(seedFleet))).toBe('2 terminals · 1 keys reported')
   })
 
-  test('opens on the first curated setting, with the terminals that reported it', () => {
+  test('opens on the first curated setting, in the DETAIL pane', () => {
     const html = render(seedFleet)
-    expect(html).toContain('Speaker volume')
-    // The detail pane for VOLUME, not just the rail entry: both terminals'
-    // reported values are in its table.
+    // "Speaker volume" alone proves nothing — the rail renders it for every
+    // selection. These three come only from the detail pane: its heading
+    // level, the fleet-standard field, and the per-terminal table.
+    expect(html).toMatch(/<h2[^>]*>Speaker volume<\/h2>/)
+    expect(html).toContain('Fleet standard')
     expect(html).toContain('Front door')
     expect(html).toContain('Workshop')
   })
 
   test('the URL decides the pane, so a reload or a shared link keeps the place', () => {
     const html = render(seedFleet, '/device-config?view=all')
-    expect(html).toMatch(/read-only unless you configure one/i)
-    // The reference view lists every reported key with its fleet summary.
-    expect(html).toContain('VOLUME')
-    expect(html).toContain('2 values')
+    // Anchored to something ONLY AllKeysReference emits. The obvious markers —
+    // the key, its summary, "read-only unless you configure one" — are all
+    // rendered by the rail on every selection, so they would pass with this
+    // route completely broken.
+    expect(html).toContain('Across the fleet')
+    // …and the detail pane it replaced is gone.
+    expect(html).not.toContain('Fleet standard')
   })
 })

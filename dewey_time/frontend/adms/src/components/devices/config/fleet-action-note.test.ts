@@ -1,8 +1,49 @@
 import { describe, test, expect } from 'vitest'
-import { applyNote, rereadNote } from './fleet-action-note'
+import {
+  applyNote,
+  overrideClearedNote,
+  overrideStoredNote,
+  rereadNote,
+  standardStoredNote,
+} from './fleet-action-note'
 
 /** The page labels a terminal by name; the tests pin that it is used. */
 const label = (sn: string) => (sn === 'A' ? 'Front door' : sn)
+
+describe('storing a desired value', () => {
+  test('a saved fleet standard says nothing has been written to a terminal', () => {
+    // The claim being refused: "saved" read as "set". The bridge stored a row;
+    // every terminal still reports exactly what it reported before.
+    expect(standardStoredNote('VOLUME', '50')).toBe(
+      'Saved 50 as the fleet standard for VOLUME. Nothing is written to a terminal until you try it or apply it.'
+    )
+  })
+
+  test('a saved override names the terminal it pins and still promises no write', () => {
+    expect(overrideStoredNote('VOLUME', 'Front door', '20')).toBe(
+      'Saved 20 for Front door, overriding the fleet standard for VOLUME. Nothing is written to a terminal until you apply it.'
+    )
+  })
+
+  test('clearing an override does not claim the terminal changed', () => {
+    // It changes what WOULD be pushed; the value on the box is untouched.
+    expect(overrideClearedNote('VOLUME', 'Front door')).toBe(
+      'Front door follows the fleet standard for VOLUME again. Its current value is unchanged until you apply.'
+    )
+  })
+
+  test('none of the three borrows the vocabulary of a write that happened', () => {
+    for (const note of [
+      standardStoredNote('VOLUME', '50'),
+      overrideStoredNote('VOLUME', 'Front door', '20'),
+      overrideClearedNote('VOLUME', 'Front door'),
+    ]) {
+      expect(note).not.toMatch(/\bapplied\b|\bqueued\b/i)
+      // Each says what is still needed to move the value onto the hardware.
+      expect(note).toMatch(/until you/)
+    }
+  })
+})
 
 describe('applyNote', () => {
   test('counts what the SERVER queued, not what the page previewed', () => {

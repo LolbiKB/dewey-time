@@ -29,7 +29,14 @@ import {
   settingListEntries,
   uncuratedDriftRows,
 } from '@/components/devices/config/setting-list-entries'
-import { applyNote, rereadNote } from '@/components/devices/config/fleet-action-note'
+import {
+  applyNote,
+  overrideClearedNote,
+  overrideStoredNote,
+  rereadNote,
+  standardStoredNote,
+} from '@/components/devices/config/fleet-action-note'
+import { splitSilentTerminals } from '@/components/devices/config/silent-terminals'
 
 /**
  * Fleet configuration — CONFIGURE FIRST, with drift kept first-class.
@@ -57,7 +64,7 @@ import { applyNote, rereadNote } from '@/components/devices/config/fleet-action-
 /** Matches the bridge's MAX_DEVICE_OPTIONS_PAGE. */
 const OPTIONS_PAGE_LIMIT = 500
 
-/** How many silent terminals to name before summarising the rest. */
+/** How many terminals to name in a banner before summarising the rest. */
 const MAX_NAMED_SILENT = 4
 
 export function DeviceConfig() {
@@ -205,9 +212,7 @@ export function DeviceConfig() {
     onMutate: clearBanners,
     onSuccess: (_data, vars) => {
       // Saving a value is not writing it. Nothing has been sent to a terminal.
-      setActionNote(
-        `Saved ${vars.value} as the fleet standard for ${vars.key}. Nothing is written to a terminal until you try it or apply it.`
-      )
+      setActionNote(standardStoredNote(vars.key, vars.value))
       invalidateFleet()
     },
     onError: (e: Error) => setActionError(e.message),
@@ -218,9 +223,7 @@ export function DeviceConfig() {
       DeviceService.setDeviceOption(sn, key, value),
     onMutate: clearBanners,
     onSuccess: (_data, vars) => {
-      setActionNote(
-        `Saved ${vars.value} for ${label(vars.sn)}, overriding the fleet standard for ${vars.key}. Nothing is written to a terminal until you apply it.`
-      )
+      setActionNote(overrideStoredNote(vars.key, label(vars.sn), vars.value))
       invalidateFleet()
     },
     onError: (e: Error) => setActionError(e.message),
@@ -231,9 +234,7 @@ export function DeviceConfig() {
       DeviceService.clearDeviceOption(sn, key),
     onMutate: clearBanners,
     onSuccess: (_data, vars) => {
-      setActionNote(
-        `${label(vars.sn)} follows the fleet standard for ${vars.key} again. Its current value is unchanged until you apply.`
-      )
+      setActionNote(overrideClearedNote(vars.key, label(vars.sn)))
       invalidateFleet()
     },
     onError: (e: Error) => setActionError(e.message),
@@ -275,20 +276,25 @@ export function DeviceConfig() {
   const rereadAll = async () => {
     setRereading(true)
     clearBanners()
-    const settled = await Promise.allSettled(
-      deviceSns.map((sn) => DeviceService.refreshDeviceOptions(sn))
-    )
-    const outcomes = deviceSns.map((deviceSn, i) => ({
-      deviceSn,
-      queued: settled[i].status === 'fulfilled',
-    }))
-    const note = rereadNote(outcomes, label)
-    if (outcomes.some((o) => !o.queued)) setActionError(note)
-    else setActionNote(note)
-    // An INFO is outstanding on real hardware, so watch for the answer — the
-    // values only change once each terminal has polled and replied.
-    if (outcomes.some((o) => o.queued)) watchQueuedWrite()
-    setRereading(false)
+    try {
+      const settled = await Promise.allSettled(
+        deviceSns.map((sn) => DeviceService.refreshDeviceOptions(sn))
+      )
+      const outcomes = deviceSns.map((deviceSn, i) => ({
+        deviceSn,
+        queued: settled[i].status === 'fulfilled',
+      }))
+      const note = rereadNote(outcomes, label)
+      if (outcomes.some((o) => !o.queued)) setActionError(note)
+      else setActionNote(note)
+      // An INFO is outstanding on real hardware, so watch for the answer — the
+      // values only change once each terminal has polled and replied.
+      if (outcomes.some((o) => o.queued)) watchQueuedWrite()
+    } finally {
+      // `allSettled` cannot reject, but a synchronous throw before it would
+      // otherwise strand the button disabled with no way back but a reload.
+      setRereading(false)
+    }
   }
 
   const pendingKey = canaryMutation.isPending
@@ -299,27 +305,83 @@ export function DeviceConfig() {
 
   const optionsError = optionQueries.find((q) => q.isError)?.error as Error | undefined
   const loadedNothing = optionQueries.every((q) => !q.data?.length)
+  const fleetUnreadable = (devicesQuery.isError || optionsError !== undefined) && loadedNothing
   const refetchAll = () => {
     void devicesQuery.refetch()
     for (const q of optionQueries) void q.refetch()
   }
 
+  const header = (
+    <PageHeader
+      title="Fleet Configuration"
+      // Never a fleet size the page does not have. While loading that is
+      // "Loading…"; when nothing could be loaded it is nothing at all, because
+      // "0 keys reported" would be a claim about terminals that were never
+      // successfully read. The card below says what actually happened.
+      description={
+        fleetUnreadable
+          ? undefined
+          : loading
+            ? 'Loading…'
+            : `${deviceSns.length} terminal${deviceSns.length === 1 ? '' : 's'} · ${matrix.rows.length} keys reported`
+      }
+      actions={
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void rereadAll()}
+          disabled={rereading || loading}
+        >
+          <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', rereading && 'animate-spin')} />
+          Re-read all terminals
+        </Button>
+      }
+    />
+  )
+
   // Nothing loaded AND something failed: an outage must not render as a fleet
   // that has reported nothing. That was the defect — an options fetch that
   // errored left the matrix empty and the page then stated "No terminal has
   // reported its configuration yet", which is a claim about the hardware.
-  if ((devicesQuery.isError || optionsError) && loadedNothing) {
+  //
+  // The frame stays: the header keeps the page inset and, more to the point,
+  // keeps "Re-read all terminals" reachable, so the card's own retry is not the
+  // operator's only way out.
+  if (fleetUnreadable) {
     return (
-      <QueryErrorCard
-        title="Could not load fleet configuration"
-        error={devicesQuery.error ?? optionsError}
-        onRetry={refetchAll}
-      />
+      <Page className="min-h-0">
+        {header}
+        <QueryErrorCard
+          title="Could not load fleet configuration"
+          error={devicesQuery.error ?? optionsError}
+          onRetry={refetchAll}
+        />
+      </Page>
     )
   }
 
-  const namedSilent = matrix.silentDevices.slice(0, MAX_NAMED_SILENT).map(label)
-  const extraSilent = matrix.silentDevices.length - namedSilent.length
+  /**
+   * A terminal missing from the comparison for two very different reasons.
+   *
+   * `matrix.silentDevices` cannot tell "reported nothing" from "we could not
+   * read it" — and with per-device queries the second is the ordinary partial
+   * failure. Naming them in one sentence would send an operator to check a
+   * healthy box's poll schedule for what is an outage on this side of the
+   * wire. See silent-terminals.ts.
+   */
+  const { silent, unreadable } = splitSilentTerminals(
+    matrix.silentDevices,
+    deviceSns.map((deviceSn, i) => ({
+      deviceSn,
+      failed: optionQueries[i]?.isError ?? false,
+      rowCount: optionQueries[i]?.data?.length ?? 0,
+    }))
+  )
+  const nameSome = (sns: string[]) => {
+    const named = sns.slice(0, MAX_NAMED_SILENT).map(label)
+    const extra = sns.length - named.length
+    return `${named.join(', ')}${extra > 0 ? ` and ${extra} more` : ''}`
+  }
   const keyLabel = selectedKey ? (curatedLabel(selectedKey) ?? selectedKey) : ''
   const keyHint = CURATED_SETTINGS.find((s) => s.key === selectedKey)?.hint ?? ''
 
@@ -379,6 +441,12 @@ export function DeviceConfig() {
           rows={driftRows}
           deviceSns={deviceSns}
           entries={entries}
+          // The UNION — silent and unreadable together — deliberately, not the
+          // split above. This prop only decides whether the "Off majority"
+          // column says "Not reported" or a deviation count, and a terminal
+          // whose read failed has no count that could be true: dropping it from
+          // this list would render "—", which claims it matches the majority
+          // everywhere. The banner above is what says WHY each one is missing.
           silentDevices={matrix.silentDevices}
           devices={devices}
           expanded={expandedTerminal}
@@ -408,27 +476,7 @@ export function DeviceConfig() {
     // regions, so a page-level warning can never scroll away from the findings
     // it qualifies.
     <Page className="min-h-0">
-      <PageHeader
-        title="Fleet Configuration"
-        // Never "0 terminals" while the fleet is still loading — an absent
-        // statement, not a false one.
-        description={
-          loading
-            ? 'Loading…'
-            : `${deviceSns.length} terminal${deviceSns.length === 1 ? '' : 's'} · ${matrix.rows.length} keys reported`
-        }
-        actions={
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void rereadAll()}
-            disabled={rereading || loading}
-          >
-            <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', rereading && 'animate-spin')} />
-            Re-read all terminals
-          </Button>
-        }
-      />
+      {header}
 
       {/* Rows are on screen but the latest fetch failed — say so rather than
           showing silently stale data as if it were current. */}
@@ -469,12 +517,31 @@ export function DeviceConfig() {
         </div>
       )}
 
-      {!loading && matrix.silentDevices.length > 0 && (
+      {/* Only terminals whose read SUCCEEDED and came back empty. This sentence
+          is a statement about the hardware, so it may only be made about a
+          terminal the page actually heard from. */}
+      {!loading && silent.length > 0 && (
         <div className={cn('rounded-lg border p-3 text-xs', signalAlert.attention)}>
-          {matrix.silentDevices.length} of {deviceSns.length} terminals have not reported yet (
-          {namedSilent.join(', ')}
-          {extraSilent > 0 ? ` and ${extraSilent} more` : ''}), so they are not compared. A terminal
-          reports on approval, when a watched setting changes, and at least twice a day.
+          {silent.length} of {deviceSns.length} terminals have not reported yet ({nameSome(silent)}),
+          so they are not compared. A terminal reports on approval, when a watched setting changes,
+          and at least twice a day.
+        </div>
+      )}
+
+      {/* The other reason a terminal is missing from the comparison, kept
+          separate on purpose: this one is a fact about THIS PAGE, and the
+          terminal may well have reported. */}
+      {!loading && unreadable.length > 0 && (
+        <div className={cn('flex gap-2 rounded-lg border p-3 text-xs', signalAlert.danger)}>
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            Could not load the configuration of {unreadable.length} terminal
+            {unreadable.length === 1 ? '' : 's'} ({nameSome(unreadable)}), so{' '}
+            {unreadable.length === 1 ? 'it is' : 'they are'} not compared here. That is this page
+            failing to read {unreadable.length === 1 ? 'it' : 'them'}, not{' '}
+            {unreadable.length === 1 ? 'a terminal' : 'the terminals'} failing to report — retry
+            before drawing any conclusion about {unreadable.length === 1 ? 'it' : 'them'}.
+          </span>
         </div>
       )}
 
