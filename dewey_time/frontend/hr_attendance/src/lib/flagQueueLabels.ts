@@ -304,61 +304,97 @@ function plural(count: number, one: string, many: string): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }
 
-export function outageBandHeadline(branchCount: number, peopleCount: number): string {
-  const branches = plural(branchCount, "branch", "branches");
-  return `${branches} had no device data · ${plural(peopleCount, "person", "people")}`;
+/**
+ * @param outageBranchCount EVERY branch in the outage — never a filtered or
+ *   still-checked subset. This sentence states what happened; it must not move
+ *   when the user unchecks a box, or the page reports "1 branch had no device
+ *   data" when thirteen did.
+ * @param affectedPeopleCount everyone the outage touched. Deliberately NOT the
+ *   count the excuse button shows: that one is `coveredEmployeeCount`, which is
+ *   smaller. "affected" is what makes the two numbers legible side by side.
+ */
+export function outageBandHeadline(
+  outageBranchCount: number,
+  affectedPeopleCount: number,
+): string {
+  const branches = plural(outageBranchCount, "branch", "branches");
+  return `${branches} had no device data · ${plural(affectedPeopleCount, "person", "people")} affected`;
 }
 
 export function outageBandSubline(dates: string[], flagCount: number): string {
-  return `${dateSpanLabel(dates)} · ${plural(flagCount, "flag", "flags")} · ${OUTAGE_NOT_A_JUDGMENT}`;
+  // dateSpanLabel returns "" for an empty array, which would leave a dangling
+  // " · " at the head of the line. personSubline has a dedicated test for this
+  // same failure; the guard is one line.
+  const span = dateSpanLabel(dates);
+  const head = span ? `${span} · ` : "";
+  return `${head}${plural(flagCount, "flag", "flags")} · ${OUTAGE_NOT_A_JUDGMENT}`;
 }
 
 export function outageBranchDays(dayCount: number): string {
   return `${plural(dayCount, "day", "days")} with no sync row`;
 }
 
-export function outageBranchSummary(peopleCount: number, flagCount: number): string {
-  return `${plural(peopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+export function outageBranchSummary(affectedPeopleCount: number, flagCount: number): string {
+  return `${plural(affectedPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
 }
 
-export function outageReviewLabel(branchCount: number): string {
-  return `Review ${branchCount}`;
+/** @param outageBranchCount every branch, not the checked subset — "Review 13"
+ *  must not become "Review 4" as boxes are unchecked. */
+export function outageReviewLabel(outageBranchCount: number): string {
+  return `Review ${plural(outageBranchCount, "branch", "branches")}`;
 }
 
 /**
- * Zero is a real state here: uncheck every branch and the button must not read
- * "Excuse 0 people · 0 flags", which looks like a live action that does
- * nothing. The button is disabled in that state; this is the label it wears.
+ * The band's write action.
+ *
+ * Three states, not two. Zero-with-nothing-selected and zero-with-nothing-left
+ * are different facts and must not share words: "Nothing LEFT to excuse" over an
+ * empty selection reads as "this outage has already been handled", when the user
+ * has merely unchecked everything to start again. "Left" is a completion word.
+ *
+ * @param coveredPeopleCount MUST be `outageWrite(...).coveredEmployeeCount` —
+ *   Global Constraint 4. Never `branchCount`, never a raw member count.
+ * @param flagCount MUST be `outageWrite(...).identities.length`.
+ * @param selectedBranchCount how many branches are still checked.
  */
-export function outageExcuseLabel(peopleCount: number, flagCount: number): string {
-  if (peopleCount === 0 || flagCount === 0) return "Nothing left to excuse";
-  return `Excuse ${plural(peopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+export function outageExcuseLabel(
+  coveredPeopleCount: number,
+  flagCount: number,
+  selectedBranchCount: number,
+): string {
+  if (selectedBranchCount === 0) return "Select a branch to excuse";
+  if (flagCount === 0) return "Nothing left to excuse";
+  return `Excuse ${plural(coveredPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
 }
 
 /**
  * Replaces `queueHeaderDescription` on this page.
  *
- * "389 people · 147 rows" counted the outage members among the people waiting
- * on HR, which is the specific lie the band exists to end: 256 of those 389
- * are waiting on a machine, and no amount of HR attention moves them.
+ * "389 people · 147 rows" counted the outage members among the people waiting on
+ * HR, which is the specific lie the band exists to end: 256 of those 389 are
+ * waiting on a machine, and no amount of HR attention moves them.
+ *
+ * `rows` survives the rewrite. It was added deliberately in 20c016fc and fixed
+ * for tier filters in 38fbea19, and `queueHeaderDescription`'s own docstring
+ * explains why people-only counting misleads above a list that can hold one row
+ * for several people. Dropping it here would silently undo both commits.
  */
-export function queueSplitDescription(queuePeople: number, outagePeople: number): string {
-  if (queuePeople === 0 && outagePeople === 0) return "Nothing needs a decision";
-  const head = queuePeople === 0 ? "Nothing needs a decision" : `${queuePeople} need a decision`;
+export function queueSplitDescription(
+  queuePeople: number,
+  queueRows: number,
+  outagePeople: number,
+): string {
+  const head =
+    queuePeople === 0
+      ? "Nothing needs a decision"
+      : `${plural(queuePeople, "person needs", "people need")} a decision · ${plural(queueRows, "row", "rows")}`;
   if (outagePeople === 0) return head;
-  return `${head} · ${outagePeople} waiting on a device fault`;
+  return `${head} · ${outagePeople.toLocaleString("en-US")} waiting on a device fault`;
 }
 
-/**
- * Toolbar and panel control labels.
- *
- * Here rather than inline in the components for the reason this module's own
- * docstring gives: the three queue components "hold no copy of their own", so
- * the queue's wording can be reviewed in one file rather than three. Control
- * labels are the easiest ones to leak — they feel like markup — which is
- * exactly why they are the ones that drift.
- */
-export const TIER_FILTER_ALL_LABEL = "All consequences";
+/** A filter's no-filter option. "All consequences" reads as an inclusion
+ *  criterion — "only flags that carry a consequence" — which is the opposite. */
+export const TIER_FILTER_ALL_LABEL = "Any consequence";
 
 export const DECIDED_TOGGLE_LABEL = "Decided";
 
@@ -371,7 +407,7 @@ export const DECIDE_ONE_LABEL = "decide";
 export const DECIDING_PREFIX = "Deciding";
 
 export function narrowRangeLabel(days: number): string {
-  return `Last ${days} days`;
+  return `Last ${plural(days, "day", "days")}`;
 }
 
 /**

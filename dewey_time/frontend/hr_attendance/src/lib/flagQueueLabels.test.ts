@@ -11,6 +11,7 @@ import {
   DECIDING_PREFIX,
   DECISION_STATE_LABELS,
   decisionStateLabel,
+  DEVICE_HEALTH_LABEL,
   deviceAlertHeadline,
   earlierMarkerLabel,
   groupHeadline,
@@ -22,9 +23,13 @@ import {
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   OUTAGE_CEILING_NOTE,
+  OUTAGE_NOT_A_JUDGMENT,
   outageBandHeadline,
   outageBandSubline,
+  outageBranchDays,
+  outageBranchSummary,
   outageExcuseLabel,
+  outageReviewLabel,
   OUTCOME_ACTION_LABELS,
   OUTCOME_LABELS,
   OUTCOME_OPTIONS,
@@ -809,12 +814,19 @@ test("a person's sub-line dates by the entry's days, and stays empty when there 
 
 test("the outage band headline names branches and people, never a device", () => {
   const headline = outageBandHeadline(13, 256);
-  assert.equal(headline, "13 branches had no device data · 256 people");
+  assert.equal(headline, "13 branches had no device data · 256 people affected");
   assert.ok(!/serial|device [A-Z]{2}-/i.test(headline));
 });
 
 test("a single branch and a single person read in the singular", () => {
-  assert.equal(outageBandHeadline(1, 1), "1 branch had no device data · 1 person");
+  assert.equal(outageBandHeadline(1, 1), "1 branch had no device data · 1 person affected");
+});
+
+test("the headline says AFFECTED, so it can differ from what the button excuses", () => {
+  // The button reads coveredEmployeeCount, which is smaller. Without "affected"
+  // an HR reader sees 256 then 157 and concludes the button is broken.
+  assert.match(outageBandHeadline(13, 256), /256 people affected$/);
+  assert.equal(outageExcuseLabel(157, 2287, 13), "Excuse 157 people · 2,287 flags");
 });
 
 test("the band subline carries the range, the flag count, and the disclaimer", () => {
@@ -826,12 +838,14 @@ test("the band subline carries the range, the flag count, and the disclaimer", (
 });
 
 test("the excuse label states both dimensions of the write", () => {
-  assert.equal(outageExcuseLabel(157, 2287), "Excuse 157 people · 2,287 flags");
-  assert.equal(outageExcuseLabel(1, 1), "Excuse 1 person · 1 flag");
+  assert.equal(outageExcuseLabel(1, 1, 1), "Excuse 1 person · 1 flag");
 });
 
-test("an excuse label with nothing to write says so rather than offering zero", () => {
-  assert.equal(outageExcuseLabel(0, 0), "Nothing left to excuse");
+test("nothing SELECTED and nothing LEFT are different sentences", () => {
+  // "Left" is a completion word. Saying it over an empty selection tells the
+  // user the outage is handled when they have merely unchecked everything.
+  assert.equal(outageExcuseLabel(0, 0, 0), "Select a branch to excuse");
+  assert.equal(outageExcuseLabel(0, 0, 3), "Nothing left to excuse");
 });
 
 test("the ceiling note refuses to promise device granularity", () => {
@@ -841,31 +855,62 @@ test("the ceiling note refuses to promise device granularity", () => {
   );
 });
 
-test("the header splits waiting-on-you from waiting-on-a-device", () => {
+test("the header splits waiting-on-you from waiting-on-a-device, and keeps rows", () => {
+  // `rows` was added in 20c016fc and fixed for tier filters in 38fbea19,
+  // because one row can stand for several people. Dropping it here would
+  // silently undo both.
   assert.equal(
-    queueSplitDescription(134, 256),
-    "134 need a decision · 256 waiting on a device fault",
+    queueSplitDescription(134, 92, 256),
+    "134 people need a decision · 92 rows · 256 waiting on a device fault",
   );
 });
 
 test("the header says nothing about device faults when there are none", () => {
-  assert.equal(queueSplitDescription(37, 0), "37 need a decision");
+  assert.equal(queueSplitDescription(37, 21, 0), "37 people need a decision · 21 rows");
+});
+
+test("one person left does not read as \"1 need a decision\"", () => {
+  // The most common end state of a session, in the page's primary header.
+  assert.equal(queueSplitDescription(1, 1, 0), "1 person needs a decision · 1 row");
 });
 
 test("a queue with nothing waiting still reads as a sentence", () => {
-  assert.equal(queueSplitDescription(0, 0), "Nothing needs a decision");
+  assert.equal(queueSplitDescription(0, 0, 0), "Nothing needs a decision");
+  assert.equal(
+    queueSplitDescription(0, 0, 256),
+    "Nothing needs a decision · 256 waiting on a device fault",
+  );
+});
+
+test("four-figure counts are grouped everywhere, not only in the band", () => {
+  assert.match(queueSplitDescription(1234, 900, 0), /1,234 people need/);
 });
 
 test("the narrow-range levers name the window they set", () => {
   assert.equal(narrowRangeLabel(7), "Last 7 days");
   assert.equal(narrowRangeLabel(3), "Last 3 days");
+  assert.equal(narrowRangeLabel(1), "Last 1 day");
 });
 
 test("control labels live here, not inline in the components", () => {
   // Global Constraint 2. These are the ones that leak, because they read as
   // markup rather than as copy.
-  assert.equal(TIER_FILTER_ALL_LABEL, "All consequences");
+  assert.equal(TIER_FILTER_ALL_LABEL, "Any consequence");
   assert.equal(DECIDED_TOGGLE_LABEL, "Decided");
   assert.equal(DECIDE_ONE_LABEL, "decide");
   assert.equal(DECIDING_PREFIX, "Deciding");
+  assert.equal(DEVICE_HEALTH_LABEL, "Device health");
+});
+
+test("every branch-row string is pinned, not just the ones a component happens to use", () => {
+  assert.equal(outageBranchDays(10), "10 days with no sync row");
+  assert.equal(outageBranchDays(1), "1 day with no sync row");
+  assert.equal(outageBranchSummary(99, 990), "99 people · 990 flags");
+  assert.equal(outageReviewLabel(13), "Review 13 branches");
+  assert.equal(outageReviewLabel(1), "Review 1 branch");
+  assert.equal(OUTAGE_NOT_A_JUDGMENT, "the machines didn't record — nobody is being judged here");
+});
+
+test("an empty date span leaves no dangling separator", () => {
+  assert.match(outageBandSubline([], 5), /^5 flags · /);
 });
