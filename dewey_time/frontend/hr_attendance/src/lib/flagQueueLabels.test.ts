@@ -6,6 +6,9 @@ import {
   appliedDecisionLabel,
   branchNoDeviceDataHeader,
   crossReferenceLabel,
+  DECIDE_ONE_LABEL,
+  DECIDED_TOGGLE_LABEL,
+  DECIDING_PREFIX,
   DECISION_STATE_LABELS,
   decisionStateLabel,
   deviceAlertHeadline,
@@ -13,10 +16,15 @@ import {
   groupHeadline,
   groupSubline,
   hiddenMemberLabel,
+  narrowRangeLabel,
   openCountAria,
   openCountLabel,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
+  OUTAGE_CEILING_NOTE,
+  outageBandHeadline,
+  outageBandSubline,
+  outageExcuseLabel,
   OUTCOME_ACTION_LABELS,
   OUTCOME_LABELS,
   OUTCOME_OPTIONS,
@@ -27,11 +35,13 @@ import {
   personSubline,
   priorDecisionLabel,
   queueHeaderDescription,
+  queueSplitDescription,
   REASON_LABELS,
   REASON_OPTIONS,
   reasonLabel,
   routineCodeHeader,
   stripAriaLabel,
+  TIER_FILTER_ALL_LABEL,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import type { Strip } from "@/lib/flagStrip";
@@ -795,4 +805,67 @@ test("a person's sub-line dates by the entry's days, and stays empty when there 
   });
   assert.equal(personSubline(oneDayTwoFlags), "2 late starts · worst 31 min · Thu 6 Aug");
   assert.equal(personSubline(person({ dates: ["2026-08-06"], flags: [] })), "");
+});
+
+test("the outage band headline names branches and people, never a device", () => {
+  const headline = outageBandHeadline(13, 256);
+  assert.equal(headline, "13 branches had no device data · 256 people");
+  assert.ok(!/serial|device [A-Z]{2}-/i.test(headline));
+});
+
+test("a single branch and a single person read in the singular", () => {
+  assert.equal(outageBandHeadline(1, 1), "1 branch had no device data · 1 person");
+});
+
+test("the band subline carries the range, the flag count, and the disclaimer", () => {
+  const subline = outageBandSubline(["2026-07-30", "2026-08-08"], 3277);
+  assert.match(subline, /30 Jul/);
+  assert.match(subline, /8 Aug/);
+  assert.match(subline, /3,277 flags/);
+  assert.match(subline, /nobody is being judged here/);
+});
+
+test("the excuse label states both dimensions of the write", () => {
+  assert.equal(outageExcuseLabel(157, 2287), "Excuse 157 people · 2,287 flags");
+  assert.equal(outageExcuseLabel(1, 1), "Excuse 1 person · 1 flag");
+});
+
+test("an excuse label with nothing to write says so rather than offering zero", () => {
+  assert.equal(outageExcuseLabel(0, 0), "Nothing left to excuse");
+});
+
+test("the ceiling note refuses to promise device granularity", () => {
+  assert.equal(
+    OUTAGE_CEILING_NOTE,
+    "Branch and days only — nothing here maps a device to a branch.",
+  );
+});
+
+test("the header splits waiting-on-you from waiting-on-a-device", () => {
+  assert.equal(
+    queueSplitDescription(134, 256),
+    "134 need a decision · 256 waiting on a device fault",
+  );
+});
+
+test("the header says nothing about device faults when there are none", () => {
+  assert.equal(queueSplitDescription(37, 0), "37 need a decision");
+});
+
+test("a queue with nothing waiting still reads as a sentence", () => {
+  assert.equal(queueSplitDescription(0, 0), "Nothing needs a decision");
+});
+
+test("the narrow-range levers name the window they set", () => {
+  assert.equal(narrowRangeLabel(7), "Last 7 days");
+  assert.equal(narrowRangeLabel(3), "Last 3 days");
+});
+
+test("control labels live here, not inline in the components", () => {
+  // Global Constraint 2. These are the ones that leak, because they read as
+  // markup rather than as copy.
+  assert.equal(TIER_FILTER_ALL_LABEL, "All consequences");
+  assert.equal(DECIDED_TOGGLE_LABEL, "Decided");
+  assert.equal(DECIDE_ONE_LABEL, "decide");
+  assert.equal(DECIDING_PREFIX, "Deciding");
 });

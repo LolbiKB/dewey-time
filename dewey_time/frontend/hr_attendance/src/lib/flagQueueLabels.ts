@@ -282,6 +282,99 @@ export function queueHeaderDescription(counts: QueuePayload["counts"]): string {
 }
 
 /**
+ * Copy for the device-outage band.
+ *
+ * The band exists because a device outage is not a judgment about anybody, and
+ * its wording has to keep saying so — an amber strip carrying 256 people's
+ * names reads as an accusation unless it states otherwise in words.
+ *
+ * Every string here observes this module's device rule: branch is the finest
+ * granularity the data supports (`_outage_branch_dates`: "nothing in this app
+ * maps a device to a branch"), so none of these functions takes a parameter a
+ * serial could arrive through.
+ */
+export const OUTAGE_NOT_A_JUDGMENT = "the machines didn't record — nobody is being judged here";
+
+export const OUTAGE_CEILING_NOTE =
+  "Branch and days only — nothing here maps a device to a branch.";
+
+export const DEVICE_HEALTH_LABEL = "Device health";
+
+function plural(count: number, one: string, many: string): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
+}
+
+export function outageBandHeadline(branchCount: number, peopleCount: number): string {
+  const branches = plural(branchCount, "branch", "branches");
+  return `${branches} had no device data · ${plural(peopleCount, "person", "people")}`;
+}
+
+export function outageBandSubline(dates: string[], flagCount: number): string {
+  return `${dateSpanLabel(dates)} · ${plural(flagCount, "flag", "flags")} · ${OUTAGE_NOT_A_JUDGMENT}`;
+}
+
+export function outageBranchDays(dayCount: number): string {
+  return `${plural(dayCount, "day", "days")} with no sync row`;
+}
+
+export function outageBranchSummary(peopleCount: number, flagCount: number): string {
+  return `${plural(peopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+}
+
+export function outageReviewLabel(branchCount: number): string {
+  return `Review ${branchCount}`;
+}
+
+/**
+ * Zero is a real state here: uncheck every branch and the button must not read
+ * "Excuse 0 people · 0 flags", which looks like a live action that does
+ * nothing. The button is disabled in that state; this is the label it wears.
+ */
+export function outageExcuseLabel(peopleCount: number, flagCount: number): string {
+  if (peopleCount === 0 || flagCount === 0) return "Nothing left to excuse";
+  return `Excuse ${plural(peopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+}
+
+/**
+ * Replaces `queueHeaderDescription` on this page.
+ *
+ * "389 people · 147 rows" counted the outage members among the people waiting
+ * on HR, which is the specific lie the band exists to end: 256 of those 389
+ * are waiting on a machine, and no amount of HR attention moves them.
+ */
+export function queueSplitDescription(queuePeople: number, outagePeople: number): string {
+  if (queuePeople === 0 && outagePeople === 0) return "Nothing needs a decision";
+  const head = queuePeople === 0 ? "Nothing needs a decision" : `${queuePeople} need a decision`;
+  if (outagePeople === 0) return head;
+  return `${head} · ${outagePeople} waiting on a device fault`;
+}
+
+/**
+ * Toolbar and panel control labels.
+ *
+ * Here rather than inline in the components for the reason this module's own
+ * docstring gives: the three queue components "hold no copy of their own", so
+ * the queue's wording can be reviewed in one file rather than three. Control
+ * labels are the easiest ones to leak — they feel like markup — which is
+ * exactly why they are the ones that drift.
+ */
+export const TIER_FILTER_ALL_LABEL = "All consequences";
+
+export const DECIDED_TOGGLE_LABEL = "Decided";
+
+/** The affordance on a compressed flag one-liner. Lowercase: it sits inline at
+ *  the end of a row of data, not as a button caption. */
+export const DECIDE_ONE_LABEL = "decide";
+
+/** Names the pinned footer's target, so a control that never moves is never
+ *  ambiguous about what it is about to write. */
+export const DECIDING_PREFIX = "Deciding";
+
+export function narrowRangeLabel(days: number): string {
+  return `Last ${days} days`;
+}
+
+/**
  * Orphan-state summaries for the two counts `get_flag_queue` returns under
  * `orphans`. Both describe a past decision, never an action the toolbar can
  * take — see the design doc's "Orphaning" table (`orphaned_flag_gone`,
