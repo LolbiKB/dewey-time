@@ -34,6 +34,7 @@ const SINGLE_CHECKIN_EVIDENCE = {
 const FLAG_OUT: FlagOut = {
   flag_identity: "FLAG-0002::2026-08-04",
   flag_code: "ATTENDANCE_ISSUE",
+  attendance_date: "2026-08-04",
   severity: "WARNING",
   day_closed: 0,
   evidence: SINGLE_CHECKIN_EVIDENCE,
@@ -43,16 +44,25 @@ const FLAG_OUT: FlagOut = {
   decision: null,
 };
 
-const ENTRY: QueueEntry = {
+// Typed as the person variant rather than the whole union: every use below
+// spreads it, and spreading a union yields a union of object types that no
+// longer narrows back to QueueEntry.
+type PersonEntry = Extract<QueueEntry, { kind: "person" }>;
+
+const ENTRY: PersonEntry = {
   kind: "person",
+  entry_key: "p:EMP-0002",
   employee: "EMP-0002",
   employee_name: "Jane Doe",
   employee_branch: null,
   attendance_date: "2026-08-04",
+  dates: ["2026-08-04"],
   rank: 140,
   tier: "act",
   flags: [FLAG_OUT],
   undecided_count: 1,
+  also_count: 0,
+  also_outlier_count: 0,
 };
 
 // Mirrors the flagOutToFlag() adapter FlagDecisionPanel.tsx builds internally
@@ -137,7 +147,7 @@ test("FlagDecisionPanel's flag card surfaces leftover evidence keys inside the d
     ...FLAG_OUT,
     evidence: { ...SINGLE_CHECKIN_EVIDENCE, diagnostic_note: "bridge retry #3" },
   };
-  const entry: QueueEntry = { ...ENTRY, flags: [flagWithLeftover] };
+  const entry: PersonEntry = { ...ENTRY, flags: [flagWithLeftover] };
 
   const html = renderToStaticMarkup(<FlagDecisionPanel {...baseProps()} entry={entry} />);
   const detailsStart = html.indexOf("<details");

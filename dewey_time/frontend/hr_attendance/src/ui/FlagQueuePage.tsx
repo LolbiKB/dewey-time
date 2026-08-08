@@ -21,6 +21,7 @@ import {
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   partialFailureMessage,
+  queueHeaderDescription,
 } from "@/lib/flagQueueLabels";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
@@ -418,7 +419,7 @@ export function FlagQueueView(props: FlagQueueViewProps) {
     <Page>
       <PageHeader
         title="Flags"
-        description={counts ? `${counts.people} people with something open` : "Loading…"}
+        description={counts ? queueHeaderDescription(counts) : "Loading…"}
       >
         {props.truncated ? (
           <p className="text-xs text-brand-accent">

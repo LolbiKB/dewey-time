@@ -122,7 +122,7 @@ class _Recorder:
 def _empty_queue():
     return {
         "entries": [],
-        "counts": {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0},
+        "counts": {"open": 0, "needs_re_review": 0, "decided": 0, "people": 0, "rows": 0},
         "orphans": {"orphaned_flag_gone": 0, "orphaned_evidence_changed": 0},
     }
 
@@ -449,9 +449,12 @@ class TestAlerts(unittest.TestCase):
 
 class TestTierFilter(unittest.TestCase):
     def test_tier_filters_entries(self):
+        # undecided_count is present because the tier filter recounts `people`
+        # against it (TestTierFilterCounts) — a real build_queue person entry
+        # always carries it.
         entries = [
-            {"kind": "person", "employee": "A", "tier": "act"},
-            {"kind": "person", "employee": "B", "tier": "routine"},
+            {"kind": "person", "employee": "A", "tier": "act", "undecided_count": 1},
+            {"kind": "person", "employee": "B", "tier": "routine", "undecided_count": 1},
         ]
         with _harness(_roster(2), queue={**_empty_queue(), "entries": entries}):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
@@ -509,8 +512,8 @@ class TestIncludeDecided(unittest.TestCase):
             [key for key, _ttl in cache.set_calls],
             [
                 # The default key is unchanged — the suffix is only ever added.
-                "flag_queue:v1:2026-08-01:2026-08-07:all",
-                "flag_queue:v1:2026-08-01:2026-08-07:all:decided",
+                "flag_queue:v2:2026-08-01:2026-08-07:all",
+                "flag_queue:v2:2026-08-01:2026-08-07:all:decided",
             ],
         )
 
@@ -527,11 +530,11 @@ class TestQueueCache(unittest.TestCase):
     def test_cache_key_and_ttl_match_the_contract(self):
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-            self.assertEqual(h.cache.set_calls, [("flag_queue:v1:2026-08-01:2026-08-07:all", 60)])
+            self.assertEqual(h.cache.set_calls, [("flag_queue:v2:2026-08-01:2026-08-07:all", 60)])
 
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
-            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v1:2026-08-01:2026-08-07:act")
+            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v2:2026-08-01:2026-08-07:act")
 
     def test_a_different_range_is_a_different_cache_entry(self):
         cache = _FakeCache()
@@ -547,7 +550,7 @@ class TestQueueCache(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             self.assertEqual(len(cache.store), 1)
             flag_queue_api.invalidate_flag_queue_cache()
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v1"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
         self.assertEqual(cache.store, {})
 
     def test_invalidate_accepts_doc_event_args(self):
@@ -555,7 +558,7 @@ class TestQueueCache(unittest.TestCase):
         with _harness(cache=cache):
             # Frappe doc_events call handlers as (doc, method); must not raise.
             flag_queue_api.invalidate_flag_queue_cache(doc=object(), method="on_update")
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v1"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
 
 
 class TestDriverDateShapes(unittest.TestCase):
@@ -715,6 +718,133 @@ class TestSharedDateNormaliser(unittest.TestCase):
         # a later "finish the job" refactor of the two into one fails.
         self.assertEqual(flag_identity._format_date(datetime(2026, 8, 3, 14, 30)), "2026-08-03")
         self.assertEqual(flag_identity._format_date("2026-08-03 00:00:00"), "2026-08-03 00:00:00")
+
+
+class TestTierFilterCounts(unittest.TestCase):
+    """The header and the list must count the same thing — under a filter too."""
+
+    def _queue(self):
+        return {
+            **_empty_queue(),
+            "entries": [
+                {"kind": "person", "entry_key": "p:A", "employee": "A", "tier": "act",
+                 "undecided_count": 1},
+                {"kind": "person", "entry_key": "p:B", "employee": "B", "tier": "routine",
+                 "undecided_count": 1},
+            ],
+            "counts": {"open": 2, "needs_re_review": 0, "decided": 0, "people": 2, "rows": 2},
+        }
+
+    def test_a_tier_filter_recounts_people_and_rows(self):
+        with _harness(_roster(2), queue=self._queue()):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertEqual(len(payload["entries"]), 1)
+        self.assertEqual(payload["counts"]["people"], 1)
+        self.assertEqual(payload["counts"]["rows"], 1)
+
+    def test_state_totals_stay_whole_range_under_a_filter(self):
+        # open/needs_re_review/decided are the size of the job, not a description
+        # of the filtered list, and the toolbar renders them as such.
+        with _harness(_roster(2), queue=self._queue()):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertEqual(payload["counts"]["open"], 2)
+
+    def test_without_a_filter_counts_are_passed_through_untouched(self):
+        # Sentinel values a recount over these two entries could never produce
+        # (two entries recount to people<=2, rows==2) — deliberately
+        # inconsistent with the entries on purpose, so this test can only pass
+        # via pass-through and not by coincidence. Do NOT "fix" these to be
+        # consistent with the entries; that would silently reopen the gap this
+        # test exists to close (a recompute-always bug would then read back
+        # the same numbers and this test would stay green either way).
+        queue = {
+            **self._queue(),
+            "counts": {"open": 2, "needs_re_review": 0, "decided": 0, "people": 7, "rows": 9},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["counts"]["people"], 7)
+        self.assertEqual(payload["counts"]["rows"], 9)
+
+    def test_group_members_count_toward_the_filtered_people(self):
+        # A person inside a pattern group is still a person with something open.
+        queue = {
+            **_empty_queue(),
+            "entries": [
+                {
+                    "kind": "group",
+                    "group_key": "REPEAT_PATTERN:LATE_START",
+                    "tier": "routine",
+                    "members": [
+                        {"employee": "A", "undecided_count": 2},
+                        {"employee": "B", "undecided_count": 1},
+                    ],
+                }
+            ],
+            "counts": {"open": 3, "needs_re_review": 0, "decided": 0, "people": 2, "rows": 1},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="routine")
+        self.assertEqual(payload["counts"]["people"], 2)
+        self.assertEqual(payload["counts"]["rows"], 1)
+
+    def test_a_settled_person_does_not_count_toward_filtered_people(self):
+        # Same rule as build_queue's own `people`: it means "people with something
+        # open", and include_decided must not inflate it.
+        queue = {
+            **_empty_queue(),
+            "entries": [
+                {"kind": "person", "entry_key": "p:A", "employee": "A", "tier": "act",
+                 "undecided_count": 0},
+            ],
+            "counts": {"open": 0, "needs_re_review": 0, "decided": 1, "people": 0, "rows": 1},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertEqual(payload["counts"]["people"], 0)
+        self.assertEqual(payload["counts"]["rows"], 1)
+
+    def test_an_employee_in_both_a_group_and_a_lone_entry_counts_once(self):
+        # flag_grouping._stamp_cross_references exists because one employee can
+        # occupy two entries at once, and a group's tier is tier_for_rank(max
+        # member rank) — so both entries can land in the same tier. `people`
+        # means distinct EMPLOYEES, not distinct appearances: A must count once
+        # even though A shows up in both the group and the lone entry.
+        queue = {
+            **_empty_queue(),
+            "entries": [
+                {
+                    "kind": "group",
+                    "group_key": "REPEAT_PATTERN:LATE_START",
+                    "tier": "routine",
+                    "members": [{"employee": "A", "undecided_count": 1}],
+                },
+                {"kind": "person", "entry_key": "p:A", "employee": "A", "tier": "routine",
+                 "undecided_count": 1},
+                {"kind": "person", "entry_key": "p:B", "employee": "B", "tier": "routine",
+                 "undecided_count": 1},
+            ],
+            "counts": {"open": 3, "needs_re_review": 0, "decided": 0, "people": 2, "rows": 3},
+        }
+        with _harness(_roster(2), queue=queue):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="routine")
+        self.assertEqual(payload["counts"]["people"], 2)
+
+    def test_a_filtered_read_does_not_corrupt_counts_for_a_later_unfiltered_read(self):
+        # build_queue is stubbed to a single fixed return value for the life of this
+        # harness (the real function is pure and allocates a fresh dict every call —
+        # test_flag_grouping.py:91 — but nothing here should rely on that). If the
+        # tier branch recomputed `people`/`rows` into queue["counts"] IN PLACE instead
+        # of a copy, the mutation would still be sitting in that shared dict when the
+        # next request reads it back — exactly what the 60s cache serves to whichever
+        # request (filtered or not) asks next.
+        queue = self._queue()
+        with _harness(_roster(2), queue=queue):
+            filtered = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+            self.assertEqual(filtered["counts"]["people"], 1)
+            unfiltered = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(unfiltered["counts"]["people"], 2)
+        self.assertEqual(unfiltered["counts"]["rows"], 2)
 
 
 class TestHooksWiring(unittest.TestCase):

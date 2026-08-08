@@ -12,6 +12,7 @@ import type { FlagOut, QueuePerson } from "@/types/flags";
 function flag(over: Partial<FlagOut> & { flag_identity: string }): FlagOut {
   return {
     flag_code: "LATE_START",
+    attendance_date: "2026-08-03",
     severity: "WARNING",
     day_closed: 1,
     evidence: {},
@@ -25,12 +26,16 @@ function flag(over: Partial<FlagOut> & { flag_identity: string }): FlagOut {
 
 function person(over: Partial<QueuePerson> & { employee: string; flags: FlagOut[] }): QueuePerson {
   return {
+    entry_key: `p:${over.employee}`,
     employee_name: over.employee,
     employee_branch: null,
     attendance_date: "2026-08-03",
+    dates: ["2026-08-03"],
     rank: 20,
     tier: "routine",
     undecided_count: over.flags.filter((f) => f.decision_state === "undecided").length,
+    also_count: 0,
+    also_outlier_count: 0,
     ...over,
   } as QueuePerson;
 }
@@ -180,14 +185,18 @@ test("remainingIdentities excludes needs_re_review flags even though the backend
   });
   const open = flag({ flag_identity: "AUTO-open", rank: 50 });
   const p: QueuePerson = {
+    entry_key: "p:HR-EMP-00001",
     employee: "HR-EMP-00001",
     employee_name: "HR-EMP-00001",
     employee_branch: null,
     attendance_date: "2026-08-03",
+    dates: ["2026-08-03"],
     rank: 90,
     tier: "routine",
     flags: [staleDecision, open],
     undecided_count: 2, // backend counts "undecided" + "needs_re_review"
+    also_count: 0,
+    also_outlier_count: 0,
   };
 
   const remaining = remainingIdentities(p);

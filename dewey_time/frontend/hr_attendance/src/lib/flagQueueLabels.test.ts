@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatFlagLabel } from "@/lib/flagLabels";
+import { formatFlagLabel, formatMissingDuration } from "@/lib/flagLabels";
 import {
   appliedDecisionLabel,
   branchNoDeviceDataHeader,
+  crossReferenceLabel,
   DECISION_STATE_LABELS,
   decisionStateLabel,
   deviceAlertHeadline,
   groupHeadline,
+  groupSubline,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   OUTCOME_ACTION_LABELS,
@@ -19,6 +21,7 @@ import {
   partialFailureMessage,
   personHeadline,
   priorDecisionLabel,
+  queueHeaderDescription,
   REASON_LABELS,
   REASON_OPTIONS,
   reasonLabel,
@@ -34,6 +37,141 @@ import type {
   QueuePerson,
   Reason,
 } from "@/types/flags";
+
+/**
+ * Fixture builders for the nesting-and-cross-reference copy below. `person`
+ * layers named overrides on a fully-formed lone-row default, so a test naming
+ * only the field it cares about — e.g.
+ * `person({ also_count: 1, also_outlier_count: 1 })` — cannot accidentally
+ * leave any other required field unset.
+ */
+function lateStart(minutes: number): FlagOut {
+  return {
+    flag_identity: `AUTO-LATE_START-${minutes}`,
+    flag_code: "LATE_START",
+    attendance_date: "2026-08-03",
+    severity: "INFO",
+    day_closed: 1,
+    evidence: { minutes },
+    rank: 20,
+    tier: "routine",
+    decision_state: "undecided",
+    decision: null,
+  };
+}
+
+function missingTime(minutes: number): FlagOut {
+  return {
+    flag_identity: `AUTO-MISSING_TIME-${minutes}`,
+    flag_code: "MISSING_TIME",
+    attendance_date: "2026-08-03",
+    severity: "INFO",
+    day_closed: 1,
+    evidence: { minutes },
+    rank: 50,
+    tier: "review",
+    decision_state: "undecided",
+    decision: null,
+  };
+}
+
+function person(overrides: Partial<QueuePerson> = {}): QueuePerson {
+  return {
+    entry_key: "p:HR-EMP-1",
+    employee: "HR-EMP-1",
+    employee_name: "HR-EMP-1",
+    employee_branch: "Phnom Penh HQ",
+    attendance_date: "2026-08-03",
+    dates: ["2026-08-03"],
+    rank: 20,
+    tier: "routine",
+    flags: [lateStart(12)],
+    undecided_count: 1,
+    also_count: 0,
+    also_outlier_count: 0,
+    ...overrides,
+  };
+}
+
+function patternDate(offset: number): string {
+  return `2026-08-${String(3 + offset).padStart(2, "0")}`;
+}
+
+function patternMember(employee: string, flagCode: string, occurrences: number): QueuePerson {
+  const flags: FlagOut[] = Array.from({ length: occurrences }, (_, i) => ({
+    flag_identity: `AUTO-${flagCode}-${employee}-${i}`,
+    flag_code: flagCode,
+    attendance_date: patternDate(i),
+    severity: "INFO",
+    day_closed: 1,
+    evidence: { minutes: 10 + i },
+    rank: 50,
+    tier: "review",
+    decision_state: "undecided",
+    decision: null,
+  }));
+  return {
+    entry_key: `REPEAT_PATTERN:${flagCode}|p:${employee}`,
+    employee,
+    employee_name: employee,
+    employee_branch: "Phnom Penh HQ",
+    attendance_date: flags[flags.length - 1]?.attendance_date ?? patternDate(0),
+    dates: flags.map((f) => f.attendance_date),
+    rank: 50,
+    tier: "review",
+    flags,
+    undecided_count: flags.length,
+    also_count: 0,
+    also_outlier_count: 0,
+  };
+}
+
+/**
+ * A REPEAT_PATTERN group of `memberCount` people sharing `occurrences` total
+ * flags of `flagCode`, spread as evenly as the numbers allow — the plan's own
+ * example ("8 people · 34 mornings") does not divide evenly either.
+ */
+function patternGroup(
+  flagCode: string,
+  memberCount: number,
+  occurrences: number = memberCount,
+): Extract<QueueEntry, { kind: "group" }> {
+  const base = Math.floor(occurrences / memberCount);
+  const remainder = occurrences - base * memberCount;
+  const members = Array.from({ length: memberCount }, (_, i) =>
+    patternMember(`HR-EMP-${i}`, flagCode, base + (i < remainder ? 1 : 0)),
+  );
+  return {
+    kind: "group",
+    group_type: "REPEAT_PATTERN",
+    group_key: `REPEAT_PATTERN:${flagCode}`,
+    branch: null,
+    flag_code: flagCode,
+    attendance_date: null,
+    rank: 50,
+    tier: "review",
+    members,
+  };
+}
+
+/** A ROUTINE_CODE group, one member per entry in `minutesList`. */
+function routineGroup(
+  flagCode: string,
+  minutesList: number[],
+): Extract<QueueEntry, { kind: "group" }> {
+  const members = minutesList.map((m, i) => routinePerson(`HR-EMP-${i}`, flagCode, m));
+  return {
+    kind: "group",
+    group_type: "ROUTINE_CODE",
+    group_key: `ROUTINE_CODE:${flagCode}:2026-08-03`,
+    branch: null,
+    flag_code: flagCode,
+    attendance_date: "2026-08-03",
+    rank: 20,
+    tier: "routine",
+    members,
+  };
+}
 
 // Hardcoded independently of REASON_LABELS's own keys — NOT derived by
 // iterating `Object.keys(REASON_LABELS)`, which would trivially pass even if
@@ -109,6 +247,7 @@ function routineFlag(flagCode: string, minutes: number): FlagOut {
   return {
     flag_identity: `AUTO-${flagCode}-${minutes}`,
     flag_code: flagCode,
+    attendance_date: "2026-08-03",
     severity: "INFO",
     day_closed: 1,
     evidence: { minutes },
@@ -121,14 +260,18 @@ function routineFlag(flagCode: string, minutes: number): FlagOut {
 
 function routinePerson(employee: string, flagCode: string, minutes: number): QueuePerson {
   return {
+    entry_key: `p:${employee}`,
     employee,
     employee_name: employee,
     employee_branch: "Phnom Penh HQ",
     attendance_date: "2026-08-03",
+    dates: ["2026-08-03"],
     rank: 20,
     tier: "routine",
     flags: [routineFlag(flagCode, minutes)],
     undecided_count: 1,
+    also_count: 0,
+    also_outlier_count: 0,
   };
 }
 
@@ -138,7 +281,7 @@ test("routineCodeHeader matches the design doc's example wording exactly", () =>
   assert.equal(members.length, 168);
   assert.equal(
     routineCodeHeader("LATE_START", members),
-    "168 late starts, 6–20 min — and nothing else wrong that day",
+    "168 one-off late starts, 6–20 min — and nothing else wrong that day",
   );
 });
 
@@ -317,4 +460,120 @@ test("groupHeadline dispatches on group_type", () => {
   // Swapping the two would describe a branch-wide outage as "2 late starts" —
   // exactly the wrong story, and the one a mis-dispatch would tell.
   assert.notEqual(groupHeadline(routine), groupHeadline(outage));
+});
+
+test("a repeat pattern is headlined by what it is, not by a count", () => {
+  const entry = patternGroup("LATE_START", 8);
+  assert.equal(groupHeadline(entry), "Repeatedly late");
+});
+
+test("a repeat pattern's subline states people and occurrences", () => {
+  const entry = patternGroup("LATE_START", 8, 34);
+  assert.equal(groupSubline(entry), "8 people · 34 mornings");
+});
+
+// Closes a gap the given fixtures leave open: both examples above use 8
+// people, so a bug that always prints "people" (or always prints "person")
+// would still pass them both. A single-member pattern is the only fixture
+// that can catch that.
+test("a repeat pattern's subline is singular for exactly one person", () => {
+  const entry = patternGroup("LATE_START", 1, 3);
+  assert.equal(groupSubline(entry), "1 person · 3 mornings");
+});
+
+test("an unknown pattern code still reads as English", () => {
+  const entry = patternGroup("SOME_NEW_CODE", 2, 6);
+  assert.equal(groupHeadline(entry), "Repeated some new code");
+  assert.equal(groupSubline(entry), "2 people · 6 days");
+});
+
+test("routine code groups say one-off, because repeat offenders left by precedence", () => {
+  const entry = routineGroup("LATE_START", [9, 20]);
+  assert.match(groupHeadline(entry), /one-off late starts/);
+});
+
+// groupSubline's early return is what keeps ROUTINE_CODE and
+// BRANCH_NO_DEVICE_DATA — the two group types that exist in production
+// today — from borrowing the pattern map's occurrence unit. Deleting that
+// return line is invisible to every test above: they only exercise
+// REPEAT_PATTERN. This is the only assertion in the file that would catch it.
+test("groupSubline reports only the people count for the two group types that are not a pattern", () => {
+  const routine = routineGroup("LATE_START", [9, 20]);
+  assert.equal(groupSubline(routine), "2 people");
+
+  const outage: Extract<QueueEntry, { kind: "group" }> = {
+    ...routine,
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    branch: "Phnom Penh HQ",
+    flag_code: null,
+  };
+  assert.equal(groupSubline(outage), "2 people");
+});
+
+test("a person whose other entries are all lone rows is badged as an outlier", () => {
+  assert.equal(crossReferenceLabel(person({ also_count: 1, also_outlier_count: 1 })), "also 1 outlier");
+  assert.equal(crossReferenceLabel(person({ also_count: 2, also_outlier_count: 2 })), "also 2 outliers");
+});
+
+test("a person whose other entries include a group is badged as elsewhere", () => {
+  assert.equal(crossReferenceLabel(person({ also_count: 1, also_outlier_count: 0 })), "also 1 elsewhere");
+  assert.equal(crossReferenceLabel(person({ also_count: 2, also_outlier_count: 1 })), "also 2 elsewhere");
+});
+
+test("a person in one entry carries no badge at all", () => {
+  assert.equal(crossReferenceLabel(person({ also_count: 0, also_outlier_count: 0 })), null);
+});
+
+test("the header states people and rows, so it cannot contradict the list", () => {
+  assert.equal(
+    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 40, rows: 12 }),
+    "40 people · 12 rows",
+  );
+});
+
+test("the header is singular for one", () => {
+  assert.equal(
+    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 1, rows: 1 }),
+    "1 person · 1 row",
+  );
+});
+
+// The two tests above are each all-singular or all-plural, so a bug that
+// decided BOTH nouns off the same count (e.g. always reading `rows` for both)
+// would still pass — 1-and-1 and 40-and-12 never disagree with themselves.
+// Only a fixture where the two counts differ can catch that.
+test("the header's two counts pluralise independently of each other", () => {
+  assert.equal(
+    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 1, rows: 3 }),
+    "1 person · 3 rows",
+  );
+  assert.equal(
+    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 5, rows: 1 }),
+    "5 people · 1 row",
+  );
+});
+
+test("a person with several flags of one code is summarised, not headlined by one", () => {
+  assert.equal(
+    personHeadline(person({ flags: [lateStart(31), lateStart(12), lateStart(9), lateStart(15)] })),
+    "4 late starts · worst 31 min",
+  );
+});
+
+test("a person with a single flag keeps the flag's own label", () => {
+  assert.equal(personHeadline(person({ flags: [lateStart(31)] })), formatFlagLabel("LATE_START", { minutes: 31 }));
+});
+
+// MISSING_TIME's single-flag path (formatFlagLabel) renders a duration, e.g.
+// "Missing 3h 12m" — never raw minutes. The multi-flag "worst" figure has to
+// agree, or the same flag reads two different units on two screens: this
+// fixture's worst occurrence is 192 minutes, and a raw-minutes bug would print
+// "worst 192 min" where the correct output reads "worst 3h 12m".
+test("a person with several MISSING_TIME flags renders the worst as a duration, not raw minutes", () => {
+  const headline = personHeadline(
+    person({ flags: [missingTime(192), missingTime(45), missingTime(130)] }),
+  );
+  assert.equal(headline, `3 gaps in the day · worst ${formatMissingDuration(192).replace(/^Missing /, "")}`);
+  assert.equal(headline, "3 gaps in the day · worst 3h 12m");
+  assert.doesNotMatch(headline, /192 min\b/);
 });

@@ -15,6 +15,18 @@ test.beforeEach(async ({ page }) => {
 // server-side route exists. That's exactly the gap the Python test above
 // covers and this file structurally cannot.
 
+// Every payload below is hand-built, and nothing type-checks it: tsconfig's
+// `include` is `["src"]`, and Playwright transpiles without checking. So these
+// literals have to be kept honest by hand against `src/types/flags.ts` and
+// `flag_grouping.build_queue`, which is the ONLY thing standing between this
+// file and a fixture that passes while production throws. In particular each
+// person carries `entry_key` (`p:<employee>`, or `<group_key>|p:<employee>` for
+// a group member), `dates` (its flags' distinct dates, ascending),
+// `also_count`/`also_outlier_count`, every flag carries its own
+// `attendance_date`, and `counts` carries `rows` (the entry count the header
+// prints). Derive them from the fixture's own flags rather than stubbing them
+// out — a fixture that disagrees with the backend proves nothing.
+
 test("the flag queue renders groups and person rows with toolbar counts for HR staff", async ({
   page,
 }) => {
@@ -31,16 +43,19 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
         tier: "act",
         members: [
           {
+            entry_key: "grp-device-siem-reap-2026-08-13|p:EMP-301",
             employee: "EMP-301",
             employee_name: "Thida Sok",
             employee_branch: "Siem Reap Depot",
             attendance_date: "2026-08-13",
+            dates: ["2026-08-13"],
             rank: 140,
             tier: "act",
             flags: [
               {
                 flag_identity: "AUTO-EMP-301-2026-08-13-attendance-issue-single_checkin",
                 flag_code: "ATTENDANCE_ISSUE",
+                attendance_date: "2026-08-13",
                 severity: "WARNING",
                 day_closed: 1,
                 evidence: { reason: "single_checkin" },
@@ -51,18 +66,23 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
               },
             ],
             undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
           },
           {
+            entry_key: "grp-device-siem-reap-2026-08-13|p:EMP-302",
             employee: "EMP-302",
             employee_name: "Vireak Chan",
             employee_branch: "Siem Reap Depot",
             attendance_date: "2026-08-13",
+            dates: ["2026-08-13"],
             rank: 140,
             tier: "act",
             flags: [
               {
                 flag_identity: "AUTO-EMP-302-2026-08-13-attendance-issue-single_checkin",
                 flag_code: "ATTENDANCE_ISSUE",
+                attendance_date: "2026-08-13",
                 severity: "WARNING",
                 day_closed: 1,
                 evidence: { reason: "single_checkin" },
@@ -73,6 +93,8 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
               },
             ],
             undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
           },
         ],
       },
@@ -87,16 +109,19 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
         tier: "routine",
         members: [
           {
+            entry_key: "grp-routine-LATE_START-2026-08-14|p:EMP-401",
             employee: "EMP-401",
             employee_name: "Leng Ratha",
             employee_branch: "BRANCH-A",
             attendance_date: "2026-08-14",
+            dates: ["2026-08-14"],
             rank: 20,
             tier: "routine",
             flags: [
               {
                 flag_identity: "AUTO-EMP-401-2026-08-14-late_start",
                 flag_code: "LATE_START",
+                attendance_date: "2026-08-14",
                 severity: "WARNING",
                 day_closed: 1,
                 evidence: { minutes: 12 },
@@ -107,18 +132,23 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
               },
             ],
             undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
           },
           {
+            entry_key: "grp-routine-LATE_START-2026-08-14|p:EMP-402",
             employee: "EMP-402",
             employee_name: "Sopheak Meas",
             employee_branch: "BRANCH-A",
             attendance_date: "2026-08-14",
+            dates: ["2026-08-14"],
             rank: 20,
             tier: "routine",
             flags: [
               {
                 flag_identity: "AUTO-EMP-402-2026-08-14-late_start",
                 flag_code: "LATE_START",
+                attendance_date: "2026-08-14",
                 severity: "WARNING",
                 day_closed: 1,
                 evidence: { minutes: 25 },
@@ -129,21 +159,26 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
               },
             ],
             undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
           },
         ],
       },
       {
         kind: "person",
+        entry_key: "p:EMP-001",
         employee: "EMP-001",
         employee_name: "Jane Doe",
         employee_branch: "BRANCH-A",
         attendance_date: "2026-08-15",
+        dates: ["2026-08-15"],
         rank: 150,
         tier: "act",
         flags: [
           {
             flag_identity: "AUTO-EMP-001-2026-08-15-unnotified_absence",
             flag_code: "UNNOTIFIED_ABSENCE",
+            attendance_date: "2026-08-15",
             severity: "CRITICAL",
             day_closed: 1,
             evidence: {},
@@ -154,9 +189,14 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
           },
         ],
         undecided_count: 1,
+        also_count: 0,
+        also_outlier_count: 0,
       },
     ],
-    counts: { open: 6, needs_re_review: 1, decided: 2, people: 5 },
+    // `rows` is the number of entries, `people` the number of distinct
+    // employees who still owe HR an answer (build_queue) — three entries here,
+    // five people across them.
+    counts: { open: 6, needs_re_review: 1, decided: 2, people: 5, rows: 3 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     truncated: false,
@@ -223,6 +263,7 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
   const undecidedFlag = {
     flag_identity: FLAG_IDENTITY,
     flag_code: "LATE_START",
+    attendance_date: "2026-08-13",
     severity: "WARNING",
     day_closed: 1,
     evidence: { minutes: 75 },
@@ -248,14 +289,20 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
   function personEntry(flag: typeof undecidedFlag, undecidedCount: number) {
     return {
       kind: "person",
+      // A lone row, so `p:<employee>` with no group prefix — and one flag on
+      // one day, so `dates` is that flag's date.
+      entry_key: "p:EMP-201",
       employee: "EMP-201",
       employee_name: "Noor Aziz",
       employee_branch: "BRANCH-A",
-      attendance_date: "2026-08-13",
+      attendance_date: flag.attendance_date,
+      dates: [flag.attendance_date],
       rank: 65,
       tier: "review",
       flags: [flag],
       undecided_count: undecidedCount,
+      also_count: 0,
+      also_outlier_count: 0,
     };
   }
 
@@ -278,10 +325,13 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
 
     if (p.includes("get_flag_queue")) {
       queueCalls += 1;
+      // One entry either way, so `rows` is 1 in both. `people` counts only
+      // those who still owe HR an answer, so it drops to 0 once the single
+      // flag is decided (build_queue's `undecided_count` filter).
       const payload =
         queueCalls === 1
-          ? { ...basePayload, entries: [personEntry(undecidedFlag, 1)], counts: { open: 1, needs_re_review: 0, decided: 0, people: 1 } }
-          : { ...basePayload, entries: [personEntry(decidedFlag, 0)], counts: { open: 0, needs_re_review: 0, decided: 1, people: 1 } };
+          ? { ...basePayload, entries: [personEntry(undecidedFlag, 1)], counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 } }
+          : { ...basePayload, entries: [personEntry(decidedFlag, 0)], counts: { open: 0, needs_re_review: 0, decided: 1, people: 0, rows: 1 } };
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -365,6 +415,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
     return {
       flag_identity: `AUTO-EMP-5${n}-2026-08-14-late_start`,
       flag_code: "LATE_START",
+      attendance_date: "2026-08-14",
       severity: "WARNING",
       day_closed: 1,
       evidence: { minutes: 15 + n },
@@ -376,15 +427,22 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
   }
 
   function member(n: number, name: string) {
+    const flag = memberFlag(n);
     return {
+      // A group member, so the key is the group's own key plus the person —
+      // the same employee in a second entry would otherwise collide.
+      entry_key: `${GROUP_KEY}|p:EMP-5${n}`,
       employee: `EMP-5${n}`,
       employee_name: name,
       employee_branch: "BRANCH-A",
-      attendance_date: "2026-08-14",
+      attendance_date: flag.attendance_date,
+      dates: [flag.attendance_date],
       rank: 20,
       tier: "routine",
-      flags: [memberFlag(n)],
+      flags: [flag],
       undecided_count: 1,
+      also_count: 0,
+      also_outlier_count: 0,
     };
   }
 
@@ -408,7 +466,8 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
         members,
       },
     ],
-    counts: { open: 5, needs_re_review: 0, decided: 0, people: 5 },
+    // Five people, but one entry: the group IS the row.
+    counts: { open: 5, needs_re_review: 0, decided: 0, people: 5, rows: 1 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     truncated: false,
@@ -503,6 +562,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
   const decidedFlag = {
     flag_identity: FLAG_IDENTITY,
     flag_code: "LATE_START",
+    attendance_date: "2026-08-13",
     severity: "WARNING",
     day_closed: 1,
     evidence: { minutes: 75 },
@@ -522,20 +582,23 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
 
   const settledPerson = {
     kind: "person",
+    entry_key: "p:EMP-201",
     employee: "EMP-201",
     employee_name: "Noor Aziz",
     employee_branch: "BRANCH-A",
-    attendance_date: "2026-08-13",
+    attendance_date: decidedFlag.attendance_date,
+    dates: [decidedFlag.attendance_date],
     // A settled person ranks 0: rank comes from the worst UNRESOLVED flag and
     // they have none (flag_grouping._person).
     rank: 0,
     tier: "routine",
     flags: [decidedFlag],
     undecided_count: 0,
+    also_count: 0,
+    also_outlier_count: 0,
   };
 
   const basePayload = {
-    counts: { open: 0, needs_re_review: 0, decided: 1, people: 0 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     truncated: false,
@@ -552,13 +615,26 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     if (p.includes("get_flag_queue")) {
       const includeDecided = url.searchParams.get("include_decided");
       queueParams.push(includeDecided);
+      // The default view genuinely does not contain this person — which is
+      // the entire reason the toggle has to exist.
+      const entries = includeDecided ? [settledPerson] : [];
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        // The default view genuinely does not contain this person — which is
-        // the entire reason the toggle has to exist.
         body: JSON.stringify({
-          message: { ...basePayload, entries: includeDecided ? [settledPerson] : [] },
+          message: {
+            ...basePayload,
+            entries,
+            // `rows` is the entry count, so it moves with `entries`; `people`
+            // stays 0 either way because this person owes HR nothing.
+            counts: {
+              open: 0,
+              needs_re_review: 0,
+              decided: 1,
+              people: 0,
+              rows: entries.length,
+            },
+          },
         }),
       });
     }

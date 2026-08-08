@@ -1,7 +1,14 @@
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { SHOW_AS_GROUP_LABEL, groupHeadline, personHeadline, tierLabel } from "@/lib/flagQueueLabels";
+import {
+  SHOW_AS_GROUP_LABEL,
+  crossReferenceLabel,
+  groupHeadline,
+  groupSubline,
+  personHeadline,
+  tierLabel,
+} from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
 import type { QueueEntry, QueuePerson, Tier } from "@/types/flags";
 
@@ -13,11 +20,14 @@ type GroupEntry = Extract<QueueEntry, { kind: "group" }>;
  * identity is useless across a react-query refetch, and `Attendance Flag.name`
  * is not usable as an identifier anywhere in this feature (the engine rebuilds
  * those rows constantly).
+ *
+ * A person's key comes from the backend rather than being derived here: under
+ * the per-flag invariant one employee can occupy two entries, and any key built
+ * from employee (and date) alone would collide with itself — selecting the
+ * outlier would select the pattern member instead.
  */
 export function entryKey(entry: QueueEntry): string {
-  return entry.kind === "group"
-    ? `g:${entry.group_key}`
-    : `p:${entry.employee}:${entry.attendance_date}`;
+  return entry.kind === "group" ? `g:${entry.group_key}` : entry.entry_key;
 }
 
 export type FlagQueueListProps = {
@@ -164,12 +174,23 @@ function PersonRow(props: { person: QueuePerson; selected: boolean; onSelect: ()
   // is still open. Counting all flags would keep showing "+2" on someone with one
   // thing left to do.
   const extra = Math.max(person.undecided_count - 1, 0);
+  const crossReference = crossReferenceLabel(person);
 
   return (
     <RowButton selected={props.selected} onSelect={props.onSelect}>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">
-          {person.employee_name}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-medium text-foreground">
+            {person.employee_name}
+          </span>
+          {/* The safeguard, in every entry this person appears in: excusing the
+              pattern group without knowing about their other row is the whole
+              risk the per-flag invariant introduced. */}
+          {crossReference ? (
+            <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+              {crossReference}
+            </span>
+          ) : null}
         </span>
         <span className="block truncate text-xs text-muted-foreground">
           {personHeadline(person)}
@@ -186,7 +207,6 @@ function PersonRow(props: { person: QueuePerson; selected: boolean; onSelect: ()
 
 function GroupRow(props: { entry: GroupEntry; selected: boolean; onSelect: () => void }) {
   const { entry } = props;
-  const count = entry.members.length;
 
   return (
     <RowButton selected={props.selected} onSelect={props.onSelect}>
@@ -194,8 +214,11 @@ function GroupRow(props: { entry: GroupEntry; selected: boolean; onSelect: () =>
         <span className="block truncate text-sm font-medium text-foreground">
           {groupHeadline(entry)}
         </span>
+        {/* Both of a pattern group's dimensions — "2 people · 6 mornings" —
+            because reporting only the head count hides how much work is behind
+            the row. */}
         <span className="block text-xs text-muted-foreground tabular-nums">
-          {count} {count === 1 ? "person" : "people"}
+          {groupSubline(entry)}
         </span>
       </span>
     </RowButton>
