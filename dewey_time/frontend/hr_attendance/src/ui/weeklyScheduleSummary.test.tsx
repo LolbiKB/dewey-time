@@ -31,7 +31,10 @@ type Spec = { superseded?: boolean; onLeave?: boolean } | "off" | "leave";
 
 /** Mon–Fri 08:00–17:00 with a one-hour lunch (5 × 8h = a round 40h), Sat off, Sun leave. */
 function week(specs: Spec[] = [{}, {}, {}, {}, {}, "off", "leave"]): Map<string, Day> {
-  return new Map(
+  // `new Map<string, Day>`, not bare `new Map`: the callback returns three
+  // differently-shaped entries, and unannotated the constructor pins `V` to the
+  // first one (`shift_assigned: false`), which the worked-day branch then fails.
+  return new Map<string, Day>(
     WEEK.map((d, i) => {
       const date = format(d, "yyyy-MM-dd");
       const spec = specs[i] ?? "off";

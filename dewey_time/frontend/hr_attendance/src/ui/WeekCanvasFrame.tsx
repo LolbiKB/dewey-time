@@ -21,6 +21,13 @@ const COL_TEMPLATES = {
 export const DEFAULT_COL_TEMPLATE = COL_TEMPLATES["8rem"];
 
 /**
+ * The closed set of day-column minimums. Exported so intermediate components
+ * that merely forward the prop (`PlannedWeekCanvas`) can declare the same type
+ * instead of widening it to `string` and failing at this boundary.
+ */
+export type MinDayWidth = keyof typeof COL_TEMPLATES;
+
+/**
  * The week canvas shell: a labelled hour gutter and seven day slots on one
  * shared axis.
  *
@@ -66,12 +73,12 @@ export function WeekCanvasFrame(props: {
    * literal class strings, so this can't be interpolated into the class name
    * at runtime — it selects between pre-built literals instead.
    */
-  minDayWidth?: keyof typeof COL_TEMPLATES;
+  minDayWidth?: MinDayWidth;
 }) {
-  // The `??` fallback matters even though the type is a closed key set:
-  // nothing typechecks this package, so an out-of-range value at runtime
-  // must degrade to the default template rather than render `undefined`
-  // into the class string.
+  // The `??` fallback matters even though the type is a closed key set: the
+  // built bundle is plain JS, so an out-of-range value reaching here at runtime
+  // must degrade to the default template rather than render `undefined` into
+  // the class string.
   const cols = COL_TEMPLATES[props.minDayWidth ?? "8rem"] ?? COL_TEMPLATES["8rem"];
 
   return (

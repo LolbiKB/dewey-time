@@ -1,11 +1,16 @@
-import type { ComponentType } from "react";
+import type { LucideIcon } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export type MobileTab = {
   label: string;
   href: string;
   active: boolean;
-  icon: ComponentType<{ className?: string }>;
+  /**
+   * `LucideIcon`, not a looser `ComponentType`: the same array feeds `AppShell`'s
+   * `tabs` prop, which demands exactly this type. Widening here only moves the
+   * error to the shell.
+   */
+  icon: LucideIcon;
 };
 
 /**

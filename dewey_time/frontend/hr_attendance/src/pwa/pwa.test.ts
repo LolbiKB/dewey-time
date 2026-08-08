@@ -6,8 +6,23 @@ import { dirname, resolve } from "node:path";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+/**
+ * Only the fields this test asserts on. `JSON.parse` hands back `any`, which
+ * silently turns every `icons` callback parameter into an implicit `any`.
+ */
+type ManifestIcon = { src: string; sizes: string; purpose?: string };
+type Manifest = {
+  id: string;
+  scope: string;
+  start_url: string;
+  display: string;
+  theme_color: string;
+  background_color: string;
+  icons: ManifestIcon[];
+};
+
 test("manifest declares an installable, white-themed PWA scoped to /hr-attendance", () => {
-  const m = JSON.parse(readFileSync(resolve(PKG, "public/manifest.json"), "utf8"));
+  const m = JSON.parse(readFileSync(resolve(PKG, "public/manifest.json"), "utf8")) as Manifest;
   assert.equal(m.id, "/hr-attendance");
   assert.equal(m.scope, "/hr-attendance");
   assert.equal(m.start_url, "/hr-attendance");

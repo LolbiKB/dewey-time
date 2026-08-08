@@ -29,7 +29,19 @@ function mkPattern(start: string, end: string): WeekPattern {
   };
 }
 
-function deferred<T = void>() {
+/**
+ * Named on purpose. `ReturnType<typeof deferred>` ignores the `T = void`
+ * default and instantiates `T` as `unknown`, which makes `resolve()` demand an
+ * argument the callers below have no value for. `Deferred` (defaulting to
+ * `void`) is what the `Map`s want.
+ */
+type Deferred<T = void> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (err: unknown) => void;
+};
+
+function deferred<T = void>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (err: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
@@ -163,7 +175,7 @@ test("runScheduleImportApply isolates a failing row and keeps applying the rest"
 
 test("runScheduleImportApply runs groups in parallel but rows within a group serially, bounded by laneLimit", async () => {
   const started: number[] = [];
-  const defs = new Map<number, ReturnType<typeof deferred>>();
+  const defs = new Map<number, Deferred>();
   const rows = [row(1, "A"), row(2, "A"), row(3, "B"), row(4, "B"), row(5, "C")];
 
   const runPromise = runScheduleImportApply({
@@ -203,7 +215,7 @@ test("runScheduleImportApply runs groups in parallel but rows within a group ser
 
 test("runScheduleImportApply stops launching new rows once cancelled, finishing in-flight", async () => {
   const started: number[] = [];
-  const defs = new Map<number, ReturnType<typeof deferred>>();
+  const defs = new Map<number, Deferred>();
   let cancelled = false;
   const rows = [row(1, "A"), row(2, "A"), row(3, "B")];
 

@@ -1,5 +1,5 @@
 import { plannedBlocks, type PlannedBlock } from "./plannedBlocks";
-import { buildWeekSchedule, shortShiftTypeCode, type WeekDaySchedule } from "./weekSchedule";
+import { buildWeekSchedule, shortShiftTypeCode } from "./weekSchedule";
 import { quantizePaddedWindow } from "./weekTimelineWindow";
 import type { AxisWindow } from "./timelineAxis";
 import { toApiTime, weekPatternDayNetMinutes, type WeekPattern } from "@/types/schedule";
@@ -64,10 +64,15 @@ export function plannedDaysFromSchedule(
  * That keeps the one live call path (`PlannedDayColumn` calls this, not
  * `plannedBlocks` directly) covered by `plannedBlocks.test.ts`'s edge cases
  * instead of leaving them pinned against a function nothing calls.
- * `plannedBlocks.ts` itself is untouched.
+ *
+ * `plannedBlocks` takes `PlannedBlockSource` — the five fields it actually
+ * reads — so this needs no cast. It previously asserted `as WeekDaySchedule`,
+ * which claimed six fields (`date`, `weekday`, `weekdayLong`, `dayNum`,
+ * `monthLabel`, `shift`) that a `PlannedDay` does not have and `plannedBlocks`
+ * never touches.
  */
 export function plannedBlocksForDay(day: PlannedDay): PlannedBlock[] {
-  return plannedBlocks({ ...day, assigned: day.works } as WeekDaySchedule);
+  return plannedBlocks({ ...day, assigned: day.works });
 }
 
 /**

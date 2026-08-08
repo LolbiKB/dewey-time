@@ -20,6 +20,30 @@ export type DatePickerInputProps = {
   max?: Date;
 };
 
+/**
+ * Sourced from `Calendar` rather than imported from react-day-picker, which is a
+ * transitive dependency we do not declare.
+ */
+type CalendarDisabled = React.ComponentProps<typeof Calendar>["disabled"];
+
+/**
+ * Every branch below is the matcher the spread `{ ...before, ...after }` used to
+ * produce at runtime — the spread merely typed as all-optional, which matches
+ * none of react-day-picker's `Matcher` variants.
+ *
+ * With both bounds this stays a single `DateInterval`, deliberately. Given
+ * `before <= after` react-day-picker reads the interval as *open*
+ * (`isDayBefore || isDayAfter`), disabling everything outside `[min, max]`.
+ * Splitting it into `[{ before }, { after }]` would agree in that case but
+ * diverge on an inverted range, so the shape is left alone.
+ */
+function boundsMatcher(min?: Date, max?: Date): CalendarDisabled {
+  if (min && max) return { before: min, after: max };
+  if (min) return { before: min };
+  if (max) return { after: max };
+  return undefined;
+}
+
 export function DatePickerInput(props: DatePickerInputProps) {
   const [open, setOpen] = React.useState(false);
   const selected = props.value ? parseISO(props.value) : undefined;
@@ -61,10 +85,7 @@ export function DatePickerInput(props: DatePickerInputProps) {
               setOpen(false);
             }}
             weekStartsOn={1}
-            disabled={{
-              ...(props.min ? { before: props.min } : {}),
-              ...(props.max ? { after: props.max } : {}),
-            }}
+            disabled={boundsMatcher(props.min, props.max)}
             defaultMonth={selected ?? props.min}
           />
         </PopoverContent>

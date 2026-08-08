@@ -2,7 +2,7 @@ import { formatScheduleDuration } from "@/lib/weekSchedule";
 import type { AxisWindow } from "@/lib/timelineAxis";
 import type { PlannedDay } from "@/lib/plannedDays";
 import { PlannedDayColumn } from "@/ui/PlannedDayColumn";
-import { WeekCanvasFrame } from "@/ui/WeekCanvasFrame";
+import { WeekCanvasFrame, type MinDayWidth } from "@/ui/WeekCanvasFrame";
 
 /** The one week length WeekCanvasFrame's grid supports (`grid-cols-[3.5rem_repeat(7,...)]`,
  * WeekCanvasFrame.tsx:36) — a `days` array of any other length would silently
@@ -39,7 +39,7 @@ export function PlannedWeekCanvas(props: {
   /** Forwarded to `WeekCanvasFrame` — see its doc comment. Omit for the
    * default 8rem (the attendance grid's width); narrower callers such as the
    * schedule preview dialog pass something smaller. */
-  minDayWidth?: string;
+  minDayWidth?: MinDayWidth;
 }) {
   if (props.days.length !== WEEK_LENGTH) {
     throw new Error(
