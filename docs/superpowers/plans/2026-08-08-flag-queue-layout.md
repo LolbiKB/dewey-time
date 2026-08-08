@@ -452,13 +452,13 @@ git commit -m "feat(flag-queue): split the payload into judgments and acknowledg
 **Interfaces:**
 - Consumes: `dateSpanLabel` and `formatBranchLabel`, already in `flagQueueLabels.ts` / `attendanceTime.ts`.
 - Produces:
-  - `outageBandHeadline(branchCount: number, peopleCount: number): string`
+  - `outageBandHeadline(outageBranchCount: number, affectedPeopleCount: number): string`
   - `outageBandSubline(dates: string[], flagCount: number): string`
   - `outageBranchDays(dayCount: number): string`
-  - `outageBranchSummary(peopleCount: number, flagCount: number): string`
-  - `outageExcuseLabel(peopleCount: number, flagCount: number): string`
-  - `outageReviewLabel(branchCount: number): string`
-  - `queueSplitDescription(queuePeople: number, outagePeople: number): string`
+  - `outageBranchSummary(affectedPeopleCount: number, flagCount: number): string`
+  - `outageExcuseLabel(coveredPeopleCount: number, flagCount: number, selectedBranchCount: number): string`
+  - `outageReviewLabel(outageBranchCount: number): string`
+  - `queueSplitDescription(queuePeople: number, queueRows: number, outagePeople: number): string`
   - `OUTAGE_CEILING_NOTE: string`
   - `DEVICE_HEALTH_LABEL: string`
   - `OUTAGE_NOT_A_JUDGMENT: string`
@@ -475,12 +475,19 @@ Append to `src/lib/flagQueueLabels.test.ts`:
 ```ts
 test("the outage band headline names branches and people, never a device", () => {
   const headline = outageBandHeadline(13, 256);
-  assert.equal(headline, "13 branches had no device data · 256 people");
+  assert.equal(headline, "13 branches had no device data · 256 people affected");
   assert.ok(!/serial|device [A-Z]{2}-/i.test(headline));
 });
 
 test("a single branch and a single person read in the singular", () => {
-  assert.equal(outageBandHeadline(1, 1), "1 branch had no device data · 1 person");
+  assert.equal(outageBandHeadline(1, 1), "1 branch had no device data · 1 person affected");
+});
+
+test("the headline says AFFECTED, so it can differ from what the button excuses", () => {
+  // The button reads coveredEmployeeCount, which is smaller. Without "affected"
+  // an HR reader sees 256 then 157 and concludes the button is broken.
+  assert.match(outageBandHeadline(13, 256), /256 people affected$/);
+  assert.equal(outageExcuseLabel(157, 2287, 13), "Excuse 157 people · 2,287 flags");
 });
 
 test("the band subline carries the range, the flag count, and the disclaimer", () => {
@@ -492,12 +499,14 @@ test("the band subline carries the range, the flag count, and the disclaimer", (
 });
 
 test("the excuse label states both dimensions of the write", () => {
-  assert.equal(outageExcuseLabel(157, 2287), "Excuse 157 people · 2,287 flags");
-  assert.equal(outageExcuseLabel(1, 1), "Excuse 1 person · 1 flag");
+  assert.equal(outageExcuseLabel(1, 1, 1), "Excuse 1 person · 1 flag");
 });
 
-test("an excuse label with nothing to write says so rather than offering zero", () => {
-  assert.equal(outageExcuseLabel(0, 0), "Nothing left to excuse");
+test("nothing SELECTED and nothing LEFT are different sentences", () => {
+  // "Left" is a completion word. Saying it over an empty selection tells the
+  // user the outage is handled when they have merely unchecked everything.
+  assert.equal(outageExcuseLabel(0, 0, 0), "Select a branch to excuse");
+  assert.equal(outageExcuseLabel(0, 0, 3), "Nothing left to excuse");
 });
 
 test("the ceiling note refuses to promise device granularity", () => {
@@ -507,33 +516,64 @@ test("the ceiling note refuses to promise device granularity", () => {
   );
 });
 
-test("the header splits waiting-on-you from waiting-on-a-device", () => {
+test("the header splits waiting-on-you from waiting-on-a-device, and keeps rows", () => {
+  // `rows` was added in 20c016fc and fixed for tier filters in 38fbea19,
+  // because one row can stand for several people. Dropping it here would
+  // silently undo both.
   assert.equal(
-    queueSplitDescription(134, 256),
-    "134 need a decision · 256 waiting on a device fault",
+    queueSplitDescription(134, 92, 256),
+    "134 people need a decision · 92 rows · 256 waiting on a device fault",
   );
 });
 
 test("the header says nothing about device faults when there are none", () => {
-  assert.equal(queueSplitDescription(37, 0), "37 need a decision");
+  assert.equal(queueSplitDescription(37, 21, 0), "37 people need a decision · 21 rows");
+});
+
+test("one person left does not read as \"1 need a decision\"", () => {
+  // The most common end state of a session, in the page's primary header.
+  assert.equal(queueSplitDescription(1, 1, 0), "1 person needs a decision · 1 row");
 });
 
 test("a queue with nothing waiting still reads as a sentence", () => {
-  assert.equal(queueSplitDescription(0, 0), "Nothing needs a decision");
+  assert.equal(queueSplitDescription(0, 0, 0), "Nothing needs a decision");
+  assert.equal(
+    queueSplitDescription(0, 0, 256),
+    "Nothing needs a decision · 256 waiting on a device fault",
+  );
+});
+
+test("four-figure counts are grouped everywhere, not only in the band", () => {
+  assert.match(queueSplitDescription(1234, 900, 0), /1,234 people need/);
 });
 
 test("the narrow-range levers name the window they set", () => {
   assert.equal(narrowRangeLabel(7), "Last 7 days");
   assert.equal(narrowRangeLabel(3), "Last 3 days");
+  assert.equal(narrowRangeLabel(1), "Last 1 day");
 });
 
 test("control labels live here, not inline in the components", () => {
   // Global Constraint 2. These are the ones that leak, because they read as
   // markup rather than as copy.
-  assert.equal(TIER_FILTER_ALL_LABEL, "All consequences");
+  assert.equal(TIER_FILTER_ALL_LABEL, "Any consequence");
   assert.equal(DECIDED_TOGGLE_LABEL, "Decided");
   assert.equal(DECIDE_ONE_LABEL, "decide");
   assert.equal(DECIDING_PREFIX, "Deciding");
+  assert.equal(DEVICE_HEALTH_LABEL, "Device health");
+});
+
+test("every branch-row string is pinned, not just the ones a component happens to use", () => {
+  assert.equal(outageBranchDays(10), "10 days with no sync row");
+  assert.equal(outageBranchDays(1), "1 day with no sync row");
+  assert.equal(outageBranchSummary(99, 990), "99 people · 990 flags");
+  assert.equal(outageReviewLabel(13), "Review 13 branches");
+  assert.equal(outageReviewLabel(1), "Review 1 branch");
+  assert.equal(OUTAGE_NOT_A_JUDGMENT, "the machines didn't record — nobody is being judged here");
+});
+
+test("an empty date span leaves no dangling separator", () => {
+  assert.match(outageBandSubline([], 5), /^5 flags · /);
 });
 ```
 
@@ -572,61 +612,97 @@ function plural(count: number, one: string, many: string): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }
 
-export function outageBandHeadline(branchCount: number, peopleCount: number): string {
-  const branches = plural(branchCount, "branch", "branches");
-  return `${branches} had no device data · ${plural(peopleCount, "person", "people")}`;
+/**
+ * @param outageBranchCount EVERY branch in the outage — never a filtered or
+ *   still-checked subset. This sentence states what happened; it must not move
+ *   when the user unchecks a box, or the page reports "1 branch had no device
+ *   data" when thirteen did.
+ * @param affectedPeopleCount everyone the outage touched. Deliberately NOT the
+ *   count the excuse button shows: that one is `coveredEmployeeCount`, which is
+ *   smaller. "affected" is what makes the two numbers legible side by side.
+ */
+export function outageBandHeadline(
+  outageBranchCount: number,
+  affectedPeopleCount: number,
+): string {
+  const branches = plural(outageBranchCount, "branch", "branches");
+  return `${branches} had no device data · ${plural(affectedPeopleCount, "person", "people")} affected`;
 }
 
 export function outageBandSubline(dates: string[], flagCount: number): string {
-  return `${dateSpanLabel(dates)} · ${plural(flagCount, "flag", "flags")} · ${OUTAGE_NOT_A_JUDGMENT}`;
+  // dateSpanLabel returns "" for an empty array, which would leave a dangling
+  // " · " at the head of the line. personSubline has a dedicated test for this
+  // same failure; the guard is one line.
+  const span = dateSpanLabel(dates);
+  const head = span ? `${span} · ` : "";
+  return `${head}${plural(flagCount, "flag", "flags")} · ${OUTAGE_NOT_A_JUDGMENT}`;
 }
 
 export function outageBranchDays(dayCount: number): string {
   return `${plural(dayCount, "day", "days")} with no sync row`;
 }
 
-export function outageBranchSummary(peopleCount: number, flagCount: number): string {
-  return `${plural(peopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+export function outageBranchSummary(affectedPeopleCount: number, flagCount: number): string {
+  return `${plural(affectedPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
 }
 
-export function outageReviewLabel(branchCount: number): string {
-  return `Review ${branchCount}`;
+/** @param outageBranchCount every branch, not the checked subset — "Review 13"
+ *  must not become "Review 4" as boxes are unchecked. */
+export function outageReviewLabel(outageBranchCount: number): string {
+  return `Review ${plural(outageBranchCount, "branch", "branches")}`;
 }
 
 /**
- * Zero is a real state here: uncheck every branch and the button must not read
- * "Excuse 0 people · 0 flags", which looks like a live action that does
- * nothing. The button is disabled in that state; this is the label it wears.
+ * The band's write action.
+ *
+ * Three states, not two. Zero-with-nothing-selected and zero-with-nothing-left
+ * are different facts and must not share words: "Nothing LEFT to excuse" over an
+ * empty selection reads as "this outage has already been handled", when the user
+ * has merely unchecked everything to start again. "Left" is a completion word.
+ *
+ * @param coveredPeopleCount MUST be `outageWrite(...).coveredEmployeeCount` —
+ *   Global Constraint 4. Never `branchCount`, never a raw member count.
+ * @param flagCount MUST be `outageWrite(...).identities.length`.
+ * @param selectedBranchCount how many branches are still checked.
  */
-export function outageExcuseLabel(peopleCount: number, flagCount: number): string {
-  if (peopleCount === 0 || flagCount === 0) return "Nothing left to excuse";
-  return `Excuse ${plural(peopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+export function outageExcuseLabel(
+  coveredPeopleCount: number,
+  flagCount: number,
+  selectedBranchCount: number,
+): string {
+  if (selectedBranchCount === 0) return "Select a branch to excuse";
+  if (flagCount === 0) return "Nothing left to excuse";
+  return `Excuse ${plural(coveredPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
 }
 
 /**
  * Replaces `queueHeaderDescription` on this page.
  *
- * "389 people · 147 rows" counted the outage members among the people waiting
- * on HR, which is the specific lie the band exists to end: 256 of those 389
- * are waiting on a machine, and no amount of HR attention moves them.
+ * "389 people · 147 rows" counted the outage members among the people waiting on
+ * HR, which is the specific lie the band exists to end: 256 of those 389 are
+ * waiting on a machine, and no amount of HR attention moves them.
+ *
+ * `rows` survives the rewrite. It was added deliberately in 20c016fc and fixed
+ * for tier filters in 38fbea19, and `queueHeaderDescription`'s own docstring
+ * explains why people-only counting misleads above a list that can hold one row
+ * for several people. Dropping it here would silently undo both commits.
  */
-export function queueSplitDescription(queuePeople: number, outagePeople: number): string {
-  if (queuePeople === 0 && outagePeople === 0) return "Nothing needs a decision";
-  const head = queuePeople === 0 ? "Nothing needs a decision" : `${queuePeople} need a decision`;
+export function queueSplitDescription(
+  queuePeople: number,
+  queueRows: number,
+  outagePeople: number,
+): string {
+  const head =
+    queuePeople === 0
+      ? "Nothing needs a decision"
+      : `${plural(queuePeople, "person needs", "people need")} a decision · ${plural(queueRows, "row", "rows")}`;
   if (outagePeople === 0) return head;
-  return `${head} · ${outagePeople} waiting on a device fault`;
+  return `${head} · ${outagePeople.toLocaleString("en-US")} waiting on a device fault`;
 }
 
-/**
- * Toolbar and panel control labels.
- *
- * Here rather than inline in the components for the reason this module's own
- * docstring gives: the three queue components "hold no copy of their own", so
- * the queue's wording can be reviewed in one file rather than three. Control
- * labels are the easiest ones to leak — they feel like markup — which is
- * exactly why they are the ones that drift.
- */
-export const TIER_FILTER_ALL_LABEL = "All consequences";
+/** A filter's no-filter option. "All consequences" reads as an inclusion
+ *  criterion — "only flags that carry a consequence" — which is the opposite. */
+export const TIER_FILTER_ALL_LABEL = "Any consequence";
 
 export const DECIDED_TOGGLE_LABEL = "Decided";
 
@@ -639,7 +715,7 @@ export const DECIDE_ONE_LABEL = "decide";
 export const DECIDING_PREFIX = "Deciding";
 
 export function narrowRangeLabel(days: number): string {
-  return `Last ${days} days`;
+  return `Last ${plural(days, "day", "days")}`;
 }
 ```
 
@@ -954,7 +1030,7 @@ export function OutageBand(props: OutageBandProps) {
           disabled={nothingToWrite || props.submitting}
           onClick={() => props.onExcuse(write.identities)}
         >
-          {outageExcuseLabel(write.coveredEmployeeCount, write.identities.length)}
+          {outageExcuseLabel(write.coveredEmployeeCount, write.identities.length, write.branchCount)}
         </Button>
       </div>
 
@@ -1007,7 +1083,7 @@ export function OutageBand(props: OutageBandProps) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx tsx --test src/ui/outageBand.test.tsx`
-Expected: PASS, 11 tests.
+Expected: PASS, 15 tests.
 
 - [ ] **Step 5: Run the full unit suite and typecheck**
 
@@ -1065,6 +1141,7 @@ test("an outage group is rendered as the band, not as a queue row", () => {
       counts={{ open: 5, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false }}
       outages={outages}
       queuePeople={1}
+      queueRows={1}
       excludedBranches={new Set()}
       onToggleBranch={() => {}}
       onExcuseOutages={() => {}}
@@ -1087,12 +1164,13 @@ test("the header separates people waiting on HR from people waiting on a device"
       counts={{ open: 9, needs_re_review: 0, decided: 0, people: 5, rows: 2, open_capped: false }}
       outages={[]}
       queuePeople={5}
+      queueRows={2}
       excludedBranches={new Set()}
       onToggleBranch={() => {}}
       onExcuseOutages={() => {}}
     />,
   );
-  assert.match(html, /5 need a decision/);
+  assert.match(html, /5 people need a decision/);
   assert.ok(!/waiting on a device fault/.test(html), "no outages, no device line");
 });
 ```
@@ -1154,6 +1232,7 @@ Replace `entries={entries}` in the `FlagQueueList` element with `entries={queue}
 ```tsx
         outages={outages}
         queuePeople={queuePeople}
+        queueRows={queue.length}
         excludedBranches={excludedBranches}
         onToggleBranch={handleToggleBranch}
         onExcuseOutages={handleExcuseOutages}
@@ -1168,6 +1247,9 @@ Add to `FlagQueueViewProps`:
   outages: OutageGroup[];
   /** Distinct people in the judgment queue — NOT `counts.people`, which includes outage members. */
   queuePeople: number;
+  /** Top-level rows in the judgment queue — NOT `counts.rows`, which counts the
+   *  outage groups too. This is `partitionQueue(...).queue.length`. */
+  queueRows: number;
   excludedBranches: ReadonlySet<string>;
   onToggleBranch: (groupKey: string) => void;
   onExcuseOutages: (identities: string[]) => void;
@@ -1176,7 +1258,7 @@ Add to `FlagQueueViewProps`:
 Change the `PageHeader` description to:
 
 ```tsx
-        description={counts ? queueSplitDescription(props.queuePeople, outagePeople) : "Loading…"}
+        description={counts ? queueSplitDescription(props.queuePeople, props.queueRows, outagePeople) : "Loading…"}
 ```
 
 with, above the `return`:
@@ -1281,7 +1363,7 @@ Replace the whole `<PageHeader …>…</PageHeader>` block with:
 ```tsx
       <PageHeader
         title="Flags"
-        description={counts ? queueSplitDescription(props.queuePeople, outagePeople) : "Loading…"}
+        description={counts ? queueSplitDescription(props.queuePeople, props.queueRows, outagePeople) : "Loading…"}
         actions={
           // One row, inline, no stacked labels. The three controls previously
           // cost 62px because each carried a <Label> above it; the accessible
