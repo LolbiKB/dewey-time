@@ -248,6 +248,9 @@ export function FlagQueuePage() {
   const [bulkFailure, setBulkFailure] = useState<BulkFailure | null>(null);
   const [writeFailure, setWriteFailure] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  /** Spoken, not shown. The queue's own state changes — selection, and the
+   *  outcome of a write — were entirely silent to assistive tech. */
+  const [announcement, setAnnouncement] = useState("");
 
   // The selected row can be a group member surfaced by "Decide one by one",
   // which is not itself a top-level entry — so resolve against the expanded
@@ -333,6 +336,15 @@ export function FlagQueuePage() {
       if (effect.lastDecision) setLastDecision(effect.lastDecision);
       setBulkFailure(effect.bulkFailure);
 
+      // Say what happened. Until now the only signal that a decision landed was
+      // the row vanishing — invisible to a screen reader, and ambiguous to
+      // everyone else, since a row also vanishes when the refetch reorders.
+      setAnnouncement(
+        effect.bulkFailure
+          ? `Saved ${effect.bulkFailure.saved} of ${effect.bulkFailure.attempted}. See the failures below.`
+          : "Decision saved.",
+      );
+
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
       // all their flags are decided.
@@ -412,6 +424,7 @@ export function FlagQueuePage() {
         orphans={isLoading || error ? undefined : orphans}
         includeDecided={includeDecided}
         onToggleDecided={handleToggleDecided}
+        announcement={announcement}
         range={requestedRange}
         onRangeChange={setRange}
         tier={tier}
@@ -493,6 +506,8 @@ export type FlagQueueViewProps = {
   /** Whether the queue is also listing people with nothing outstanding. */
   includeDecided?: boolean;
   onToggleDecided?: () => void;
+  /** Spoken-only status text for the queue's live region. */
+  announcement?: string;
   /** The range the controls edit — the request, not the payload's answer. */
   range: { startDate: string; endDate: string };
   onRangeChange: (next: { startDate: string; endDate: string }) => void;
@@ -746,8 +761,20 @@ export function FlagQueueView(props: FlagQueueViewProps) {
               "lg:grid lg:overflow-visible lg:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
             )}
           >
+            {/* polite, not assertive: these confirm what the user just did, so
+                they must not cut across whatever is being read. Visually hidden
+                because the same facts are already on screen. */}
+            <p className="sr-only" role="status" aria-live="polite">
+              {props.announcement}
+            </p>
             <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.list}</div>
-            <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.panel}</div>
+            <div
+              role="region"
+              aria-label="Selected flag"
+              className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain"
+            >
+              {props.panel}
+            </div>
           </div>
         )}
       </Section>
