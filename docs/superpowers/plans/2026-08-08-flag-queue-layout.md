@@ -416,7 +416,7 @@ export function queuePeopleCount(entries: QueueEntry[]): number {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx tsx --test src/lib/flagQueuePartition.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 12 tests (one gains a negative control).
 
 - [ ] **Step 5: Confirm the new file is actually globbed**
 
@@ -951,7 +951,14 @@ test("an in-flight write disables the action and says so", () => {
   // hurried double-click fires two writes over thousands of flags.
   const html = render({ submitting: true });
   assert.match(html, /Excusing…/);
-  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Excusing…/);
+  // `disabled=""`, NOT a bare /disabled/. Button's class list always contains
+  // the literal "disabled:pointer-events-none disabled:opacity-50", so
+  // /<button[^>]+disabled/ matches the CLASS whether or not the attribute is
+  // there — a re-review mutation-tested this exact regex and found the suite
+  // stayed green with `|| props.submitting` deleted.
+  assert.match(html, /<button[^>]*\sdisabled=""[^>]*>[^<]*Excusing…/);
+  // Negative control: the same button, not submitting, must NOT be disabled.
+  assert.doesNotMatch(render(), /<button[^>]*\sdisabled=""[^>]*>[^<]*Excuse /);
 });
 
 test("excluding every branch disables the action rather than offering zero", () => {
@@ -964,7 +971,7 @@ test("excluding every branch disables the action rather than offering zero", () 
   // Anchored to the excuse button specifically: a bare /disabled/ match would
   // pass if the disclosure were disabled and the write button left live.
   assert.match(html, /Select a branch to excuse/);
-  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Select a branch to excuse/);
+  assert.match(html, /<button[^>]*\sdisabled=""[^>]*>[^<]*Select a branch to excuse/);
 });
 
 test("a decided flag is not counted in the action", () => {
@@ -1095,7 +1102,10 @@ export function OutageBand(props: OutageBandProps) {
   // band and not a nav item.
   if (props.outages.length === 0) return null;
 
-  const all = outageWrite(props.outages, new Set<string>());
+  // Only the filtered write is needed. The unfiltered pass this used to keep
+  // fed the headline and subline, and both now read queuePeopleCount /
+  // outageFlagCount instead — running groupPayload over every branch for a
+  // discarded result is pure cost.
   const write = outageWrite(props.outages, props.excludedBranches);
   const nothingToWrite = write.identities.length === 0;
 
@@ -1124,8 +1134,13 @@ export function OutageBand(props: OutageBandProps) {
           variant="ghost"
           size="sm"
           className="shrink-0"
+          // aria-expanded only. aria-controls must reference an element that
+          // EXISTS, and this panel is conditionally rendered — pointing at an
+          // absent id is what automated a11y audits flag, and it buys nothing
+          // over aria-expanded, which already announces the state. Keeping the
+          // panel permanently mounted just to satisfy the attribute would put
+          // thirteen branch rows in the accessibility tree at all times.
           aria-expanded={open}
-          aria-controls="outage-band-branches"
           onClick={() => setOpen((prev) => !prev)}
         >
           {outageReviewLabel(props.outages.length)}
@@ -1151,7 +1166,7 @@ export function OutageBand(props: OutageBandProps) {
       </div>
 
       {open ? (
-        <div id="outage-band-branches" className="border-t border-amber-500/25 px-3 py-2">
+        <div className="border-t border-amber-500/25 px-3 py-2">
           {/* Bounded on purpose. Thirteen branches is today's real count, and an
               unbounded list would push the queue below the fold — the exact
               failure this band exists to prevent. */}
@@ -1173,11 +1188,11 @@ export function OutageBand(props: OutageBandProps) {
                       !included && "opacity-50",
                     )}
                   >
-                  <Checkbox
-                    checked={included}
-                    onCheckedChange={() => props.onToggleBranch(group.group_key)}
-                    aria-label={outageBranchCheckboxLabel(branch)}
-                  />
+                    <Checkbox
+                      checked={included}
+                      onCheckedChange={() => props.onToggleBranch(group.group_key)}
+                      aria-label={outageBranchCheckboxLabel(branch)}
+                    />
                   <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                     {branch}
                   </span>
