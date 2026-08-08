@@ -59,6 +59,12 @@ export type QueuePerson = {
   employee: string;
   employee_name: string;
   employee_branch: string | null;
+  /**
+   * `Employee.image` — a site-relative path like "/files/sokheng.jpg", null for
+   * the many employees who have no photo on file. The row renders initials in
+   * that case, never an empty circle.
+   */
+  employee_image: string | null;
   /** The worst unresolved flag's date — the row's headline day. */
   attendance_date: string;
   /** Every distinct date THIS entry's flags fall on, ascending. */
@@ -94,6 +100,17 @@ export type QueuePayload = {
   counts: { open: number; needs_re_review: number; decided: number; people: number; rows: number };
   orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number };
   alerts: { branch: string; local_date: string; status: string; last_error?: string | null }[];
+  /**
+   * (branch, date) pairs where no device data arrived — the strip's grey cells.
+   *
+   * Required, and safe to rely on: the queue's cache prefix is versioned by
+   * payload shape (`flag_queue:v2`, flag_queue_api.py) and was bumped when this
+   * key and the person fields above were added, so a pre-deploy entry can never
+   * be served to code that expects them. Adding a field here without bumping
+   * that prefix reintroduces a 60-second window where cached responses arrive
+   * one field short and the page throws.
+   */
+  outage_dates: { branch: string; date: string }[];
   truncated: boolean;
   start_date: string;
   end_date: string;

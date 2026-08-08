@@ -13,6 +13,8 @@ from dewey_time.attendance_engine.flag_grouping import (
     _pattern_codes,
     _person,
     build_queue,
+    iter_people,
+    recount,
 )
 from dewey_time.attendance_engine.flag_identity import evidence_fingerprint
 from dewey_time.attendance_engine.flag_triage import triage_rank
@@ -39,13 +41,13 @@ def _flag(employee, attendance_date, flag_code, *, evidence=None, identity=None,
     }
 
 
-def _iter_all_people(entries):
-    for entry in entries:
-        if entry["kind"] == "group":
-            for member in entry["members"]:
-                yield member
-        else:
-            yield entry
+# Alias, not a second definition: this file asserted its dedup and
+# cross-reference invariants against a hand-copied flattening loop until a
+# review caught that the copy could silently drift from the production walk
+# `iter_people` performs — the exact failure mode promoting it to public was
+# meant to close. `_iter_all_people` is kept as the call-site name because it
+# reads better at each of the ~10 assertions below than the shorter one.
+_iter_all_people = iter_people
 
 
 def _decision(flag, *, name="AFD-0001", outcome="EXCUSED", reason="DEVICE_OR_DATA_FAULT",
@@ -1401,6 +1403,131 @@ class CrossReferenceTests(unittest.TestCase):
         for person in appearances:
             self.assertEqual(person["also_count"], 1)
             self.assertEqual(person["also_outlier_count"], 0)
+
+
+class EmployeeImageTests(unittest.TestCase):
+    def test_a_persons_photo_reaches_the_entry(self):
+        result = build_queue(
+            flags=[_flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9})],
+            decisions_by_identity={},
+            employees_by_id={
+                "EMP-1": {
+                    "employee_name": "Sokheng Hon",
+                    "branch": "HQ",
+                    "image": "/files/sokheng.jpg",
+                }
+            },
+            outage_branch_dates=set(),
+        )
+        self.assertEqual(result["entries"][0]["employee_image"], "/files/sokheng.jpg")
+
+    def test_an_employee_with_no_photo_carries_none_not_a_missing_key(self):
+        result = build_queue(
+            flags=[_flag("EMP-1", DATE, "LATE_START", evidence={"minutes": 9})],
+            decisions_by_identity={},
+            employees_by_id={"EMP-1": {"employee_name": "Sokheng Hon", "branch": "HQ"}},
+            outage_branch_dates=set(),
+        )
+        self.assertIsNone(result["entries"][0]["employee_image"])
+
+
+class RecountAgreementTests(unittest.TestCase):
+    """`recount` exercised over REAL `build_queue` output, not a hand-built
+    entries list — synthetic dicts can't close the gap the two-definitions bug
+    hid in, since a shape drift between what `build_queue` assembles and what a
+    hand-written recount expects would still agree on a fixture built by hand.
+
+    An AGREEMENT test needs two properties, checked TOGETHER against the SAME
+    independently known literal numbers — never against each other:
+      1. `recount(result["entries"])` is right. Pins `recount` itself.
+      2. `result["counts"]["rows"]`/`["people"]` are ALSO right. Pins that
+         `build_queue` actually CALLED `recount` to produce its own counts,
+         rather than computing them some other way that happens to agree
+         today.
+    Property 1 alone cannot catch `build_queue` silently drifting off of
+    `recount`: an inline, drifted recomputation living *inside* `build_queue`
+    leaves the standalone `recount` function — and therefore property 1 —
+    completely untouched, so a test that only calls `recount` directly stays
+    green while `result["counts"]` quietly goes wrong. Comparing
+    `recount(result["entries"])` against `result["counts"]` ALONE is
+    tautological in the other direction: `build_queue` sets its own counts VIA
+    `recount` today, so both sides call the identical function over the
+    identical input — f(x) == f(x), which cannot fail while the consolidation
+    holds, which is exactly when a regression needs catching. Asserting BOTH
+    sides against independently known literals is what closes both gaps at
+    once.
+
+    The fixture also carries a fully DECIDED person (reachable only under
+    include_decided), because a fixture with zero decided people leaves the
+    `undecided_count` filter — the only non-trivial half of the definition —
+    untested no matter how the comparison is written: with nobody decided,
+    "count everyone" and "count only the undecided" produce the same number
+    by coincidence.
+    """
+
+    def _fixture(self):
+        flags = []
+        for employee in ("EMP-1", "EMP-2"):
+            for d in (D1, D2, D3):
+                flags.append(_flag(employee, d, "LATE_START", evidence={"minutes": 9}))
+        flags.append(_flag("EMP-3", D1, "UNNOTIFIED_ABSENCE"))
+        # EMP-4's only flag is decided and its fingerprint matches, so this
+        # person is fully settled — undecided_count 0 — and reachable in
+        # `entries` only because include_decided=True.
+        settled = _flag("EMP-4", D1, "LATE_START", evidence={"minutes": 9})
+        flags.append(settled)
+
+        return build_queue(
+            flags=flags,
+            decisions_by_identity={settled["flag_identity"]: _decision(settled)},
+            employees_by_id=_emps("EMP-1", "EMP-2", "EMP-3", "EMP-4"),
+            outage_branch_dates=set(),
+            include_decided=True,
+        )
+
+    def test_recount_over_the_real_entries_matches_an_independently_known_total(self):
+        result = self._fixture()
+        # A REPEAT_PATTERN group (EMP-1, EMP-2), EMP-3's own act-tier row, and
+        # EMP-4's fully-settled row: both entry kinds, plus a settled person,
+        # in one real assembly — 3 entries, not built or counted by hand.
+        self.assertEqual({e["kind"] for e in result["entries"]}, {"group", "person"})
+        self.assertEqual(len(result["entries"]), 3)
+
+        # 3 people: EMP-1, EMP-2 (the group) and EMP-3 (their own row) all
+        # still owe HR something. EMP-4 is settled and must not count.
+        expected = {"rows": 3, "people": 3}
+
+        # Property 1: `recount` itself is right over the real entries.
+        self.assertEqual(recount(result["entries"]), expected)
+        # Property 2: `build_queue` actually USED `recount` to set its own
+        # counts, rather than computing them some other way. A drifted inline
+        # recomputation living inside `build_queue` (dropping the
+        # undecided_count filter, say) would leave property 1 above green —
+        # `recount` itself is untouched — while THIS assertion catches
+        # `result["counts"]["people"]` coming back 4, not 3.
+        self.assertEqual(result["counts"]["rows"], expected["rows"])
+        self.assertEqual(result["counts"]["people"], expected["people"])
+
+    def test_recount_over_a_tier_filtered_slice_excludes_the_settled_person(self):
+        # The shape flag_queue_api.py's tier branch actually hands `recount`:
+        # a SLICE of real entries, not the whole list (already covered above)
+        # and not a hand-built one. EMP-4's settled row and the LATE_START
+        # pattern group both land in "routine" (a settled person's rank falls
+        # to 0, which tiers routine) — EMP-3's UNNOTIFIED_ABSENCE is "act" and
+        # is filtered out here regardless.
+        #
+        # Property 1 only: `build_queue` itself never computes a tier-sliced
+        # count (only the whole-range one, covered by property 2 above) — the
+        # slice-and-recount pairing this pins is flag_queue_api's own call,
+        # asserted from the other side of the boundary in test_flag_queue_api.py.
+        result = self._fixture()
+        routine_only = [entry for entry in result["entries"] if entry["tier"] == "routine"]
+        self.assertEqual(len(routine_only), 2)
+
+        # 2 rows (the group + EMP-4's settled row); 2 people, not 3 — EMP-4's
+        # undecided_count is 0, so a filter that drops the undecided_count
+        # check would wrongly count them alongside EMP-1 and EMP-2.
+        self.assertEqual(recount(routine_only), {"rows": 2, "people": 2})
 
 
 if __name__ == "__main__":

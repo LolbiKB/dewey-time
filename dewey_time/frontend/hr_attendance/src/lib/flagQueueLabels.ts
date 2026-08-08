@@ -22,6 +22,7 @@ import { format } from "date-fns";
 
 import { formatBranchLabel, parseDateKey } from "@/lib/attendanceTime";
 import { formatFlagLabel, formatMissingDuration, parseFlagEvidence } from "@/lib/flagLabels";
+import type { Strip } from "@/lib/flagStrip";
 import type {
   DecisionState,
   FlagDecision,
@@ -84,9 +85,17 @@ export function flagDayLabel(attendanceDate: string): string {
  * (`Employee.branch`, run through `formatBranchLabel` for the `BRANCH-`
  * prefix some records still carry, the same helper `DeviceAlerts.tsx` uses
  * for branch display).
+ *
+ * A missing date drops the clause rather than being coerced into one: every
+ * group in the contract types `attendance_date` as nullable, and `format`
+ * throws `RangeError: Invalid time value` on a date it cannot parse. The
+ * caller's old `?? ""` read like a guard and was the opposite — it handed the
+ * formatter the one string guaranteed to throw, taking the whole list down
+ * rather than wording one header badly.
  */
-export function branchNoDeviceDataHeader(branch: string, attendanceDate: string): string {
+export function branchNoDeviceDataHeader(branch: string, attendanceDate: string | null): string {
   const label = formatBranchLabel(branch) ?? branch;
+  if (!attendanceDate) return `${label} had no device data`;
   return `${label} had no device data on ${formatDayMonth(attendanceDate)}`;
 }
 
@@ -312,7 +321,7 @@ export function decisionStateLabel(state: DecisionState): string {
  */
 export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): string {
   if (entry.group_type === "BRANCH_NO_DEVICE_DATA") {
-    return branchNoDeviceDataHeader(entry.branch ?? "Unknown branch", entry.attendance_date ?? "");
+    return branchNoDeviceDataHeader(entry.branch ?? "Unknown branch", entry.attendance_date);
   }
   if (entry.group_type === "REPEAT_PATTERN") {
     return repeatPatternHeader(entry.flag_code ?? "flag");
@@ -364,6 +373,48 @@ export function personHeadline(person: QueuePerson): string {
       ? formatMissingDuration(worstMinutes).replace(/^Missing /, "")
       : `${worstMinutes} min`;
   return `${summary} · worst ${worstText}`;
+}
+
+/**
+ * The strip's only accessible name. Its cells are hidden: at 6px they are not a
+ * click target and the sub-line has already given the reader the finding in
+ * words — the strip is reinforcement, so it takes one summary and no more.
+ */
+export function stripAriaLabel(strip: Strip): string {
+  const days = `${strip.flaggedCount} flagged ${strip.flaggedCount === 1 ? "day" : "days"}`;
+  return `${days} in the last ${strip.cells.length}`;
+}
+
+/**
+ * A widened range can produce a row whose sub-line names a serious flag while
+ * the strip is all green — the flag is older than the window. This marker is
+ * what keeps that honest. The sub-line remains driven by the person's worst flag
+ * across the WHOLE range, not the strip's window.
+ */
+export function earlierMarkerLabel(count: number): string | null {
+  return count > 0 ? `+${count} earlier` : null;
+}
+
+/**
+ * "+2" — the member faces a group row had no room for, beside
+ * `earlierMarkerLabel` so the queue's two "+N" affixes follow one rule from one
+ * file rather than setting two precedents in the same row. Bare on purpose: it
+ * sits at the end of a row of faces, where "+2 more people" would out-argue the
+ * headline, and `groupSubline` has already led with "N people".
+ */
+export function hiddenMemberLabel(count: number): string | null {
+  return count > 0 ? `+${count}` : null;
+}
+
+/**
+ * The row's second line. A person row names the day; a member of a pattern group
+ * does not, because naming one of four mornings would be wrong for the other
+ * three. `dates.length === 1` is the honest test for which case this is.
+ */
+export function personSubline(person: QueuePerson): string {
+  const headline = personHeadline(person);
+  if (!headline || person.dates.length !== 1) return headline;
+  return `${headline} · ${format(parseDateKey(person.dates[0]), "EEE d MMM")}`;
 }
 
 /**

@@ -14,18 +14,16 @@ test.beforeEach(async ({ page }) => {
 // Frappe does — direct navigation to `/hr-flags` works here whether or not the
 // server-side route exists. That's exactly the gap the Python test above
 // covers and this file structurally cannot.
-
-// Every payload below is hand-built, and nothing type-checks it: tsconfig's
-// `include` is `["src"]`, and Playwright transpiles without checking. So these
-// literals have to be kept honest by hand against `src/types/flags.ts` and
-// `flag_grouping.build_queue`, which is the ONLY thing standing between this
-// file and a fixture that passes while production throws. In particular each
-// person carries `entry_key` (`p:<employee>`, or `<group_key>|p:<employee>` for
-// a group member), `dates` (its flags' distinct dates, ascending),
-// `also_count`/`also_outlier_count`, every flag carries its own
-// `attendance_date`, and `counts` carries `rows` (the entry count the header
-// prints). Derive them from the fixture's own flags rather than stubbing them
-// out — a fixture that disagrees with the backend proves nothing.
+//
+// Every queue payload below is hand-built and must match `QueuePayload` in
+// src/types/flags.ts field for field — including the ones nothing here asserts
+// on. Nothing checks that for you: `tsconfig.json` includes only `src`, so
+// `tsc --noEmit` never sees this file, and Playwright transpiles without type
+// checking. A payload that has drifted does not fail as a type error, it fails
+// as "the row never rendered" — which is exactly how the person fields
+// (`entry_key`, `dates`, `employee_image`, `also_count`, `also_outlier_count`)
+// and `FlagOut.attendance_date` came to be missing here while the whole unit
+// suite stayed green.
 
 test("the flag queue renders groups and person rows with toolbar counts for HR staff", async ({
   page,
@@ -47,6 +45,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
             employee: "EMP-301",
             employee_name: "Thida Sok",
             employee_branch: "Siem Reap Depot",
+            employee_image: null,
             attendance_date: "2026-08-13",
             dates: ["2026-08-13"],
             rank: 140,
@@ -74,6 +73,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
             employee: "EMP-302",
             employee_name: "Vireak Chan",
             employee_branch: "Siem Reap Depot",
+            employee_image: null,
             attendance_date: "2026-08-13",
             dates: ["2026-08-13"],
             rank: 140,
@@ -113,6 +113,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
             employee: "EMP-401",
             employee_name: "Leng Ratha",
             employee_branch: "BRANCH-A",
+            employee_image: null,
             attendance_date: "2026-08-14",
             dates: ["2026-08-14"],
             rank: 20,
@@ -140,6 +141,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
             employee: "EMP-402",
             employee_name: "Sopheak Meas",
             employee_branch: "BRANCH-A",
+            employee_image: null,
             attendance_date: "2026-08-14",
             dates: ["2026-08-14"],
             rank: 20,
@@ -170,6 +172,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
         employee: "EMP-001",
         employee_name: "Jane Doe",
         employee_branch: "BRANCH-A",
+        employee_image: null,
         attendance_date: "2026-08-15",
         dates: ["2026-08-15"],
         rank: 150,
@@ -193,12 +196,17 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
         also_outlier_count: 0,
       },
     ],
-    // `rows` is the number of entries, `people` the number of distinct
-    // employees who still owe HR an answer (build_queue) — three entries here,
-    // five people across them.
-    counts: { open: 6, needs_re_review: 1, decided: 2, people: 5, rows: 3 },
+    // Every number here is one `build_queue` could actually return for these
+    // entries. `people`/`rows` are `flag_grouping.recount` — three entries, five
+    // distinct employees with something undecided across them. `open` counts the
+    // five undecided flags below; an undecided flag can never be missing from the
+    // list, so it cannot exceed them. `decided` can and does: those two settled
+    // flags belong to people the default view drops, which is the whole reason
+    // the toolbar reports the number.
+    counts: { open: 5, needs_re_review: 0, decided: 2, people: 5, rows: 3 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
+    outage_dates: [],
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -260,10 +268,11 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
   // submit button at every viewport, so this runs on both projects.
 
   const FLAG_IDENTITY = "AUTO-EMP-201-2026-08-13-late_start";
+  const FLAG_DATE = "2026-08-13";
   const undecidedFlag = {
     flag_identity: FLAG_IDENTITY,
     flag_code: "LATE_START",
-    attendance_date: "2026-08-13",
+    attendance_date: FLAG_DATE,
     severity: "WARNING",
     day_closed: 1,
     evidence: { minutes: 75 },
@@ -286,21 +295,25 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
     },
   };
 
+  // `p:<employee>`, with no group prefix: a lone person row is exactly what
+  // `flag_grouping._entries_for` stamps that way, and it is the key the page
+  // holds as its selection across the refetch this test is about.
   function personEntry(flag: typeof undecidedFlag, undecidedCount: number) {
     return {
       kind: "person",
-      // A lone row, so `p:<employee>` with no group prefix — and one flag on
-      // one day, so `dates` is that flag's date.
       entry_key: "p:EMP-201",
       employee: "EMP-201",
       employee_name: "Noor Aziz",
       employee_branch: "BRANCH-A",
-      attendance_date: flag.attendance_date,
-      dates: [flag.attendance_date],
+      employee_image: null,
+      attendance_date: FLAG_DATE,
+      // The distinct dates of THIS entry's flags — one flag, one date.
+      dates: [FLAG_DATE],
       rank: 65,
       tier: "review",
       flags: [flag],
       undecided_count: undecidedCount,
+      // In one entry only, so no cross-reference badge.
       also_count: 0,
       also_outlier_count: 0,
     };
@@ -309,6 +322,7 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
   const basePayload = {
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
+    outage_dates: [],
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -325,13 +339,21 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
 
     if (p.includes("get_flag_queue")) {
       queueCalls += 1;
-      // One entry either way, so `rows` is 1 in both. `people` counts only
-      // those who still owe HR an answer, so it drops to 0 once the single
-      // flag is decided (build_queue's `undecided_count` filter).
+      // One row either way; `people` counts only employees with something still
+      // undecided (flag_grouping.recount), so it drops to 0 once the flag is
+      // decided even though the row is still on screen.
       const payload =
         queueCalls === 1
-          ? { ...basePayload, entries: [personEntry(undecidedFlag, 1)], counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 } }
-          : { ...basePayload, entries: [personEntry(decidedFlag, 0)], counts: { open: 0, needs_re_review: 0, decided: 1, people: 0, rows: 1 } };
+          ? {
+              ...basePayload,
+              entries: [personEntry(undecidedFlag, 1)],
+              counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 },
+            }
+          : {
+              ...basePayload,
+              entries: [personEntry(decidedFlag, 0)],
+              counts: { open: 0, needs_re_review: 0, decided: 1, people: 0, rows: 1 },
+            };
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -411,11 +433,13 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
   const GROUP_KEY = "grp-routine-LATE_START-2026-08-14-bulk";
   const names = ["Aiko Tan", "Ben Souza", "Cleo Marsh", "Dara Sok", "Elan Rios"];
 
+  const FLAG_DATE = "2026-08-14";
+
   function memberFlag(n: number) {
     return {
-      flag_identity: `AUTO-EMP-5${n}-2026-08-14-late_start`,
+      flag_identity: `AUTO-EMP-5${n}-${FLAG_DATE}-late_start`,
       flag_code: "LATE_START",
-      attendance_date: "2026-08-14",
+      attendance_date: FLAG_DATE,
       severity: "WARNING",
       day_closed: 1,
       evidence: { minutes: 15 + n },
@@ -426,21 +450,23 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
     };
   }
 
+  // `<group_key>|p:<employee>`, the form `flag_grouping._entries_for` stamps on a
+  // group member — a bare `p:<employee>` would collide with the same person's lone
+  // row if they had one, which is the collision the prefix exists to prevent.
   function member(n: number, name: string) {
-    const flag = memberFlag(n);
     return {
-      // A group member, so the key is the group's own key plus the person —
-      // the same employee in a second entry would otherwise collide.
       entry_key: `${GROUP_KEY}|p:EMP-5${n}`,
       employee: `EMP-5${n}`,
       employee_name: name,
       employee_branch: "BRANCH-A",
-      attendance_date: flag.attendance_date,
-      dates: [flag.attendance_date],
+      employee_image: null,
+      attendance_date: FLAG_DATE,
+      dates: [FLAG_DATE],
       rank: 20,
       tier: "routine",
-      flags: [flag],
+      flags: [memberFlag(n)],
       undecided_count: 1,
+      // Each of these five is in this group and nowhere else.
       also_count: 0,
       also_outlier_count: 0,
     };
@@ -460,16 +486,19 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
         group_key: GROUP_KEY,
         branch: null,
         flag_code: "LATE_START",
-        attendance_date: "2026-08-14",
+        attendance_date: FLAG_DATE,
         rank: 20,
         tier: "routine",
         members,
       },
     ],
-    // Five people, but one entry: the group IS the row.
+    // One entry — the group — holding all five people (flag_grouping.recount
+    // counts group members as people, which is what keeps the header from
+    // reading "1 row" over five names).
     counts: { open: 5, needs_re_review: 0, decided: 0, people: 5, rows: 1 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
+    outage_dates: [],
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -559,10 +588,11 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
   // decision form are the same component tree at every viewport.
 
   const FLAG_IDENTITY = "AUTO-EMP-201-2026-08-13-late_start";
+  const FLAG_DATE = "2026-08-13";
   const decidedFlag = {
     flag_identity: FLAG_IDENTITY,
     flag_code: "LATE_START",
-    attendance_date: "2026-08-13",
+    attendance_date: FLAG_DATE,
     severity: "WARNING",
     day_closed: 1,
     evidence: { minutes: 75 },
@@ -586,8 +616,9 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     employee: "EMP-201",
     employee_name: "Noor Aziz",
     employee_branch: "BRANCH-A",
-    attendance_date: decidedFlag.attendance_date,
-    dates: [decidedFlag.attendance_date],
+    employee_image: null,
+    attendance_date: FLAG_DATE,
+    dates: [FLAG_DATE],
     // A settled person ranks 0: rank comes from the worst UNRESOLVED flag and
     // they have none (flag_grouping._person).
     rank: 0,
@@ -599,8 +630,14 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
   };
 
   const basePayload = {
+    // `people` is 0 in both views: it counts employees with something still
+    // undecided, and the only person here has nothing. `rows` is not in here —
+    // it is the length of whichever entry list the response carries, so it is
+    // filled in below rather than shared between the two.
+    counts: { open: 0, needs_re_review: 0, decided: 1, people: 0 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
+    outage_dates: [],
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -615,8 +652,10 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     if (p.includes("get_flag_queue")) {
       const includeDecided = url.searchParams.get("include_decided");
       queueParams.push(includeDecided);
-      // The default view genuinely does not contain this person — which is
-      // the entire reason the toggle has to exist.
+      // The default view genuinely does not contain this person — which is the
+      // entire reason the toggle has to exist. `rows` follows the list rather
+      // than being pinned to one number, because the backend recounts it per
+      // response and the header would otherwise claim a row that is not there.
       const entries = includeDecided ? [settledPerson] : [];
       return route.fulfill({
         status: 200,
@@ -625,15 +664,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
           message: {
             ...basePayload,
             entries,
-            // `rows` is the entry count, so it moves with `entries`; `people`
-            // stays 0 either way because this person owes HR nothing.
-            counts: {
-              open: 0,
-              needs_re_review: 0,
-              decided: 1,
-              people: 0,
-              rows: entries.length,
-            },
+            counts: { ...basePayload.counts, rows: entries.length },
           },
         }),
       });

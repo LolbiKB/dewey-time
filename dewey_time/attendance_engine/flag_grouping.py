@@ -136,13 +136,14 @@ def build_queue(
     # with something open" (which is what the toolbar renders it as) when settled
     # people are on show. Under the default every person in `entries` is
     # unresolved by construction, so the filter changes nothing there.
-    counts["people"] = len(
-        {person["employee"] for person in _iter_people(entries) if person["undecided_count"]}
-    )
+    #
     # The header states people AND rows so the toolbar total and the list length
     # cannot read as contradicting each other — "40 people · 12 rows", not "40
-    # people with something open" above 200 rows.
-    counts["rows"] = len(entries)
+    # people with something open" above 200 rows. `recount()` is the ONE
+    # definition of both numbers — flag_queue_api's tier-filtered recount calls
+    # the same function, so the unfiltered header and a filtered list can never
+    # silently disagree about what they count.
+    counts.update(recount(entries))
 
     return {
         "entries": entries,
@@ -229,6 +230,10 @@ def _person(employee: str, person_flags: list[dict], employees_by_id: dict, *, e
         # still owes HR a decision.
         "employee_name": meta.get("employee_name") or employee,
         "employee_branch": meta.get("branch"),
+        # Employee.image — a site-relative path like "/files/sokheng.jpg", or
+        # None for the many employees with no photo on file. The row renders
+        # initials for None, which is a real avatar rather than a placeholder.
+        "employee_image": meta.get("image"),
         "attendance_date": top["attendance_date"] if top else None,
         "dates": sorted({f["attendance_date"] for f in person_flags}),
         # Rank and tier come from the worst *unresolved* flag only: a decided
@@ -535,10 +540,39 @@ def _entry_sort_key(entry: dict) -> tuple:
     return (-entry["rank"], -1, entry["entry_key"])
 
 
-def _iter_people(entries: list[dict]):
+def iter_people(entries: list[dict]):
+    """Every Person in an assembled entry set, groups flattened.
+
+    Public: flag_queue_api's tier filter and this module's own `recount` both
+    need to walk group members the same way `_entries_for` builds them, and a
+    second hand-written copy of the group/lone-entry branch is exactly the kind
+    of duplicate definition `recount` exists to retire.
+    """
     for entry in entries:
         if entry["kind"] == "group":
             for member in entry["members"]:
                 yield member
         else:
             yield entry
+
+
+def recount(entries: list[dict]) -> dict:
+    """The ONE definition of `counts["people"]`/`["rows"]` for an entry list.
+
+    `rows` is `len(entries)`. `people` is distinct employees with a truthy
+    `undecided_count`, counted across every entry INCLUDING group members — a
+    person inside a pattern group is still a person with something open, and a
+    person who cleared the queue (reachable only under `include_decided`) must
+    not count.
+
+    Called from two places that used to each hand-write this: `build_queue`,
+    for the whole-range header, and `flag_queue_api`'s tier branch, for the
+    filtered list. One implementation is what makes it impossible for the two
+    to disagree about what "N people" means.
+    """
+    return {
+        "rows": len(entries),
+        "people": len(
+            {person["employee"] for person in iter_people(entries) if person["undecided_count"]}
+        ),
+    }

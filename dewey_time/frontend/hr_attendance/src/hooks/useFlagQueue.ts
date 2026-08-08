@@ -31,6 +31,14 @@ export type FlagQueue = {
   counts: QueuePayload["counts"];
   orphans: QueuePayload["orphans"];
   alerts: QueuePayload["alerts"];
+  /** (branch, date) pairs with no device data — the flag strip's grey cells. */
+  outageDates: QueuePayload["outage_dates"];
+  /**
+   * The range the payload actually covers, falling back to the one requested.
+   * The strip's window is cut from its recent end, so it has to be the server's
+   * answer rather than the client's question wherever the two can differ.
+   */
+  range: { startDate: string; endDate: string };
   truncated: boolean;
   isLoading: boolean;
   error: unknown;
@@ -51,11 +59,21 @@ export function useFlagQueue(params: FlagQueueParams): FlagQueue {
       counts: data?.counts ?? EMPTY_COUNTS,
       orphans: data?.orphans ?? EMPTY_ORPHANS,
       alerts: data?.alerts ?? [],
+      // `?? []` is for the pre-first-payload render, where `data` is undefined —
+      // the same reason as every other line in this block. A *present* payload
+      // always carries the key: the cache prefix is versioned by payload shape
+      // (flag_queue_api.py's `_QUEUE_CACHE_PREFIX`), so no pre-deploy entry
+      // written under an older shape survives into new code.
+      outageDates: data?.outage_dates ?? [],
+      range: {
+        startDate: data?.start_date ?? startDate,
+        endDate: data?.end_date ?? endDate,
+      },
       truncated: data?.truncated ?? false,
       isLoading,
       error,
       refresh: () => void refetch(),
     }),
-    [data, isLoading, error, refetch],
+    [data, startDate, endDate, isLoading, error, refetch],
   );
 }

@@ -6,6 +6,7 @@ assembly. Ranking, person-dedup and grouping belong to flag_grouping and are cov
 test_flag_grouping.py, so build_queue is stubbed here and asserted on its INPUTS.
 """
 
+import json
 import sys
 import unittest
 from contextlib import contextmanager
@@ -293,7 +294,7 @@ class TestQueueInputs(unittest.TestCase):
         self.assertEqual(flags[0]["attendance_date"], "2026-08-03")
         self.assertEqual(
             kwargs["employees_by_id"]["HR-EMP-00000"],
-            {"employee_name": "Name HR-EMP-00000", "branch": "BR-A"},
+            {"employee_name": "Name HR-EMP-00000", "branch": "BR-A", "image": None},
         )
 
     def test_only_auto_flags_reach_the_queue(self):
@@ -381,6 +382,111 @@ class TestQueueInputs(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             outage = h.build.call_args.kwargs["outage_branch_dates"]
         self.assertIn(("BR-A", "2026-08-03"), outage)
+
+
+class TestEmployeePhoto(unittest.TestCase):
+    def test_the_employee_query_selects_the_photo_column(self):
+        # A column, not a query: the fixed five-query budget is the defining
+        # constraint of this endpoint.
+        with _harness(_roster(2)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            fields = h.recorder.kwargs_for("Employee")[0]["fields"]
+        self.assertIn("image", fields)
+
+    def test_the_photo_reaches_build_queue_on_the_employee_meta(self):
+        rows = _roster(1)
+        rows["Employee"] = [{**_employee_row("HR-EMP-00000"), "image": "/files/sokheng.jpg"}]
+        with _harness(rows) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            employees = h.build.call_args.kwargs["employees_by_id"]
+        self.assertEqual(employees["HR-EMP-00000"]["image"], "/files/sokheng.jpg")
+
+    def test_an_employee_with_no_photo_carries_none(self):
+        with _harness(_roster(1)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            employees = h.build.call_args.kwargs["employees_by_id"]
+        self.assertIsNone(employees["HR-EMP-00000"]["image"])
+
+
+class TestOutageDatesInPayload(unittest.TestCase):
+    def test_a_branch_day_with_no_sync_row_reaches_the_payload(self):
+        rows = _roster(2)
+        rows["Device Sync Status"] = []  # nothing ever reported for BR-A that day
+        with _harness(rows):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["outage_dates"], [{"branch": "BR-A", "date": "2026-08-03"}])
+
+    def test_a_branch_day_that_reported_is_not_an_outage(self):
+        with _harness(_roster(2)):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["outage_dates"], [])
+
+    def test_an_unresolved_alert_is_an_outage_even_with_a_sync_row(self):
+        # `alerts` alone is not the signal and neither is the watermark: the
+        # strip's grey state needs _outage_branch_dates' combination of both.
+        rows = _roster(2)
+        rows["Device Closeout Alert"] = [
+            {
+                "branch": "BR-A",
+                "local_date": "2026-08-03",
+                "status": "closure_failed",
+                "last_error": None,
+            }
+        ]
+        with _harness(rows):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["outage_dates"], [{"branch": "BR-A", "date": "2026-08-03"}])
+
+    def test_outage_dates_are_json_safe(self):
+        # The payload is cached and returned over the wire; a set of tuples is
+        # neither serialisable nor stably ordered.
+        rows = _roster(2)
+        rows["Device Sync Status"] = []
+        with _harness(rows):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        json.dumps(payload["outage_dates"])
+        self.assertIsInstance(payload["outage_dates"], list)
+
+    def test_outage_dates_are_returned_in_a_stable_sorted_order(self):
+        # Five branch-days, deliberately built (and inserted) out of sorted
+        # order: a plain `list(a_set)` has no defined iteration order — Python
+        # randomises str hashing per process, so a missing `sorted()` matches
+        # this expected order only by coincidence. Three elements gave that a
+        # 1-in-6 chance of a false pass (observed in practice); five brings it
+        # to 1-in-120. The payload is Redis-cached, so a cache hit and a cache
+        # miss have to hand the strip the identical array or two requests for
+        # the same range silently render the fortnight differently.
+        rows = {
+            "Attendance Flag": [
+                _flag_row("HR-EMP-00000", attendance_date="2026-08-05"),
+                _flag_row("HR-EMP-00001", attendance_date="2026-08-03"),
+                _flag_row("HR-EMP-00002", attendance_date="2026-08-04"),
+                _flag_row("HR-EMP-00003", attendance_date="2026-08-07"),
+                _flag_row("HR-EMP-00004", attendance_date="2026-08-06"),
+            ],
+            "Attendance Flag Decision": [],
+            "Employee": [
+                _employee_row("HR-EMP-00000", branch="BR-Z"),
+                _employee_row("HR-EMP-00001", branch="BR-A"),
+                _employee_row("HR-EMP-00002", branch="BR-M"),
+                _employee_row("HR-EMP-00003", branch="BR-Y"),
+                _employee_row("HR-EMP-00004", branch="BR-C"),
+            ],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],  # none of the five branch-days ever reported
+        }
+        with _harness(rows):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(
+            payload["outage_dates"],
+            [
+                {"branch": "BR-A", "date": "2026-08-03"},
+                {"branch": "BR-C", "date": "2026-08-06"},
+                {"branch": "BR-M", "date": "2026-08-04"},
+                {"branch": "BR-Y", "date": "2026-08-07"},
+                {"branch": "BR-Z", "date": "2026-08-05"},
+            ],
+        )
 
 
 class TestAlerts(unittest.TestCase):
