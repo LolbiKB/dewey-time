@@ -225,11 +225,22 @@ def _decisions_by_identity(start, end) -> tuple[dict[str, dict], bool]:
                 "decided_by",
                 "decided_at",
             ],
-            order_by="decided_at asc",
+            # Newest-first for the same reason the flag scan is (_flag_rows), and it
+            # has to MATCH it: the two scans share a cap, and if one keeps its newest
+            # rows while the other keeps its oldest, the tails no longer line up. A
+            # recently-decided flag would come back with its decision dropped — so it
+            # reads as open again, and counts["decided"] undercounts. `truncated` goes
+            # true and bounds the damage, but "the flag you settled this morning is
+            # back in the queue" is not a state to leave reachable.
+            order_by="decided_at desc",
             limit_page_length=QUEUE_FLAG_LIMIT,
         )
         or []
     )
+    hit_cap = len(rows) >= QUEUE_FLAG_LIMIT
+    # Back to ascending: the loop below overwrites per identity, so last-seen wins,
+    # and the comment there depends on that being the NEWEST row.
+    rows.reverse()
 
     by_identity: dict[str, dict] = {}
     for row in rows:
@@ -244,7 +255,7 @@ def _decisions_by_identity(start, end) -> tuple[dict[str, dict], bool]:
         # decided_at asc means the newest wins if a write ever raced and left two.
         by_identity[row.get("flag_identity")] = row
 
-    return by_identity, len(rows) >= QUEUE_FLAG_LIMIT
+    return by_identity, hit_cap
 
 
 def _employees_by_id(employee_ids: set[str]) -> dict[str, dict]:

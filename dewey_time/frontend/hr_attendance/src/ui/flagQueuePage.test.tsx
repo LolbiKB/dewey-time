@@ -1349,13 +1349,17 @@ test("a repeat pattern group's panel header survives its null date", () => {
   assert.match(html, /2 people · 6 mornings/);
 });
 
+// ROUTINE_CODE, not BRANCH_NO_DEVICE_DATA: an outage group spans dates now and
+// build_queue always sends it a null attendance_date, so pinning the dated-header
+// branch on an outage would pin it on a shape the backend can no longer produce.
+// ROUTINE_CODE is keyed by code + date and is the group type that still has one.
 test("a dated group's panel header still names its day and its size", () => {
   const group: QueueEntry = {
     kind: "group",
-    group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
-    branch: "Phnom Penh HQ",
-    flag_code: null,
+    group_type: "ROUTINE_CODE",
+    group_key: `ROUTINE_CODE:UNNOTIFIED_ABSENCE:${DATE}`,
+    branch: null,
+    flag_code: "UNNOTIFIED_ABSENCE",
     attendance_date: DATE,
     dates: [DATE],
     day_count: 1,

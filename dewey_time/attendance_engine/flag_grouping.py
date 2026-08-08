@@ -337,7 +337,7 @@ def _entries_for(
             # broke the cross-reference badge, which read "also 10 elsewhere" for
             # every member while describing a single outage.
             #
-            # This is what REPEAT_PATTERN below has always done (`:373`, no date in
+            # This is what REPEAT_PATTERN below has always done (no date in
             # its key); the nesting work preserved this branch's PRECEDENCE and left
             # its key behind. Deliberately NOT split into contiguous date runs: a
             # branch with no data on Friday and Monday did not recover over the

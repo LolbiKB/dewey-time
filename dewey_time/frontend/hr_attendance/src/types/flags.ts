@@ -122,7 +122,7 @@ export type QueuePayload = {
    * (branch, date) pairs where no device data arrived — the strip's grey cells.
    *
    * Required, and safe to rely on: the queue's cache prefix is versioned by
-   * payload shape (`flag_queue:v2`, flag_queue_api.py) and was bumped when this
+   * payload shape (`_QUEUE_CACHE_PREFIX` in flag_queue_api.py) and was bumped when this
    * key and the person fields above were added, so a pre-deploy entry can never
    * be served to code that expects them. Adding a field here without bumping
    * that prefix reintroduces a 60-second window where cached responses arrive

@@ -359,6 +359,68 @@ class TestTruncation(unittest.TestCase):
             flags = h.build.call_args.kwargs["flags"]
         self.assertEqual([flag["attendance_date"] for flag in flags], days)
 
+    def test_the_decision_scan_asks_for_the_newest_decisions_first(self):
+        with _harness(_roster(3)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            order_by = h.recorder.kwargs_for("Attendance Flag Decision")[0]["order_by"]
+        self.assertTrue(
+            order_by.startswith("decided_at desc"),
+            f"expected the decision scan to lead with decided_at desc, got {order_by!r}",
+        )
+
+    def test_both_capped_scans_drop_the_same_end(self):
+        """The invariant, not just the direction.
+
+        Flags and decisions share one cap. If one keeps its newest rows while the
+        other keeps its oldest, the tails stop lining up: a flag survives while the
+        decision that settled it is dropped, so a settled flag reads as open again
+        and counts["decided"] undercounts. Asserting the two orderings agree is what
+        stops a later edit fixing one scan and forgetting the other.
+        """
+        with _harness(_roster(3)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.recorder.kwargs_for("Attendance Flag")[0]
+            decisions = h.recorder.kwargs_for("Attendance Flag Decision")[0]
+
+        self.assertEqual(flags["limit_page_length"], decisions["limit_page_length"])
+        for kwargs in (flags, decisions):
+            self.assertIn(" desc", kwargs["order_by"], f"{kwargs['order_by']!r} is not newest-first")
+
+    def test_a_decided_flag_keeps_its_decision_when_the_scans_are_capped(self):
+        """The behaviour the invariant above protects: at the cap, the newest flag
+        and the decision that settled it must both survive."""
+        rows = {
+            "Attendance Flag": [
+                _flag_row("HR-EMP-00000", attendance_date=day)
+                for day in ("2026-08-01", "2026-08-02", "2026-08-05")
+            ],
+            "Attendance Flag Decision": [
+                {
+                    "name": f"AFD-{day}",
+                    "flag_identity": f"AUTO-{day}",
+                    "employee": "HR-EMP-00000",
+                    "attendance_date": day,
+                    "flag_code": "LATE_START",
+                    "outcome": "EXCUSED",
+                    "reason": "DEVICE_OR_DATA_FAULT",
+                    "note": "",
+                    "evidence_fingerprint": "fp",
+                    "group_key": "AFD-batch",
+                    "decided_by": "hr@example.com",
+                    "decided_at": f"{day} 09:00:00",
+                }
+                for day in ("2026-08-01", "2026-08-02", "2026-08-05")
+            ],
+            "Employee": [_employee_row("HR-EMP-00000")],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],
+        }
+        with _harness(rows) as h, patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 1):
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            decisions = h.build.call_args.kwargs["decisions_by_identity"]
+        # The newest decision survived, not the oldest — matching the newest flag.
+        self.assertEqual(list(decisions), ["AUTO-2026-08-05"])
+
     def test_entry_limit_slices_and_marks_truncated(self):
         entries = [
             {"kind": "person", "employee": f"HR-EMP-{i:05d}", "tier": "routine"} for i in range(4)
