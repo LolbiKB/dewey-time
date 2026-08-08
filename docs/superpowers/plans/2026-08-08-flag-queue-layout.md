@@ -1427,6 +1427,91 @@ Then render the band immediately after `</PageHeader>`, before the `writeFailure
       />
 ```
 
+- [ ] **Step 5b: Separate the band's write from the panel's**
+
+Found by the Task 4 review. `handleExcuseOutages` reuses the `decide` mutation wholesale, so a successful band excuse runs `onSuccess` in full — including two effects that belong only to a write about the *selected person*:
+
+- `setLastDecision(...)` makes the panel offer a one-click **"Same reason applies — Excused, Device or data fault"** that submits the selected person's remaining identities. That is `resetRowState`'s own stated failure ("one person's reasoning applied to the next"), arriving by a path `resetRowState` cannot intercept because no selection changed.
+- `setRestore(...)` arms against the selected row, and the excuse just removed N outage entries — so every later index shifts by N. With thirteen outages ahead, the user is moved from row *i* to row *i+13*, focus follows, and the in-progress draft including the free-text note is wiped.
+
+Both are reachable by an ordinary sequence: select a row, start typing, notice the amber band, click Excuse.
+
+Add a discriminant to `DecideArgs`:
+
+```ts
+export type DecideArgs = {
+  identities: string[];
+  decision: PendingDecision;
+  groupKey?: string | null;
+  confirm?: boolean;
+  /**
+   * Which surface issued the write.
+   *
+   * The band excuses branches; the panel decides a person. Only the panel's
+   * write may offer its reason as a repeat or move the selection — a band
+   * excuse that set `lastDecision` would put "Excused · Device or data fault"
+   * one click away from being applied to an unrelated person's genuine flags.
+   */
+  source: "panel" | "band";
+};
+```
+
+Set `source: "panel"` in `handleSubmit`, `source: "band"` in `handleExcuseOutages`. The confirm re-issue at the `ResponsiveModal` spreads `pendingConfirm.args`, so it carries the discriminant automatically — verify that rather than assuming it.
+
+Then gate both effects in `onSuccess`:
+
+```ts
+      // Panel writes only. A band excuse announces and refreshes; it must not
+      // touch anything scoped to the selected row.
+      if (effect.lastDecision && args.source === "panel") setLastDecision(effect.lastDecision);
+```
+
+and wrap the whole `setRestore` block in the same condition.
+
+- [ ] **Step 5c: Restore against the rendered list, not the payload**
+
+`restore` indexes `entries`, but the list renders `queue`. They disagree the moment an outage exists, and the review found the consequence is worse than a wrong row: `selectedEntry` also resolves against `entries`, so a restore can land on an **outage group** — the page then renders a judgment form over a device fault, which is the precondition this whole plan exists to stop being judged, and `focusKey` points at a row the list does not render, so `onFocusHandled` never fires and focus drops to `<body>`. That is the exact regression the restore effect was built to fix.
+
+Replace `entries` with `queue` at all four sites — the `findIndex`, the `from:`, the staleness comparison, and the clamp — and in `selectedEntry`'s loop:
+
+```ts
+        const index = queue.findIndex(
+          (entry) =>
+            entryKey(entry) === selectedKey ||
+            (entry.kind === "group" &&
+              entry.members.some(
+                (member) => entryKey({ kind: "person", ...member }) === selectedKey,
+              )),
+        );
+        setRestore(index >= 0 ? { index, from: queue } : null);
+```
+
+```ts
+    if (queue === restore.from) return; // the refetch has not landed yet
+    setRestore(null);
+    const next = queue[Math.min(restore.index, queue.length - 1)];
+```
+
+The `from` identity trick still works: `queue` comes from a `useMemo` on `entries`, so it is reference-stable on exactly the same terms the old code relied on.
+
+- [ ] **Step 5d: Wire `submitting`, and reset the exclusions**
+
+`OutageBandProps.submitting` exists, the button honours it, `OUTAGE_EXCUSING_LABEL` exists for it — and the band is passed nothing, so during a multi-second write over thousands of flags the button stays enabled and a second click issues a second mutation, with two `needs_confirm` responses racing to set `pendingConfirm`. Thread it through `FlagQueueViewProps` the same way the panel already gets it (`submitting={decide.isPending}`).
+
+`excludedBranches` is also never cleared. It is keyed by `group_key`, which `handleSubmit`'s own comment says is stable across months for a branch outage — so a branch unchecked for last week's outage stays silently unchecked for this week's, with the band collapsed by default so the only signal is a number in a button label. Clear it on a range change, on a tier change, and after a successful band write.
+
+- [ ] **Step 5e: Pin the header's arithmetic**
+
+Three review rounds established that `outagePeople` must be `queuePeopleCount(outages)` and `queueRows` must be `queue.length`, and **no test would fail if either were swapped back.** The only view test with a non-empty `outages` never asserts the header, and its single member holds one undecided flag — so `queuePeopleCount` and `coveredEmployeeCount` are indistinguishable in the one fixture that exercises them.
+
+Give that unit fixture a second, already-decided member so the two sources diverge, and assert the header clause. Then add the e2e assertion, which pins all three sources at once against payload `counts` of `people: 5, rows: 3`:
+
+```ts
+  await expect(page.getByText(/· 2 rows · 2 waiting on a device fault/)).toBeVisible();
+```
+
+Mutation-test all three swaps — `queuePeopleCount(outages)` → `coveredEmployeeCount`, `queue.length` → `counts.rows`, `queuePeopleCount(queue)` → `counts.people` — and confirm each fails.
+
 - [ ] **Step 6: Run tests**
 
 Run: `npx tsx --test src/ui/flagQueuePage.test.tsx && npm run typecheck`
