@@ -1510,7 +1510,18 @@ test("a row's avatar is decoration to a screen reader, ring and all", () => {
     renderToStaticMarkup(<FlagQueueList entries={[missingTimePerson()]} {...listProps()} />),
     "Sokheng Hon"
   );
-  assert.match(row, /aria-hidden="true"[^>]*><span class="[^"]*size-10/);
+  // Containment, not adjacency: the avatar's root now leads with
+  // `data-slot="avatar"` (so AvatarGroup can style it), which pushed `class`
+  // along and broke a pattern that required the two to be neighbours. What the
+  // test is actually for — the avatar sits inside the aria-hidden wrapper and
+  // no avatar renders outside one — is asserted directly.
+  const hidden = row.slice(row.indexOf('aria-hidden="true"'));
+  assert.match(hidden, /data-slot="avatar"[^>]*class="[^"]*size-10/);
+  assert.equal(
+    row.split("size-10").length,
+    hidden.split("size-10").length,
+    "no avatar renders outside the aria-hidden wrapper",
+  );
   // …while the strip keeps its one summary: it carries a fact — how many days
   // of this fortnight are flagged — that appears nowhere else in the row.
   assert.match(row, /aria-label="1 flagged day in the last 14"/);

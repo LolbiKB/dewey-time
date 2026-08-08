@@ -526,7 +526,7 @@ function GroupRow(props: {
                 image: member.employee_image,
               }}
               fallbackId={member.employee}
-              className="size-7 ring-2 ring-background"
+              className="size-7"
             />
           ))}
           {hidden ? (
