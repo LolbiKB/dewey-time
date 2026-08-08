@@ -14,6 +14,19 @@ defaults:
   run:
     working-directory: dewey_time/frontend/hr_attendance
 
+# Every job below installs the private @lolbikb/dewey-ui package from GitHub
+# Packages before it can do anything. A failed install FAILS THE JOB.
+#
+# It used to be `continue-on-error: true` with every real step gated on
+# `steps.install.outcome == 'success'`, so a failed install skipped the work and
+# reported success. Because all five jobs pull the same package with the same
+# token, the realistic trigger — a revoked grant, an expired PAT, a registry
+# outage — took out all five at once and the PR showed all-green having run
+# nothing. See #138.
+#
+# `npm install` (not `npm ci`): the committed lockfile may omit platform-gated
+# optional deps that Linux needs.
+
 jobs:
   # Types are a real gate here, not advisory. `tsconfig.json` covers src/, e2e/,
   # devPort.ts and playwright.config.ts, so this also catches the drift class
@@ -32,14 +45,15 @@ jobs:
         with:
           node-version: "20"
       - id: install
-        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm install --no-audit --no-fund
-      - if: steps.install.outcome != 'success'
-        run: echo "::warning title=Typecheck skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
-      - if: steps.install.outcome == 'success'
-        run: npm run typecheck
+      # Diagnosis only — the job is already failing by the time this runs.
+      # Scoped to `steps.install`, so a plain test failure does not get blamed
+      # on package access.
+      - if: ${{ failure() && steps.install.outcome == 'failure' }}
+        run: echo "::error title=Typecheck could not run::npm install failed — grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT)"
+      - run: npm run typecheck
 
   unit-web:
     runs-on: ubuntu-22.04
@@ -52,21 +66,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      # The app depends on the private @lolbikb/dewey-ui package (GitHub Packages).
-      # If this repo hasn't been granted read access to it, install fails — degrade
-      # gracefully with a warning instead of a red X until access is granted.
-      # `npm install` (not `npm ci`): the committed lockfile may omit platform-gated
-      # optional deps that Linux needs.
       - id: install
-        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm install --no-audit --no-fund
-      - if: steps.install.outcome != 'success'
-        run: echo "::warning title=Frontend unit tests skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
-      - if: steps.install.outcome == 'success'
-        run: npm run test:web
+      - if: ${{ failure() && steps.install.outcome == 'failure' }}
+        run: echo "::error title=Frontend unit tests could not run::npm install failed — grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT)"
+      - run: npm run test:web
 
   e2e:
     runs-on: ubuntu-22.04
@@ -80,16 +86,15 @@ jobs:
         with:
           node-version: "20"
       - id: install
-        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm install --no-audit --no-fund
-      - if: steps.install.outcome != 'success'
-        run: echo "::warning title=E2E skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
-      - if: steps.install.outcome == 'success'
-        run: npx playwright install --with-deps chromium
-      - if: steps.install.outcome == 'success'
-        run: npm run test:e2e
+      - if: ${{ failure() && steps.install.outcome == 'failure' }}
+        run: echo "::error title=E2E could not run::npm install failed — grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT)"
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      # Still scoped to a successful install: a failed install produces no
+      # report, and uploading a missing path would only add noise to the failure.
       - if: ${{ failure() && steps.install.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
@@ -111,23 +116,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      # The app depends on the private @lolbikb/dewey-ui package (GitHub Packages).
-      # If this repo hasn't been granted read access to it, install fails — degrade
-      # gracefully with a warning instead of a red X until access is granted.
-      # `npm install` (not `npm ci`): the committed lockfile may omit platform-gated
-      # optional deps that Linux needs.
       - id: install
-        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm install --no-audit --no-fund
-      - if: steps.install.outcome != 'success'
-        run: echo "::warning title=ADMS unit tests skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
-      - if: steps.install.outcome == 'success'
-        run: npm run build
-      - if: steps.install.outcome == 'success'
-        run: npm test
+      - if: ${{ failure() && steps.install.outcome == 'failure' }}
+        run: echo "::error title=ADMS unit tests could not run::npm install failed — grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT)"
+      - run: npm run build
+      - run: npm test
 
   adms-e2e:
     runs-on: ubuntu-22.04
@@ -144,16 +140,13 @@ jobs:
         with:
           node-version: "20"
       - id: install
-        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm install --no-audit --no-fund
-      - if: steps.install.outcome != 'success'
-        run: echo "::warning title=ADMS E2E skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
-      - if: steps.install.outcome == 'success'
-        run: npx playwright install --with-deps chromium
-      - if: steps.install.outcome == 'success'
-        run: npm run test:e2e
+      - if: ${{ failure() && steps.install.outcome == 'failure' }}
+        run: echo "::error title=ADMS E2E could not run::npm install failed — grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT)"
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - if: ${{ failure() && steps.install.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
