@@ -108,7 +108,19 @@ export function EmployeeAvatar(props: EmployeeAvatarProps) {
   }, [image]);
 
   return (
-    <span className={cn("relative shrink-0", props.className)}>
+    // `rounded-full` on the ROOT, not only on the inner layers: AvatarGroup
+    // styles its children with a `ring`, which is a box-shadow, and a
+    // box-shadow follows the border-radius of the element it sits on. Without
+    // this the ring drew a SQUARE around a circular avatar — and where the
+    // faces overlap that reads as each circle being sliced flat.
+    //
+    // `data-slot="avatar"` is what shadcn's AvatarGroup targets
+    // (`*:data-[slot=avatar]:ring-2`), so the group styles its children itself
+    // instead of every callsite hand-applying a ring and getting it wrong.
+    <span
+      data-slot="avatar"
+      className={cn("relative shrink-0 rounded-full", props.className)}
+    >
       {/* Decoration, not content: every caller renders the employee's name as
           adjacent text, so initials in the accessibility tree only pad the
           computed name of whatever contains them — `EmployeePicker`'s trigger is
