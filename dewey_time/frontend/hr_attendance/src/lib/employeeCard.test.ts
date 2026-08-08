@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
   employeeCommandFilter,
+  employeeInitials,
   employeeSearchHaystack,
   isWeeklyScheduleEligible,
   weeklyScheduleIneligibleMessage,
@@ -95,4 +96,26 @@ test("employeeCommandFilter requires every whitespace-separated token to match",
 test("employeeCommandFilter still finds ADMS Bridge by its own name/id", () => {
   assert.equal(employeeCommandFilter(ADMS, "adms"), 1);
   assert.equal(employeeCommandFilter(ADMS, "bridge"), 1);
+});
+
+// A single initial where two are expected reads as a rendering bug, and it is:
+// stripMiddleName normalises whitespace only on its >=3-part branch, so a
+// two-part name joined by anything other than one ASCII space came through
+// verbatim and the empty split element ate the second initial.
+test("a name separated by more than one space still yields two initials", () => {
+  assert.equal(employeeInitials({ employee_name: "Chan  Dara" } as CalendarEmployee), "CD");
+  assert.equal(employeeInitials({ employee_name: "Chan Dara" } as CalendarEmployee), "CD");
+  assert.equal(employeeInitials({ employee_name: " Chan Dara " } as CalendarEmployee), "CD");
+});
+
+test("a mononym honestly yields one initial", () => {
+  assert.equal(employeeInitials({ employee_name: "Sokha" } as CalendarEmployee), "S");
+});
+
+test("an initial is a whole character, not half a surrogate pair", () => {
+  // "𝐀lice" starts with an astral code point; string indexing would return a
+  // lone high surrogate and render as a replacement glyph.
+  const initials = employeeInitials({ employee_name: "\u{1D400}lice Ng" } as CalendarEmployee);
+  assert.equal([...initials].length, 2);
+  assert.equal(initials, "\u{1D400}N".toUpperCase());
 });

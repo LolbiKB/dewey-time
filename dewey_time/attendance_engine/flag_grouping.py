@@ -555,12 +555,40 @@ def _member_sort_key(person: dict) -> tuple:
     return (-person["rank"], (person["employee_name"] or "").lower(), person["employee"])
 
 
+def _worst_minutes(entry: dict) -> int:
+    """The largest `minutes` on any unresolved flag in this entry, 0 if none.
+
+    Rank bands are deliberately coarse — MISSING_TIME is `130 + min(minutes // 60, 9)`,
+    so 4h and 4h 30m are both 134 — but the row PRINTS "worst 4h" against
+    "worst 4h 30m". Sorting on rank alone therefore interleaved two numbers the
+    reader can see are different, and the order looked arbitrary because the
+    thing it sorted on was never rendered. This is the tiebreak that makes the
+    visible metric and the visible order agree.
+
+    Deliberately a tiebreak WITHIN a rank rather than a change to the bands: the
+    rank table encodes which codes outrank which, and reordering across bands
+    from a raw minute count would let a long routine gap outrank a genuine
+    absence.
+    """
+    people = entry["members"] if entry["kind"] == "group" else [entry]
+    worst = 0
+    for person in people:
+        for flag_out in person.get("flags") or []:
+            if flag_out.get("decision_state") not in UNRESOLVED_STATES:
+                continue
+            minutes = (flag_out.get("evidence") or {}).get("minutes")
+            if isinstance(minutes, (int, float)):
+                worst = max(worst, int(minutes))
+    return worst
+
+
 def _entry_sort_key(entry: dict) -> tuple:
     """Rank first, so a lone 3h gap can outrank a 168-member routine group; then
-    blast radius; then a stable string so two runs of the same data never reorder."""
+    the magnitude the row actually prints; then blast radius; then a stable
+    string so two runs of the same data never reorder."""
     if entry["kind"] == "group":
-        return (-entry["rank"], -len(entry["members"]), entry["group_key"])
-    return (-entry["rank"], -1, entry["entry_key"])
+        return (-entry["rank"], -_worst_minutes(entry), -len(entry["members"]), entry["group_key"])
+    return (-entry["rank"], -_worst_minutes(entry), -1, entry["entry_key"])
 
 
 def iter_people(entries: list[dict]):
