@@ -390,6 +390,11 @@ export function stripAriaLabel(strip: Strip): string {
  * the strip is all green — the flag is older than the window. This marker is
  * what keeps that honest. The sub-line remains driven by the person's worst flag
  * across the WHOLE range, not the strip's window.
+ *
+ * `count` is DAYS (`Strip.earlierCount`), the same unit as the cells this sits
+ * beside and as `stripAriaLabel`'s "N flagged days" above. The noun stays
+ * implied rather than printed: the marker follows a 117px strip of day cells in
+ * a 352px pane, and "+2 earlier days" is what starts truncating names.
  */
 export function earlierMarkerLabel(count: number): string | null {
   return count > 0 ? `+${count} earlier` : null;

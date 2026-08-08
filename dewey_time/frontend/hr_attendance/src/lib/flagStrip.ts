@@ -43,7 +43,13 @@ export type Strip = {
   cells: StripCell[];
   /** Days with at least one flag — not the flag count. */
   flaggedCount: number;
-  /** Flags older than the window — the "+N earlier" marker. */
+  /**
+   * Days older than the window with at least one flag — the "+N earlier"
+   * marker. Days, not flags, so that it and `flaggedCount` are the same unit as
+   * each other and as a cell: two flags on one pre-window day is "+1 earlier",
+   * matching what the strip shows and what "N flagged days in the last 14"
+   * already says.
+   */
   earlierCount: number;
 };
 
@@ -126,10 +132,10 @@ export function buildStrip(args: {
   const windowStartKey = dateKeyOf(windowStart);
 
   const worstByDate = new Map<string, Tier>();
-  let earlierCount = 0;
+  const earlierDates = new Set<string>();
   for (const flag of args.flags) {
     if (flag.attendance_date < windowStartKey) {
-      earlierCount += 1;
+      earlierDates.add(flag.attendance_date);
       continue;
     }
     // A flag dated after `args.endDate` would fall through both branches here —
@@ -156,9 +162,15 @@ export function buildStrip(args: {
     // whatever the watermark says. Green means "no flag on this day" and nothing
     // more — it deliberately does not claim the person worked, because the queue
     // does not load shift assignments and cannot know.
-    const noData = args.branch !== null && args.outage.has(outageKey(args.branch, date));
+    //
+    // `!args.branch`, not `!== null`: an employee with an empty-string branch
+    // keys the same as a branchless one (`outageKey` does `branch ?? ""`), so a
+    // `!== null` check would grey them against an outage row whose own branch
+    // was blank. The backend filters falsy branches at every entry point, so
+    // this is a convention match rather than a live bug.
+    const noData = !!args.branch && args.outage.has(outageKey(args.branch, date));
     cells.push({ date, state: noData ? "no-data" : "clean", tier: null });
   }
 
-  return { cells, flaggedCount, earlierCount };
+  return { cells, flaggedCount, earlierCount: earlierDates.size };
 }
