@@ -95,6 +95,32 @@ class _Recorder:
                 return False
         return True
 
+    @staticmethod
+    def _ordered(rows, order_by):
+        """Honour `order_by` before the limit slice.
+
+        A fake that ignores ordering cannot tell "keep the newest 5000" from "keep the
+        oldest 5000" — it slices whatever order the fixture happened to be written in,
+        so a mutant flipping the direction stays green. That is the same blindness
+        _matches was repaired for above, on the axis that decides WHICH rows survive
+        truncation rather than whether they match.
+
+        Sorts are stable, so applying the clauses right-to-left yields the multi-key
+        order. Values are compared as strings: an ISO date sorts identically either
+        way, and it keeps a date object and its string form from raising on compare.
+        """
+        for clause in reversed([c.strip() for c in str(order_by or "").split(",") if c.strip()]):
+            parts = clause.split()
+            field = parts[0]
+            if not any(field in row for row in rows):
+                continue
+            rows = sorted(
+                rows,
+                key=lambda row: (row.get(field) is None, str(row.get(field))),
+                reverse=len(parts) > 1 and parts[1].lower() == "desc",
+            )
+        return rows
+
     def __call__(self, doctype, **kwargs):
         self.calls.append((doctype, kwargs))
         rows = [
@@ -102,6 +128,7 @@ class _Recorder:
             for row in self.rows_by_doctype.get(doctype, [])
             if self._matches(row, kwargs.get("filters") or {})
         ]
+        rows = self._ordered(rows, kwargs.get("order_by"))
         limit = kwargs.get("limit_page_length")
         if limit:
             rows = rows[:limit]
@@ -269,6 +296,49 @@ class TestTruncation(unittest.TestCase):
         with _harness(_roster(3)):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
         self.assertFalse(payload["truncated"])
+
+    def test_the_flag_scan_asks_for_the_newest_flags_first(self):
+        """One word, and the queue starts hiding today's work — see _flag_rows."""
+        with _harness(_roster(3)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            order_by = h.recorder.kwargs_for("Attendance Flag")[0]["order_by"]
+        self.assertTrue(
+            order_by.startswith("attendance_date desc"),
+            f"expected the scan to lead with attendance_date desc, got {order_by!r}",
+        )
+
+    def test_truncation_drops_the_oldest_flags_not_the_newest(self):
+        days = ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
+        rows = {
+            "Attendance Flag": [_flag_row("HR-EMP-00000", attendance_date=day) for day in days],
+            "Attendance Flag Decision": [],
+            "Employee": [_employee_row("HR-EMP-00000")],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],
+        }
+        # Cap of 2 against 5 days of flags: only the two newest may survive.
+        with _harness(rows) as h, patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 2):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.build.call_args.kwargs["flags"]
+
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(sorted(flag["attendance_date"] for flag in flags), ["2026-08-04", "2026-08-05"])
+
+    def test_the_surviving_flags_reach_build_queue_oldest_first(self):
+        """The scan runs newest-first; everything downstream still sees ascending
+        order, so the dedupe's last-wins tiebreak does not flip with the query."""
+        days = ["2026-08-01", "2026-08-02", "2026-08-03"]
+        rows = {
+            "Attendance Flag": [_flag_row("HR-EMP-00000", attendance_date=day) for day in days],
+            "Attendance Flag Decision": [],
+            "Employee": [_employee_row("HR-EMP-00000")],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],
+        }
+        with _harness(rows) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.build.call_args.kwargs["flags"]
+        self.assertEqual([flag["attendance_date"] for flag in flags], days)
 
     def test_entry_limit_slices_and_marks_truncated(self):
         entries = [

@@ -149,12 +149,24 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
             "Attendance Flag",
             filters={"attendance_date": ["between", [start, end]], "source": "AUTO"},
             fields=["employee", "attendance_date", "flag_code", "severity", "day_closed", "evidence"],
-            # Deterministic so truncation at the cap always drops the same tail.
-            order_by="attendance_date asc, employee asc, creation asc",
+            # Deterministic so truncation at the cap always drops the same tail, and
+            # NEWEST-FIRST so the tail it drops is the oldest work rather than today's.
+            # This read ordered ascending until the queue saturated its cap in
+            # production: `truncated` went true, and the days it had silently dropped
+            # were the most recent ones — an outage that started this morning was not
+            # on a page whose only instruction is "work down from the top". `truncated`
+            # cannot warn about a day that never entered the result set, so the
+            # ordering is the only thing protecting the invariant.
+            order_by="attendance_date desc, employee desc, creation desc",
             limit_page_length=QUEUE_FLAG_LIMIT,
         )
         or []
     )
+    hit_cap = len(rows) >= QUEUE_FLAG_LIMIT
+    # Back to ascending before anything reads them. The dedupe below keeps the LAST row
+    # seen at equal day_closed, so which row survives an identity collision must not
+    # depend on the direction the scan happened to run in.
+    rows.reverse()
 
     # flag_identity deliberately excludes day_closed (that is the whole point of the
     # scheme), so inside the closeout window a provisional and its final replacement can
@@ -188,7 +200,7 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
         if previous is None or (flag.get("day_closed") or 0) >= (previous.get("day_closed") or 0):
             by_identity[identity] = flag
 
-    return list(by_identity.values()), len(rows) >= QUEUE_FLAG_LIMIT
+    return list(by_identity.values()), hit_cap
 
 
 def _decisions_by_identity(start, end) -> tuple[dict[str, dict], bool]:
