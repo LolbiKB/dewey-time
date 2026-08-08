@@ -15,12 +15,17 @@
  */
 import { useState } from "react";
 import { ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DEVICE_HEALTH_LABEL,
+  OUTAGE_BAND_LABEL,
   OUTAGE_CEILING_NOTE,
+  OUTAGE_EXCUSING_LABEL,
+  UNKNOWN_BRANCH_LABEL,
+  outageBranchCheckboxLabel,
   outageBandHeadline,
   outageBandSubline,
   outageBranchDays,
@@ -28,7 +33,12 @@ import {
   outageExcuseLabel,
   outageReviewLabel,
 } from "@/lib/flagQueueLabels";
-import { outageWrite, type OutageGroup } from "@/lib/flagQueuePartition";
+import {
+  outageFlagCount,
+  outageWrite,
+  queuePeopleCount,
+  type OutageGroup,
+} from "@/lib/flagQueuePartition";
 import { cn } from "@/lib/utils";
 
 export type OutageBandProps = {
@@ -66,17 +76,23 @@ export function OutageBand(props: OutageBandProps) {
 
   return (
     <section
-      aria-label="Device outages"
+      aria-label={OUTAGE_BAND_LABEL}
       className="rounded-md border border-amber-500/25 bg-amber-500/[0.06] text-sm animate-in fade-in"
     >
       <div className="flex items-center gap-2.5 px-3 py-2">
         <TriangleAlertIcon className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="font-medium text-foreground">
-            {outageBandHeadline(props.outages.length, all.coveredEmployeeCount)}
+            {/* queuePeopleCount, NOT coveredEmployeeCount. This parameter is
+                "everyone the outage touched" and its docstring forbids the
+                covered count by name: covered counts only members with an
+                undecided flag, so it equals the button's number on load (making
+                the word "affected" do nothing) and falls to "0 people affected"
+                once the outage is excused — a false statement of history. */}
+            {outageBandHeadline(props.outages.length, queuePeopleCount(props.outages))}
           </div>
           <div className="text-xs text-muted-foreground">
-            {outageBandSubline(spanOf(props.outages), all.identities.length)}
+            {outageBandSubline(spanOf(props.outages), outageFlagCount(props.outages))}
           </div>
         </div>
         <Button
@@ -84,6 +100,7 @@ export function OutageBand(props: OutageBandProps) {
           size="sm"
           className="shrink-0"
           aria-expanded={open}
+          aria-controls="outage-band-branches"
           onClick={() => setOpen((prev) => !prev)}
         >
           {outageReviewLabel(props.outages.length)}
@@ -98,29 +115,43 @@ export function OutageBand(props: OutageBandProps) {
           disabled={nothingToWrite || props.submitting}
           onClick={() => props.onExcuse(write.identities)}
         >
-          {outageExcuseLabel(write.coveredEmployeeCount, write.identities.length, write.branchCount)}
+          {props.submitting
+            ? OUTAGE_EXCUSING_LABEL
+            : outageExcuseLabel(
+                write.coveredEmployeeCount,
+                write.identities.length,
+                write.branchCount,
+              )}
         </Button>
       </div>
 
       {open ? (
-        <div className="border-t border-amber-500/25 px-3 py-2">
+        <div id="outage-band-branches" className="border-t border-amber-500/25 px-3 py-2">
           {/* Bounded on purpose. Thirteen branches is today's real count, and an
               unbounded list would push the queue below the fold — the exact
               failure this band exists to prevent. */}
           <ul className="max-h-[13rem] space-y-0.5 overflow-y-auto overscroll-contain">
             {props.outages.map((group) => {
               const included = !props.excludedBranches.has(group.group_key);
-              const branch = group.branch ?? "Unknown branch";
+              const branch = group.branch ?? UNKNOWN_BRANCH_LABEL;
               const size = outageWrite([group], new Set<string>());
               return (
-                <li
-                  key={group.group_key}
-                  className={cn("flex items-center gap-2.5 py-1", !included && "opacity-50")}
-                >
+                <li key={group.group_key}>
+                  {/* The whole row is the hit target. A bare size-4 checkbox is
+                      16px, under WCAG 2.2 SC 2.5.8's 24px floor, and thirteen of
+                      them in a scroller is the strongest mis-click surface here
+                      — a missed toggle silently changes what the button above
+                      writes, with no second confirmation inside this component. */}
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2.5 rounded px-1 py-1.5 hover:bg-amber-500/10",
+                      !included && "opacity-50",
+                    )}
+                  >
                   <Checkbox
                     checked={included}
                     onCheckedChange={() => props.onToggleBranch(group.group_key)}
-                    aria-label={`Include ${branch}`}
+                    aria-label={outageBranchCheckboxLabel(branch)}
                   />
                   <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                     {branch}
@@ -129,17 +160,25 @@ export function OutageBand(props: OutageBandProps) {
                     {outageBranchDays(group.day_count)}
                   </span>
                   <span className="w-40 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
-                    {outageBranchSummary(size.coveredEmployeeCount, size.identities.length)}
+                    {outageBranchSummary(queuePeopleCount([group]), outageFlagCount([group]))}
                   </span>
+                  </label>
                 </li>
               );
             })}
           </ul>
           <p className="mt-2 border-t border-amber-500/25 pt-2 text-[11px] text-muted-foreground">
             {OUTAGE_CEILING_NOTE}{" "}
-            <a href="/hr-attendance" className="font-medium text-primary underline-offset-2 hover:underline">
+            {/* <Link>, not <a>: /hr-attendance is a client route (main.tsx:27),
+                and a bare anchor forces a full document reload that throws away
+                the queue's in-flight state. HrAppShell.test.tsx pins this same
+                rule after the identical mistake was removed there. It still
+                renders href="/hr-attendance", so the assertion is unchanged —
+                but the test now needs a MemoryRouter wrapper, because <Link>
+                throws outside a router. */}
+            <Link to="/hr-attendance" className="font-medium text-primary underline-offset-2 hover:underline">
               {DEVICE_HEALTH_LABEL}
-            </a>
+            </Link>
           </p>
         </div>
       ) : null}

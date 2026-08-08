@@ -98,6 +98,22 @@ export function outageWrite(
 }
 
 /**
+ * Every flag the outage produced, decided or not.
+ *
+ * NOT `outageWrite(...).identities.length`, which counts only undecided flags
+ * and therefore shrinks as decisions land. The band's subline is a statement of
+ * what happened — "30 Jul – 8 Aug · 3,277 flags" — and a historical fact that
+ * falls to zero after the excuse is a false one.
+ */
+export function outageFlagCount(outages: OutageGroup[]): number {
+  let total = 0;
+  for (const group of outages) {
+    for (const member of group.members) total += member.flags.length;
+  }
+  return total;
+}
+
+/**
  * Distinct employees across the judgment queue. `counts.people` from the
  * payload counts the whole thing including outage members, so it cannot answer
  * "how many people are actually waiting on a decision" once the band exists.

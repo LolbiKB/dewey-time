@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OUTAGE_CEILING_NOTE } from "@/lib/flagQueueLabels";
 import type { OutageGroup } from "@/lib/flagQueuePartition";
 import type { DecisionState, FlagOut, QueuePerson } from "@/types/flags";
+import { MemoryRouter } from "react-router-dom";
+
 import { OutageBand, type OutageBandProps } from "@/ui/OutageBand";
 
 function flag(identity: string, state: DecisionState = "undecided"): FlagOut {
@@ -55,8 +57,11 @@ function group(branch: string, members: QueuePerson[], dates = ["2026-08-03"]): 
   };
 }
 
+// MemoryRouter because the ceiling note renders a <Link>, which throws outside
+// a router. It still emits href="/hr-attendance", so the assertion is unchanged.
 function render(overrides: Partial<OutageBandProps> = {}) {
   return renderToStaticMarkup(
+    <MemoryRouter>
     <OutageBand
       outages={[
         group("DIS Iconic", [member("DI-1", [flag("a")]), member("DI-2", [flag("b")])]),
@@ -66,7 +71,8 @@ function render(overrides: Partial<OutageBandProps> = {}) {
       onToggleBranch={() => {}}
       onExcuse={() => {}}
       {...overrides}
-    />,
+    />
+    </MemoryRouter>,
   );
 }
 
@@ -98,6 +104,15 @@ test("excluding a branch drops its people and flags from the action", () => {
   assert.match(html, /Excuse 1 person · 1 flag/);
 });
 
+test("an in-flight write disables the action and says so", () => {
+  // The only double-submit guard on the largest write on the page. Without this
+  // test, deleting `|| props.submitting` leaves all other tests green while a
+  // hurried double-click fires two writes over thousands of flags.
+  const html = render({ submitting: true });
+  assert.match(html, /Excusing…/);
+  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Excusing…/);
+});
+
 test("excluding every branch disables the action rather than offering zero", () => {
   const html = render({
     excludedBranches: new Set([
@@ -105,12 +120,10 @@ test("excluding every branch disables the action rather than offering zero", () 
       "BRANCH_NO_DEVICE_DATA:ISBB",
     ]),
   });
-  // Zero branches CHECKED, not zero flags left: `flagQueueLabels.test.ts`
-  // ("nothing SELECTED and nothing LEFT are different sentences") pins
-  // `outageExcuseLabel(0, 0, 0)` to "Select a branch to excuse" — "Nothing
-  // left" is reserved for a checked branch whose flags are already decided.
+  // Anchored to the excuse button specifically: a bare /disabled/ match would
+  // pass if the disclosure were disabled and the write button left live.
   assert.match(html, /Select a branch to excuse/);
-  assert.match(html, /<button[^>]+disabled/);
+  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Select a branch to excuse/);
 });
 
 test("a decided flag is not counted in the action", () => {

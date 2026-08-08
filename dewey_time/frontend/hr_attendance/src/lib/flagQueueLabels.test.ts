@@ -22,10 +22,13 @@ import {
   openCountLabel,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
+  OUTAGE_BAND_LABEL,
   OUTAGE_CEILING_NOTE,
+  OUTAGE_EXCUSING_LABEL,
   OUTAGE_NOT_A_JUDGMENT,
   outageBandHeadline,
   outageBandSubline,
+  outageBranchCheckboxLabel,
   outageBranchDays,
   outageBranchSummary,
   outageExcuseLabel,
@@ -48,6 +51,7 @@ import {
   stripAriaLabel,
   TIER_FILTER_ALL_LABEL,
   tierLabel,
+  UNKNOWN_BRANCH_LABEL,
 } from "@/lib/flagQueueLabels";
 import type { Strip } from "@/lib/flagStrip";
 import type {
@@ -853,6 +857,13 @@ test("the ceiling note refuses to promise device granularity", () => {
     OUTAGE_CEILING_NOTE,
     "Branch and days only — nothing here maps a device to a branch.",
   );
+});
+
+test("the band's own accessible names are copy, not markup", () => {
+  assert.equal(OUTAGE_BAND_LABEL, "Device outages");
+  assert.equal(UNKNOWN_BRANCH_LABEL, "Unknown branch");
+  assert.equal(outageBranchCheckboxLabel("DIS Iconic"), "Include DIS Iconic");
+  assert.equal(OUTAGE_EXCUSING_LABEL, "Excusing…");
 });
 
 test("the header splits waiting-on-you from waiting-on-a-device, and keeps rows", () => {

@@ -300,6 +300,24 @@ export const OUTAGE_CEILING_NOTE =
 
 export const DEVICE_HEALTH_LABEL = "Device health";
 
+/** The band's accessible name — the only thing a screen-reader user hears on
+ *  entering the landmark, so it is copy like any other string here. */
+export const OUTAGE_BAND_LABEL = "Device outages";
+
+/** Unreachable against build_queue's output, which always sets `branch` for a
+ *  BRANCH_NO_DEVICE_DATA group, but the contract types it nullable. */
+export const UNKNOWN_BRANCH_LABEL = "Unknown branch";
+
+/** The checkbox's only accessible name. Without it the control is unnamed. */
+export function outageBranchCheckboxLabel(branch: string): string {
+  return `Include ${branch}`;
+}
+
+/** Shown while the write is in flight. A greyed button still reading "Excuse
+ *  157 people" gives no sign that anything is happening during a multi-second
+ *  write over thousands of flags. */
+export const OUTAGE_EXCUSING_LABEL = "Excusing…";
+
 function plural(count: number, one: string, many: string): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }

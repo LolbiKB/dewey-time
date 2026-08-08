@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   isOutageGroup,
+  outageFlagCount,
   outageWrite,
   partitionQueue,
   queuePeopleCount,
@@ -213,4 +214,17 @@ test("queuePeopleCount counts distinct employees, not rows", () => {
   ];
 
   assert.equal(queuePeopleCount(entries), 2, "DI-9 appears twice, counts once");
+});
+
+test("outageFlagCount counts every flag, not just the writable ones", () => {
+  const groups = [
+    outage("A", [person("DI-1", [flag("a1"), flag("done", "matched")])]),
+    outage("B", [person("DI-2", [flag("b1", "needs_re_review")])]),
+  ];
+  assert.equal(outageFlagCount(groups), 3);
+  assert.equal(outageWrite(groups, new Set()).identities.length, 1, "the write is smaller, on purpose");
+});
+
+test("outageFlagCount of nothing is zero", () => {
+  assert.equal(outageFlagCount([]), 0);
 });
