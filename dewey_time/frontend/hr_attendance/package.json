@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --base=/assets/dewey_time/hr_attendance/ && node scripts/copy-html-entry.mjs",
+    "build": "vite build --base=/assets/dewey_time/hr_attendance/ && node scripts/copy-html-entry.mjs && node scripts/check-fonts.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:web": "tsx --test src/lib/*.test.ts src/brand/*.test.ts src/brand/*.test.tsx src/pwa/*.test.ts src/pwa/*.test.tsx src/components/*.test.tsx src/components/ui/*.test.tsx src/ui/*.test.tsx",
@@ -32,11 +32,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
-    "@tailwindcss/postcss": "4.3.0",
+    "@tailwindcss/vite": "^4.3.0",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "6.0.2",
-    "autoprefixer": "10.5.0",
     "postcss": "8.5.15",
     "tailwindcss": "4.3.0",
     "tsx": "^4.22.4",
