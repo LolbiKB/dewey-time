@@ -25,7 +25,9 @@ import { FlagDecisionPanel, type FlagDecisionPanelProps } from "./FlagDecisionPa
 import { FlagQueueList, entryKey } from "./FlagQueueList";
 import {
   FlagQueueView,
+  clampRange,
   decideEffect,
+  parseTierParam,
   stripInputs,
   type DecideArgs,
   type DecideEffect,
@@ -274,6 +276,10 @@ function spanPersonEntry(): PersonEntry {
 /** Everything FlagQueueView needs except `counts`, which each test supplies. */
 function viewProps(): Omit<FlagQueueViewProps, "counts"> {
   return {
+    range: { startDate: "2026-07-21", endDate: "2026-08-03" },
+    onRangeChange: () => {},
+    tier: null,
+    onTierChange: () => {},
     isLoading: false,
     error: null,
     onRetry: () => {},
@@ -282,6 +288,49 @@ function viewProps(): Omit<FlagQueueViewProps, "counts"> {
     panel: <div />,
   };
 }
+
+// The range and tier were a module constant and a hard-coded null, so the page
+// told HR to "narrow the dates" while offering nothing that could, and the
+// backend's tier filter was never sent. These pin the parsing either side of the
+// URL, which is the part that can silently go wrong.
+test("an unknown tier param is ignored rather than filtering to nothing", () => {
+  // Passing it through would ask the server for a tier it rejects (417), and
+  // swallowing the error would render an empty queue that looks like "all clear".
+  assert.equal(parseTierParam("urgent"), null);
+  assert.equal(parseTierParam(""), null);
+  assert.equal(parseTierParam(null), null);
+});
+
+test("each real tier round-trips through the URL", () => {
+  assert.equal(parseTierParam("act"), "act");
+  assert.equal(parseTierParam("review"), "review");
+  assert.equal(parseTierParam("routine"), "routine");
+});
+
+test("a range longer than the server's cap gives up its OLDEST days", () => {
+  // Trimming the recent end would hide today's work — the same defect the flag
+  // scan's ordering was fixed for. 2026-01-01..2026-03-01 is 60 days; the cap is 31.
+  const range = clampRange("2026-01-01", "2026-03-01");
+  assert.equal(range.endDate, "2026-03-01", "the recent end is kept");
+  assert.equal(range.startDate, "2026-01-30", "31 days back from the end, inclusive");
+});
+
+test("a range inside the cap is left exactly as asked", () => {
+  const range = clampRange("2026-08-01", "2026-08-07");
+  assert.deepEqual(range, { startDate: "2026-08-01", endDate: "2026-08-07" });
+});
+
+test("an inverted or unparseable range falls back rather than throwing", () => {
+  // getdate() would 417 on an inverted range and the page would render its
+  // failure block — for a URL a user can produce by typing.
+  const inverted = clampRange("2026-08-07", "2026-08-01");
+  const garbage = clampRange("not-a-date", "2026-08-07");
+  for (const range of [inverted, garbage]) {
+    assert.match(range.startDate, /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(range.endDate, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(range.startDate <= range.endDate);
+  }
+});
 
 /** The panel's header, up to the first flag card — where the day is named. */
 function panelHeader(html: string): string {
@@ -706,6 +755,7 @@ test("the Decided count doubles as the control that surfaces decided people", ()
 
   const off = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={counts}
       includeDecided={false}
       onToggleDecided={() => {}}
@@ -722,6 +772,7 @@ test("the Decided count doubles as the control that surfaces decided people", ()
 
   const on = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={counts}
       includeDecided
       onToggleDecided={() => {}}
@@ -746,6 +797,7 @@ test("the Decided count doubles as the control that surfaces decided people", ()
 test("a load failure renders exactly one assertive alert", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={null}
       isLoading={false}
       error={new Error("Network request failed")}
@@ -768,6 +820,7 @@ test("a load failure renders exactly one assertive alert", () => {
 test("a partial bulk failure is reported politely, with the failures disclosed", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
@@ -799,6 +852,7 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
 test("the toolbar reports open, needs re-review and decided counts", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
@@ -824,6 +878,7 @@ test("the toolbar reports open, needs re-review and decided counts", () => {
 test("device alert cards render from alerts, with no flags present", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
@@ -851,6 +906,7 @@ test("device alert cards render from alerts, with no flags present", () => {
 test("device alert cards never render a device serial", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
@@ -878,6 +934,7 @@ test("device alert cards never render a device serial", () => {
 test("device alert cards carry no decide action", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
@@ -966,6 +1023,7 @@ test("an over-threshold decide asks for confirmation and settles nothing", () =>
 test("a decide that fails outright is reported, politely, without hiding the queue", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
@@ -1041,6 +1099,7 @@ test("an expanded group can be put back together", () => {
 test("no alert cards render when the array is empty", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
@@ -1067,6 +1126,7 @@ test("orphaned decisions are reported, so the rate is visible rather than inferr
 
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={counts}
       orphans={{ orphaned_flag_gone: 3, orphaned_evidence_changed: 1 }}
       includeDecided={false}
@@ -1092,6 +1152,7 @@ test("an orphan line appears only when its own count is non-zero", () => {
   const render = (orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number }) =>
     renderToStaticMarkup(
       <FlagQueueView
+        {...viewProps()}
         counts={counts}
         orphans={orphans}
         includeDecided={false}
@@ -1124,6 +1185,7 @@ test("orphan lines are withheld while loading and on failure", () => {
 
   const loading = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={null}
       isLoading
       error={null}
@@ -1137,6 +1199,7 @@ test("orphan lines are withheld while loading and on failure", () => {
 
   const failed = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={null}
       error={new Error("boom")}
       isLoading={false}
@@ -1232,6 +1295,7 @@ test("the same person in two entries produces two distinct row keys", () => {
 test("the header states people and rows", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 40, rows: 12 }}
       {...viewProps()}
     />
