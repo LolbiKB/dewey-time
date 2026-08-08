@@ -164,6 +164,8 @@ function patternGroupEntry(): GroupEntry {
     flag_code: "LATE_START",
     // A pattern spans dates by definition, so the backend sends no single one.
     attendance_date: null,
+    dates: [],
+    day_count: 0,
     rank: 20,
     tier: "routine",
     // Both members have a photo: a group header answers "who is in here?" with
@@ -380,6 +382,8 @@ test("a person with a routine flag and an act flag appears once, under Act", () 
     branch: null,
     flag_code: "LATE_START",
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 20,
     tier: "routine",
     members: [
@@ -440,10 +444,12 @@ test("the group action count drops when members are excluded", () => {
   const group: QueueEntry = {
     kind: "group",
     group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
     branch: "Phnom Penh HQ",
     flag_code: null,
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 150,
     tier: "act",
     members,
@@ -606,10 +612,12 @@ test("bulk labels count what will actually be written, not undecided_count", () 
   const group: QueueEntry = {
     kind: "group",
     group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
     branch: "Phnom Penh HQ",
     flag_code: null,
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 150,
     tier: "act",
     members: [
@@ -984,6 +992,8 @@ test("an expanded group can be put back together", () => {
     branch: null,
     flag_code: "LATE_START",
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 20,
     tier: "routine",
     members: [
@@ -1274,10 +1284,12 @@ test("a dated group's panel header still names its day and its size", () => {
   const group: QueueEntry = {
     kind: "group",
     group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
     branch: "Phnom Penh HQ",
     flag_code: null,
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 150,
     tier: "act",
     members: [

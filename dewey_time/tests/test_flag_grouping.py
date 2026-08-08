@@ -333,6 +333,124 @@ class TestPersonDedup(unittest.TestCase):
 
 
 class TestBranchOutageGrouping(unittest.TestCase):
+    def test_one_branch_outage_across_many_days_is_one_entry_not_one_per_day(self):
+        """The regression this class never covered.
+
+        Every other fixture here hands `outage_branch_dates` a single (branch, date)
+        pair, so nothing ever exercised a multi-day outage — and the per-day group
+        key shipped to production, where one device fault at a 98-person branch
+        became eleven rows carrying eleven copies of the same roster.
+
+        `len(members) == 2` is the load-bearing assertion: a per-day key also yields
+        entries whose *keys* differ, so asserting only the count of groups would
+        pass on a fixture with one employee.
+        """
+        days = ["2026-08-03", "2026-08-04", "2026-08-05"]
+        flags = [
+            _flag(emp, day, "LATE_START", evidence={"minutes": 9})
+            for emp in ("EMP-1", "EMP-2")
+            for day in days
+        ]
+
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-A")),
+            outage_branch_dates={("BR-A", day) for day in days},
+        )
+
+        outage = _groups(payload, "BRANCH_NO_DEVICE_DATA")
+        self.assertEqual(len(outage), 1)
+        group = outage[0]
+        self.assertEqual(len(group["members"]), 2)
+        self.assertEqual(group["group_key"], "BRANCH_NO_DEVICE_DATA:BR-A")
+        self.assertIsNone(group["attendance_date"])
+        self.assertEqual(group["dates"], days)
+        self.assertEqual(group["day_count"], 3)
+        self.assertEqual(payload["counts"]["rows"], 1)
+        # Each member carries all three of their days, so nothing was dropped in
+        # exchange for the collapse.
+        self.assertEqual([m["dates"] for m in group["members"]], [days, days])
+        self.assertEqual([len(m["flags"]) for m in group["members"]], [3, 3])
+
+    def test_a_multi_day_outage_does_not_inflate_the_cross_reference_badge(self):
+        """One incident must not make everyone in it look like a repeat offender.
+
+        Under the per-day key each member appeared in ten other entries, so every
+        row read "also 10 elsewhere" — the badge that exists to stop HR bulk-excusing
+        someone who also has a serious outlier, rendered identically for all 98
+        people and describing a single outage. A badge that says the same thing on
+        every row is one nobody reads.
+        """
+        days = ["2026-08-03", "2026-08-04", "2026-08-05"]
+        flags = [
+            _flag(emp, day, "LATE_START", evidence={"minutes": 9})
+            for emp in ("EMP-1", "EMP-2")
+            for day in days
+        ]
+
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-A")),
+            outage_branch_dates={("BR-A", day) for day in days},
+        )
+
+        group = _groups(payload, "BRANCH_NO_DEVICE_DATA")[0]
+        self.assertEqual([m["also_count"] for m in group["members"]], [0, 0])
+
+    def test_two_branches_out_on_the_same_days_stay_two_entries(self):
+        """Collapsing on date must not collapse across branches: two device faults
+        are two facts, and one decision cannot speak for both."""
+        days = ["2026-08-03", "2026-08-04"]
+        flags = [
+            _flag(emp, day, "LATE_START", evidence={"minutes": 9})
+            for emp in ("EMP-1", "EMP-2", "EMP-3", "EMP-4")
+            for day in days
+        ]
+
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_employees(
+                ("EMP-1", "Ana", "BR-A"),
+                ("EMP-2", "Ben", "BR-A"),
+                ("EMP-3", "Cy", "BR-B"),
+                ("EMP-4", "Dee", "BR-B"),
+            ),
+            outage_branch_dates={(branch, day) for branch in ("BR-A", "BR-B") for day in days},
+        )
+
+        outage = _groups(payload, "BRANCH_NO_DEVICE_DATA")
+        self.assertEqual(
+            sorted(g["group_key"] for g in outage),
+            ["BRANCH_NO_DEVICE_DATA:BR-A", "BRANCH_NO_DEVICE_DATA:BR-B"],
+        )
+
+    def test_a_day_the_branch_was_measured_is_left_out_of_the_outage_group(self):
+        """The group spans the days that were actually out, not the range between
+        them. A clean Tuesday between two dark Mondays belongs to whatever grouping
+        its own flags earn — it is not swallowed by the span."""
+        flags = [
+            _flag(emp, day, "LATE_START", evidence={"minutes": 9})
+            for emp in ("EMP-1", "EMP-2")
+            for day in ("2026-08-03", "2026-08-04", "2026-08-05")
+        ]
+
+        payload = build_queue(
+            flags=flags,
+            decisions_by_identity={},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-A")),
+            # 4 Aug was measured: the device reported, so those flags are real.
+            outage_branch_dates={("BR-A", "2026-08-03"), ("BR-A", "2026-08-05")},
+        )
+
+        group = _groups(payload, "BRANCH_NO_DEVICE_DATA")[0]
+        self.assertEqual(group["dates"], ["2026-08-03", "2026-08-05"])
+        self.assertEqual(group["day_count"], 2)
+        for member in group["members"]:
+            self.assertNotIn("2026-08-04", member["dates"])
+
     def test_outage_branch_claims_people_who_only_have_routine_flags(self):
         flags = [
             _flag(emp, DATE, "LATE_START", evidence={"minutes": 9})
@@ -353,7 +471,7 @@ class TestBranchOutageGrouping(unittest.TestCase):
 
         outage = _groups(payload, "BRANCH_NO_DEVICE_DATA")
         self.assertEqual(len(outage), 1)
-        self.assertEqual(outage[0]["group_key"], "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:" + DATE)
+        self.assertEqual(outage[0]["group_key"], "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ")
         self.assertEqual(outage[0]["branch"], "Phnom Penh HQ")
         self.assertIsNone(outage[0]["flag_code"])
         self.assertEqual([m["employee"] for m in outage[0]["members"]], ["EMP-1", "EMP-2"])
@@ -420,8 +538,14 @@ class TestBranchOutageGrouping(unittest.TestCase):
         )
 
         group = _groups(payload, "BRANCH_NO_DEVICE_DATA")[0]
-        self.assertEqual(group["group_key"], "BRANCH_NO_DEVICE_DATA:BR-A:2026-08-03")
-        self.assertEqual(group["attendance_date"], "2026-08-03")
+        self.assertEqual(group["group_key"], "BRANCH_NO_DEVICE_DATA:BR-A")
+        # A branch group spans dates, so its own attendance_date is null and the
+        # normalised day is read from `dates`. The assertion this test exists for
+        # is unchanged: a datetime.date off the driver and the string in the outage
+        # set have to converge on one ISO day, or the claim never matches.
+        self.assertIsNone(group["attendance_date"])
+        self.assertEqual(group["dates"], ["2026-08-03"])
+        self.assertEqual(group["day_count"], 1)
         self.assertEqual([m["attendance_date"] for m in group["members"]], ["2026-08-03"] * 2)
 
     def test_datetime_shaped_dates_truncate_to_the_day(self):
@@ -443,7 +567,7 @@ class TestBranchOutageGrouping(unittest.TestCase):
 
         self.assertEqual(len(payload["entries"]), 1)
         group = _groups(payload, "BRANCH_NO_DEVICE_DATA")[0]
-        self.assertEqual(group["group_key"], "BRANCH_NO_DEVICE_DATA:BR-A:2026-08-03")
+        self.assertEqual(group["group_key"], "BRANCH_NO_DEVICE_DATA:BR-A")
         self.assertEqual([m["employee"] for m in group["members"]], ["EMP-1", "EMP-2", "EMP-3"])
 
 

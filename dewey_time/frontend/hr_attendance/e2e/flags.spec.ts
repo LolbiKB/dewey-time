@@ -53,6 +53,8 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
         branch: "Siem Reap Depot",
         flag_code: null,
         attendance_date: "2026-08-13",
+        dates: ["2026-08-13"],
+        day_count: 1,
         rank: 140,
         tier: "act",
         members: [
@@ -121,6 +123,8 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
         branch: null,
         flag_code: "LATE_START",
         attendance_date: "2026-08-14",
+        dates: ["2026-08-14"],
+        day_count: 1,
         rank: 20,
         tier: "routine",
         members: [
@@ -513,6 +517,8 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
         branch: null,
         flag_code: "LATE_START",
         attendance_date: FLAG_DATE,
+        dates: [FLAG_DATE],
+        day_count: 1,
         rank: 20,
         tier: "routine",
         members,

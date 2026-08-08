@@ -278,10 +278,20 @@ export function FlagQueuePage() {
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
       if (identities.length === 0) return;
-      const groupKey = selectedEntry?.kind === "group" ? selectedEntry.group_key : null;
-      decide.mutate({ identities, decision, groupKey });
+      // No groupKey: the server mints a fresh `AFD-<hash>` per call.
+      //
+      // A decision's group_key answers "which writes happened together, so which
+      // ones does reverse_decision_group undo together" — it is a batch id, not a
+      // name for the queue row the batch came from. Passing the entry's group_key
+      // conflated the two, and reversal supersedes EVERY live row sharing the key:
+      // two separate decisions on one group already collapsed into a single
+      // undo. Now that a branch outage is one entry spanning the whole range
+      // rather than one per day, that key would be stable across months, so
+      // undoing this morning's call would silently reverse every device-fault
+      // decision ever made for that branch.
+      decide.mutate({ identities, decision, groupKey: null });
     },
-    [decide, selectedEntry],
+    [decide],
   );
 
   const handleDecideOneByOne = useCallback(() => {

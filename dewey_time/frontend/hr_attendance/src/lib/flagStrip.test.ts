@@ -265,6 +265,8 @@ test("the flag index gathers a person's flags from every entry they appear in", 
       branch: null,
       flag_code: "LATE_START",
       attendance_date: null,
+      dates: [],
+      day_count: 0,
       rank: 20,
       tier: "routine",
       members: [

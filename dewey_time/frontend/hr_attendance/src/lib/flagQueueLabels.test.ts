@@ -150,6 +150,9 @@ function patternGroup(
   const members = Array.from({ length: memberCount }, (_, i) =>
     patternMember(`HR-EMP-${i}`, flagCode, base + (i < remainder ? 1 : 0)),
   );
+  // Derived from the members exactly as flag_grouping's assembly does it, so the
+  // fixture cannot claim a span its own flags do not cover.
+  const dates = [...new Set(members.flatMap((member) => member.dates))].sort();
   return {
     kind: "group",
     group_type: "REPEAT_PATTERN",
@@ -157,6 +160,8 @@ function patternGroup(
     branch: null,
     flag_code: flagCode,
     attendance_date: null,
+    dates,
+    day_count: dates.length,
     rank: 50,
     tier: "review",
     members,
@@ -176,6 +181,8 @@ function routineGroup(
     branch: null,
     flag_code: flagCode,
     attendance_date: "2026-08-03",
+    dates: ["2026-08-03"],
+    day_count: 1,
     rank: 20,
     tier: "routine",
     members,
@@ -261,6 +268,58 @@ test("a dateless outage header drops the day rather than throwing on it", () => 
   assert.equal(branchNoDeviceDataHeader("Phnom Penh HQ", ""), "Phnom Penh HQ had no device data");
 });
 
+// A device that stopped reporting is ONE fact spanning however many days it was
+// down. Naming only the first day is how eleven rows all read "…on 28 Jul" and
+// looked like eleven separate incidents.
+test("a multi-day outage headline counts the days instead of naming one", () => {
+  assert.equal(
+    branchNoDeviceDataHeader("Phnom Penh HQ", null, ["2026-07-26", "2026-07-27", "2026-08-05"]),
+    "Phnom Penh HQ had no device data on 3 days",
+  );
+});
+
+test("a one-day outage still names the day", () => {
+  assert.equal(
+    branchNoDeviceDataHeader("Phnom Penh HQ", null, ["2026-08-03"]),
+    "Phnom Penh HQ had no device data on 3 Aug",
+  );
+});
+
+test("the outage subline gives the span, so a live fault is distinguishable from a finished one", () => {
+  const entry: Extract<QueueEntry, { kind: "group" }> = {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
+    branch: "Phnom Penh HQ",
+    flag_code: null,
+    attendance_date: null,
+    dates: ["2026-07-26", "2026-07-27", "2026-08-05"],
+    day_count: 3,
+    rank: 150,
+    tier: "act",
+    members: [person(), person({ employee: "HR-EMP-2", entry_key: "p:HR-EMP-2" })],
+  };
+  assert.equal(groupHeadline(entry), "Phnom Penh HQ had no device data on 3 days");
+  assert.equal(groupSubline(entry), "2 people · 26 Jul – 5 Aug");
+});
+
+test("a one-day outage subline stays just the headcount, with no span to state", () => {
+  const entry: Extract<QueueEntry, { kind: "group" }> = {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
+    branch: "Phnom Penh HQ",
+    flag_code: null,
+    attendance_date: null,
+    dates: ["2026-08-03"],
+    day_count: 1,
+    rank: 150,
+    tier: "act",
+    members: [person(), person({ employee: "HR-EMP-2", entry_key: "p:HR-EMP-2" })],
+  };
+  assert.equal(groupSubline(entry), "2 people");
+});
+
 test("a dateless outage group still gets a headline", () => {
   const entry: Extract<QueueEntry, { kind: "group" }> = {
     kind: "group",
@@ -269,6 +328,8 @@ test("a dateless outage group still gets a headline", () => {
     branch: null,
     flag_code: null,
     attendance_date: null,
+    dates: [],
+    day_count: 0,
     rank: 150,
     tier: "act",
     members: [],
@@ -475,6 +536,8 @@ test("groupHeadline dispatches on group_type", () => {
     branch: null,
     flag_code: "LATE_START",
     attendance_date: "2026-08-03",
+    dates: ["2026-08-03"],
+    day_count: 1,
     rank: 20,
     tier: "routine",
     members,

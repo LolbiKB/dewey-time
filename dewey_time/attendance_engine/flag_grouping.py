@@ -329,7 +329,21 @@ def _entries_for(
     for person_day in person_days:
         branch = (employees_by_id.get(person_day["employee"]) or {}).get("branch")
         if branch and (branch, person_day["date"]) in outage_branch_dates:
-            key = "{0}:{1}:{2}".format(GROUP_BRANCH_NO_DEVICE_DATA, branch, person_day["date"])
+            # Keyed on the BRANCH ALONE, not branch + date. A device that stopped
+            # reporting is one operational fact; keying per-day emitted it once per
+            # day, so a fortnight-long outage at a 98-person branch became eleven
+            # near-identical rows carrying eleven copies of the same roster — 45% of
+            # the queue and 26% of the payload, for fourteen real incidents. It also
+            # broke the cross-reference badge, which read "also 10 elsewhere" for
+            # every member while describing a single outage.
+            #
+            # This is what REPEAT_PATTERN below has always done (`:373`, no date in
+            # its key); the nesting work preserved this branch's PRECEDENCE and left
+            # its key behind. Deliberately NOT split into contiguous date runs: a
+            # branch with no data on Friday and Monday did not recover over the
+            # weekend, it simply had nobody rostered, so gap-splitting would invent
+            # incidents out of days off.
+            key = "{0}:{1}".format(GROUP_BRANCH_NO_DEVICE_DATA, branch)
             group = branch_groups.setdefault(
                 key,
                 {
@@ -337,7 +351,9 @@ def _entries_for(
                     "group_key": key,
                     "branch": branch,
                     "flag_code": None,
-                    "attendance_date": person_day["date"],
+                    # Spans dates now, exactly as a repeat pattern does. Consumers
+                    # read the entry's `dates` / `day_count` instead.
+                    "attendance_date": None,
                     "by_employee": {},
                 },
             )
@@ -438,6 +454,11 @@ def _entries_for(
             ]
             members.sort(key=_member_sort_key)
             rank = max(member["rank"] for member in members)
+            # Every date any member's flags in THIS group fall on. Two of the three
+            # group types now span dates, so `attendance_date` alone cannot describe
+            # a group and a consumer that reads it gets null. Emitted for all three
+            # so there is one shape to read rather than a per-type special case.
+            dates = sorted({date for member in members for date in member["dates"]})
             entries.append(
                 {
                     "kind": "group",
@@ -446,6 +467,8 @@ def _entries_for(
                     "branch": group["branch"],
                     "flag_code": group["flag_code"],
                     "attendance_date": group["attendance_date"],
+                    "dates": dates,
+                    "day_count": len(dates),
                     "rank": rank,
                     "tier": tier_for_rank(rank),
                     "members": members,

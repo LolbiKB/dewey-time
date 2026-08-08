@@ -88,8 +88,15 @@ export type QueueEntry =
       group_key: string;
       branch: string | null;
       flag_code: string | null;
-      /** null for REPEAT_PATTERN, which spans dates by definition. */
+      /**
+       * null for REPEAT_PATTERN and BRANCH_NO_DEVICE_DATA, both of which span
+       * dates by definition. Read `dates` / `day_count` instead.
+       */
       attendance_date: string | null;
+      /** Every date the flags in this group fall on, ascending. Never empty. */
+      dates: string[];
+      /** `dates.length`, carried so a caller need not recount to phrase a label. */
+      day_count: number;
       rank: number;
       tier: Tier;
       members: QueuePerson[];
