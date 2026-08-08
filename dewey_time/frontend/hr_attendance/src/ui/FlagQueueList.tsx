@@ -53,20 +53,41 @@ export function FlagQueueList(props: FlagQueueListProps) {
   // flag that put them in a second entry — see buildEmployeeFlagIndex.
   const flagsByEmployee = useMemo(() => buildEmployeeFlagIndex(props.entries), [props.entries]);
 
+  // A strip is ~14 date-fns format/addDays calls, and this list is ~40 rows. The
+  // parent re-renders on every keystroke in the decision note, so building them
+  // inline rebuilt six hundred of them per character. Memoised on the same
+  // inputs as the index — entries (which arrive through the index's identity,
+  // itself memoised on them), range, outage set — because those are the only
+  // things buildStrip reads.
+  //
+  // Lazy rather than a prebuilt map: a collapsed group renders faces, not
+  // strips, so eagerly building one per member would do a 168-member routine
+  // group's work for a row that shows four avatars. Keyed by employee, which is
+  // what buildStrip's inputs reduce to — the flags come from the index and the
+  // branch is a property of the Employee, so two entries for one person yield
+  // the same strip.
+  const stripFor = useMemo(() => {
+    const cache = new Map<string, Strip>();
+    return (person: QueuePerson): Strip => {
+      const cached = cache.get(person.employee);
+      if (cached) return cached;
+      const strip = buildStrip({
+        flags: flagsByEmployee.get(person.employee) ?? person.flags,
+        branch: person.employee_branch,
+        startDate: props.range.startDate,
+        endDate: props.range.endDate,
+        outage: props.outage,
+      });
+      cache.set(person.employee, strip);
+      return strip;
+    };
+  }, [flagsByEmployee, props.outage, props.range.endDate, props.range.startDate]);
+
   // build_queue already ranks entries; this re-sort is defensive and *stable*
   // (V8's sort is), so the backend's tie-break order within one rank survives
   // untouched. Sorting here rather than trusting transport order is what keeps a
   // lone 3-hour gap above a 168-member routine group.
   const ordered = [...props.entries].sort((a, b) => b.rank - a.rank);
-
-  const stripFor = (person: QueuePerson): Strip =>
-    buildStrip({
-      flags: flagsByEmployee.get(person.employee) ?? person.flags,
-      branch: person.employee_branch,
-      startDate: props.range.startDate,
-      endDate: props.range.endDate,
-      outage: props.outage,
-    });
 
   if (ordered.length === 0) {
     return (

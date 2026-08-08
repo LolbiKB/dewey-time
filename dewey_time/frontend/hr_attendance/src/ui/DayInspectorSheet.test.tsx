@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
 
-import { narrativeDayFrom } from "@/ui/DayInspectorSheet";
-import type { Day } from "@/types/calendar";
+import { Sheet } from "@/components/ui/sheet";
+import { DayInspectorHeader, narrativeDayFrom } from "@/ui/DayInspectorSheet";
+import type { Day, Flag } from "@/types/calendar";
 
 const FULL_DAY: Day = {
   date: "2026-08-04",
@@ -45,4 +47,50 @@ test("narrativeDayFrom maps a loaded Day into a NarrativeDay, including the snak
 test("narrativeDayFrom returns a safe empty NarrativeDay when no calendar day has loaded yet", () => {
   const result = narrativeDayFrom(undefined);
   assert.deepEqual(result, { checkins: [], shift: null, holiday: null, observedLunch: null });
+});
+
+const REVIEWING_FLAG: Flag = {
+  name: "FLAG-0001",
+  flag_code: "LATE_START",
+  status: "OPEN",
+  severity: "WARNING",
+  day_closed: 1,
+  is_provisional: false,
+  evidence: {},
+};
+
+/**
+ * The header is rendered on its own, inside a bare `<Sheet open>`, because
+ * `SheetContent` is a portal and a portal renders nothing on the server —
+ * mounting the whole sheet would assert against an empty string. Radix's Title
+ * and Description read the dialog context from the ROOT, so this is all they
+ * need.
+ */
+function headerHtml(inspectingDate: string | null): string {
+  return renderToStaticMarkup(
+    <Sheet open>
+      <DayInspectorHeader
+        inspectingDate={inspectingDate}
+        employeeId="EMP-0001"
+        employeeLabel="Jane Doe"
+        reviewingFlag={REVIEWING_FLAG}
+        onBack={() => {}}
+      />
+    </Sheet>
+  );
+}
+
+test("the flag-review header names the day being reviewed", () => {
+  assert.match(headerHtml("2026-08-04"), />Attendance flag review · Tue, Aug 4, 2026</);
+});
+
+// `formatFlagContextDate("")` throws `RangeError: Invalid time value`, so the
+// header's old `?? ""` read like a guard and was the opposite — it handed the
+// formatter the one string guaranteed to take the render down. Nothing reaches
+// this state today (the sheet is closed while `inspectingDate` is null, so its
+// content is unmounted), which is precisely why it needs pinning: the crash
+// would arrive with whatever change first mounts this header without a date.
+test("the flag-review header drops the date clause rather than formatting an empty one", () => {
+  const html = headerHtml(null);
+  assert.match(html, />Attendance flag review</, "the clause is dropped, not left dangling");
 });

@@ -98,6 +98,38 @@ test("flags older than the window are counted, not dropped", () => {
   assert.equal(strip.flaggedCount, 0);
 });
 
+test("two flags on one earlier day are one earlier DAY, the same unit the strip counts", () => {
+  // The trap this pins: `flaggedCount` counts flagged days while `earlierCount`
+  // used to count flags, so a person with two flags on a single pre-window day
+  // read "+2 earlier" beside a strip whose cells are days and an aria-label that
+  // says "N flagged days". One unit, everywhere.
+  const strip = buildStrip({
+    flags: [
+      flag("2026-07-16", "LATE_START", "routine", 20),
+      flag("2026-07-16", "MISSING_TIME", "act", 133),
+    ],
+    branch: "HQ",
+    startDate: "2026-07-15",
+    endDate: "2026-08-07",
+    outage: NONE,
+  });
+  assert.equal(strip.earlierCount, 1);
+});
+
+test("two earlier days are two, so counting days has not collapsed the marker", () => {
+  const strip = buildStrip({
+    flags: [
+      flag("2026-07-16", "LATE_START", "routine", 20),
+      flag("2026-07-17", "LATE_START", "routine", 20),
+    ],
+    branch: "HQ",
+    startDate: "2026-07-15",
+    endDate: "2026-08-07",
+    outage: NONE,
+  });
+  assert.equal(strip.earlierCount, 2);
+});
+
 test("a day with a flag renders at that flag's tier", () => {
   const strip = buildStrip({
     flags: [flag("2026-08-03", "LATE_START", "routine", 20)],
@@ -180,12 +212,27 @@ test("a flag outranks an outage on the same day", () => {
 test("an employee with no branch is never greyed", () => {
   // An empty branch string produces the same outage key as a null branch
   // (outageKey does `branch ?? ""`), so this is the fixture that actually
-  // exercises the `branch !== null` guard: a `Device Closeout Alert` with an
-  // empty branch reaches the payload unfiltered, and without the guard this
-  // employee's day would grey.
+  // exercises the branch guard: a `Device Closeout Alert` with an empty branch
+  // reaches the payload unfiltered, and without the guard this employee's day
+  // would grey.
   const strip = buildStrip({
     flags: [],
     branch: null,
+    startDate: "2026-08-01",
+    endDate: "2026-08-07",
+    outage: buildOutageSet([{ branch: "", date: "2026-08-04" }]),
+  });
+  assert.deepEqual(new Set(strip.cells.map((c) => c.state)), new Set(["clean"]));
+});
+
+test("an employee whose branch is an empty string is never greyed either", () => {
+  // The other half of the same key collision, and the reason the guard is
+  // `!args.branch` rather than `!== null`: "" is not null, so a `!== null` check
+  // lets it through to `outageKey("", date)` — the key an empty-branch alert
+  // produces — and greys a branchless employee against another record's outage.
+  const strip = buildStrip({
+    flags: [],
+    branch: "",
     startDate: "2026-08-01",
     endDate: "2026-08-07",
     outage: buildOutageSet([{ branch: "", date: "2026-08-04" }]),

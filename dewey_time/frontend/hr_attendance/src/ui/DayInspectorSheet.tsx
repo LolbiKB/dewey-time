@@ -31,7 +31,7 @@ import {
   type SegmentInspectorItem,
 } from "@/lib/segmentInspector";
 import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
-import { flagDialogTitle, formatFlagContextDate, formatFlagStatusLabel, flagIsProvisional } from "@/lib/flagDetails";
+import { flagDialogTitle, flagReviewSubtitle, formatFlagStatusLabel, flagIsProvisional } from "@/lib/flagDetails";
 import type { NarrativeDay } from "@/lib/flagNarrative";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -136,48 +136,16 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
             : "w-full sm:w-[440px] sm:max-w-md",
         )}
       >
-        <SheetHeader>
-          {props.reviewingFlag ? (
-            <>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0"
-                  onClick={() => {
-                    props.onReviewingFlagChange(null);
-                    setActiveTab("flags");
-                  }}
-                  aria-label="Back to flags"
-                >
-                  <ArrowLeftIcon className="size-4" />
-                </Button>
-                <SheetTitle className="truncate">{flagDialogTitle(props.reviewingFlag)}</SheetTitle>
-              </div>
-              <SheetDescription asChild>
-                <div className="text-sm text-muted-foreground">
-                  Attendance flag review · {formatFlagContextDate(props.inspectingDate ?? "")}
-                </div>
-              </SheetDescription>
-            </>
-          ) : (
-            <>
-              <SheetTitle>
-                {props.inspectingDate ? format(parseDateKey(props.inspectingDate), "EEE, MMM d") : "Day"}
-              </SheetTitle>
-              <SheetDescription asChild>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <span className="text-foreground">
-                    {props.employeeLabel ?? props.employeeId ?? "Employee"}
-                  </span>
-                  <Separator orientation="vertical" className="h-4" />
-                  <span>Day inspector</span>
-                </div>
-              </SheetDescription>
-            </>
-          )}
-        </SheetHeader>
+        <DayInspectorHeader
+          inspectingDate={props.inspectingDate}
+          employeeId={props.employeeId}
+          employeeLabel={props.employeeLabel}
+          reviewingFlag={props.reviewingFlag}
+          onBack={() => {
+            props.onReviewingFlagChange(null);
+            setActiveTab("flags");
+          }}
+        />
 
         <ScrollArea className="min-h-0 flex-1 px-4 pb-5">
           {props.reviewingFlag && props.inspectingDate ? (
@@ -339,6 +307,71 @@ export function DayInspectorSheet(props: DayInspectorSheetProps) {
         </ScrollArea>
       </SheetContent>
     </Sheet>
+  );
+}
+
+export type DayInspectorHeaderProps = {
+  inspectingDate: string | null;
+  employeeId: string | null;
+  employeeLabel: string | null;
+  reviewingFlag: Flag | null;
+  /** Leaves flag review and puts the sheet back on its flags tab. */
+  onBack: () => void;
+};
+
+/**
+ * The sheet's two-state header: one flag under review, or the day itself.
+ *
+ * Exported so each state can be rendered on its own. Inside the sheet it only
+ * ever appears within `SheetContent`, which is a portal — and a portal renders
+ * nothing on the server, so a test that mounts the whole sheet asserts against
+ * an empty string. Radix's Title and Description read the dialog context from
+ * the ROOT, so a bare `<Sheet open>` is enough to render this for real.
+ *
+ * Both states take a null date, and both say so in words rather than handing a
+ * date formatter something it cannot parse.
+ */
+export function DayInspectorHeader(props: DayInspectorHeaderProps) {
+  return (
+    <SheetHeader>
+      {props.reviewingFlag ? (
+        <>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0"
+              onClick={props.onBack}
+              aria-label="Back to flags"
+            >
+              <ArrowLeftIcon className="size-4" />
+            </Button>
+            <SheetTitle className="truncate">{flagDialogTitle(props.reviewingFlag)}</SheetTitle>
+          </div>
+          <SheetDescription asChild>
+            <div className="text-sm text-muted-foreground">
+              {flagReviewSubtitle(props.inspectingDate)}
+            </div>
+          </SheetDescription>
+        </>
+      ) : (
+        <>
+          <SheetTitle>
+            {props.inspectingDate ? format(parseDateKey(props.inspectingDate), "EEE, MMM d") : "Day"}
+          </SheetTitle>
+          <SheetDescription asChild>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="text-foreground">
+                {props.employeeLabel ?? props.employeeId ?? "Employee"}
+              </span>
+              <Separator orientation="vertical" className="h-4" />
+              <span>Day inspector</span>
+            </div>
+          </SheetDescription>
+        </>
+      )}
+    </SheetHeader>
   );
 }
 

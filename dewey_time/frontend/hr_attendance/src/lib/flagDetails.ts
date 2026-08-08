@@ -270,6 +270,22 @@ export function formatFlagContextDate(dateKey: string): string {
   return format(parseDateKey(dateKey), "EEE, MMM d, yyyy");
 }
 
+/**
+ * "Attendance flag review · Tue, Aug 4, 2026" — the line under the title while
+ * the day inspector is reviewing one flag.
+ *
+ * No inspected day drops the clause rather than coercing one out of nothing:
+ * `formatFlagContextDate("")` throws `RangeError: Invalid time value`, so a
+ * caller's `?? ""` reads like a guard and is the opposite — it hands the
+ * formatter the one string guaranteed to take the render down instead of
+ * wording one sub-line more briefly. Same rule, for the same reason, as
+ * `branchNoDeviceDataHeader` in flagQueueLabels.ts.
+ */
+export function flagReviewSubtitle(dateKey: string | null): string {
+  if (!dateKey) return "Attendance flag review";
+  return `Attendance flag review · ${formatFlagContextDate(dateKey)}`;
+}
+
 export function flagDialogTitle(flag: Flag): string {
   return formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence));
 }
