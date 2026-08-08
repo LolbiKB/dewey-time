@@ -11,7 +11,7 @@ import { plannedDaysFromSchedule } from "../lib/plannedDays";
 import { resolveWeekTimelineWindow } from "../lib/weekTimelineWindow";
 import { WeekView } from "./WeekView";
 import { PlannedWeekCanvas } from "./PlannedWeekCanvas";
-import { WeekCanvasFrame } from "./WeekCanvasFrame";
+import { WeekCanvasFrame, type MinDayWidth } from "./WeekCanvasFrame";
 import type { Day } from "../types/calendar";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -99,7 +99,7 @@ function colsTemplate(html: string): string | undefined {
   return html.match(/grid-cols-\[3\.5rem_repeat\(7,minmax\([^)]*\)\)\]/)?.[0];
 }
 
-function renderFrame(minDayWidth?: string): string {
+function renderFrame(minDayWidth?: MinDayWidth): string {
   return renderToStaticMarkup(
     <WeekCanvasFrame
       weekDates={WEEK}
