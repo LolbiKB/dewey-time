@@ -219,7 +219,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
     // list, so it cannot exceed them. `decided` can and does: those two settled
     // flags belong to people the default view drops, which is the whole reason
     // the toolbar reports the number.
-    counts: { open: 5, needs_re_review: 0, decided: 2, people: 5, rows: 3 },
+    counts: { open: 5, needs_re_review: 0, open_capped: false, decided: 2, people: 5, rows: 3 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
@@ -368,12 +368,12 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
           ? ({
               ...basePayload,
               entries: [personEntry(undecidedFlag, 1)],
-              counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 },
+              counts: { open: 1, needs_re_review: 0, open_capped: false, decided: 0, people: 1, rows: 1 },
             } satisfies QueuePayload)
           : ({
               ...basePayload,
               entries: [personEntry(decidedFlag, 0)],
-              counts: { open: 0, needs_re_review: 0, decided: 1, people: 0, rows: 1 },
+              counts: { open: 0, needs_re_review: 0, open_capped: false, decided: 1, people: 0, rows: 1 },
             } satisfies QueuePayload);
       return route.fulfill({
         status: 200,
@@ -521,7 +521,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
     // One entry — the group — holding all five people (flag_grouping.recount
     // counts group members as people, which is what keeps the header from
     // reading "1 row" over five names).
-    counts: { open: 5, needs_re_review: 0, decided: 0, people: 5, rows: 1 },
+    counts: { open: 5, needs_re_review: 0, open_capped: false, decided: 0, people: 5, rows: 1 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
@@ -660,7 +660,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     // undecided, and the only person here has nothing. `rows` is not in here —
     // it is the length of whichever entry list the response carries, so it is
     // filled in below rather than shared between the two.
-    counts: { open: 0, needs_re_review: 0, decided: 1, people: 0 },
+    counts: { open: 0, needs_re_review: 0, open_capped: false, decided: 1, people: 0 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
@@ -807,7 +807,7 @@ test("a person row's avatar loading ring stays out of the accessibility tree", a
         also_outlier_count: 0,
       },
     ],
-    counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 },
+    counts: { open: 1, needs_re_review: 0, open_capped: false, decided: 0, people: 1, rows: 1 },
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],

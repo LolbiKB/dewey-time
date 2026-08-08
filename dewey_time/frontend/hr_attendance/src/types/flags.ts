@@ -97,7 +97,18 @@ export type QueueEntry =
 
 export type QueuePayload = {
   entries: QueueEntry[];
-  counts: { open: number; needs_re_review: number; decided: number; people: number; rows: number };
+  counts: {
+    open: number;
+    needs_re_review: number;
+    decided: number;
+    people: number;
+    rows: number;
+    /**
+     * True when the flag scan hit its row cap, which makes `open` the cap itself
+     * rather than a total. Render it through `openCountLabel`, never bare.
+     */
+    open_capped: boolean;
+  };
   orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number };
   alerts: { branch: string; local_date: string; status: string; last_error?: string | null }[];
   /**

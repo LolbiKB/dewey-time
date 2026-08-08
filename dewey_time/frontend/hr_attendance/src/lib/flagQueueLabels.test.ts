@@ -13,6 +13,8 @@ import {
   groupHeadline,
   groupSubline,
   hiddenMemberLabel,
+  openCountAria,
+  openCountLabel,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   OUTCOME_ACTION_LABELS,
@@ -558,14 +560,14 @@ test("a person in one entry carries no badge at all", () => {
 
 test("the header states people and rows, so it cannot contradict the list", () => {
   assert.equal(
-    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 40, rows: 12 }),
+    queueHeaderDescription({ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 40, rows: 12 }),
     "40 people · 12 rows",
   );
 });
 
 test("the header is singular for one", () => {
   assert.equal(
-    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 1, rows: 1 }),
+    queueHeaderDescription({ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 1, rows: 1 }),
     "1 person · 1 row",
   );
 });
@@ -576,12 +578,52 @@ test("the header is singular for one", () => {
 // Only a fixture where the two counts differ can catch that.
 test("the header's two counts pluralise independently of each other", () => {
   assert.equal(
-    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 1, rows: 3 }),
+    queueHeaderDescription({ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 1, rows: 3 }),
     "1 person · 3 rows",
   );
   assert.equal(
-    queueHeaderDescription({ open: 0, needs_re_review: 0, decided: 0, people: 5, rows: 1 }),
+    queueHeaderDescription({ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 5, rows: 1 }),
     "5 people · 1 row",
+  );
+});
+
+// `open` is a count of the flags the scan returned, so at the cap it IS the cap.
+// Printed bare it is a constant masquerading as a total — 5000 before HR decides a
+// thousand and 5000 after. The "+" is the entire difference between reporting a
+// floor and claiming a measurement.
+test("an uncapped open count prints as the plain number", () => {
+  assert.equal(
+    openCountLabel({ open: 42, needs_re_review: 0, open_capped: false, decided: 0, people: 9, rows: 9 }),
+    "42",
+  );
+});
+
+test("a capped open count prints as a floor, not a total", () => {
+  assert.equal(
+    openCountLabel({ open: 5000, needs_re_review: 0, open_capped: true, decided: 0, people: 390, rows: 252 }),
+    "5000+",
+  );
+});
+
+// The "+" is one character at the end of a number, and it is the character a
+// screen reader is likeliest to drop — so the fact travels in words too.
+test("a capped count says in words that the total is higher", () => {
+  const aria = openCountAria({
+    open: 5000,
+    needs_re_review: 0,
+    open_capped: true,
+    decided: 0,
+    people: 390,
+    rows: 252,
+  });
+  assert.match(String(aria), /at least 5000/);
+  assert.match(String(aria), /limit/);
+});
+
+test("an uncapped count needs no spoken caveat", () => {
+  assert.equal(
+    openCountAria({ open: 42, needs_re_review: 0, open_capped: false, decided: 0, people: 9, rows: 9 }),
+    undefined,
   );
 });
 

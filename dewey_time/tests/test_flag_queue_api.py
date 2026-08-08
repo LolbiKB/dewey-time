@@ -297,6 +297,25 @@ class TestTruncation(unittest.TestCase):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
         self.assertFalse(payload["truncated"])
 
+    def test_open_is_marked_capped_when_the_scan_hits_the_limit(self):
+        """`open` counts the flags the scan returned, so at the cap it IS the cap.
+        Without this the toolbar renders a constant as a measured total."""
+        with _harness(_roster(3)), patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 3):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertTrue(payload["counts"]["open_capped"])
+
+    def test_open_is_not_marked_capped_below_the_limit(self):
+        with _harness(_roster(3)):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertFalse(payload["counts"]["open_capped"])
+
+    def test_open_capped_survives_the_tier_filter_recount(self):
+        """recount() rewrites people/rows for a filtered list; open_capped describes
+        the whole-range scan and must not be dropped on the way through."""
+        with _harness(_roster(3)), patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 3):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertTrue(payload["counts"]["open_capped"])
+
     def test_the_flag_scan_asks_for_the_newest_flags_first(self):
         """One word, and the queue starts hiding today's work — see _flag_rows."""
         with _harness(_roster(3)) as h:
@@ -688,8 +707,8 @@ class TestIncludeDecided(unittest.TestCase):
             [key for key, _ttl in cache.set_calls],
             [
                 # The default key is unchanged — the suffix is only ever added.
-                "flag_queue:v2:2026-08-01:2026-08-07:all",
-                "flag_queue:v2:2026-08-01:2026-08-07:all:decided",
+                "flag_queue:v3:2026-08-01:2026-08-07:all",
+                "flag_queue:v3:2026-08-01:2026-08-07:all:decided",
             ],
         )
 
@@ -706,11 +725,11 @@ class TestQueueCache(unittest.TestCase):
     def test_cache_key_and_ttl_match_the_contract(self):
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-            self.assertEqual(h.cache.set_calls, [("flag_queue:v2:2026-08-01:2026-08-07:all", 60)])
+            self.assertEqual(h.cache.set_calls, [("flag_queue:v3:2026-08-01:2026-08-07:all", 60)])
 
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
-            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v2:2026-08-01:2026-08-07:act")
+            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v3:2026-08-01:2026-08-07:act")
 
     def test_a_different_range_is_a_different_cache_entry(self):
         cache = _FakeCache()
@@ -726,7 +745,7 @@ class TestQueueCache(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             self.assertEqual(len(cache.store), 1)
             flag_queue_api.invalidate_flag_queue_cache()
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v3"])
         self.assertEqual(cache.store, {})
 
     def test_invalidate_accepts_doc_event_args(self):
@@ -734,7 +753,7 @@ class TestQueueCache(unittest.TestCase):
         with _harness(cache=cache):
             # Frappe doc_events call handlers as (doc, method); must not raise.
             flag_queue_api.invalidate_flag_queue_cache(doc=object(), method="on_update")
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v3"])
 
 
 class TestDriverDateShapes(unittest.TestCase):

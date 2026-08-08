@@ -22,6 +22,8 @@ import {
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   partialFailureMessage,
+  openCountAria,
+  openCountLabel,
   queueHeaderDescription,
 } from "@/lib/flagQueueLabels";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
@@ -468,11 +470,15 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           aria-label="Queue counts"
           className="flex w-full gap-1 rounded-lg bg-muted/40 p-1 sm:w-fit"
         >
-          <CountChip label="Open" value={counts?.open ?? 0} />
-          <CountChip label="Needs re-review" value={counts?.needs_re_review ?? 0} />
+          <CountChip
+            label="Open"
+            value={counts ? openCountLabel(counts) : "0"}
+            valueAria={counts ? openCountAria(counts) : undefined}
+          />
+          <CountChip label="Needs re-review" value={`${counts?.needs_re_review ?? 0}`} />
           <CountChip
             label="Decided"
-            value={counts?.decided ?? 0}
+            value={`${counts?.decided ?? 0}`}
             pressed={props.includeDecided}
             onToggle={props.onToggleDecided}
           />
@@ -588,7 +594,10 @@ export function FlagQueueView(props: FlagQueueViewProps) {
 
 function CountChip(props: {
   label: string;
-  value: number;
+  /** Pre-formatted: a capped count carries a trailing "+" (see openCountLabel). */
+  value: string;
+  /** Spoken form for a value whose printed shape under-states it, e.g. "5000+". */
+  valueAria?: string;
   /** Present only on a chip that also toggles what the list shows. */
   pressed?: boolean;
   onToggle?: () => void;
@@ -596,7 +605,15 @@ function CountChip(props: {
   const body = (
     <>
       {props.label}
-      <span className="tabular-nums text-foreground">{props.value}</span>
+      <span
+        className="tabular-nums text-foreground"
+        aria-label={props.valueAria}
+        // A bare "+" is the only thing distinguishing a floor from a total, and
+        // it is exactly the character a screen reader is likeliest to swallow.
+        role={props.valueAria ? "text" : undefined}
+      >
+        {props.value}
+      </span>
     </>
   );
   const shape =

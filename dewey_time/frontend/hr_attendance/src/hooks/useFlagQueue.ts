@@ -8,6 +8,7 @@ import type { QueuePayload, Tier } from "@/types/flags";
 const EMPTY_COUNTS: QueuePayload["counts"] = {
   open: 0,
   needs_re_review: 0,
+  open_capped: false,
   decided: 0,
   people: 0,
   rows: 0,

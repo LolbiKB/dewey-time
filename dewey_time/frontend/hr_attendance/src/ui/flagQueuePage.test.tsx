@@ -689,7 +689,7 @@ test("a decided flag can be decided again, with the decision it replaces in view
 });
 
 test("the Decided count doubles as the control that surfaces decided people", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
+  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
 
   const off = renderToStaticMarkup(
     <FlagQueueView
@@ -755,7 +755,7 @@ test("a load failure renders exactly one assertive alert", () => {
 test("a partial bulk failure is reported politely, with the failures disclosed", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
+      counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -786,7 +786,7 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
 test("the toolbar reports open, needs re-review and decided counts", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
+      counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -811,7 +811,7 @@ test("the toolbar reports open, needs re-review and decided counts", () => {
 test("device alert cards render from alerts, with no flags present", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -838,7 +838,7 @@ test("device alert cards render from alerts, with no flags present", () => {
 test("device alert cards never render a device serial", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -865,7 +865,7 @@ test("device alert cards never render a device serial", () => {
 test("device alert cards carry no decide action", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -953,7 +953,7 @@ test("an over-threshold decide asks for confirmation and settles nothing", () =>
 test("a decide that fails outright is reported, politely, without hiding the queue", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
+      counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -1026,7 +1026,7 @@ test("an expanded group can be put back together", () => {
 test("no alert cards render when the array is empty", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -1048,7 +1048,7 @@ test("no alert cards render when the array is empty", () => {
 // rate is on screen. Before this, get_flag_queue computed both counts and
 // nothing rendered them.
 test("orphaned decisions are reported, so the rate is visible rather than inferred", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
+  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
 
   const html = renderToStaticMarkup(
     <FlagQueueView
@@ -1073,7 +1073,7 @@ test("orphaned decisions are reported, so the rate is visible rather than inferr
 // is noise on the overwhelmingly common day, and each line is independent —
 // one count being zero must not suppress the other.
 test("an orphan line appears only when its own count is non-zero", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
+  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
   const render = (orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number }) =>
     renderToStaticMarkup(
       <FlagQueueView
@@ -1217,7 +1217,7 @@ test("the same person in two entries produces two distinct row keys", () => {
 test("the header states people and rows", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 40, rows: 12 }}
+      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 40, rows: 12 }}
       {...viewProps()}
     />
   );

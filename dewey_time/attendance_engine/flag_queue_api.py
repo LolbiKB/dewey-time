@@ -49,7 +49,10 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # v2: person entries gained entry_key / dates / also_count / also_outlier_count and
 # employee_image; flags gained attendance_date; counts gained rows; and the payload
 # gained outage_dates.
-_QUEUE_CACHE_PREFIX = "flag_queue:v2"
+# v3: counts gained open_capped; branch-outage groups span dates, so their
+# attendance_date is now null and they carry `dates` / `day_count`; group entries
+# carry member_preview / member_count instead of the full members roster.
+_QUEUE_CACHE_PREFIX = "flag_queue:v3"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
 # below is best-effort only: the engine deletes flags with raw frappe.db.delete()
@@ -388,6 +391,14 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
 
     entries = queue.get("entries") or []
     counts = dict(queue.get("counts") or {})
+    # `open` counts the flags this scan actually returned, so when the scan hit its cap
+    # the number IS QUEUE_FLAG_LIMIT — a constant, not a measurement. Rendered bare it
+    # reads as a precise total, stays at 5000 after HR clears a thousand, and quietly
+    # teaches everyone that the numbers on this page are approximate. Flagged here so
+    # the toolbar can say "5000+" and mean it; the true total is unknown by design,
+    # because counting it exactly would cost the second unfiltered scan the fixed query
+    # budget exists to prevent.
+    counts["open_capped"] = bool(flags_capped)
     if tier:
         entries = [entry for entry in entries if entry.get("tier") == tier]
         # `people` and `rows` describe the LIST; leaving them whole-range would

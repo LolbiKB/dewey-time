@@ -217,6 +217,28 @@ export function crossReferenceLabel(person: QueuePerson): string | null {
 }
 
 /**
+ * The Open chip's number, and the only place allowed to format it.
+ *
+ * `open` counts the flags the scan returned, so once the scan hits its row cap
+ * the number IS the cap — 5000 today, 5000 tomorrow, and still 5000 after HR
+ * decides a thousand of them. Rendered bare it reads as a measured total and
+ * quietly teaches everyone that the numbers on this page are approximate, which
+ * is the one lesson that must not reach the evidence panel.
+ *
+ * "+" is the whole fix: it says "at least this many" without claiming a total
+ * nobody has counted. `openCountAria` carries the same fact to a screen reader,
+ * where a trailing plus is easily lost.
+ */
+export function openCountLabel(counts: QueuePayload["counts"]): string {
+  return counts.open_capped ? `${counts.open}+` : `${counts.open}`;
+}
+
+export function openCountAria(counts: QueuePayload["counts"]): string | undefined {
+  if (!counts.open_capped) return undefined;
+  return `Open: at least ${counts.open}. The scan reached its limit, so the true total is higher.`;
+}
+
+/**
  * "40 people · 12 rows". The header and the list must count the same thing:
  * before nesting, `people` counted distinct employees while the list showed one
  * row per person-DAY, so the toolbar read "40 people with something open" above
