@@ -592,9 +592,31 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             className="min-h-0"
           />
         ) : (
-          <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-            <div className="min-h-0 overflow-y-auto overscroll-contain">{props.list}</div>
-            <div className="min-h-0 overflow-y-auto overscroll-contain">{props.panel}</div>
+          // Below lg this is ONE scroll surface, not two stacked ones. As a grid
+          // it was two implicit auto rows in a definite-height container, and
+          // `min-h-0` on both children drops their min-content contribution to
+          // zero — so the tracks split the height evenly and a phone got a ~133px
+          // window onto 252 rows, shearing the third row through its sub-line
+          // while an unasked-for empty panel took the other half.
+          //
+          // The split starts at lg, not md: at 768px the panel would be 340px,
+          // narrower than the list beside it, and the decision form does not fit
+          // that. useIsMobile.ts:9 already puts the data table's break at lg.
+          //
+          // 24–30rem rather than a flat 22rem cap. The row's fixed chrome (avatar,
+          // gaps, +N badge, 117px strip) is ~240px, so 22rem left 112px for two
+          // lines of text and the name — the row's identity — was the only
+          // shrinkable thing in it, collapsing to "B…" beside a shrink-0 badge.
+          // The panel gives up width it measurably was not using: its longest
+          // line of prose ends ~277px short of the old edge.
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain",
+              "lg:grid lg:overflow-visible lg:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
+            )}
+          >
+            <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.list}</div>
+            <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.panel}</div>
           </div>
         )}
       </Section>

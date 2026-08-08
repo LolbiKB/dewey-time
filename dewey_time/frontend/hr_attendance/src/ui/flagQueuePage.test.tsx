@@ -409,8 +409,13 @@ test("a person with a routine flag and an act flag appears once, under Act", () 
     <FlagQueueList entries={[routineGroup, { kind: "person", ...ada }]} {...listProps()} />
   );
 
+  // `>Ada Lovelace<` — the name as TEXT, not as any occurrence of the string.
+  // A bare substring count also matched the `title` attribute the row carries
+  // for long names, so it counted markup rather than rows. This proxy is the
+  // stricter of the two: it still fails if the person is rendered twice, and it
+  // no longer fails when an attribute happens to repeat the name.
   assert.equal(
-    html.split("Ada Lovelace").length - 1,
+    html.split(">Ada Lovelace<").length - 1,
     1,
     "Ada must appear in exactly one row, not once as a person and once in the routine group"
   );
