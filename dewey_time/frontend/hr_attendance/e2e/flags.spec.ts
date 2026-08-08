@@ -754,3 +754,128 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
   expect(body.outcome).toBe("UPHELD");
   expect(body.reason).toBe("GENUINE_VIOLATION");
 });
+
+test("a person row's avatar loading ring stays out of the accessibility tree", async ({ page }) => {
+  // Issue #130. `FlagQueueList.tsx`'s `DecorativeAvatars` puts `aria-hidden` on a
+  // `display: contents` span, and `EmployeeAvatar`'s loading ring is a
+  // `role="status"` LIVE REGION. Forty rows of lazily-loaded photos would queue
+  // forty "Loading" announcements if that `aria-hidden` did not take, and
+  // `display: contents` removes the element from the box tree — historically the
+  // exact case engines have disagreed on. Nothing proved it worked.
+  //
+  // The unit suite structurally cannot: it renders with `renderToStaticMarkup`,
+  // so `useEffect` never runs, `delayElapsed` stays false, and `showsRing` is
+  // never true — the ring does not exist to be checked. It takes a real engine.
+  //
+  // Chromium ONLY. Both playwright.config.ts projects (Desktop Chrome, Pixel 7)
+  // are Chromium and the CDP block below is a Chromium protocol, so this proves
+  // nothing about Gecko or WebKit. That is the honest scope of the claim.
+
+  // A photo the browser asks for and never receives, so the avatar is pinned in
+  // its `loading` phase past AVATAR_RING_DELAY_MS and the ring actually renders.
+  const AVATAR_URL = "/e2e-avatar-never-arrives.png";
+
+  const queuePayload = {
+    entries: [
+      {
+        kind: "person",
+        entry_key: "p:EMP-900",
+        employee: "EMP-900",
+        employee_name: "Nita Prum",
+        employee_branch: "BRANCH-A",
+        employee_image: AVATAR_URL,
+        attendance_date: "2026-08-15",
+        dates: ["2026-08-15"],
+        rank: 150,
+        tier: "act",
+        flags: [
+          {
+            flag_identity: "AUTO-EMP-900-2026-08-15-unnotified_absence",
+            flag_code: "UNNOTIFIED_ABSENCE",
+            attendance_date: "2026-08-15",
+            severity: "CRITICAL",
+            day_closed: 1,
+            evidence: {},
+            rank: 150,
+            tier: "act",
+            decision_state: "undecided",
+            decision: null,
+          },
+        ],
+        undecided_count: 1,
+        also_count: 0,
+        also_outlier_count: 0,
+      },
+    ],
+    counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1 },
+    orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
+    alerts: [],
+    outage_dates: [],
+    truncated: false,
+    start_date: "2026-08-09",
+    end_date: "2026-08-15",
+  } satisfies QueuePayload;
+
+  // Deliberately never fulfilled, aborted, or continued. An abort would fire the
+  // <img>'s `error` handler, move the phase to `failed`, and take the ring back
+  // off screen — the one thing this test needs on screen. A hanging route is
+  // discarded when the context closes.
+  await page.route(`**${AVATAR_URL}`, () => {});
+
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: queuePayload }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+
+  // Located by CSS, not by role: every later assertion here is about the
+  // accessibility tree, so the scope they are measured in must not be.
+  const row = page.locator("button[aria-pressed]").filter({ hasText: "Nita Prum" });
+  await expect(row).toHaveCount(1);
+
+  // THE GUARD, and the most important line in this test. Without it, everything
+  // below passes whether or not `aria-hidden` works — a ring that never rendered
+  // is also a ring that is not exposed. `[role="status"]` is a plain attribute
+  // selector, so it sees the element regardless of `aria-hidden`; `animate-spin`
+  // pins that what rendered is the ring and not something else wearing the role.
+  // This retries, which is also how the test waits out AVATAR_RING_DELAY_MS.
+  await expect(row.locator('svg[role="status"].animate-spin')).toHaveCount(1);
+
+  // Playwright's own ARIA implementation: `getByRole` skips `aria-hidden`
+  // subtrees, so a hit here means a screen reader would have one too.
+  await expect(row.getByRole("status")).toHaveCount(0);
+
+  // And now the engine itself, which is the actual question — the above is
+  // Playwright's opinion of the markup, not Blink's. `Accessibility.getFullAXTree`
+  // is Blink's real tree, the one a platform screen reader reads.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Accessibility.enable");
+
+  async function exposedNodes() {
+    const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+    const live = nodes.filter((node) => !node.ignored);
+    return {
+      status: live.filter((node) => node.role?.value === "status").length,
+      namedLoading: live.filter((node) => node.name?.value === "Loading").length,
+      // The positive control, and the reason this assertion is not vacuous. The
+      // flag strip is a `role="img"` sibling of the avatar INSIDE THE SAME
+      // <button>, and it is deliberately not hidden. Its presence proves the tree
+      // was populated and that Blink does not prune a button's descendants
+      // wholesale — so the ring's absence is `aria-hidden` doing its job and
+      // nothing else. Without this, an empty tree would read as a pass.
+      strip: live.filter(
+        (node) => node.role?.value === "image" && /flagged day/.test(String(node.name?.value ?? "")),
+      ).length,
+    };
+  }
+
+  // Polled: the AX tree is built off the main thread's commit, so it can lag the
+  // DOM by a frame.
+  await expect.poll(exposedNodes).toEqual({ status: 0, namedLoading: 0, strip: 1 });
+});
