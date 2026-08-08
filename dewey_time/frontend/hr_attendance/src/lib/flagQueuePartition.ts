@@ -16,12 +16,30 @@
 import { groupPayload } from "@/lib/flagDecisionState";
 import type { QueueEntry } from "@/types/flags";
 
-export type OutageGroup = Extract<QueueEntry, { kind: "group" }>;
+/**
+ * An outage group specifically — NOT any group.
+ *
+ * `QueueEntry` is discriminated on `kind` alone; `group_type` is an ordinary
+ * field holding a three-way union, so a bare
+ * `Extract<QueueEntry, { kind: "group" }>` admits REPEAT_PATTERN and
+ * ROUTINE_CODE too. Handing either to `outageWrite` would return the undecided
+ * identities of genuine judgments as an "Excuse all" payload — a mass excuse
+ * over real findings, the highest-blast-radius mistake this page can make.
+ *
+ * Intersection, not a filtered `Extract`: `Extract<…, { group_type: "…" }>`
+ * yields `never` here, because the arm's `group_type` union is not assignable
+ * to a single-member object type.
+ */
+export type OutageGroup = Extract<QueueEntry, { kind: "group" }> & {
+  group_type: "BRANCH_NO_DEVICE_DATA";
+};
 
 /** No exclusions — the band excludes whole branches, never individuals. */
 const NO_EXCLUSIONS: ReadonlySet<string> = new Set<string>();
 
-export function isOutageGroup(entry: QueueEntry): boolean {
+/** A type predicate, so `partitionQueue` narrows instead of casting — a cast
+ *  here would keep the alias above unenforced and invisible to tsc. */
+export function isOutageGroup(entry: QueueEntry): entry is OutageGroup {
   return entry.kind === "group" && entry.group_type === "BRANCH_NO_DEVICE_DATA";
 }
 
@@ -32,7 +50,7 @@ export function partitionQueue(entries: QueueEntry[]): {
   const outages: OutageGroup[] = [];
   const queue: QueueEntry[] = [];
   for (const entry of entries) {
-    if (isOutageGroup(entry)) outages.push(entry as OutageGroup);
+    if (isOutageGroup(entry)) outages.push(entry);
     else queue.push(entry);
   }
   return { outages, queue };
@@ -45,8 +63,16 @@ export function partitionQueue(entries: QueueEntry[]): {
  * apply here too: only strictly `undecided` flags are ever included, and
  * `coveredEmployeeCount` counts only members who contribute an identity. A
  * member whose sole unresolved flag is `needs_re_review` is checked but writes
- * nothing, so a label reading `employeeCount` would promise a write that does
- * not happen for them.
+ * nothing, so a count of merely-checked members would promise a write that does
+ * not happen for them. The returned field is named `coveredEmployeeCount` to
+ * match `groupPayload`'s own vocabulary exactly — an `employeeCount` here would
+ * mean the opposite of what that name means one module over, which is the same
+ * shape of trap as the `undecided`/`unresolved` collision that module documents
+ * at length.
+ *
+ * `branchCount` answers "branches still checked", NOT "branches that will be
+ * written": a branch whose flags are all already decided still increments it
+ * while contributing no identities. Copy built on it must not promise a write.
  *
  * No dedupe: the per-flag invariant puts each flag in exactly one entry, so two
  * outage groups cannot both carry the same identity.
@@ -54,20 +80,21 @@ export function partitionQueue(entries: QueueEntry[]): {
 export function outageWrite(
   outages: OutageGroup[],
   excludedBranches: ReadonlySet<string>,
-): { identities: string[]; branchCount: number; employeeCount: number } {
+): { identities: string[]; branchCount: number; coveredEmployeeCount: number } {
   const identities: string[] = [];
   let branchCount = 0;
-  let employeeCount = 0;
+  let coveredEmployeeCount = 0;
 
   for (const group of outages) {
+    if (group.group_type !== "BRANCH_NO_DEVICE_DATA") continue;
     if (excludedBranches.has(group.group_key)) continue;
     branchCount += 1;
     const payload = groupPayload(group.members, NO_EXCLUSIONS);
     identities.push(...payload.identities);
-    employeeCount += payload.coveredEmployeeCount;
+    coveredEmployeeCount += payload.coveredEmployeeCount;
   }
 
-  return { identities, branchCount, employeeCount };
+  return { identities, branchCount, coveredEmployeeCount };
 }
 
 /**

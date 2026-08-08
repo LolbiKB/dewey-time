@@ -119,7 +119,7 @@ test("the write covers every undecided flag of every included branch", () => {
 
   assert.deepEqual(write.identities, ["a1", "a2", "a3", "b1"]);
   assert.equal(write.branchCount, 2);
-  assert.equal(write.employeeCount, 3);
+  assert.equal(write.coveredEmployeeCount, 3);
 });
 
 test("excluding a branch removes its people and all of their flags", () => {
@@ -132,7 +132,7 @@ test("excluding a branch removes its people and all of their flags", () => {
 
   assert.deepEqual(write.identities, ["b1"]);
   assert.equal(write.branchCount, 1);
-  assert.equal(write.employeeCount, 1);
+  assert.equal(write.coveredEmployeeCount, 1);
 });
 
 test("a decided or needs_re_review flag is never swept into the write", () => {
@@ -156,8 +156,48 @@ test("a member who contributes no identity is not counted as covered", () => {
 
   const write = outageWrite(groups, new Set());
 
-  assert.equal(write.employeeCount, 1, "only DI-1 writes anything");
+  assert.equal(write.coveredEmployeeCount, 1, "only DI-1 writes anything");
   assert.deepEqual(write.identities, ["keep"]);
+});
+
+test("a pattern group handed to outageWrite yields nothing", () => {
+  // The type forbids it, but types are erased. If this ever returned identities
+  // the band's "Excuse all" would mass-excuse genuine judgments — the worst
+  // thing this page can do. Cast through unknown to reach past the guard.
+  const patternGroup = pattern([person("DI-2", [flag("p1")])]) as unknown as OutageGroup;
+  assert.deepEqual(outageWrite([patternGroup], new Set()).identities, []);
+});
+
+test("empty inputs return empty results rather than throwing", () => {
+  assert.deepEqual(partitionQueue([]), { outages: [], queue: [] });
+  assert.deepEqual(outageWrite([], new Set()), {
+    identities: [],
+    branchCount: 0,
+    coveredEmployeeCount: 0,
+  });
+  assert.equal(queuePeopleCount([]), 0);
+});
+
+test("an exclusion key matching no branch changes nothing", () => {
+  const groups = [outage("A", [person("DI-1", [flag("a1")])])];
+  const write = outageWrite(groups, new Set(["BRANCH_NO_DEVICE_DATA:Nowhere"]));
+  assert.deepEqual(write.identities, ["a1"]);
+  assert.equal(write.branchCount, 1);
+});
+
+test("neither function mutates what it was given", () => {
+  // The sibling suite pins exactly this for the tier filter (commit aff38433),
+  // because a filter that sorted in place corrupted the caller's array.
+  const groups = [outage("A", [person("DI-1", [flag("a1")])])];
+  const entries: QueueEntry[] = [groups[0], LONE];
+  const snapshot = JSON.stringify(entries);
+
+  partitionQueue(entries);
+  outageWrite(groups, new Set());
+  queuePeopleCount(entries);
+
+  assert.equal(JSON.stringify(entries), snapshot);
+  assert.equal(entries.length, 2, "the input array kept its length");
 });
 
 test("queuePeopleCount counts distinct employees, not rows", () => {
