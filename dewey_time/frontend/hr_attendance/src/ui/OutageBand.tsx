@@ -80,33 +80,42 @@ export function OutageBand(props: OutageBandProps) {
   return (
     <section
       aria-label={OUTAGE_BAND_LABEL}
-      // shrink-0, and a header row that wraps. The band is a flex item in the
-      // page's column, and the queue below it is `flex-1 basis-0` — which has a
-      // shrink weight of zero, so the queue cannot give up any height and every
-      // pixel the band takes is a pixel the queue loses. On a 412px phone the
-      // two shrink-0, whitespace-nowrap buttons left the headline a sliver to
-      // wrap in: the band grew to 474px and the queue was allotted exactly 0.
-      // Below sm the headline therefore takes the full row and the buttons drop
-      // beneath it (134px); from sm up `basis-0` restores the original single
-      // row exactly. This is the band's own stated rule — "an unbounded list
-      // would push the queue below the fold, the exact failure this band exists
-      // to prevent" — applied to its header instead of its list.
-      className="shrink-0 rounded-md border border-amber-500/25 bg-amber-500/[0.06] text-sm animate-in fade-in"
+      className="rounded-md border border-amber-500/25 bg-amber-500/[0.06] text-sm animate-in fade-in"
     >
+      {/* The header row WRAPS, and that is what keeps the queue on screen.
+          This band is a flex item in the page's column and `Section grow` below
+          it is `min-h-0 flex-1 overflow-hidden` — flex-basis 0 — so the queue is
+          only ever handed positive free space, and every pixel this row takes is
+          a pixel the queue never gets. Unwrapped, the two shrink-0,
+          whitespace-nowrap buttons took the whole row at 412px and left the
+          headline a sliver to wrap in: the band grew to 474px and the queue was
+          allotted exactly 0. Wrapped, it is 134px and the queue gets 292px.
+
+          Below sm the headline block takes a full line of its own and the
+          buttons drop beneath it; from sm up `basis-0` reproduces the previous
+          single-row layout exactly. The icon rides in a nested row with the
+          headline rather than beside it, because a basis-full sibling cannot
+          share a flex line and the triangle would be stranded on a line by
+          itself. */}
       <div className="flex flex-wrap items-center gap-2.5 px-3 py-2">
-        <TriangleAlertIcon className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
-        <div className="min-w-0 flex-1 basis-full sm:basis-0">
-          <div className="font-medium text-foreground">
-            {/* queuePeopleCount, NOT coveredEmployeeCount. This parameter is
-                "everyone the outage touched" and its docstring forbids the
-                covered count by name: covered counts only members with an
-                undecided flag, so it equals the button's number on load (making
-                the word "affected" do nothing) and falls to "0 people affected"
-                once the outage is excused — a false statement of history. */}
-            {outageBandHeadline(props.outages.length, queuePeopleCount(props.outages))}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            {outageBandSubline(spanOf(props.outages), outageFlagCount(props.outages))}
+        <div className="flex min-w-0 flex-1 basis-full items-start gap-2.5 sm:basis-0">
+          <TriangleAlertIcon
+            className="mt-0.5 size-4 shrink-0 text-amber-600"
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-foreground">
+              {/* queuePeopleCount, NOT coveredEmployeeCount. This parameter is
+                  "everyone the outage touched" and its docstring forbids the
+                  covered count by name: covered counts only members with an
+                  undecided flag, so it equals the button's number on load (making
+                  the word "affected" do nothing) and falls to "0 people affected"
+                  once the outage is excused — a false statement of history. */}
+              {outageBandHeadline(props.outages.length, queuePeopleCount(props.outages))}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {outageBandSubline(spanOf(props.outages), outageFlagCount(props.outages))}
+            </div>
           </div>
         </div>
         <Button

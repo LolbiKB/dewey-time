@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
 import { outageKey } from "@/lib/flagStrip";
-import { partitionQueue } from "@/lib/flagQueuePartition";
+import { outageWrite, partitionQueue, queuePeopleCount } from "@/lib/flagQueuePartition";
 import {
   DECIDE_AGAIN_LABEL,
   SAME_REASON_LABEL,
@@ -27,6 +27,7 @@ import { FlagQueueList, entryKey } from "./FlagQueueList";
 import {
   FlagQueueView,
   clampRange,
+  confirmArgs,
   decideEffect,
   parseTierParam,
   stripInputs,
@@ -969,6 +970,7 @@ const ARGS: DecideArgs = {
   identities: ["id-1", "id-2", "id-3"],
   decision: DRAFT,
   groupKey: null,
+  source: "panel",
 };
 
 function settled(effect: DecideEffect) {
@@ -1580,8 +1582,20 @@ test("the page hands the list the payload's outages, not an empty set", () => {
   assert.doesNotMatch(rowWith(withoutOutage, "Sokheng Hon"), /bg-muted-foreground\/30/);
 });
 
-test("an outage group is rendered as the band, not as a queue row", () => {
-  const outageGroup: GroupEntry = {
+/**
+ * One branch that lost its device, with two people behind it — and the second
+ * one already decided.
+ *
+ * That second member is the whole point of the fixture. She is still someone
+ * the outage touched, so `queuePeopleCount` counts her (2), but she has nothing
+ * left to write, so `outageWrite(...).coveredEmployeeCount` does not (1). With a
+ * single undecided member the two numbers are equal and the header could read
+ * from either source while every assertion passed — which is the state the Task
+ * 4 review found this fixture in, after three earlier rounds had established
+ * that only one of the two sources is correct.
+ */
+function outageBranchEntry(): GroupEntry {
+  return {
     kind: "group",
     group_type: "BRANCH_NO_DEVICE_DATA",
     group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
@@ -1592,8 +1606,32 @@ test("an outage group is rendered as the band, not as a queue row", () => {
     day_count: 1,
     rank: 134,
     tier: "act",
-    members: [patternMember({ employee: "DI-1", name: "Ada Lovelace" })],
+    members: [
+      patternMember({ employee: "DI-1", name: "Ada Lovelace" }),
+      makePerson({
+        employee: "DI-2",
+        name: "Grace Hopper",
+        rank: 134,
+        tier: "act",
+        entryKey: "BRANCH_NO_DEVICE_DATA:DIS Iconic|p:DI-2",
+        flags: [
+          makeFlag({
+            identity: "id-outage-DI-2",
+            code: "ATTENDANCE_ISSUE",
+            rank: 134,
+            tier: "act",
+            evidence: { reason: "single_checkin" },
+            state: "matched",
+            decision: PRIOR,
+          }),
+        ],
+      }),
+    ],
   };
+}
+
+test("an outage group is rendered as the band, not as a queue row", () => {
+  const outageGroup = outageBranchEntry();
   const person = missingTimePerson();
 
   const { outages, queue } = partitionQueue([outageGroup, person]);
@@ -1629,21 +1667,7 @@ test("a failed load withholds the band, not just the list", () => {
   // is merely misleading; this one carries the largest write the page can make,
   // and "Excuse 1 person · 3 flags" above "Flags didn't load" is an invitation
   // to decide over data the page has just disowned.
-  const outages = partitionQueue([
-    {
-      kind: "group",
-      group_type: "BRANCH_NO_DEVICE_DATA",
-      group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
-      branch: "DIS Iconic",
-      flag_code: null,
-      attendance_date: null,
-      dates: [DATE],
-      day_count: 1,
-      rank: 134,
-      tier: "act",
-      members: [patternMember({ employee: "DI-1", name: "Ada Lovelace" })],
-    } satisfies GroupEntry,
-  ]).outages;
+  const outages = partitionQueue([outageBranchEntry()]).outages;
   assert.equal(outages.length, 1, "the fixture is the stale-data case");
 
   const failed = renderToStaticMarkup(
@@ -1684,4 +1708,60 @@ test("the header separates people waiting on HR from people waiting on a device"
   );
   assert.match(html, /5 people need a decision/);
   assert.ok(!/waiting on a device fault/.test(html), "no outages, no device line");
+});
+
+test("the header's device line counts everyone the outage touched, not just the write", () => {
+  // Three rounds of review settled that this number is `queuePeopleCount`, and
+  // no test would have failed if it were swapped back to
+  // `outageWrite(...).coveredEmployeeCount`. The difference only shows on a
+  // fixture where some of the outage's flags are already decided — which is the
+  // ordinary state of an outage part-way through being cleared, and the state
+  // this line goes wrong in: covered shrinks as decisions land and reaches zero
+  // once the excuse is complete, so the header would announce that nobody is
+  // waiting on a device fault while the band directly above it still names the
+  // branch.
+  const outages = partitionQueue([outageBranchEntry()]).outages;
+  assert.equal(queuePeopleCount(outages), 2, "two people are behind this outage");
+  assert.equal(
+    outageWrite(outages, new Set<string>()).coveredEmployeeCount,
+    1,
+    "…but only one of them still has anything to write",
+  );
+
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 7, rows: 3, open_capped: false }}
+      outages={outages}
+      queuePeople={5}
+      queueRows={2}
+    />
+  );
+
+  assert.match(html, /5 people need a decision · 2 rows · 2 waiting on a device fault/);
+  assert.doesNotMatch(html, /1 waiting on a device fault/, "not the write's covered count");
+});
+
+test("a confirmed re-issue is the same call plus confirm — including its source", () => {
+  // decide_flags refuses more than 25 writes without an explicit confirm, so
+  // every large write takes this path: the user is shown a blast radius and the
+  // identical call is sent again. Any field that changes in between makes the
+  // preview they approved a description of a different call. `source` is the one
+  // that would do real harm — a band excuse re-issued as "panel" would offer
+  // "Excused · Device or data fault" as the selected person's repeat and drag
+  // them off their row, which is exactly what the discriminant prevents, and it
+  // would do it only on the path the biggest writes always take.
+  const band: DecideArgs = {
+    identities: ["id-1", "id-2"],
+    decision: { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" },
+    groupKey: null,
+    source: "band",
+  };
+
+  assert.deepEqual(confirmArgs(band), { ...band, confirm: true });
+  assert.equal(confirmArgs(band).source, "band", "the surface survives the round trip");
+  assert.equal(confirmArgs(ARGS).source, "panel");
+  // The original is untouched: it stays in `pendingConfirm` while the modal is
+  // open, and the user may yet cancel.
+  assert.equal(band.confirm, undefined);
 });

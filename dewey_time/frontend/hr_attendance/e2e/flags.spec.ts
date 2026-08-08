@@ -273,6 +273,19 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // clothes, and it is the only one of the two that a layout can fail.
   await expect(list.getByRole("listitem").first()).toBeVisible();
 
+  // The header, against a payload whose own `counts` disagrees with all three
+  // numbers in it: `people: 5, rows: 3` count the outage's two members and the
+  // outage row along with the judgment work. Only the real page can catch these
+  // — the split is computed in `FlagQueuePage`'s body, which the unit suite has
+  // no react-query harness to reach.
+  //
+  //   3 people   = queuePeopleCount(queue): EMP-401, EMP-402, EMP-001
+  //   2 rows     = queue.length, not counts.rows (3)
+  //   2 waiting  = queuePeopleCount(outages): EMP-301, EMP-302
+  await expect(
+    page.getByText("3 people need a decision · 2 rows · 2 waiting on a device fault"),
+  ).toBeVisible();
+
   // ROUTINE_CODE group: same rule's copy example ("168 late starts, 6–20
   // min…") turns on the flag label, formatted through the shared
   // `formatFlagLabel` helper the design doc names explicitly
@@ -1190,6 +1203,274 @@ test("the next row's form is empty after a decide, not pre-filled with the last 
   await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
   await page.getByRole("button", { name: "Decide", exact: true }).click();
   await expect(page.getByRole("textbox").first()).toHaveValue("");
+});
+
+/** The a11y queue's three people, plus the branch whose reader died that day. */
+const A11Y_OUTAGE = {
+  kind: "group",
+  group_type: "BRANCH_NO_DEVICE_DATA",
+  group_key: "BRANCH_NO_DEVICE_DATA:Siem Reap Depot",
+  branch: "Siem Reap Depot",
+  flag_code: null,
+  attendance_date: "2026-08-13",
+  dates: ["2026-08-13"],
+  day_count: 1,
+  // Ranked ABOVE the person rows on purpose. Interleaving is what makes the two
+  // arrays disagree: with the outage first, every person's slot in `entries` is
+  // one further down than its slot in the rendered list, and removing the
+  // outage shifts them all back again.
+  rank: 140,
+  tier: "act",
+  members: [
+    a11yPerson({ employee: "HR-EMP-00031", name: "Chanthou Ny", minutes: 300 }),
+    a11yPerson({ employee: "HR-EMP-00032", name: "Rithy Sen", minutes: 310 }),
+  ],
+} satisfies QueueEntry;
+
+// The band's write must not run the panel's success path. `decide` is shared by
+// both surfaces, and its onSuccess arms two effects scoped to the SELECTED
+// PERSON: the "Same reason applies" repeat, and the post-write restore. A band
+// excuse that ran either would leave a device-fault reason one click from an
+// unrelated person's genuine attendance flags, and would carry the user off the
+// row they were working on — the excuse removes the outage entries, so every
+// later slot shifts. Both are reachable by an ordinary sequence: select a row,
+// notice the amber band, click Excuse.
+test("a band excuse leaves the selected person's row and form alone", async ({ page }) => {
+  let excused = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      excused = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 2, group_key: "AFD-band", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    // The outage leaves the payload once excused, exactly as it does in
+    // production once every flag behind it is settled.
+    const entries: QueueEntry[] = [
+      ...(excused ? [] : [A11Y_OUTAGE]),
+      ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+    ];
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: { ...A11Y_PAYLOAD, entries, counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const vandy = page.locator('button[aria-label*="Vandy In"]');
+  await vandy.click();
+  await expect(vandy).toHaveAttribute("aria-current", "true");
+
+  // Mid-sentence about Vandy — the sequence in full is: select a row, start
+  // typing, notice the amber band, click Excuse. The free-text note is the
+  // sharpest thing to lose, because it is the only part of a decision that
+  // cannot be retyped from the row itself.
+  const note = "Spoke to Vandy, family emergency";
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page.getByRole("textbox").first().fill(note);
+
+  const band = page.getByRole("region", { name: "Device outages" });
+  await band.getByRole("button", { name: /^Excuse\b/ }).click();
+
+  // The write landed, was announced, and cleared the band.
+  await expect(page.locator('[role="status"][aria-live="polite"]')).toHaveText(/saved/i);
+  await expect(band).toHaveCount(0);
+
+  // None of it was about Vandy. Her row is still the selected one, her form is
+  // still open, and her half-written note is still in it — the restore effect
+  // resets the draft on arrival, so arming it here would have wiped exactly
+  // this text.
+  await expect(vandy).toHaveAttribute("aria-current", "true");
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).not.toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(page.getByRole("textbox").first()).toHaveValue(note);
+
+  // And "Excused · Device or data fault" is not on offer as her reason. It was
+  // never a decision about her; it was a statement about a dead card reader.
+  // The repeat only renders on a CLOSED flag card, so the form has to be shut
+  // to look for it — with it open the button is absent either way and the
+  // assertion would prove nothing.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("button", { name: "Same reason applies" })).toHaveCount(0);
+});
+
+// The band's button starts the largest write on the page, and the `decide`
+// mutation behind it is shared with the panel. Two things have to hold at once:
+// it must lock while its OWN write runs — a second click issues a second
+// mutation, and two needs_confirm responses then race into the same preview —
+// and it must stay quiet while the PANEL writes, because an unqualified
+// `decide.isPending` would put "Excusing…" on the band every time somebody
+// decided a single person, announcing a mass excuse they never asked for.
+test("the band's button reports the band's own write, and no other", async ({ page }) => {
+  await page.route("**/api/method/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      // Held open on purpose: an in-flight state that is never observed cannot
+      // be asserted on, and this whole test is about one.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-slow", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [
+            A11Y_OUTAGE,
+            ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+          ],
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  const bandExcuse = band.getByRole("button", { name: /Excus/ });
+  const panelSubmit = page.getByRole("button", { name: /^Excuse\b/ }).last();
+
+  // A panel write, mid-flight.
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await panelSubmit.click();
+
+  // The panel's own submit is disabled while its write runs, which is the proof
+  // that the band is being read mid-flight rather than after everything
+  // settled.
+  await expect(panelSubmit).toBeDisabled();
+  // Snapshot reads, NOT `expect(...).toBeEnabled()`. A web-first assertion
+  // retries for five seconds, so a negative one about a two-second window
+  // passes the moment the window shuts — it would report the band as quiet
+  // simply by outlasting the write it was supposed to be watching.
+  expect(await bandExcuse.isDisabled()).toBe(false);
+  expect(await bandExcuse.textContent()).not.toMatch(/Excusing/);
+  await expect(panelSubmit).toBeEnabled({ timeout: 10_000 });
+
+  // The band's own write, mid-flight.
+  await bandExcuse.click();
+  await expect(bandExcuse).toBeDisabled();
+  await expect(bandExcuse).toHaveText(/Excusing/);
+});
+
+// `excludedBranches` is keyed by `group_key`, and a branch outage's group_key
+// is stable across months — the same fact that makes it unsafe to send as a
+// decision's group_key. Left standing across a change of question, a branch
+// unchecked for last week's outage silently narrows this week's write, and the
+// band is collapsed by default so the only trace is a smaller number inside a
+// button label.
+test("a branch unchecked for one outage is not still unchecked for the next", async ({ page }) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [
+            A11Y_OUTAGE,
+            ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+          ],
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
+
+  await band.getByRole("button", { name: /Review 1 branch/ }).click();
+  await band.getByRole("checkbox", { name: "Include Siem Reap Depot" }).click();
+  await expect(bandExcuse).toHaveText("Select a branch to excuse");
+
+  // A different consequence filter is a different question, and the answer to
+  // the old one must not be carried into it.
+  await page.locator("#flag-tier").selectOption("routine");
+  await expect(bandExcuse).toHaveText(/^Excuse /);
+});
+
+// The restore effect remembers a SLOT, because the row it was on is about to
+// stop existing. Remembered against the payload rather than against the rendered
+// list, the slot vacated by the last person is filled by the outage group — and
+// the page opens a decision form over a device fault, which is the single thing
+// this layout exists to prevent. `focusKey` then names a row the list never
+// renders, so `onFocusHandled` never fires and focus drops to <body>: the exact
+// regression the restore effect was built to fix.
+test("deciding the last judgment row lands nowhere, not on the outage", async ({ page }) => {
+  let decided = false;
+  const person = A11Y_PEOPLE[0];
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-z", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    // One person and one outage; deciding her leaves the outage alone in the
+    // payload and the rendered list empty.
+    const entries: QueueEntry[] = decided
+      ? [A11Y_OUTAGE]
+      : [A11Y_OUTAGE, { kind: "person", ...person } satisfies QueueEntry];
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: { ...A11Y_PAYLOAD, entries, counts: { ...A11Y_PAYLOAD.counts, people: 3, rows: 2 } },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveCount(0);
+
+  // Nothing is selected, and the panel says so. Landing on the outage would
+  // have put its branch, its members and an excuse control in here instead.
+  const panel = page.getByRole("region", { name: "Selected flag" });
+  await expect(panel.getByText("Pick a row to review")).toBeVisible();
+  await expect(panel).not.toContainText("Siem Reap Depot");
+
+  // The outage itself is untouched — still a band, still awaiting its own
+  // acknowledgement.
+  await expect(page.getByRole("region", { name: "Device outages" })).toBeVisible();
 });
 
 test("a second save is announced too, not silently deduplicated", async ({ page }) => {

@@ -95,6 +95,15 @@ export type DecideArgs = {
   decision: PendingDecision;
   groupKey?: string | null;
   confirm?: boolean;
+  /**
+   * Which surface issued the write.
+   *
+   * The band excuses branches; the panel decides a person. Only the panel's
+   * write may offer its reason as a repeat or move the selection — a band
+   * excuse that set `lastDecision` would put "Excused · Device or data fault"
+   * one click away from being applied to an unrelated person's genuine flags.
+   */
+  source: "panel" | "band";
 };
 
 /**
@@ -152,6 +161,26 @@ export function decideEffect(result: DecideResponse, args: DecideArgs): DecideEf
     bulkFailure:
       errors.length > 0 ? { saved: written, attempted: args.identities.length, errors } : null,
   };
+}
+
+/**
+ * The confirmed re-issue of a call the backend refused as too large.
+ *
+ * "Identical, plus confirm" is the whole contract: the preview the user was
+ * shown described THIS call, so any field that changes on the way back makes the
+ * blast radius they approved a description of something else. `source` is the
+ * one that would bite hardest — a band excuse re-issued as `"panel"` would, on
+ * success, offer "Excused · Device or data fault" as the selected person's
+ * repeat and drag them to a different row, which is precisely what the
+ * discriminant exists to prevent, and only on the over-25 path that the biggest
+ * writes always take.
+ *
+ * Exported and lifted out of the modal's onClick for the reason `decideEffect`
+ * and `stripInputs` are: this suite has no react-query harness, so a spread left
+ * inline there is a line no test can reach.
+ */
+export function confirmArgs(args: DecideArgs): DecideArgs {
+  return { ...args, confirm: true };
 }
 
 /** A fresh draft for a newly selected row. REASON_OPTIONS[0] only seeds the
@@ -260,6 +289,21 @@ export function FlagQueuePage() {
     });
   }, []);
 
+  // An exclusion belongs to the outage it was made about, and nothing else does
+  // that bookkeeping. `group_key` for a branch outage is stable across months
+  // (handleSubmit's comment says so, which is why it must never be sent as a
+  // decision's group_key), so a branch unchecked for last week's outage stays
+  // unchecked for this week's — and the band is collapsed by default, so the
+  // only trace is a smaller number inside a button label.
+  //
+  // Keyed on the range and tier rather than reset inside their two setters: the
+  // URL is the source of truth for both, and it also changes via the back
+  // button and via any link somebody was sent. Identity is preserved when the
+  // set is already empty, so the overwhelmingly common case does not re-render.
+  useEffect(() => {
+    setExcludedBranches((prev) => (prev.size === 0 ? prev : new Set<string>()));
+  }, [requestedRange.startDate, requestedRange.endDate, tier]);
+
   // Memoised once for the whole list rather than rebuilt per row: the list
   // re-renders on every keystroke in the decision note, and forty rows would
   // otherwise each rebuild the same set each time.
@@ -295,10 +339,16 @@ export function FlagQueuePage() {
 
   // The selected row can be a group member surfaced by "Decide one by one",
   // which is not itself a top-level entry — so resolve against the expanded
-  // group's members too, not just `entries`.
+  // group's members too, not just the top-level rows.
+  //
+  // `queue`, not `entries`: an outage is not selectable, because the list does
+  // not render one. Resolving against `entries` let a stale or mis-aimed
+  // selection land on an outage group and open the decision panel over it — a
+  // judgment form for a dead card reader, which is the precondition this page
+  // now refuses to judge.
   const selectedEntry = useMemo<QueueEntry | null>(() => {
     if (!selectedKey) return null;
-    for (const entry of entries) {
+    for (const entry of queue) {
       if (entryKey(entry) === selectedKey) return entry;
       if (entry.kind === "group" && entry.group_key === expandedGroupKey) {
         for (const member of entry.members) {
@@ -308,7 +358,7 @@ export function FlagQueuePage() {
       }
     }
     return null;
-  }, [entries, expandedGroupKey, selectedKey]);
+  }, [queue, expandedGroupKey, selectedKey]);
 
   // Everything reset here is per-row state: a draft, a repeat decision, an
   // exclusion set or a failure notice leaking across a selection change would
@@ -383,11 +433,22 @@ export function FlagQueuePage() {
       }
 
       setPendingConfirm(null);
-      setActiveIdentity(null);
+      // The open flag form belongs to the selected person, so it closes when
+      // THEIR write lands and not when the band's does. Same rule as the two
+      // gates below, and the same sequence reaches it: a half-typed decision
+      // should not snap shut because somebody acknowledged an outage.
+      if (args.source === "panel") setActiveIdentity(null);
       setWriteFailure(null);
       // null only when the call wrote nothing; keep whatever repeat was already
       // on offer rather than clearing a decision that did land earlier.
-      if (effect.lastDecision) setLastDecision(effect.lastDecision);
+      //
+      // Panel writes only. A band excuse announces and refreshes; it must not
+      // touch anything scoped to the selected row. Offering "Excused · Device
+      // or data fault" as this person's repeat, when the write was about a
+      // branch's dead reader and not about them at all, is resetRowState's own
+      // stated failure — one person's reasoning applied to the next — arriving
+      // by a path resetRowState cannot intercept, because no selection changed.
+      if (effect.lastDecision && args.source === "panel") setLastDecision(effect.lastDecision);
       setBulkFailure(effect.bulkFailure);
 
       // Say what happened. Until now the only signal that a decision landed was
@@ -416,11 +477,18 @@ export function FlagQueuePage() {
       // unrelated refetch (this query is staleTime 0 with refetchOnWindowFocus)
       // finally changed the data, then steal focus and clobber the selection at
       // an arbitrary moment, possibly mid-note.
-      if (effect.lastDecision) {
+      //
+      // Panel writes only, for the second time on this handler and for a
+      // different reason: a band excuse removes N outage entries, so every later
+      // slot shifts. With thirteen branches down the user is carried from row i
+      // to row i+13, focus follows, and the draft they were part-way through —
+      // including its free-text note — is wiped. They asked to acknowledge an
+      // outage, not to leave the row they were working on.
+      if (effect.lastDecision && args.source === "panel") {
         // Members of an expanded group are not top-level entries, so fall back to
         // the group that owns the selected member — that is the row the list
         // renders in its place.
-        const index = entries.findIndex(
+        const index = queue.findIndex(
           (entry) =>
             entryKey(entry) === selectedKey ||
             (entry.kind === "group" &&
@@ -428,8 +496,16 @@ export function FlagQueuePage() {
                 (member) => entryKey({ kind: "person", ...member }) === selectedKey,
               )),
         );
-        setRestore(index >= 0 ? { index, from: entries } : null);
+        setRestore(index >= 0 ? { index, from: queue } : null);
       }
+
+      // The branches just excused are about to leave the queue, so the choice of
+      // which ones to include has nothing left to describe. Left standing it
+      // would silently narrow the next outage's write. Same "something was
+      // actually written" guard as the restore above: a call that wrote nothing
+      // has not settled anything, and the user's selection is still the one they
+      // will want when they retry.
+      if (effect.lastDecision && args.source === "band") setExcludedBranches(new Set<string>());
 
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
@@ -450,11 +526,11 @@ export function FlagQueuePage() {
 
   useEffect(() => {
     if (!restore) return;
-    if (entries === restore.from) return; // the refetch has not landed yet
+    if (queue === restore.from) return; // the refetch has not landed yet
     setRestore(null);
     // Clamped: deciding the last row leaves the slot past the end, and the row
     // above it is where a human would look next.
-    const next = entries[Math.min(restore.index, entries.length - 1)];
+    const next = queue[Math.min(restore.index, queue.length - 1)];
     if (!next) {
       setSelectedKey(null);
       return;
@@ -474,7 +550,7 @@ export function FlagQueuePage() {
     setActiveIdentity(null);
     setExcluded(new Set<string>());
     setFocusKey(key);
-  }, [restore, entries]);
+  }, [restore, queue]);
 
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
@@ -490,7 +566,7 @@ export function FlagQueuePage() {
       // rather than one per day, that key would be stable across months, so
       // undoing this morning's call would silently reverse every device-fault
       // decision ever made for that branch.
-      decide.mutate({ identities, decision, groupKey: null });
+      decide.mutate({ identities, decision, groupKey: null, source: "panel" });
     },
     [decide],
   );
@@ -512,6 +588,7 @@ export function FlagQueuePage() {
         identities,
         decision: { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" },
         groupKey: null,
+        source: "band",
       });
     },
     [decide],
@@ -526,7 +603,12 @@ export function FlagQueuePage() {
 
   const handleCollapseGroup = useCallback(() => {
     if (!expandedGroupKey) return;
-    const group = entries.find(
+    // `queue` for the same reason as everywhere else: this looks up a row the
+    // list is rendering, and `entries` is the payload. Equivalent today, since
+    // an expansion can only start from `selectedEntry` and an outage can never
+    // be selected — but it was the last lookup in this component still reaching
+    // past the partition, which is precisely the shape of the bug above.
+    const group = queue.find(
       (entry) => entry.kind === "group" && entry.group_key === expandedGroupKey,
     );
     setExpandedGroupKey(null);
@@ -535,7 +617,7 @@ export function FlagQueuePage() {
     setSelectedKey(group ? entryKey(group) : null);
     resetRowState();
     cancelRestore();
-  }, [entries, expandedGroupKey, resetRowState, cancelRestore]);
+  }, [queue, expandedGroupKey, resetRowState, cancelRestore]);
 
   if (sessionLoading) {
     return (
@@ -580,6 +662,13 @@ export function FlagQueuePage() {
         excludedBranches={excludedBranches}
         onToggleBranch={handleToggleBranch}
         onExcuseOutages={handleExcuseOutages}
+        // Narrowed to the band's own write, not a bare `decide.isPending`. The
+        // mutation is shared with the panel, so the unqualified flag would put
+        // "Excusing…" on the band every time somebody decided a single person —
+        // telling them a mass excuse was under way when they had asked for
+        // nothing of the sort. This still closes the hazard the flag is for: a
+        // second click on the band while the band's own write is in flight.
+        excusing={decide.isPending && decide.variables?.source === "band"}
         list={
           <FlagQueueList
             entries={queue}
@@ -630,7 +719,7 @@ export function FlagQueuePage() {
               size="sm"
               disabled={decide.isPending}
               onClick={() => {
-                if (pendingConfirm) decide.mutate({ ...pendingConfirm.args, confirm: true });
+                if (pendingConfirm) decide.mutate(confirmArgs(pendingConfirm.args));
               }}
             >
               Write {pendingConfirm?.preview.count ?? 0} decisions
@@ -689,6 +778,9 @@ export type FlagQueueViewProps = {
   excludedBranches: ReadonlySet<string>;
   onToggleBranch: (groupKey: string) => void;
   onExcuseOutages: (identities: string[]) => void;
+  /** A band excuse is in flight — NOT any write. Disables the band's button and
+   *  is the only thing that may make it say "Excusing…". */
+  excusing?: boolean;
   list: ReactNode;
   panel: ReactNode;
 };
@@ -849,6 +941,7 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           excludedBranches={props.excludedBranches}
           onToggleBranch={props.onToggleBranch}
           onExcuse={props.onExcuseOutages}
+          submitting={props.excusing}
         />
       )}
 
