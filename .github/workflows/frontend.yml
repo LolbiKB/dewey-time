@@ -15,6 +15,32 @@ defaults:
     working-directory: dewey_time/frontend/hr_attendance
 
 jobs:
+  # Types are a real gate here, not advisory. `tsconfig.json` covers src/, e2e/,
+  # devPort.ts and playwright.config.ts, so this also catches the drift class
+  # that `test:web` structurally cannot: its globs are non-recursive and skip
+  # `.tsx` under src/lib, so a file can be un-run by the suite and still be
+  # type-checked here.
+  typecheck:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read # read @lolbikb/dewey-ui from GitHub Packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - id: install
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm install --no-audit --no-fund
+      - if: steps.install.outcome != 'success'
+        run: echo "::warning title=Typecheck skipped::grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT) to activate"
+      - if: steps.install.outcome == 'success'
+        run: npm run typecheck
+
   unit-web:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
