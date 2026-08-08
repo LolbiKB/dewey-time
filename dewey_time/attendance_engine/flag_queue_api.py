@@ -50,8 +50,7 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # employee_image; flags gained attendance_date; counts gained rows; and the payload
 # gained outage_dates.
 # v3: counts gained open_capped; branch-outage groups span dates, so their
-# attendance_date is now null and they carry `dates` / `day_count`; group entries
-# carry member_preview / member_count instead of the full members roster.
+# attendance_date is now null, and every group carries `dates` / `day_count`.
 _QUEUE_CACHE_PREFIX = "flag_queue:v3"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
