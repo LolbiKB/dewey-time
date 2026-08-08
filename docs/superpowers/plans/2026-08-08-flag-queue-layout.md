@@ -66,11 +66,11 @@ Python, from the repo root, only to confirm nothing broke: `python3.13 -m unitte
 **Interfaces:**
 - Consumes: `QueueEntry`, `QueuePerson` from `@/types/flags`; `groupPayload` from `@/lib/flagDecisionState`.
 - Produces:
-  - `isOutageGroup(entry: QueueEntry): boolean`
+  - `isOutageGroup(entry: QueueEntry): entry is OutageGroup`
   - `partitionQueue(entries: QueueEntry[]): { outages: OutageGroup[]; queue: QueueEntry[] }`
-  - `outageWrite(outages: OutageGroup[], excludedBranches: ReadonlySet<string>): { identities: string[]; branchCount: number; employeeCount: number }`
+  - `outageWrite(outages: OutageGroup[], excludedBranches: ReadonlySet<string>): { identities: string[]; branchCount: number; coveredEmployeeCount: number }`
   - `queuePeopleCount(entries: QueueEntry[]): number`
-  - `type OutageGroup = Extract<QueueEntry, { kind: "group" }>`
+  - `type OutageGroup = Extract<QueueEntry, { kind: "group" }> & { group_type: "BRANCH_NO_DEVICE_DATA" }`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -198,7 +198,7 @@ test("the write covers every undecided flag of every included branch", () => {
 
   assert.deepEqual(write.identities, ["a1", "a2", "a3", "b1"]);
   assert.equal(write.branchCount, 2);
-  assert.equal(write.employeeCount, 3);
+  assert.equal(write.coveredEmployeeCount, 3);
 });
 
 test("excluding a branch removes its people and all of their flags", () => {
@@ -211,7 +211,7 @@ test("excluding a branch removes its people and all of their flags", () => {
 
   assert.deepEqual(write.identities, ["b1"]);
   assert.equal(write.branchCount, 1);
-  assert.equal(write.employeeCount, 1);
+  assert.equal(write.coveredEmployeeCount, 1);
 });
 
 test("a decided or needs_re_review flag is never swept into the write", () => {
@@ -235,8 +235,48 @@ test("a member who contributes no identity is not counted as covered", () => {
 
   const write = outageWrite(groups, new Set());
 
-  assert.equal(write.employeeCount, 1, "only DI-1 writes anything");
+  assert.equal(write.coveredEmployeeCount, 1, "only DI-1 writes anything");
   assert.deepEqual(write.identities, ["keep"]);
+});
+
+test("a pattern group handed to outageWrite yields nothing", () => {
+  // The type forbids it, but types are erased. If this ever returned identities
+  // the band's "Excuse all" would mass-excuse genuine judgments — the worst
+  // thing this page can do. Cast through unknown to reach past the guard.
+  const patternGroup = pattern([person("DI-2", [flag("p1")])]) as unknown as OutageGroup;
+  assert.deepEqual(outageWrite([patternGroup], new Set()).identities, []);
+});
+
+test("empty inputs return empty results rather than throwing", () => {
+  assert.deepEqual(partitionQueue([]), { outages: [], queue: [] });
+  assert.deepEqual(outageWrite([], new Set()), {
+    identities: [],
+    branchCount: 0,
+    coveredEmployeeCount: 0,
+  });
+  assert.equal(queuePeopleCount([]), 0);
+});
+
+test("an exclusion key matching no branch changes nothing", () => {
+  const groups = [outage("A", [person("DI-1", [flag("a1")])])];
+  const write = outageWrite(groups, new Set(["BRANCH_NO_DEVICE_DATA:Nowhere"]));
+  assert.deepEqual(write.identities, ["a1"]);
+  assert.equal(write.branchCount, 1);
+});
+
+test("neither function mutates what it was given", () => {
+  // The sibling suite pins exactly this for the tier filter (commit aff38433),
+  // because a filter that sorted in place corrupted the caller's array.
+  const groups = [outage("A", [person("DI-1", [flag("a1")])])];
+  const entries: QueueEntry[] = [groups[0], LONE];
+  const snapshot = JSON.stringify(entries);
+
+  partitionQueue(entries);
+  outageWrite(groups, new Set());
+  queuePeopleCount(entries);
+
+  assert.equal(JSON.stringify(entries), snapshot);
+  assert.equal(entries.length, 2, "the input array kept its length");
 });
 
 test("queuePeopleCount counts distinct employees, not rows", () => {
@@ -278,12 +318,30 @@ Create `src/lib/flagQueuePartition.ts`:
 import { groupPayload } from "@/lib/flagDecisionState";
 import type { QueueEntry } from "@/types/flags";
 
-export type OutageGroup = Extract<QueueEntry, { kind: "group" }>;
+/**
+ * An outage group specifically — NOT any group.
+ *
+ * `QueueEntry` is discriminated on `kind` alone; `group_type` is an ordinary
+ * field holding a three-way union, so a bare
+ * `Extract<QueueEntry, { kind: "group" }>` admits REPEAT_PATTERN and
+ * ROUTINE_CODE too. Handing either to `outageWrite` would return the undecided
+ * identities of genuine judgments as an "Excuse all" payload — a mass excuse
+ * over real findings, the highest-blast-radius mistake this page can make.
+ *
+ * Intersection, not a filtered `Extract`: `Extract<…, { group_type: "…" }>`
+ * yields `never` here, because the arm's `group_type` union is not assignable
+ * to a single-member object type.
+ */
+export type OutageGroup = Extract<QueueEntry, { kind: "group" }> & {
+  group_type: "BRANCH_NO_DEVICE_DATA";
+};
 
 /** No exclusions — the band excludes whole branches, never individuals. */
 const NO_EXCLUSIONS: ReadonlySet<string> = new Set<string>();
 
-export function isOutageGroup(entry: QueueEntry): boolean {
+/** A type predicate, so `partitionQueue` narrows instead of casting — a cast
+ *  here would keep the alias above unenforced and invisible to tsc. */
+export function isOutageGroup(entry: QueueEntry): entry is OutageGroup {
   return entry.kind === "group" && entry.group_type === "BRANCH_NO_DEVICE_DATA";
 }
 
@@ -294,7 +352,7 @@ export function partitionQueue(entries: QueueEntry[]): {
   const outages: OutageGroup[] = [];
   const queue: QueueEntry[] = [];
   for (const entry of entries) {
-    if (isOutageGroup(entry)) outages.push(entry as OutageGroup);
+    if (isOutageGroup(entry)) outages.push(entry);
     else queue.push(entry);
   }
   return { outages, queue };
@@ -307,8 +365,16 @@ export function partitionQueue(entries: QueueEntry[]): {
  * apply here too: only strictly `undecided` flags are ever included, and
  * `coveredEmployeeCount` counts only members who contribute an identity. A
  * member whose sole unresolved flag is `needs_re_review` is checked but writes
- * nothing, so a label reading `employeeCount` would promise a write that does
- * not happen for them.
+ * nothing, so a count of merely-checked members would promise a write that does
+ * not happen for them. The returned field is named `coveredEmployeeCount` to
+ * match `groupPayload`'s own vocabulary exactly — an `employeeCount` here would
+ * mean the opposite of what that name means one module over, which is the same
+ * shape of trap as the `undecided`/`unresolved` collision that module documents
+ * at length.
+ *
+ * `branchCount` answers "branches still checked", NOT "branches that will be
+ * written": a branch whose flags are all already decided still increments it
+ * while contributing no identities. Copy built on it must not promise a write.
  *
  * No dedupe: the per-flag invariant puts each flag in exactly one entry, so two
  * outage groups cannot both carry the same identity.
@@ -316,20 +382,20 @@ export function partitionQueue(entries: QueueEntry[]): {
 export function outageWrite(
   outages: OutageGroup[],
   excludedBranches: ReadonlySet<string>,
-): { identities: string[]; branchCount: number; employeeCount: number } {
+): { identities: string[]; branchCount: number; coveredEmployeeCount: number } {
   const identities: string[] = [];
   let branchCount = 0;
-  let employeeCount = 0;
+  let coveredEmployeeCount = 0;
 
   for (const group of outages) {
     if (excludedBranches.has(group.group_key)) continue;
     branchCount += 1;
     const payload = groupPayload(group.members, NO_EXCLUSIONS);
     identities.push(...payload.identities);
-    employeeCount += payload.coveredEmployeeCount;
+    coveredEmployeeCount += payload.coveredEmployeeCount;
   }
 
-  return { identities, branchCount, employeeCount };
+  return { identities, branchCount, coveredEmployeeCount };
 }
 
 /**
@@ -350,17 +416,23 @@ export function queuePeopleCount(entries: QueueEntry[]): number {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx tsx --test src/lib/flagQueuePartition.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Confirm the new file is actually globbed**
 
 Run: `npm run test:web 2>&1 | tail -5`
-Expected: the total test count rises by 8. `src/lib/*.test.ts` is already in the glob, so no `package.json` change is needed — but **verify the count moved**, because a file in an unglobbed directory fails silently by simply never running.
+Expected: the total test count rises by 12. `src/lib/*.test.ts` is already in the glob, so no `package.json` change is needed — but **verify the count moved**, because a file in an unglobbed directory fails silently by simply never running.
 
 - [ ] **Step 6: Mutation-test the partition**
 
-Temporarily change `isOutageGroup` to `entry.kind === "group"` (dropping the `group_type` check). Run `npx tsx --test src/lib/flagQueuePartition.test.ts`.
-Expected: FAIL on "only BRANCH_NO_DEVICE_DATA leaves the queue". Revert.
+Two mutations, both reverted after:
+
+1. Change `isOutageGroup` to `entry.kind === "group"` (dropping the `group_type` check).
+   Expected: FAIL on "only BRANCH_NO_DEVICE_DATA leaves the queue" **and** on "a pattern group handed to outageWrite yields nothing".
+2. Widen `OutageGroup` back to a bare `Extract<QueueEntry, { kind: "group" }>`.
+   Expected: `npm run typecheck` stays clean — proving the type alone never guarded this, which is why the runtime test in step 1 exists.
+
+Run: `npx tsx --test src/lib/flagQueuePartition.test.ts`
 
 - [ ] **Step 7: Commit**
 
@@ -857,7 +929,7 @@ export function OutageBand(props: OutageBandProps) {
         <TriangleAlertIcon className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="font-medium text-foreground">
-            {outageBandHeadline(props.outages.length, all.employeeCount)}
+            {outageBandHeadline(props.outages.length, all.coveredEmployeeCount)}
           </div>
           <div className="text-xs text-muted-foreground">
             {outageBandSubline(spanOf(props.outages), all.identities.length)}
@@ -882,7 +954,7 @@ export function OutageBand(props: OutageBandProps) {
           disabled={nothingToWrite || props.submitting}
           onClick={() => props.onExcuse(write.identities)}
         >
-          {outageExcuseLabel(write.employeeCount, write.identities.length)}
+          {outageExcuseLabel(write.coveredEmployeeCount, write.identities.length)}
         </Button>
       </div>
 
@@ -913,7 +985,7 @@ export function OutageBand(props: OutageBandProps) {
                     {outageBranchDays(group.day_count)}
                   </span>
                   <span className="w-40 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
-                    {outageBranchSummary(size.employeeCount, size.identities.length)}
+                    {outageBranchSummary(size.coveredEmployeeCount, size.identities.length)}
                   </span>
                 </li>
               );
@@ -1112,7 +1184,7 @@ with, above the `return`:
 ```tsx
   // Read from the band's own arithmetic rather than counts.people, which counts
   // both populations together and so cannot answer either question.
-  const outagePeople = outageWrite(props.outages, new Set<string>()).employeeCount;
+  const outagePeople = outageWrite(props.outages, new Set<string>()).coveredEmployeeCount;
 ```
 
 Then render the band immediately after `</PageHeader>`, before the `writeFailure` strip:
@@ -2337,7 +2409,7 @@ The PR body must state the four measurements, and must repeat the spec's two out
 
 **Spec coverage.** Decision 1 → Tasks 1–4, 7. Decision 2 (split + pinned) → Task 9. Decision 3 (chrome) → Task 5. Decision 4 (width) → Task 5, Step 4. Decision 5 (density) → Task 8. Decision 6 (mobile) → Task 10. Other states → Task 6. Testing section → Tasks 7, 10, 11. Phasing → the Phase 1 / Phase 2 headings.
 
-**Type consistency.** `partitionQueue` → `{ outages, queue }` and `outageWrite` → `{ identities, branchCount, employeeCount }` are used under those exact names in Tasks 1, 3, 4 and 6. The band's own prop is `onExcuse`; the view-level prop that feeds it is `onExcuseOutages`, mapped in Task 4, Step 5. `queuePeopleCount` (function) and `queuePeople` (prop) are deliberately different names for the same number at two layers.
+**Type consistency.** `partitionQueue` → `{ outages, queue }` and `outageWrite` → `{ identities, branchCount, coveredEmployeeCount }` are used under those exact names in Tasks 1, 3, 4 and 6. The band's own prop is `onExcuse`; the view-level prop that feeds it is `onExcuseOutages`, mapped in Task 4, Step 5. `queuePeopleCount` (function) and `queuePeople` (prop) are deliberately different names for the same number at two layers.
 
 **Known soft spots, flagged rather than hidden:**
 
