@@ -296,15 +296,24 @@ export function FlagQueuePage() {
     setWriteFailure(null);
   }, []);
 
+  /**
+   * Cancel a pending post-write restore.
+   *
+   * Every deliberate move the user makes while a write is in flight has to call
+   * this: their choice wins, and a restore left armed would yank them off the
+   * row they just chose when the refetch lands. Shared rather than repeated so
+   * a fourth navigation path cannot quietly omit it — which is exactly how the
+   * first three came to differ.
+   */
+  const cancelRestore = useCallback(() => setRestore(null), []);
+
   const handleSelect = useCallback(
     (key: string) => {
       setSelectedKey(key);
       resetRowState();
-      // The user moved while a write was in flight. Their choice wins — a
-      // pending restore would otherwise yank them off the row they just picked.
-      setRestore(null);
+      cancelRestore();
     },
-    [resetRowState],
+    [resetRowState, cancelRestore],
   );
 
   const handleToggleDecided = useCallback(() => {
@@ -314,7 +323,8 @@ export function FlagQueuePage() {
     // it was started on either way.
     setSelectedKey(null);
     resetRowState();
-  }, [resetRowState]);
+    cancelRestore();
+  }, [resetRowState, cancelRestore]);
 
   const handleToggleMember = useCallback((employee: string) => {
     setExcluded((prev) => {
@@ -463,7 +473,8 @@ export function FlagQueuePage() {
     if (selectedEntry?.kind !== "group") return;
     setExpandedGroupKey(selectedEntry.group_key);
     setSelectedKey(null);
-  }, [selectedEntry]);
+    cancelRestore();
+  }, [selectedEntry, cancelRestore]);
 
   const handleCollapseGroup = useCallback(() => {
     if (!expandedGroupKey) return;
@@ -475,7 +486,8 @@ export function FlagQueuePage() {
     // would resolve to nothing and blank the panel. Land back on the group.
     setSelectedKey(group ? entryKey(group) : null);
     resetRowState();
-  }, [entries, expandedGroupKey, resetRowState]);
+    cancelRestore();
+  }, [entries, expandedGroupKey, resetRowState, cancelRestore]);
 
   if (sessionLoading) {
     return (

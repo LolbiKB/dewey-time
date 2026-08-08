@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -59,7 +59,7 @@ export type FlagQueueListProps = {
 
 export function FlagQueueList(props: FlagQueueListProps) {
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
-  /** The selectable row keys in rendered order, refreshed every render. */
+  /** The selectable row keys in rendered order, written on commit below. */
   const orderedKeysRef = useRef<string[]>([]);
 
   // Runs after commit, so the replacement row is mounted and its ref registered.
@@ -142,16 +142,6 @@ export function FlagQueueList(props: FlagQueueListProps) {
   // lone 3-hour gap above a 168-member routine group.
   const ordered = [...props.entries].sort((a, b) => b.rank - a.rank);
 
-  if (ordered.length === 0) {
-    return (
-      <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-        Nothing to triage in this range.
-      </p>
-    );
-  }
-
-  const rows: { key: string; tier: Tier; element: ReactNode; selectable: boolean }[] = [];
-
   // Exactly one row sits in the tab order (`activeKey`); the arrows move between
   // them. Before this the list had no keyboard model at all — no onKeyDown, no
   // tabIndex, no ref anywhere in the feature — so reaching the decision panel
@@ -169,7 +159,23 @@ export function FlagQueueList(props: FlagQueueListProps) {
       ? props.selectedKey
       : (orderedKeys[0] ?? null);
 
-  orderedKeysRef.current = orderedKeys;
+  // Committed, not assigned during render: a concurrent render that React
+  // abandons must not leave the arrow-key order describing a tree that was
+  // never mounted. This runs after the DOM is in place and before paint, which
+  // is also after every ref callback has fired.
+  useLayoutEffect(() => {
+    orderedKeysRef.current = orderedKeys;
+  });
+
+  if (ordered.length === 0) {
+    return (
+      <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+        Nothing to triage in this range.
+      </p>
+    );
+  }
+
+  const rows: { key: string; tier: Tier; element: ReactNode; selectable: boolean }[] = [];
 
   const registerRow = (key: string) => (node: HTMLButtonElement | null) => {
     if (node) rowRefs.current.set(key, node);
