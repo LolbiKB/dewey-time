@@ -70,7 +70,10 @@ export function OutageBand(props: OutageBandProps) {
   // band and not a nav item.
   if (props.outages.length === 0) return null;
 
-  const all = outageWrite(props.outages, new Set<string>());
+  // Only the filtered write is needed. The unfiltered pass this used to keep
+  // fed the headline and subline, and both now read queuePeopleCount /
+  // outageFlagCount instead — running groupPayload over every branch for a
+  // discarded result is pure cost.
   const write = outageWrite(props.outages, props.excludedBranches);
   const nothingToWrite = write.identities.length === 0;
 
@@ -99,8 +102,13 @@ export function OutageBand(props: OutageBandProps) {
           variant="ghost"
           size="sm"
           className="shrink-0"
+          // aria-expanded only. aria-controls must reference an element that
+          // EXISTS, and this panel is conditionally rendered — pointing at an
+          // absent id is what automated a11y audits flag, and it buys nothing
+          // over aria-expanded, which already announces the state. Keeping the
+          // panel permanently mounted just to satisfy the attribute would put
+          // thirteen branch rows in the accessibility tree at all times.
           aria-expanded={open}
-          aria-controls="outage-band-branches"
           onClick={() => setOpen((prev) => !prev)}
         >
           {outageReviewLabel(props.outages.length)}
@@ -126,7 +134,7 @@ export function OutageBand(props: OutageBandProps) {
       </div>
 
       {open ? (
-        <div id="outage-band-branches" className="border-t border-amber-500/25 px-3 py-2">
+        <div className="border-t border-amber-500/25 px-3 py-2">
           {/* Bounded on purpose. Thirteen branches is today's real count, and an
               unbounded list would push the queue below the fold — the exact
               failure this band exists to prevent. */}
@@ -148,20 +156,20 @@ export function OutageBand(props: OutageBandProps) {
                       !included && "opacity-50",
                     )}
                   >
-                  <Checkbox
-                    checked={included}
-                    onCheckedChange={() => props.onToggleBranch(group.group_key)}
-                    aria-label={outageBranchCheckboxLabel(branch)}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-                    {branch}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                    {outageBranchDays(group.day_count)}
-                  </span>
-                  <span className="w-40 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
-                    {outageBranchSummary(queuePeopleCount([group]), outageFlagCount([group]))}
-                  </span>
+                    <Checkbox
+                      checked={included}
+                      onCheckedChange={() => props.onToggleBranch(group.group_key)}
+                      aria-label={outageBranchCheckboxLabel(branch)}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                      {branch}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                      {outageBranchDays(group.day_count)}
+                    </span>
+                    <span className="w-40 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
+                      {outageBranchSummary(queuePeopleCount([group]), outageFlagCount([group]))}
+                    </span>
                   </label>
                 </li>
               );

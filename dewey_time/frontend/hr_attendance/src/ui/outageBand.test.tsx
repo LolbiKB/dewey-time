@@ -110,7 +110,14 @@ test("an in-flight write disables the action and says so", () => {
   // hurried double-click fires two writes over thousands of flags.
   const html = render({ submitting: true });
   assert.match(html, /Excusing…/);
-  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Excusing…/);
+  // `disabled=""`, NOT a bare /disabled/. Button's class list always contains
+  // the literal "disabled:pointer-events-none disabled:opacity-50", so
+  // /<button[^>]+disabled/ matches the CLASS whether or not the attribute is
+  // there — a re-review mutation-tested this exact regex and found the suite
+  // stayed green with `|| props.submitting` deleted.
+  assert.match(html, /<button[^>]*\sdisabled=""[^>]*>[^<]*Excusing…/);
+  // Negative control: the same button, not submitting, must NOT be disabled.
+  assert.doesNotMatch(render(), /<button[^>]*\sdisabled=""[^>]*>[^<]*Excuse /);
 });
 
 test("excluding every branch disables the action rather than offering zero", () => {
@@ -123,7 +130,7 @@ test("excluding every branch disables the action rather than offering zero", () 
   // Anchored to the excuse button specifically: a bare /disabled/ match would
   // pass if the disclosure were disabled and the write button left live.
   assert.match(html, /Select a branch to excuse/);
-  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Select a branch to excuse/);
+  assert.match(html, /<button[^>]*\sdisabled=""[^>]*>[^<]*Select a branch to excuse/);
 });
 
 test("a decided flag is not counted in the action", () => {
