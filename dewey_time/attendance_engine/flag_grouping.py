@@ -577,7 +577,10 @@ def _worst_minutes(entry: dict) -> int:
             if flag_out.get("decision_state") not in UNRESOLVED_STATES:
                 continue
             minutes = (flag_out.get("evidence") or {}).get("minutes")
-            if isinstance(minutes, (int, float)):
+            # `not isinstance(minutes, bool)` because bool subclasses int in
+            # Python, so a stray `"minutes": true` would otherwise sort as one
+            # minute of missing time rather than as the absent value it is.
+            if isinstance(minutes, (int, float)) and not isinstance(minutes, bool):
                 worst = max(worst, int(minutes))
     return worst
 

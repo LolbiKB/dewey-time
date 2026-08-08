@@ -300,6 +300,9 @@ export function FlagQueuePage() {
     (key: string) => {
       setSelectedKey(key);
       resetRowState();
+      // The user moved while a write was in flight. Their choice wins — a
+      // pending restore would otherwise yank them off the row they just picked.
+      setRestore(null);
     },
     [resetRowState],
   );
@@ -354,17 +357,43 @@ export function FlagQueuePage() {
       // Say what happened. Until now the only signal that a decision landed was
       // the row vanishing — invisible to a screen reader, and ambiguous to
       // everyone else, since a row also vanishes when the refetch reorders.
-      setAnnouncement(
-        effect.bulkFailure
+      // The zero-width space alternates, so two consecutive identical outcomes
+      // still change the text node. Without it React bails out on the equal
+      // string, the DOM never mutates, and a live region announces nothing —
+      // every save after the first would be silent, which is the exact silence
+      // this is here to end, in the decide -> next loop the feature exists for.
+      setAnnouncement((previous) => {
+        const text = effect.bulkFailure
           ? `Saved ${effect.bulkFailure.saved} of ${effect.bulkFailure.attempted}. See the failures below.`
-          : "Decision saved.",
-      );
+          : "Decision saved.";
+        return previous.endsWith("\u200b") ? text : `${text}\u200b`;
+      });
 
       // Remember the SLOT, not the row: the row is about to stop existing.
       // Landing on whatever takes its place turns the core loop into
       // decide -> next instead of decide -> lost.
-      const index = entries.findIndex((entry) => entryKey(entry) === selectedKey);
-      setRestore(index >= 0 ? { index, from: entries } : null);
+      //
+      // Armed only when something was actually written. A zero-write call (a
+      // bulk attempt where every identity failed) leaves the queue unchanged, so
+      // react-query's structural sharing hands back a reference-identical array
+      // and the guard below never fires — the request would sit armed until some
+      // unrelated refetch (this query is staleTime 0 with refetchOnWindowFocus)
+      // finally changed the data, then steal focus and clobber the selection at
+      // an arbitrary moment, possibly mid-note.
+      if (effect.lastDecision) {
+        // Members of an expanded group are not top-level entries, so fall back to
+        // the group that owns the selected member — that is the row the list
+        // renders in its place.
+        const index = entries.findIndex(
+          (entry) =>
+            entryKey(entry) === selectedKey ||
+            (entry.kind === "group" &&
+              entry.members.some(
+                (member) => entryKey({ kind: "person", ...member }) === selectedKey,
+              )),
+        );
+        setRestore(index >= 0 ? { index, from: entries } : null);
+      }
 
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
@@ -396,6 +425,18 @@ export function FlagQueuePage() {
     }
     const key = entryKey(next);
     setSelectedKey(key);
+    // Landing on a row is a selection change, so it owes the same reset every
+    // other selection change does. Without it the decided person's draft —
+    // outcome, reason and the free-text NOTE — and their exclusion set arrive
+    // pre-filled on the next person's form, which is resetRowState's own stated
+    // error: one person's reasoning applied to the next.
+    //
+    // Not the whole of resetRowState: `lastDecision` is what powers "same reason
+    // applies" (the entire point of landing here), and `bulkFailure` /
+    // `writeFailure` describe the write that just happened and must outlive it.
+    setDraft(emptyDraft());
+    setActiveIdentity(null);
+    setExcluded(new Set<string>());
     setFocusKey(key);
   }, [restore, entries]);
 

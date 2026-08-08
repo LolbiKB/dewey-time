@@ -1121,3 +1121,107 @@ test("deciding a row lands focus on the row that takes its place", async ({ page
   // And the write is announced, rather than being inferable only from absence.
   await expect(page.locator('[role="status"][aria-live="polite"]')).toHaveText(/saved/i);
 });
+
+test("the next row's form is empty after a decide, not pre-filled with the last one's", async ({
+  page,
+}) => {
+  let decided = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-y", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = decided ? A11Y_PEOPLE.slice(1) : A11Y_PEOPLE;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })),
+          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  // A note is the sharpest version of the leak: free text about ONE person.
+  await page.getByRole("textbox").first().fill("Spoke to Vandy, family emergency");
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  // We land on Sokha Phlat. Opening her form must not present Vandy's note or
+  // Vandy's reason as if they were hers — resetRowState's own stated error,
+  // "one person's reasoning applied to the next".
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await expect(page.getByRole("textbox").first()).toHaveValue("");
+});
+
+test("a second save is announced too, not silently deduplicated", async ({ page }) => {
+  // A live region announces on MUTATION. Two identical outcome strings mean
+  // React bails out, the DOM never changes, and every save after the first is
+  // silent — the exact silence the live region exists to end.
+  let decides = 0;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decides += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: `AFD-${decides}`, errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = A11Y_PEOPLE.slice(decides);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })),
+          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+        },
+      }),
+    });
+  });
+
+  const live = page.locator('[role="status"][aria-live="polite"]');
+  await page.goto("/hr-flags");
+
+  async function decideSelected() {
+    await page.getByRole("button", { name: "Decide", exact: true }).click();
+    await page
+      .getByRole("combobox", { name: /reason/i })
+      .selectOption({ label: "Approved leave or holiday" });
+    await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+  }
+
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await decideSelected();
+  await expect(live).toHaveText(/saved/i);
+  const first = await live.textContent();
+
+  await decideSelected(); // we were landed on the next row already
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  // Same words, different text node — otherwise nothing is announced at all.
+  await expect(live).toHaveText(/saved/i);
+  expect(await live.textContent()).not.toBe(first);
+});

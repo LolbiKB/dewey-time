@@ -59,6 +59,8 @@ export type FlagQueueListProps = {
 
 export function FlagQueueList(props: FlagQueueListProps) {
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  /** The selectable row keys in rendered order, refreshed every render. */
+  const orderedKeysRef = useRef<string[]>([]);
 
   // Runs after commit, so the replacement row is mounted and its ref registered.
   // Guarded by onFocusHandled rather than a local "done" flag: the parent owns
@@ -72,9 +74,19 @@ export function FlagQueueList(props: FlagQueueListProps) {
   }, [focusKey, onFocusHandled]);
 
   /** Arrow / Home / End move focus between rows without selecting; Enter and
-   *  Space still activate, because every row is a real <button>. */
+   *  Space still activate, because every row is a real <button>.
+   *
+   *  Order comes from `orderedKeysRef` — the keys in the order this render
+   *  produced them — not from the ref Map's insertion order. The Map only
+   *  happens to be in DOM order because `registerRow` gets a fresh identity
+   *  every render, so React detaches and reattaches every ref in tree order;
+   *  memoise a row and that accident stops holding, silently, with no test to
+   *  notice. The rendered order is the thing actually being asserted. */
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLUListElement>) => {
-    const keys = [...rowRefs.current.keys()];
+    // Cmd+ArrowDown is "scroll to end" on macOS, Alt+Arrow is word/history
+    // navigation — none of these are ours to take.
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const keys = orderedKeysRef.current.filter((key) => rowRefs.current.has(key));
     if (keys.length === 0) return;
     const active = document.activeElement as HTMLElement | null;
     const current = keys.findIndex((key) => rowRefs.current.get(key) === active);
@@ -156,6 +168,8 @@ export function FlagQueueList(props: FlagQueueListProps) {
     props.selectedKey && orderedKeys.includes(props.selectedKey)
       ? props.selectedKey
       : (orderedKeys[0] ?? null);
+
+  orderedKeysRef.current = orderedKeys;
 
   const registerRow = (key: string) => (node: HTMLButtonElement | null) => {
     if (node) rowRefs.current.set(key, node);
@@ -264,6 +278,11 @@ export function FlagQueueList(props: FlagQueueListProps) {
         return (
           <li
             key={row.key}
+            // The "show as group" caption is not one of the set's items. Left as
+            // a bare listitem it would be counted by assistive tech (4 items)
+            // while the authored aria-setsize said 3 — ARIA wants the metadata
+            // all-or-none across a set, so the caption leaves the set entirely.
+            role={row.selectable ? undefined : "presentation"}
             aria-setsize={row.selectable ? total : undefined}
             aria-posinset={row.selectable ? position : undefined}
           >
@@ -375,7 +394,7 @@ function PersonRow(props: {
         person.employee_name,
         crossReference,
         personSubline(person),
-        extra > 0 ? `${extra} more flags` : null,
+        extra > 0 ? `${extra} more ${extra === 1 ? "flag" : "flags"}` : null,
         stripAriaLabel(props.strip),
       ]
         .filter(Boolean)
