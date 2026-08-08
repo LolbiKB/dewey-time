@@ -1,5 +1,15 @@
 import type { Page } from "@playwright/test";
 
+import type { CalendarSession } from "@/hooks/useCalendarSession";
+import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
+import type { CalendarEmployee, CalendarPayload, Day } from "@/types/calendar";
+import {
+  WEEKDAYS,
+  type ApplyScheduleResult,
+  type ResolvePlan,
+  type ScheduleContext,
+} from "@/types/schedule";
+
 /**
  * Network stubs for the HR Attendance SPA.
  *
@@ -11,6 +21,13 @@ import type { Page } from "@playwright/test";
  * would show a signed-in user there instead of the sign-in card. Calendar days
  * are generated for whatever date range the app requests, so tests are independent
  * of "today".
+ *
+ * Every payload below carries a `satisfies` clause naming the type the real
+ * endpoint is declared to return (issue #133). `message` is deliberately
+ * `unknown` — it has to be, since one handler serves nine differently shaped
+ * endpoints — so without those clauses nothing checks these literals against
+ * anything, and a backend contract change surfaces as a blank page rather than
+ * as a type error. See the header of flags.spec.ts for the full story.
  */
 
 function ymd(d: Date): string {
@@ -18,7 +35,7 @@ function ymd(d: Date): string {
 }
 
 function buildDays(start: string, end: string) {
-  const days = [];
+  const days: Day[] = [];
   const cur = new Date(`${start}T00:00:00Z`);
   const last = new Date(`${end}T00:00:00Z`);
   while (cur <= last) {
@@ -57,7 +74,7 @@ function buildDays(start: string, end: string) {
           evidence: { late_threshold: `${date}T08:00:00` },
         },
       ],
-    });
+    } satisfies Day);
     cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return days;
@@ -78,9 +95,7 @@ const EMPLOYEE = {
   schedule_min_date: "2026-01-01",
   schedule_max_date: "2026-12-31",
   first_checkin_date: "2026-01-01",
-};
-
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+} satisfies CalendarEmployee;
 
 // Schedule-coverage payload: a few employees with no shift assignment, plus assigned
 // employees spread across weekly-hours buckets (incl. one unresolvable 0-minute row).
@@ -103,7 +118,7 @@ const COVERAGE = {
     { id: "EMP-017", employee_name: "Jonas Berg", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 0 },
   ],
   counts: { active: 13, unassigned: 3, assigned: 10, truncated: false },
-};
+} satisfies ScheduleCoveragePayload;
 
 export async function stubFrappe(page: Page): Promise<void> {
   // Skip the one-shot brand intro overlay so it never covers content under test.
@@ -128,8 +143,11 @@ export async function stubFrappe(page: Page): Promise<void> {
     if (p.includes("get_logged_user")) {
       message = "hr@example.com";
     } else if (p.includes("get_calendar_session")) {
-      message = { hr_staff: true, employee_id: "EMP-001" };
+      message = { hr_staff: true, employee_id: "EMP-001" } satisfies CalendarSession;
     } else if (p.includes("list_calendar_employees")) {
+      // No `satisfies` here: this envelope's type is inline and unexported at
+      // services/calendar.ts's `listCalendarEmployees`. `EMPLOYEE` — the part
+      // that actually drifts — is checked at its declaration above.
       message = { employees: [EMPLOYEE], current_user_employee: "EMP-001" };
     } else if (p.includes("get_employee_calendar")) {
       const start = url.searchParams.get("start_date") ?? "2026-06-01";
@@ -144,10 +162,12 @@ export async function stubFrappe(page: Page): Promise<void> {
         first_checkin_date: "2026-01-01",
         schedule_max_date: "2026-12-31",
         has_shift_assignment: true,
-      };
+      } satisfies CalendarPayload;
     } else if (p.includes("get_schedule_coverage")) {
       message = COVERAGE;
     } else if (p.includes("list_weekly_schedule_templates")) {
+      // Envelope type is inline and unexported at services/schedule.ts's
+      // `listScheduleTemplates`; the list is empty, so there is nothing to drift.
       message = { templates: [] };
     } else if (p.includes("get_employee_schedule_context")) {
       message = {
@@ -173,9 +193,14 @@ export async function stubFrappe(page: Page): Promise<void> {
         },
         default_effective_from: "2026-07-01",
         default_generate_through: "2026-09-29",
-      };
+      } satisfies ScheduleContext;
     } else if (p.includes("resolve_weekly_schedule_plan")) {
-      message = { employee: "EMP-001", groups: [], warnings: [], needs_create: false };
+      message = {
+        employee: "EMP-001",
+        groups: [],
+        warnings: [],
+        needs_create: false,
+      } satisfies ResolvePlan;
     } else if (p.includes("apply_weekly_schedule")) {
       message = {
         needs_confirm: true,
@@ -192,7 +217,7 @@ export async function stubFrappe(page: Page): Promise<void> {
             { name: "A2", start_date: "2026-06-20", action: "end_before", proposed_end_date: "2026-06-30" },
           ],
         },
-      };
+      } satisfies ApplyScheduleResult;
     }
 
     route.fulfill({
