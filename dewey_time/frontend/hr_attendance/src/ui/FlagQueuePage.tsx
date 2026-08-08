@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
 import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
@@ -251,6 +251,21 @@ export function FlagQueuePage() {
   /** Spoken, not shown. The queue's own state changes — selection, and the
    *  outcome of a write — were entirely silent to assistive tech. */
   const [announcement, setAnnouncement] = useState("");
+  /**
+   * Where to land after a write. Deciding a row removes it, which unmounted the
+   * focused button and dropped focus to <body> — so a keyboard user was
+   * returned to the top of the document and had to walk back down, and the
+   * panel silently reverted to its empty state with no statement that anything
+   * had been saved.
+   *
+   * `from` is the entry array as it was at submit time. react-query hands back a
+   * new array on new data, so comparing identity is how we tell "the refetch has
+   * landed" from "this effect ran on the pre-refetch render" — acting on the
+   * latter would re-select the row that was just decided.
+   */
+  const [restore, setRestore] = useState<{ index: number; from: QueueEntry[] } | null>(null);
+  /** Handed to the list, which focuses this row once and reports back. */
+  const [focusKey, setFocusKey] = useState<string | null>(null);
 
   // The selected row can be a group member surfaced by "Decide one by one",
   // which is not itself a top-level entry — so resolve against the expanded
@@ -345,6 +360,12 @@ export function FlagQueuePage() {
           : "Decision saved.",
       );
 
+      // Remember the SLOT, not the row: the row is about to stop existing.
+      // Landing on whatever takes its place turns the core loop into
+      // decide -> next instead of decide -> lost.
+      const index = entries.findIndex((entry) => entryKey(entry) === selectedKey);
+      setRestore(index >= 0 ? { index, from: entries } : null);
+
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
       // all their flags are decided.
@@ -361,6 +382,22 @@ export function FlagQueuePage() {
       setWriteFailure(extractFrappeError(err, DECIDE_FAILED_MESSAGE));
     },
   });
+
+  useEffect(() => {
+    if (!restore) return;
+    if (entries === restore.from) return; // the refetch has not landed yet
+    setRestore(null);
+    // Clamped: deciding the last row leaves the slot past the end, and the row
+    // above it is where a human would look next.
+    const next = entries[Math.min(restore.index, entries.length - 1)];
+    if (!next) {
+      setSelectedKey(null);
+      return;
+    }
+    const key = entryKey(next);
+    setSelectedKey(key);
+    setFocusKey(key);
+  }, [restore, entries]);
 
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
@@ -444,6 +481,8 @@ export function FlagQueuePage() {
             expandedGroupKey={expandedGroupKey}
             onSelect={handleSelect}
             onCollapseGroup={handleCollapseGroup}
+            focusKey={focusKey}
+            onFocusHandled={() => setFocusKey(null)}
           />
         }
         panel={

@@ -1061,3 +1061,63 @@ test("the queue carries a polite live region for its own state changes", async (
   const live = page.locator('[role="status"][aria-live="polite"]');
   await expect(live).toHaveCount(1);
 });
+
+test("deciding a row lands focus on the row that takes its place", async ({ page }) => {
+  // The list shrinks by one on the refetch, exactly as it does in production
+  // once the server says every flag on that person is settled.
+  let decided = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-x", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = decided ? A11Y_PEOPLE.slice(1) : A11Y_PEOPLE;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })),
+          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await expect(page.getByRole("region", { name: "Selected flag" })).toBeVisible();
+
+  // Same three steps as the decide test above: the form is gated behind its own
+  // "Decide" button, reason is a native <select>, and the submit button shares
+  // its name with the outcome toggle so `.last()` picks the submit.
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  // Vandy In is gone; the slot she occupied now holds Sokha Phlat, and that is
+  // where focus and selection must be. Before this the decided button unmounted
+  // and focus fell to <body> — a keyboard user was returned to the top of the
+  // document, and the panel reverted to its empty state with no statement that
+  // anything had been saved.
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveCount(0);
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+
+  // And the write is announced, rather than being inferable only from absence.
+  await expect(page.locator('[role="status"][aria-live="polite"]')).toHaveText(/saved/i);
+});

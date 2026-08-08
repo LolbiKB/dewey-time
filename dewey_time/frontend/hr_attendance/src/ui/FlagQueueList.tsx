@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -48,10 +48,28 @@ export type FlagQueueListProps = {
   onSelect: (key: string) => void;
   /** Puts the expanded group back together — the way out of "decide one by one". */
   onCollapseGroup?: () => void;
+  /**
+   * Row to move focus to once, after the parent has replaced the list under it
+   * — a decided row unmounts, and without this focus falls to <body>.
+   */
+  focusKey?: string | null;
+  /** Cleared by the parent once the focus has been taken. */
+  onFocusHandled?: () => void;
 };
 
 export function FlagQueueList(props: FlagQueueListProps) {
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  // Runs after commit, so the replacement row is mounted and its ref registered.
+  // Guarded by onFocusHandled rather than a local "done" flag: the parent owns
+  // the request, so it also owns clearing it, and a re-render cannot re-steal
+  // focus from wherever the user has since moved.
+  const { focusKey, onFocusHandled } = props;
+  useEffect(() => {
+    if (!focusKey) return;
+    rowRefs.current.get(focusKey)?.focus();
+    onFocusHandled?.();
+  }, [focusKey, onFocusHandled]);
 
   /** Arrow / Home / End move focus between rows without selecting; Enter and
    *  Space still activate, because every row is a real <button>. */
