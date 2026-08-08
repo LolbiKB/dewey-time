@@ -13,7 +13,7 @@
 Copied verbatim from `docs/superpowers/specs/2026-08-08-flag-queue-layout-design.md`. Every task's requirements implicitly include these.
 
 1. **No backend change.** All 606 Python tests must stay green and untouched. `get_flag_queue` already returns `group_type`; this is a client-side partition.
-2. **All user-facing copy lives in `src/lib/flagQueueLabels.ts`.** That module's own docstring: *"`ui/FlagQueuePage.tsx`, `ui/FlagQueueList.tsx` and `ui/FlagDecisionPanel.tsx` hold no copy of their own — every string they render is imported from here."* New components follow the same rule.
+2. **All user-facing copy lives in `src/lib/flagQueueLabels.ts`.** That module's own docstring: *"`ui/FlagQueuePage.tsx`, `ui/FlagQueueList.tsx` and `ui/FlagDecisionPanel.tsx` hold no copy of their own — every string they render is imported from here."* New components follow the same rule. **This includes control labels** — button captions, `<option>` text, inline affordances. They read as markup, which is exactly why they are the strings that leak; a pre-flight scan of this plan's first draft found five. Any string a user can read is copy. Reviewers should reject inline literals even when they are a single word.
 3. **Never name a device.** Branch is the finest granularity the data supports. No copy may imply otherwise. The outage band must carry the ceiling note verbatim: `Branch and days only — nothing here maps a device to a branch.`
 4. **Bulk writes go through `groupPayload(members, excluded)` from `lib/flagDecisionState.ts`.** Never hand-roll an identities array. Any count shown beside a write action reads `coveredEmployeeCount`, never `employeeCount` and never `undecided_count` — a member whose only unresolved flag is `needs_re_review` is checked but writes nothing.
 5. **Device-health link target is `/hr-attendance`.** `main.tsx` has exactly five routes (`/hr-attendance`, `/hr-schedule`, `/hr-schedule/import`, `/hr-schedule/coverage`, `/hr-flags`). This plan adds none.
@@ -390,6 +390,11 @@ git commit -m "feat(flag-queue): split the payload into judgments and acknowledg
   - `OUTAGE_CEILING_NOTE: string`
   - `DEVICE_HEALTH_LABEL: string`
   - `OUTAGE_NOT_A_JUDGMENT: string`
+  - `TIER_FILTER_ALL_LABEL: string`
+  - `DECIDED_TOGGLE_LABEL: string`
+  - `DECIDE_ONE_LABEL: string`
+  - `DECIDING_PREFIX: string`
+  - `narrowRangeLabel(days: number): string`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -443,6 +448,20 @@ test("the header says nothing about device faults when there are none", () => {
 
 test("a queue with nothing waiting still reads as a sentence", () => {
   assert.equal(queueSplitDescription(0, 0), "Nothing needs a decision");
+});
+
+test("the narrow-range levers name the window they set", () => {
+  assert.equal(narrowRangeLabel(7), "Last 7 days");
+  assert.equal(narrowRangeLabel(3), "Last 3 days");
+});
+
+test("control labels live here, not inline in the components", () => {
+  // Global Constraint 2. These are the ones that leak, because they read as
+  // markup rather than as copy.
+  assert.equal(TIER_FILTER_ALL_LABEL, "All consequences");
+  assert.equal(DECIDED_TOGGLE_LABEL, "Decided");
+  assert.equal(DECIDE_ONE_LABEL, "decide");
+  assert.equal(DECIDING_PREFIX, "Deciding");
 });
 ```
 
@@ -524,6 +543,31 @@ export function queueSplitDescription(queuePeople: number, outagePeople: number)
   const head = queuePeople === 0 ? "Nothing needs a decision" : `${queuePeople} need a decision`;
   if (outagePeople === 0) return head;
   return `${head} · ${outagePeople} waiting on a device fault`;
+}
+
+/**
+ * Toolbar and panel control labels.
+ *
+ * Here rather than inline in the components for the reason this module's own
+ * docstring gives: the three queue components "hold no copy of their own", so
+ * the queue's wording can be reviewed in one file rather than three. Control
+ * labels are the easiest ones to leak — they feel like markup — which is
+ * exactly why they are the ones that drift.
+ */
+export const TIER_FILTER_ALL_LABEL = "All consequences";
+
+export const DECIDED_TOGGLE_LABEL = "Decided";
+
+/** The affordance on a compressed flag one-liner. Lowercase: it sits inline at
+ *  the end of a row of data, not as a button caption. */
+export const DECIDE_ONE_LABEL = "decide";
+
+/** Names the pinned footer's target, so a control that never moves is never
+ *  ambiguous about what it is about to write. */
+export const DECIDING_PREFIX = "Deciding";
+
+export function narrowRangeLabel(days: number): string {
+  return `Last ${days} days`;
 }
 ```
 
@@ -1193,7 +1237,7 @@ Replace the whole `<PageHeader …>…</PageHeader>` block with:
               onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
               className="h-10 rounded-md border bg-background px-2 text-sm"
             >
-              <option value="">All consequences</option>
+              <option value="">{TIER_FILTER_ALL_LABEL}</option>
               {TIER_VALUES.map((value) => (
                 <option key={value} value={value}>
                   {tierLabel(value)}
@@ -1215,7 +1259,7 @@ Replace the whole `<PageHeader …>…</PageHeader>` block with:
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              Decided
+              {DECIDED_TOGGLE_LABEL}
               <span className="tabular-nums text-foreground">{counts?.decided ?? 0}</span>
             </button>
           </div>
@@ -1428,12 +1472,16 @@ Replace the `props.truncated ? <AttentionStrip …>` block with:
               <span className="font-medium">{cappedHeadline(counts.open)}</span>{" "}
               <span className="text-muted-foreground">{CAPPED_EXPLAINER}</span>
             </span>
-            <Button size="sm" variant="outline" onClick={() => props.onNarrowRange(7)}>
-              Last 7 days
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => props.onNarrowRange(3)}>
-              Last 3 days
-            </Button>
+            {[7, 3].map((days) => (
+              <Button
+                key={days}
+                size="sm"
+                variant="outline"
+                onClick={() => props.onNarrowRange(days)}
+              >
+                {narrowRangeLabel(days)}
+              </Button>
+            ))}
           </span>
         </AttentionStrip>
       ) : null}
@@ -1903,7 +1951,7 @@ function FlagOneLiner(props: { flag: FlagOut; onExpand: () => void }) {
           {decisionStateLabel(props.flag.decision_state)}
         </Badge>
       ) : null}
-      <span className="shrink-0 text-[11px] font-medium text-primary">decide</span>
+      <span className="shrink-0 text-[11px] font-medium text-primary">{DECIDE_ONE_LABEL}</span>
     </button>
   );
 }
@@ -2034,7 +2082,7 @@ Add a line above the form naming what is being decided, so the pinned control is
 
 ```tsx
         <div className="mb-1.5 text-xs text-muted-foreground">
-          Deciding <span className="font-medium text-foreground">{decidingLabel}</span>
+          {DECIDING_PREFIX} <span className="font-medium text-foreground">{decidingLabel}</span>
         </div>
 ```
 
