@@ -1,5 +1,6 @@
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 
+import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import {
   SHOW_AS_GROUP_LABEL,
@@ -8,6 +9,7 @@ import {
   groupSubline,
   hiddenMemberLabel,
   personSubline,
+  stripAriaLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import { buildEmployeeFlagIndex, buildStrip, type Strip } from "@/lib/flagStrip";
@@ -46,9 +48,60 @@ export type FlagQueueListProps = {
   onSelect: (key: string) => void;
   /** Puts the expanded group back together — the way out of "decide one by one". */
   onCollapseGroup?: () => void;
+  /**
+   * Row to move focus to once, after the parent has replaced the list under it
+   * — a decided row unmounts, and without this focus falls to <body>.
+   */
+  focusKey?: string | null;
+  /** Cleared by the parent once the focus has been taken. */
+  onFocusHandled?: () => void;
 };
 
 export function FlagQueueList(props: FlagQueueListProps) {
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  /** The selectable row keys in rendered order, written on commit below. */
+  const orderedKeysRef = useRef<string[]>([]);
+
+  // Runs after commit, so the replacement row is mounted and its ref registered.
+  // Guarded by onFocusHandled rather than a local "done" flag: the parent owns
+  // the request, so it also owns clearing it, and a re-render cannot re-steal
+  // focus from wherever the user has since moved.
+  const { focusKey, onFocusHandled } = props;
+  useEffect(() => {
+    if (!focusKey) return;
+    rowRefs.current.get(focusKey)?.focus();
+    onFocusHandled?.();
+  }, [focusKey, onFocusHandled]);
+
+  /** Arrow / Home / End move focus between rows without selecting; Enter and
+   *  Space still activate, because every row is a real <button>.
+   *
+   *  Order comes from `orderedKeysRef` — the keys in the order this render
+   *  produced them — not from the ref Map's insertion order. The Map only
+   *  happens to be in DOM order because `registerRow` gets a fresh identity
+   *  every render, so React detaches and reattaches every ref in tree order;
+   *  memoise a row and that accident stops holding, silently, with no test to
+   *  notice. The rendered order is the thing actually being asserted. */
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLUListElement>) => {
+    // Cmd+ArrowDown is "scroll to end" on macOS, Alt+Arrow is word/history
+    // navigation — none of these are ours to take.
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const keys = orderedKeysRef.current.filter((key) => rowRefs.current.has(key));
+    if (keys.length === 0) return;
+    const active = document.activeElement as HTMLElement | null;
+    const current = keys.findIndex((key) => rowRefs.current.get(key) === active);
+
+    let next: number | null = null;
+    if (event.key === "ArrowDown") next = current < 0 ? 0 : Math.min(current + 1, keys.length - 1);
+    else if (event.key === "ArrowUp") next = current < 0 ? 0 : Math.max(current - 1, 0);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = keys.length - 1;
+    if (next === null) return;
+
+    event.preventDefault(); // ArrowDown would otherwise scroll the pane away
+    rowRefs.current.get(keys[next])?.focus();
+  }, []);
+
   // Built from the whole entry set, so a group member's strip shows the outlier
   // flag that put them in a second entry — see buildEmployeeFlagIndex.
   const flagsByEmployee = useMemo(() => buildEmployeeFlagIndex(props.entries), [props.entries]);
@@ -89,6 +142,31 @@ export function FlagQueueList(props: FlagQueueListProps) {
   // lone 3-hour gap above a 168-member routine group.
   const ordered = [...props.entries].sort((a, b) => b.rank - a.rank);
 
+  // Exactly one row sits in the tab order (`activeKey`); the arrows move between
+  // them. Before this the list had no keyboard model at all — no onKeyDown, no
+  // tabIndex, no ref anywhere in the feature — so reaching the decision panel
+  // meant Tab-ing through every row above it, up to 252 of them.
+  //
+  // The selected row is the natural anchor; with nothing selected the first row
+  // is, so a fresh page has one reachable entry point rather than none.
+  const orderedKeys = ordered.map((entry) =>
+    entry.kind === "group" && entry.group_key === props.expandedGroupKey
+      ? entry.members.map((member) => entryKey({ kind: "person", ...member }))
+      : [entryKey(entry)],
+  ).flat();
+  const activeKey =
+    props.selectedKey && orderedKeys.includes(props.selectedKey)
+      ? props.selectedKey
+      : (orderedKeys[0] ?? null);
+
+  // Committed, not assigned during render: a concurrent render that React
+  // abandons must not leave the arrow-key order describing a tree that was
+  // never mounted. This runs after the DOM is in place and before paint, which
+  // is also after every ref callback has fired.
+  useLayoutEffect(() => {
+    orderedKeysRef.current = orderedKeys;
+  });
+
   if (ordered.length === 0) {
     return (
       <p className="px-3 py-6 text-center text-sm text-muted-foreground">
@@ -97,7 +175,12 @@ export function FlagQueueList(props: FlagQueueListProps) {
     );
   }
 
-  const rows: { key: string; tier: Tier; element: ReactNode }[] = [];
+  const rows: { key: string; tier: Tier; element: ReactNode; selectable: boolean }[] = [];
+
+  const registerRow = (key: string) => (node: HTMLButtonElement | null) => {
+    if (node) rowRefs.current.set(key, node);
+    else rowRefs.current.delete(key);
+  };
 
   for (const entry of ordered) {
     if (entry.kind === "group" && entry.group_key === props.expandedGroupKey) {
@@ -109,6 +192,7 @@ export function FlagQueueList(props: FlagQueueListProps) {
       rows.push({
         key: `x:${entry.group_key}`,
         tier: entry.tier,
+        selectable: false,
         element: (
           <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
             <span className="min-w-0 truncate text-xs text-muted-foreground">
@@ -132,12 +216,15 @@ export function FlagQueueList(props: FlagQueueListProps) {
         rows.push({
           key,
           tier: member.tier,
+          selectable: true,
           element: (
             <PersonRow
               person={member}
               strip={stripFor(member)}
               selected={props.selectedKey === key}
               onSelect={() => props.onSelect(key)}
+              focusable={key === activeKey}
+              buttonRef={registerRow(key)}
             />
           ),
         });
@@ -149,12 +236,15 @@ export function FlagQueueList(props: FlagQueueListProps) {
     rows.push({
       key,
       tier: entry.tier,
+      selectable: true,
       element:
         entry.kind === "group" ? (
           <GroupRow
             entry={entry}
             selected={props.selectedKey === key}
             onSelect={() => props.onSelect(key)}
+            focusable={key === activeKey}
+            buttonRef={registerRow(key)}
           />
         ) : (
           <PersonRow
@@ -162,6 +252,8 @@ export function FlagQueueList(props: FlagQueueListProps) {
             strip={stripFor(entry)}
             selected={props.selectedKey === key}
             onSelect={() => props.onSelect(key)}
+            focusable={key === activeKey}
+            buttonRef={registerRow(key)}
           />
         ),
     });
@@ -173,34 +265,82 @@ export function FlagQueueList(props: FlagQueueListProps) {
   // the list and losing the interleaving.
   let lastTier: Tier | null = null;
 
+  // A real list, so a screen reader can say "item 5 of 147" — the one fact that
+  // tells someone whether this queue is a five-minute job or an afternoon. It was
+  // a bare <div> of <div>s, which announces 147 unrelated buttons and no length.
+  const total = rows.filter((row) => row.selectable).length;
+  let position = 0;
+
   return (
-    <div className="space-y-1 pb-4">
+    <ul
+      className="space-y-1 pb-4"
+      aria-label="Flag queue"
+      onKeyDown={handleKeyDown}
+    >
       {rows.map((row) => {
         const heading = row.tier !== lastTier ? row.tier : null;
         lastTier = row.tier;
+        if (row.selectable) position += 1;
         return (
-          <div key={row.key}>
+          <li
+            key={row.key}
+            // The "show as group" caption is not one of the set's items. Left as
+            // a bare listitem it would be counted by assistive tech (4 items)
+            // while the authored aria-setsize said 3 — ARIA wants the metadata
+            // all-or-none across a set, so the caption leaves the set entirely.
+            role={row.selectable ? undefined : "presentation"}
+            aria-setsize={row.selectable ? total : undefined}
+            aria-posinset={row.selectable ? position : undefined}
+          >
             {heading ? (
-              <h3 className="px-2 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              // sticky: tiers are contiguous runs, so three markers govern
+              // ~21 screens of scroll — without this, row 80 gives no clue
+              // whether you are still in Act.
+              <h3 className="sticky top-0 z-10 -mx-1 bg-background/95 px-3 pb-1.5 pt-4 text-xs font-semibold uppercase tracking-wider text-foreground backdrop-blur-sm">
                 {tierLabel(heading)}
               </h3>
             ) : null}
             {row.element}
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
-function RowButton(props: { selected: boolean; onSelect: () => void; children: ReactNode }) {
+function RowButton(props: {
+  selected: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+  /**
+   * The row spoken aloud. Required, not optional: every row's text lives in
+   * nested <span>s, and the avatar cluster beside it is aria-hidden, so without
+   * this a screen reader announces 252 buttons with no names at all.
+   */
+  label: string;
+  /**
+   * Roving tabindex — exactly one row is in the tab order, and the arrow keys
+   * move between them. Without it, reaching the decision panel means pressing
+   * Tab past every row above it, up to 252 times.
+   */
+  focusable: boolean;
+  buttonRef?: (node: HTMLButtonElement | null) => void;
+}) {
   return (
     <button
       type="button"
-      aria-pressed={props.selected}
+      ref={props.buttonRef}
+      aria-label={props.label}
+      // aria-current, not aria-pressed: this is single-select navigation, not an
+      // independent on/off toggle. aria-pressed made 251 rows announce
+      // "not pressed" and described a semantic the component does not have.
+      aria-current={props.selected ? "true" : undefined}
+      tabIndex={props.focusable ? 0 : -1}
       onClick={props.onSelect}
       className={cn(
         "flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors",
+        // Keyboard focus has to be visible now that it can move without a click.
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
         props.selected
           ? "border-primary/30 bg-primary/5"
           : "border-transparent hover:border-border/60 hover:bg-muted/40",
@@ -223,7 +363,7 @@ function RowButton(props: { selected: boolean; onSelect: () => void; children: R
  * this fortnight are flagged — that appears nowhere else in the row, so it keeps
  * its one summarising label.
  */
-function DecorativeAvatars(props: { className: string; children: ReactNode }) {
+function DecorativeAvatars(props: { className?: string; children: ReactNode }) {
   return (
     <span aria-hidden="true" className={props.className}>
       {props.children}
@@ -236,6 +376,8 @@ function PersonRow(props: {
   strip: Strip;
   selected: boolean;
   onSelect: () => void;
+  focusable: boolean;
+  buttonRef?: (node: HTMLButtonElement | null) => void;
 }) {
   const { person } = props;
   // undecided_count, not flags.length: a partially decided person returns to the
@@ -246,7 +388,24 @@ function PersonRow(props: {
   const crossReference = crossReferenceLabel(person);
 
   return (
-    <RowButton selected={props.selected} onSelect={props.onSelect}>
+    <RowButton
+      selected={props.selected}
+      onSelect={props.onSelect}
+      focusable={props.focusable}
+      buttonRef={props.buttonRef}
+      // Name, finding, how many more flags, then the fortnight the strip draws.
+      // The strip and the avatar are aria-hidden decoration; without this the
+      // row's entire content is invisible to a screen reader.
+      label={[
+        person.employee_name,
+        crossReference,
+        personSubline(person),
+        extra > 0 ? `${extra} more ${extra === 1 ? "flag" : "flags"}` : null,
+        stripAriaLabel(props.strip),
+      ]
+        .filter(Boolean)
+        .join(". ")}
+    >
       {/* 40px is a floor, not a preference. At 20px an avatar is decoration —
           too small to recognise anyone — so if photos are to earn their space
           the row cannot be denser than this. */}
@@ -304,13 +463,27 @@ function PersonRow(props: {
 /** At most this many faces before the row would out-argue its own headline. */
 const GROUP_AVATAR_LIMIT = 4;
 
-function GroupRow(props: { entry: GroupEntry; selected: boolean; onSelect: () => void }) {
+function GroupRow(props: {
+  entry: GroupEntry;
+  selected: boolean;
+  onSelect: () => void;
+  focusable: boolean;
+  buttonRef?: (node: HTMLButtonElement | null) => void;
+}) {
   const { entry } = props;
   const shown = entry.members.slice(0, GROUP_AVATAR_LIMIT);
   const hidden = hiddenMemberLabel(entry.members.length - shown.length);
 
   return (
-    <RowButton selected={props.selected} onSelect={props.onSelect}>
+    <RowButton
+      selected={props.selected}
+      onSelect={props.onSelect}
+      focusable={props.focusable}
+      buttonRef={props.buttonRef}
+      // The faces beside this are aria-hidden (they restate the sub-line), so
+      // the headline and its two dimensions are the whole spoken row.
+      label={`${groupHeadline(entry)}. ${groupSubline(entry)}`}
+    >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-foreground">
           {groupHeadline(entry)}
@@ -327,25 +500,41 @@ function GroupRow(props: { entry: GroupEntry; selected: boolean; onSelect: () =>
           expanded. Hidden from assistive tech as a cluster, because the sub-line
           above already answers it in words — exposed, the "+2" would read as a
           bare number appended to the headline. */}
-      <DecorativeAvatars className="flex shrink-0 items-center -space-x-2">
-        {shown.map((member) => (
-          <EmployeeAvatar
-            key={member.employee}
-            employee={{
-              id: member.employee,
-              label: member.employee_name,
-              employee_name: member.employee_name,
-              image: member.employee_image,
-            }}
-            fallbackId={member.employee}
-            className="size-7 ring-2 ring-background"
-          />
-        ))}
-        {hidden ? (
-          <span className="flex size-7 items-center justify-center rounded-full bg-muted text-[10px] font-semibold tabular-nums text-muted-foreground ring-2 ring-background">
-            {hidden}
-          </span>
-        ) : null}
+      <DecorativeAvatars>
+        {/* shadcn's AvatarGroup / AvatarGroupCount rather than a hand-rolled
+            flex row and a hand-rolled counter pill.
+
+            Its default overlap is -space-x-2, which is overridden here: at
+            size-7 that covers 8px of a 28px face — 29% — and a two-letter
+            initial pair is centred, so the covered band eats its second glyph.
+            Fine for photographs, wrong for the fallback, and the fallback is
+            what renders for every employee with no photo on file and for every
+            face still in flight. -space-x-1 keeps the overlapped look and
+            leaves 24px of each circle visible, which clears the pair.
+
+            EmployeeAvatar stays the child rather than shadcn's Avatar: it
+            carries the loading-phase work that makes an avatar never flash
+            empty, half-painted, or broken. */}
+        <AvatarGroup className="shrink-0 items-center -space-x-1">
+          {shown.map((member) => (
+            <EmployeeAvatar
+              key={member.employee}
+              employee={{
+                id: member.employee,
+                label: member.employee_name,
+                employee_name: member.employee_name,
+                image: member.employee_image,
+              }}
+              fallbackId={member.employee}
+              className="size-7 ring-2 ring-background"
+            />
+          ))}
+          {hidden ? (
+            <AvatarGroupCount className="size-7 text-[10px] font-semibold tabular-nums">
+              {hidden}
+            </AvatarGroupCount>
+          ) : null}
+        </AvatarGroup>
       </DecorativeAvatars>
     </RowButton>
   );

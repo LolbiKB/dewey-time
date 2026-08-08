@@ -332,6 +332,76 @@ class TestPersonDedup(unittest.TestCase):
         self.assertIsNone(person["employee_branch"])
 
 
+class TestMagnitudeOrdering(unittest.TestCase):
+    """Rank bands are coarse on purpose; the rows are not.
+
+    MISSING_TIME ranks `130 + min(minutes // 60, 9)`, so 4h and 4h 30m are both
+    134 — while the rows read "worst 4h" and "worst 4h 30m". Sorting on rank
+    alone interleaved two numbers the reader can see are different, and the
+    order looked arbitrary because the field it sorted on is never rendered.
+    """
+
+    @staticmethod
+    def _person_entries(payload):
+        return [e for e in payload["entries"] if e["kind"] == "person"]
+
+    def test_two_people_in_one_rank_band_sort_by_the_minutes_the_row_prints(self):
+        payload = build_queue(
+            flags=[
+                _flag("EMP-1", DATE, "MISSING_TIME", evidence={"minutes": 240}),   # worst 4h
+                _flag("EMP-2", DATE, "MISSING_TIME", evidence={"minutes": 270}),   # worst 4h 30m
+                _flag("EMP-3", DATE, "MISSING_TIME", evidence={"minutes": 255}),
+            ],
+            decisions_by_identity={},
+            employees_by_id=_employees(
+                ("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-B"), ("EMP-3", "Cy", "BR-C")
+            ),
+            outage_branch_dates=set(),
+        )
+        people = self._person_entries(payload)
+        # All three share rank 134, so before this they came out in employee-id
+        # order and 4h could sit above 4h 30m.
+        self.assertEqual({p["rank"] for p in people}, {134})
+        self.assertEqual([p["employee"] for p in people], ["EMP-2", "EMP-3", "EMP-1"])
+
+    def test_magnitude_never_reorders_across_rank_bands(self):
+        """The tiebreak is WITHIN a band. A long routine gap must not climb over
+        a genuine absence just for being long — that is what the rank table is
+        for, and reordering across bands would silently overrule it."""
+        payload = build_queue(
+            flags=[
+                # rank 140, no minutes at all
+                _flag("EMP-1", DATE, "UNNOTIFIED_ABSENCE"),
+                # rank 139 (capped), an enormous 12h
+                _flag("EMP-2", DATE, "MISSING_TIME", evidence={"minutes": 720}),
+            ],
+            decisions_by_identity={},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-B")),
+            outage_branch_dates=set(),
+        )
+        people = self._person_entries(payload)
+        self.assertEqual([p["employee"] for p in people], ["EMP-1", "EMP-2"])
+        self.assertGreater(people[0]["rank"], people[1]["rank"])
+
+    def test_a_decided_flag_does_not_lend_its_magnitude_to_the_order(self):
+        """Ordering is about outstanding work. A settled 9h gap must not hold a
+        person above someone whose 5h gap nobody has looked at."""
+        settled = _flag("EMP-1", DATE, "MISSING_TIME", evidence={"minutes": 540})
+        payload = build_queue(
+            flags=[
+                settled,
+                _flag("EMP-1", DATE2, "MISSING_TIME", evidence={"minutes": 130}),
+                _flag("EMP-2", DATE, "MISSING_TIME", evidence={"minutes": 135}),
+            ],
+            decisions_by_identity={settled["flag_identity"]: _decision(settled)},
+            employees_by_id=_employees(("EMP-1", "Ana", "BR-A"), ("EMP-2", "Ben", "BR-B")),
+            outage_branch_dates=set(),
+        )
+        people = self._person_entries(payload)
+        # EMP-2's live 135 outranks EMP-1's live 130; the excused 540 is silent.
+        self.assertEqual([p["employee"] for p in people], ["EMP-2", "EMP-1"])
+
+
 class TestBranchOutageGrouping(unittest.TestCase):
     def test_one_branch_outage_across_many_days_is_one_entry_not_one_per_day(self):
         """The regression this class never covered.

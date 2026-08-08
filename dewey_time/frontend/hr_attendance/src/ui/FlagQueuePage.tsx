@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
 import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
@@ -248,6 +248,24 @@ export function FlagQueuePage() {
   const [bulkFailure, setBulkFailure] = useState<BulkFailure | null>(null);
   const [writeFailure, setWriteFailure] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  /** Spoken, not shown. The queue's own state changes — selection, and the
+   *  outcome of a write — were entirely silent to assistive tech. */
+  const [announcement, setAnnouncement] = useState("");
+  /**
+   * Where to land after a write. Deciding a row removes it, which unmounted the
+   * focused button and dropped focus to <body> — so a keyboard user was
+   * returned to the top of the document and had to walk back down, and the
+   * panel silently reverted to its empty state with no statement that anything
+   * had been saved.
+   *
+   * `from` is the entry array as it was at submit time. react-query hands back a
+   * new array on new data, so comparing identity is how we tell "the refetch has
+   * landed" from "this effect ran on the pre-refetch render" — acting on the
+   * latter would re-select the row that was just decided.
+   */
+  const [restore, setRestore] = useState<{ index: number; from: QueueEntry[] } | null>(null);
+  /** Handed to the list, which focuses this row once and reports back. */
+  const [focusKey, setFocusKey] = useState<string | null>(null);
 
   // The selected row can be a group member surfaced by "Decide one by one",
   // which is not itself a top-level entry — so resolve against the expanded
@@ -278,12 +296,24 @@ export function FlagQueuePage() {
     setWriteFailure(null);
   }, []);
 
+  /**
+   * Cancel a pending post-write restore.
+   *
+   * Every deliberate move the user makes while a write is in flight has to call
+   * this: their choice wins, and a restore left armed would yank them off the
+   * row they just chose when the refetch lands. Shared rather than repeated so
+   * a fourth navigation path cannot quietly omit it — which is exactly how the
+   * first three came to differ.
+   */
+  const cancelRestore = useCallback(() => setRestore(null), []);
+
   const handleSelect = useCallback(
     (key: string) => {
       setSelectedKey(key);
       resetRowState();
+      cancelRestore();
     },
-    [resetRowState],
+    [resetRowState, cancelRestore],
   );
 
   const handleToggleDecided = useCallback(() => {
@@ -293,7 +323,8 @@ export function FlagQueuePage() {
     // it was started on either way.
     setSelectedKey(null);
     resetRowState();
-  }, [resetRowState]);
+    cancelRestore();
+  }, [resetRowState, cancelRestore]);
 
   const handleToggleMember = useCallback((employee: string) => {
     setExcluded((prev) => {
@@ -333,6 +364,47 @@ export function FlagQueuePage() {
       if (effect.lastDecision) setLastDecision(effect.lastDecision);
       setBulkFailure(effect.bulkFailure);
 
+      // Say what happened. Until now the only signal that a decision landed was
+      // the row vanishing — invisible to a screen reader, and ambiguous to
+      // everyone else, since a row also vanishes when the refetch reorders.
+      // The zero-width space alternates, so two consecutive identical outcomes
+      // still change the text node. Without it React bails out on the equal
+      // string, the DOM never mutates, and a live region announces nothing —
+      // every save after the first would be silent, which is the exact silence
+      // this is here to end, in the decide -> next loop the feature exists for.
+      setAnnouncement((previous) => {
+        const text = effect.bulkFailure
+          ? `Saved ${effect.bulkFailure.saved} of ${effect.bulkFailure.attempted}. See the failures below.`
+          : "Decision saved.";
+        return previous.endsWith("\u200b") ? text : `${text}\u200b`;
+      });
+
+      // Remember the SLOT, not the row: the row is about to stop existing.
+      // Landing on whatever takes its place turns the core loop into
+      // decide -> next instead of decide -> lost.
+      //
+      // Armed only when something was actually written. A zero-write call (a
+      // bulk attempt where every identity failed) leaves the queue unchanged, so
+      // react-query's structural sharing hands back a reference-identical array
+      // and the guard below never fires — the request would sit armed until some
+      // unrelated refetch (this query is staleTime 0 with refetchOnWindowFocus)
+      // finally changed the data, then steal focus and clobber the selection at
+      // an arbitrary moment, possibly mid-note.
+      if (effect.lastDecision) {
+        // Members of an expanded group are not top-level entries, so fall back to
+        // the group that owns the selected member — that is the row the list
+        // renders in its place.
+        const index = entries.findIndex(
+          (entry) =>
+            entryKey(entry) === selectedKey ||
+            (entry.kind === "group" &&
+              entry.members.some(
+                (member) => entryKey({ kind: "person", ...member }) === selectedKey,
+              )),
+        );
+        setRestore(index >= 0 ? { index, from: entries } : null);
+      }
+
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
       // all their flags are decided.
@@ -349,6 +421,34 @@ export function FlagQueuePage() {
       setWriteFailure(extractFrappeError(err, DECIDE_FAILED_MESSAGE));
     },
   });
+
+  useEffect(() => {
+    if (!restore) return;
+    if (entries === restore.from) return; // the refetch has not landed yet
+    setRestore(null);
+    // Clamped: deciding the last row leaves the slot past the end, and the row
+    // above it is where a human would look next.
+    const next = entries[Math.min(restore.index, entries.length - 1)];
+    if (!next) {
+      setSelectedKey(null);
+      return;
+    }
+    const key = entryKey(next);
+    setSelectedKey(key);
+    // Landing on a row is a selection change, so it owes the same reset every
+    // other selection change does. Without it the decided person's draft —
+    // outcome, reason and the free-text NOTE — and their exclusion set arrive
+    // pre-filled on the next person's form, which is resetRowState's own stated
+    // error: one person's reasoning applied to the next.
+    //
+    // Not the whole of resetRowState: `lastDecision` is what powers "same reason
+    // applies" (the entire point of landing here), and `bulkFailure` /
+    // `writeFailure` describe the write that just happened and must outlive it.
+    setDraft(emptyDraft());
+    setActiveIdentity(null);
+    setExcluded(new Set<string>());
+    setFocusKey(key);
+  }, [restore, entries]);
 
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
@@ -373,7 +473,8 @@ export function FlagQueuePage() {
     if (selectedEntry?.kind !== "group") return;
     setExpandedGroupKey(selectedEntry.group_key);
     setSelectedKey(null);
-  }, [selectedEntry]);
+    cancelRestore();
+  }, [selectedEntry, cancelRestore]);
 
   const handleCollapseGroup = useCallback(() => {
     if (!expandedGroupKey) return;
@@ -385,7 +486,8 @@ export function FlagQueuePage() {
     // would resolve to nothing and blank the panel. Land back on the group.
     setSelectedKey(group ? entryKey(group) : null);
     resetRowState();
-  }, [entries, expandedGroupKey, resetRowState]);
+    cancelRestore();
+  }, [entries, expandedGroupKey, resetRowState, cancelRestore]);
 
   if (sessionLoading) {
     return (
@@ -412,6 +514,7 @@ export function FlagQueuePage() {
         orphans={isLoading || error ? undefined : orphans}
         includeDecided={includeDecided}
         onToggleDecided={handleToggleDecided}
+        announcement={announcement}
         range={requestedRange}
         onRangeChange={setRange}
         tier={tier}
@@ -431,6 +534,8 @@ export function FlagQueuePage() {
             expandedGroupKey={expandedGroupKey}
             onSelect={handleSelect}
             onCollapseGroup={handleCollapseGroup}
+            focusKey={focusKey}
+            onFocusHandled={() => setFocusKey(null)}
           />
         }
         panel={
@@ -493,6 +598,8 @@ export type FlagQueueViewProps = {
   /** Whether the queue is also listing people with nothing outstanding. */
   includeDecided?: boolean;
   onToggleDecided?: () => void;
+  /** Spoken-only status text for the queue's live region. */
+  announcement?: string;
   /** The range the controls edit — the request, not the payload's answer. */
   range: { startDate: string; endDate: string };
   onRangeChange: (next: { startDate: string; endDate: string }) => void;
@@ -746,8 +853,20 @@ export function FlagQueueView(props: FlagQueueViewProps) {
               "lg:grid lg:overflow-visible lg:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
             )}
           >
+            {/* polite, not assertive: these confirm what the user just did, so
+                they must not cut across whatever is being read. Visually hidden
+                because the same facts are already on screen. */}
+            <p className="sr-only" role="status" aria-live="polite">
+              {props.announcement}
+            </p>
             <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.list}</div>
-            <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.panel}</div>
+            <div
+              role="region"
+              aria-label="Selected flag"
+              className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain"
+            >
+              {props.panel}
+            </div>
           </div>
         )}
       </Section>

@@ -1235,13 +1235,18 @@ test("a person in two entries carries the cross-reference badge in both", () => 
   // would satisfy a whole-markup count while telling HR nothing about the
   // group. Ada's two rows are told apart by their headlines: three late starts
   // in the group, the unpatterned three-hour gap on her own.
+  // `>also …<` — the badge as rendered TEXT. A row's aria-label now restates the
+  // badge (deliberately: it is the safeguard, so it has to be spoken as well as
+  // shown), which means a bare substring count sees each badge twice. Matching
+  // the text node counts badges rather than mentions, and stays strict about the
+  // thing this test is for: exactly two rows carry one.
   const member = rowWith(html, "Ada Lovelace", "late starts");
   const lone = rowWith(html, "Ada Lovelace", "Missing 3h");
-  assert.match(member, /also 1 outlier/, "the group member is badged");
-  assert.match(lone, /also 1 elsewhere/, "and so is the lone row");
+  assert.match(member, />also 1 outlier</, "the group member is badged");
+  assert.match(lone, />also 1 elsewhere</, "and so is the lone row");
   // Grace is in one entry only, and a badge on her would be a false alarm.
-  assert.doesNotMatch(rowWith(html, "Grace Hopper"), /also /, "nobody else is badged");
-  assert.equal(html.split("also ").length - 1, 2, "…and no badge anywhere else either");
+  assert.doesNotMatch(rowWith(html, "Grace Hopper"), />also /, "nobody else is badged");
+  assert.equal(html.split(">also ").length - 1, 2, "…and no badge anywhere else either");
 });
 
 // The badge's primary surface, and the one it was missing. "Who this covers" is
@@ -1435,7 +1440,21 @@ test("a group header shows who is in it, not a strip", () => {
   // The faces answer "who is in here?" by sight; the sub-line answers it in
   // words. Exposing the cluster as well would read as a stray "+2" after the
   // headline, so it stays out of the accessibility tree whole.
-  assert.match(html, /aria-hidden="true"[^>]*><span class="[^"]*size-7/);
+  //
+  // Asserted as "the cluster opens inside the hidden wrapper and every avatar
+  // is within it", not as "the wrapper's immediate child is an avatar" — the
+  // cluster is an AvatarGroup now, so the avatars sit one level deeper, and the
+  // property that matters is containment rather than adjacency.
+  const hidden = html.slice(html.indexOf('aria-hidden="true"><div data-slot="avatar-group"'));
+  assert.notEqual(hidden, html, "the avatar cluster opens inside the aria-hidden wrapper");
+  const clusterEnd = hidden.indexOf("</span>", hidden.lastIndexOf("size-7"));
+  assert.ok(clusterEnd > 0, "the cluster closes");
+  // Every size-7 avatar in the document is inside that hidden subtree.
+  assert.equal(
+    html.split("size-7").length,
+    hidden.split("size-7").length,
+    "no avatar renders outside the aria-hidden cluster",
+  );
 });
 
 // GROUP_AVATAR_LIMIT is 4: past that the faces out-argue the row's own headline,

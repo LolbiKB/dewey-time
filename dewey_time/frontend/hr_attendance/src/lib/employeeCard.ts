@@ -34,9 +34,18 @@ export function employeeInitials(
   const name = employeeShortName(employee, fallbackId);
   return (
     name
-      .split(" ")
+      // Any run of whitespace, not one literal space. stripMiddleName normalises
+      // whitespace only on its three-or-more-part branch, so a two-part name
+      // separated by a double space or a non-breaking space arrived verbatim,
+      // split to ["Chan", "", "Dara"], and slice(0, 2) took ["Chan", ""] — one
+      // initial, the second silently swallowed rather than falling back.
+      .split(/\s+/)
+      .filter(Boolean)
       .slice(0, 2)
-      .map((part) => part[0])
+      // [...part][0], not part[0]: string indexing yields a UTF-16 code unit, so
+      // an astral first character returns half a surrogate pair. Spreading
+      // iterates code points. One initial is still honest for a mononym.
+      .map((part) => [...part][0] ?? "")
       .join("")
       .toUpperCase() || "?"
   );

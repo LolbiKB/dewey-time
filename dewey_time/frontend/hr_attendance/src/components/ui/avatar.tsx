@@ -1,0 +1,48 @@
+/**
+ * shadcn `avatar`, reduced to the two pieces this app uses.
+ *
+ * `Avatar` / `AvatarImage` / `AvatarFallback` / `AvatarBadge` were removed on
+ * purpose rather than left unused: `ui/EmployeeAvatar.tsx` is this app's avatar,
+ * and it carries the loading-phase handling that keeps a face from flashing
+ * empty, half-painted, or as a broken-image icon. Leaving shadcn's plain Avatar
+ * exported here is an invitation to reach for it and lose all of that.
+ *
+ * Re-add from the registry if a genuine plain-avatar case turns up.
+ */
+import * as React from "react"
+
+import { cn } from "@/lib/utils"
+
+function AvatarGroup({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="avatar-group"
+      className={cn(
+        "group/avatar-group flex -space-x-2",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function AvatarGroupCount({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="avatar-group-count"
+      className={cn(
+        "relative flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-sm text-muted-foreground ring-2 ring-background [&>svg]:size-4",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+export {
+  AvatarGroup,
+  AvatarGroupCount,
+}

@@ -842,7 +842,11 @@ test("a person row's avatar loading ring stays out of the accessibility tree", a
 
   // Located by CSS, not by role: every later assertion here is about the
   // accessibility tree, so the scope they are measured in must not be.
-  const row = page.locator("button[aria-pressed]").filter({ hasText: "Nita Prum" });
+  // `aria-label`, not `aria-pressed`: rows are single-select navigation and
+  // carry aria-current when chosen, so aria-pressed no longer exists on them —
+  // and aria-current is absent until something is selected, which this test
+  // never does. Every row has a label, so that is the stable hook.
+  const row = page.locator("button[aria-label]").filter({ hasText: "Nita Prum" });
   await expect(row).toHaveCount(1);
 
   // THE GUARD, and the most important line in this test. Without it, everything
@@ -866,22 +870,358 @@ test("a person row's avatar loading ring stays out of the accessibility tree", a
   async function exposedNodes() {
     const { nodes } = await cdp.send("Accessibility.getFullAXTree");
     const live = nodes.filter((node) => !node.ignored);
+    const named = (node: (typeof live)[number]) => String(node.name?.value ?? "");
     return {
-      status: live.filter((node) => node.role?.value === "status").length,
+      // The ring, identified by its own name rather than by role alone. The page
+      // now also carries a legitimate `role="status"` live region for decision
+      // outcomes, so a bare role count would score that as a failure.
+      ring: live.filter((node) => node.role?.value === "status" && /Loading/i.test(named(node)))
+        .length,
       namedLoading: live.filter((node) => node.name?.value === "Loading").length,
-      // The positive control, and the reason this assertion is not vacuous. The
-      // flag strip is a `role="img"` sibling of the avatar INSIDE THE SAME
-      // <button>, and it is deliberately not hidden. Its presence proves the tree
-      // was populated and that Blink does not prune a button's descendants
-      // wholesale — so the ring's absence is `aria-hidden` doing its job and
-      // nothing else. Without this, an empty tree would read as a pass.
-      strip: live.filter(
-        (node) => node.role?.value === "image" && /flagged day/.test(String(node.name?.value ?? "")),
-      ).length,
+      // The positive control, and the reason this assertion is not vacuous: the
+      // row itself, exposed and named, proves the tree was populated and that we
+      // are looking at the right part of it. Without a control, an empty tree
+      // reads as a pass.
+      //
+      // This used to be the flag strip — a `role="img"` sibling inside the same
+      // <button>, deliberately unhidden. It is no longer separately exposed, and
+      // that is expected: the row now carries an explicit `aria-label`, so Blink
+      // stops walking its descendants for the name and prunes them. Nothing is
+      // lost to a screen reader — `stripAriaLabel` is part of that label, pinned
+      // by "every queue row has an accessible name carrying its finding" below.
+      row: live.filter((node) => node.role?.value === "button" && /Nita Prum/.test(named(node)))
+        .length,
     };
   }
 
   // Polled: the AX tree is built off the main thread's commit, so it can lag the
   // DOM by a frame.
-  await expect.poll(exposedNodes).toEqual({ status: 0, namedLoading: 0, strip: 1 });
+  await expect.poll(exposedNodes).toEqual({ ring: 0, namedLoading: 0, row: 1 });
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard and screen-reader access to the queue list.
+//
+// These live here rather than in the unit suite for a structural reason: that
+// suite is `renderToStaticMarkup` plus regex over the HTML string, and a markup
+// string has no accessibility tree, no focus and no key events. It could not
+// have caught ANY of what follows — which is how a 252-row list shipped with no
+// accessible names, no keyboard model and nothing announced.
+// ---------------------------------------------------------------------------
+
+function a11yPerson(args: { employee: string; name: string; minutes: number }): QueuePerson {
+  const flag = {
+    flag_identity: `AUTO-${args.employee}`,
+    flag_code: "MISSING_TIME",
+    attendance_date: "2026-08-13",
+    severity: "WARNING",
+    day_closed: 1,
+    evidence: { minutes: args.minutes },
+    rank: 134,
+    tier: "act",
+    decision_state: "undecided",
+    decision: null,
+  } satisfies FlagOut;
+  return {
+    entry_key: `p:${args.employee}`,
+    employee: args.employee,
+    employee_name: args.name,
+    employee_branch: "Siem Reap Depot",
+    employee_image: null,
+    attendance_date: "2026-08-13",
+    dates: ["2026-08-13"],
+    rank: 134,
+    tier: "act",
+    flags: [flag],
+    undecided_count: 1,
+    also_count: 0,
+    also_outlier_count: 0,
+  } satisfies QueuePerson;
+}
+
+const A11Y_PEOPLE = [
+  a11yPerson({ employee: "HR-EMP-00021", name: "Vandy In", minutes: 240 }),
+  a11yPerson({ employee: "HR-EMP-00022", name: "Sokha Phlat", minutes: 250 }),
+  a11yPerson({ employee: "HR-EMP-00023", name: "Dara Kim", minutes: 260 }),
+];
+
+const A11Y_PAYLOAD = {
+  entries: A11Y_PEOPLE.map((person) => ({ kind: "person", ...person })) satisfies QueueEntry[],
+  counts: {
+    open: 3,
+    needs_re_review: 0,
+    decided: 0,
+    people: 3,
+    rows: 3,
+    open_capped: false,
+  },
+  orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
+  alerts: [],
+  outage_dates: [],
+  truncated: false,
+  start_date: "2026-07-31",
+  end_date: "2026-08-13",
+} satisfies QueuePayload;
+
+async function gotoA11yQueue(page: import("@playwright/test").Page) {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+  await page.goto("/hr-flags");
+  await expect(page.getByRole("button", { name: /Vandy In/ })).toBeVisible();
+}
+
+test("every queue row has an accessible name carrying its finding", async ({ page }) => {
+  await gotoA11yQueue(page);
+
+  // getByRole with a name is the whole assertion: it resolves against the
+  // accessibility tree, so it fails outright if the row is an unnamed button —
+  // which is what all 252 of them were. A CSS selector would pass either way.
+  const row = page.getByRole("button", { name: /Vandy In/ });
+  await expect(row).toHaveCount(1);
+
+  const label = await row.getAttribute("aria-label");
+  expect(label).toContain("Vandy In");
+  expect(label).toMatch(/gap|Missing/i); // the finding, not just the name
+  expect(label).toMatch(/flagged day/); // and the fortnight the strip draws
+
+  // Every row, not just the one we looked at.
+  for (const person of A11Y_PEOPLE) {
+    await expect(page.getByRole("button", { name: new RegExp(person.employee_name) })).toHaveCount(1);
+  }
+});
+
+test("the list is a list, and says how long it is", async ({ page }) => {
+  await gotoA11yQueue(page);
+
+  const list = page.getByRole("list", { name: "Flag queue" });
+  await expect(list).toHaveCount(1);
+  // "item N of 3" is the fact that tells a screen-reader user whether this
+  // queue is a five-minute job or an afternoon.
+  await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "3");
+  await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-posinset", "1");
+});
+
+test("one tab reaches the list, then the arrows move within it", async ({ page }) => {
+  await gotoA11yQueue(page);
+
+  const rows = page.getByRole("button", { name: /Vandy In|Sokha Phlat|Dara Kim/ });
+  await expect(rows).toHaveCount(3);
+
+  // Roving tabindex: exactly one row is tabbable, so reaching the panel does not
+  // cost 252 Tab presses.
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveAttribute("tabindex", "0");
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toHaveAttribute("tabindex", "-1");
+
+  await page.locator('button[aria-label*="Vandy In"]').focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  // Clamped at the end rather than wrapping — wrapping past the last row reads
+  // as "the list restarted" when you cannot see it.
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+
+  await page.keyboard.press("Home");
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+});
+
+test("a row can be selected from the keyboard, and says so", async ({ page }) => {
+  await gotoA11yQueue(page);
+
+  await page.locator('button[aria-label*="Vandy In"]').focus();
+  await page.keyboard.press("Enter");
+
+  // aria-current, not aria-pressed: single-select navigation, not a toggle.
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).not.toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+
+  // The panel is a named region, so a screen reader can jump to it rather than
+  // tabbing through the rest of the list to find where the row went.
+  await expect(page.getByRole("region", { name: "Selected flag" })).toBeVisible();
+});
+
+test("the queue carries a polite live region for its own state changes", async ({ page }) => {
+  await gotoA11yQueue(page);
+  const live = page.locator('[role="status"][aria-live="polite"]');
+  await expect(live).toHaveCount(1);
+});
+
+test("deciding a row lands focus on the row that takes its place", async ({ page }) => {
+  // The list shrinks by one on the refetch, exactly as it does in production
+  // once the server says every flag on that person is settled.
+  let decided = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-x", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = decided ? A11Y_PEOPLE.slice(1) : A11Y_PEOPLE;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })),
+          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await expect(page.getByRole("region", { name: "Selected flag" })).toBeVisible();
+
+  // Same three steps as the decide test above: the form is gated behind its own
+  // "Decide" button, reason is a native <select>, and the submit button shares
+  // its name with the outcome toggle so `.last()` picks the submit.
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  // Vandy In is gone; the slot she occupied now holds Sokha Phlat, and that is
+  // where focus and selection must be. Before this the decided button unmounted
+  // and focus fell to <body> — a keyboard user was returned to the top of the
+  // document, and the panel reverted to its empty state with no statement that
+  // anything had been saved.
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveCount(0);
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+
+  // And the write is announced, rather than being inferable only from absence.
+  await expect(page.locator('[role="status"][aria-live="polite"]')).toHaveText(/saved/i);
+});
+
+test("the next row's form is empty after a decide, not pre-filled with the last one's", async ({
+  page,
+}) => {
+  let decided = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-y", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = decided ? A11Y_PEOPLE.slice(1) : A11Y_PEOPLE;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })),
+          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  // A note is the sharpest version of the leak: free text about ONE person.
+  await page.getByRole("textbox").first().fill("Spoke to Vandy, family emergency");
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  // We land on Sokha Phlat. Opening her form must not present Vandy's note or
+  // Vandy's reason as if they were hers — resetRowState's own stated error,
+  // "one person's reasoning applied to the next".
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await expect(page.getByRole("textbox").first()).toHaveValue("");
+});
+
+test("a second save is announced too, not silently deduplicated", async ({ page }) => {
+  // A live region announces on MUTATION. Two identical outcome strings mean
+  // React bails out, the DOM never changes, and every save after the first is
+  // silent — the exact silence the live region exists to end.
+  let decides = 0;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decides += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: `AFD-${decides}`, errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = A11Y_PEOPLE.slice(decides);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })),
+          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+        },
+      }),
+    });
+  });
+
+  const live = page.locator('[role="status"][aria-live="polite"]');
+  await page.goto("/hr-flags");
+
+  async function decideSelected() {
+    await page.getByRole("button", { name: "Decide", exact: true }).click();
+    await page
+      .getByRole("combobox", { name: /reason/i })
+      .selectOption({ label: "Approved leave or holiday" });
+    await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+  }
+
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await decideSelected();
+  await expect(live).toHaveText(/saved/i);
+  const first = await live.textContent();
+
+  await decideSelected(); // we were landed on the next row already
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  // Same words, different text node — otherwise nothing is announced at all.
+  await expect(live).toHaveText(/saved/i);
+  expect(await live.textContent()).not.toBe(first);
 });
