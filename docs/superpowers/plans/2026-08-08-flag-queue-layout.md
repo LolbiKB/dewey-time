@@ -758,6 +758,82 @@ git commit -m "feat(flag-queue): copy for the device-outage band"
 
 **Why not `AttentionStrip`:** its `detail` slot makes the whole header row the `<summary>`, so the two action buttons inside it would toggle the disclosure on click. The band needs a header row with independent controls. It borrows the amber tone classes verbatim (`border-amber-500/25 bg-amber-500/[0.06]`) so it stays visually in the notice family.
 
+- [ ] **Step 0: Add the four exports the band needs but the earlier modules lack**
+
+Found by the Task 3 review. Three of them are Constraint 2 violations that were inline in this task's own component code; the fourth is a count that does not exist yet.
+
+In `src/lib/flagQueuePartition.ts`:
+
+```ts
+/**
+ * Every flag the outage produced, decided or not.
+ *
+ * NOT `outageWrite(...).identities.length`, which counts only undecided flags
+ * and therefore shrinks as decisions land. The band's subline is a statement of
+ * what happened — "30 Jul – 8 Aug · 3,277 flags" — and a historical fact that
+ * falls to zero after the excuse is a false one.
+ */
+export function outageFlagCount(outages: OutageGroup[]): number {
+  let total = 0;
+  for (const group of outages) {
+    for (const member of group.members) total += member.flags.length;
+  }
+  return total;
+}
+```
+
+with tests beside the existing ones:
+
+```ts
+test("outageFlagCount counts every flag, not just the writable ones", () => {
+  const groups = [
+    outage("A", [person("DI-1", [flag("a1"), flag("done", "matched")])]),
+    outage("B", [person("DI-2", [flag("b1", "needs_re_review")])]),
+  ];
+  assert.equal(outageFlagCount(groups), 3);
+  assert.equal(outageWrite(groups, new Set()).identities.length, 1, "the write is smaller, on purpose");
+});
+
+test("outageFlagCount of nothing is zero", () => {
+  assert.equal(outageFlagCount([]), 0);
+});
+```
+
+In `src/lib/flagQueueLabels.ts`:
+
+```ts
+/** The band's accessible name — the only thing a screen-reader user hears on
+ *  entering the landmark, so it is copy like any other string here. */
+export const OUTAGE_BAND_LABEL = "Device outages";
+
+/** Unreachable against build_queue's output, which always sets `branch` for a
+ *  BRANCH_NO_DEVICE_DATA group, but the contract types it nullable. */
+export const UNKNOWN_BRANCH_LABEL = "Unknown branch";
+
+/** The checkbox's only accessible name. Without it the control is unnamed. */
+export function outageBranchCheckboxLabel(branch: string): string {
+  return `Include ${branch}`;
+}
+
+/** Shown while the write is in flight. A greyed button still reading "Excuse
+ *  157 people" gives no sign that anything is happening during a multi-second
+ *  write over thousands of flags. */
+export const OUTAGE_EXCUSING_LABEL = "Excusing…";
+```
+
+with tests appended to `src/lib/flagQueueLabels.test.ts`:
+
+```ts
+test("the band's own accessible names are copy, not markup", () => {
+  assert.equal(OUTAGE_BAND_LABEL, "Device outages");
+  assert.equal(UNKNOWN_BRANCH_LABEL, "Unknown branch");
+  assert.equal(outageBranchCheckboxLabel("DIS Iconic"), "Include DIS Iconic");
+  assert.equal(OUTAGE_EXCUSING_LABEL, "Excusing…");
+});
+```
+
+Run `npm run test:web` after this step and before writing the component; expect the total up by 3.
+
 - [ ] **Step 1: Write the failing test**
 
 Create `src/ui/outageBand.test.tsx`:
@@ -770,6 +846,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OUTAGE_CEILING_NOTE } from "@/lib/flagQueueLabels";
 import type { OutageGroup } from "@/lib/flagQueuePartition";
 import type { DecisionState, FlagOut, QueuePerson } from "@/types/flags";
+import { MemoryRouter } from "react-router-dom";
+
 import { OutageBand, type OutageBandProps } from "@/ui/OutageBand";
 
 function flag(identity: string, state: DecisionState = "undecided"): FlagOut {
@@ -820,8 +898,11 @@ function group(branch: string, members: QueuePerson[], dates = ["2026-08-03"]): 
   };
 }
 
+// MemoryRouter because the ceiling note renders a <Link>, which throws outside
+// a router. It still emits href="/hr-attendance", so the assertion is unchanged.
 function render(overrides: Partial<OutageBandProps> = {}) {
   return renderToStaticMarkup(
+    <MemoryRouter>
     <OutageBand
       outages={[
         group("DIS Iconic", [member("DI-1", [flag("a")]), member("DI-2", [flag("b")])]),
@@ -831,7 +912,8 @@ function render(overrides: Partial<OutageBandProps> = {}) {
       onToggleBranch={() => {}}
       onExcuse={() => {}}
       {...overrides}
-    />,
+    />
+    </MemoryRouter>,
   );
 }
 
@@ -863,6 +945,15 @@ test("excluding a branch drops its people and flags from the action", () => {
   assert.match(html, /Excuse 1 person · 1 flag/);
 });
 
+test("an in-flight write disables the action and says so", () => {
+  // The only double-submit guard on the largest write on the page. Without this
+  // test, deleting `|| props.submitting` leaves all other tests green while a
+  // hurried double-click fires two writes over thousands of flags.
+  const html = render({ submitting: true });
+  assert.match(html, /Excusing…/);
+  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Excusing…/);
+});
+
 test("excluding every branch disables the action rather than offering zero", () => {
   const html = render({
     excludedBranches: new Set([
@@ -870,8 +961,10 @@ test("excluding every branch disables the action rather than offering zero", () 
       "BRANCH_NO_DEVICE_DATA:ISBB",
     ]),
   });
-  assert.match(html, /Nothing left to excuse/);
-  assert.match(html, /<button[^>]+disabled/);
+  // Anchored to the excuse button specifically: a bare /disabled/ match would
+  // pass if the disclosure were disabled and the write button left live.
+  assert.match(html, /Select a branch to excuse/);
+  assert.match(html, /<button[^>]+disabled[^>]*>[^<]*Select a branch to excuse/);
 });
 
 test("a decided flag is not counted in the action", () => {
@@ -948,12 +1041,17 @@ Create `src/ui/OutageBand.tsx`:
  */
 import { useState } from "react";
 import { ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DEVICE_HEALTH_LABEL,
+  OUTAGE_BAND_LABEL,
   OUTAGE_CEILING_NOTE,
+  OUTAGE_EXCUSING_LABEL,
+  UNKNOWN_BRANCH_LABEL,
+  outageBranchCheckboxLabel,
   outageBandHeadline,
   outageBandSubline,
   outageBranchDays,
@@ -961,7 +1059,12 @@ import {
   outageExcuseLabel,
   outageReviewLabel,
 } from "@/lib/flagQueueLabels";
-import { outageWrite, type OutageGroup } from "@/lib/flagQueuePartition";
+import {
+  outageFlagCount,
+  outageWrite,
+  queuePeopleCount,
+  type OutageGroup,
+} from "@/lib/flagQueuePartition";
 import { cn } from "@/lib/utils";
 
 export type OutageBandProps = {
@@ -998,17 +1101,23 @@ export function OutageBand(props: OutageBandProps) {
 
   return (
     <section
-      aria-label="Device outages"
+      aria-label={OUTAGE_BAND_LABEL}
       className="rounded-md border border-amber-500/25 bg-amber-500/[0.06] text-sm animate-in fade-in"
     >
       <div className="flex items-center gap-2.5 px-3 py-2">
         <TriangleAlertIcon className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="font-medium text-foreground">
-            {outageBandHeadline(props.outages.length, all.coveredEmployeeCount)}
+            {/* queuePeopleCount, NOT coveredEmployeeCount. This parameter is
+                "everyone the outage touched" and its docstring forbids the
+                covered count by name: covered counts only members with an
+                undecided flag, so it equals the button's number on load (making
+                the word "affected" do nothing) and falls to "0 people affected"
+                once the outage is excused — a false statement of history. */}
+            {outageBandHeadline(props.outages.length, queuePeopleCount(props.outages))}
           </div>
           <div className="text-xs text-muted-foreground">
-            {outageBandSubline(spanOf(props.outages), all.identities.length)}
+            {outageBandSubline(spanOf(props.outages), outageFlagCount(props.outages))}
           </div>
         </div>
         <Button
@@ -1016,6 +1125,7 @@ export function OutageBand(props: OutageBandProps) {
           size="sm"
           className="shrink-0"
           aria-expanded={open}
+          aria-controls="outage-band-branches"
           onClick={() => setOpen((prev) => !prev)}
         >
           {outageReviewLabel(props.outages.length)}
@@ -1030,29 +1140,43 @@ export function OutageBand(props: OutageBandProps) {
           disabled={nothingToWrite || props.submitting}
           onClick={() => props.onExcuse(write.identities)}
         >
-          {outageExcuseLabel(write.coveredEmployeeCount, write.identities.length, write.branchCount)}
+          {props.submitting
+            ? OUTAGE_EXCUSING_LABEL
+            : outageExcuseLabel(
+                write.coveredEmployeeCount,
+                write.identities.length,
+                write.branchCount,
+              )}
         </Button>
       </div>
 
       {open ? (
-        <div className="border-t border-amber-500/25 px-3 py-2">
+        <div id="outage-band-branches" className="border-t border-amber-500/25 px-3 py-2">
           {/* Bounded on purpose. Thirteen branches is today's real count, and an
               unbounded list would push the queue below the fold — the exact
               failure this band exists to prevent. */}
           <ul className="max-h-[13rem] space-y-0.5 overflow-y-auto overscroll-contain">
             {props.outages.map((group) => {
               const included = !props.excludedBranches.has(group.group_key);
-              const branch = group.branch ?? "Unknown branch";
+              const branch = group.branch ?? UNKNOWN_BRANCH_LABEL;
               const size = outageWrite([group], new Set<string>());
               return (
-                <li
-                  key={group.group_key}
-                  className={cn("flex items-center gap-2.5 py-1", !included && "opacity-50")}
-                >
+                <li key={group.group_key}>
+                  {/* The whole row is the hit target. A bare size-4 checkbox is
+                      16px, under WCAG 2.2 SC 2.5.8's 24px floor, and thirteen of
+                      them in a scroller is the strongest mis-click surface here
+                      — a missed toggle silently changes what the button above
+                      writes, with no second confirmation inside this component. */}
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2.5 rounded px-1 py-1.5 hover:bg-amber-500/10",
+                      !included && "opacity-50",
+                    )}
+                  >
                   <Checkbox
                     checked={included}
                     onCheckedChange={() => props.onToggleBranch(group.group_key)}
-                    aria-label={`Include ${branch}`}
+                    aria-label={outageBranchCheckboxLabel(branch)}
                   />
                   <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                     {branch}
@@ -1061,17 +1185,25 @@ export function OutageBand(props: OutageBandProps) {
                     {outageBranchDays(group.day_count)}
                   </span>
                   <span className="w-40 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
-                    {outageBranchSummary(size.coveredEmployeeCount, size.identities.length)}
+                    {outageBranchSummary(queuePeopleCount([group]), outageFlagCount([group]))}
                   </span>
+                  </label>
                 </li>
               );
             })}
           </ul>
           <p className="mt-2 border-t border-amber-500/25 pt-2 text-[11px] text-muted-foreground">
             {OUTAGE_CEILING_NOTE}{" "}
-            <a href="/hr-attendance" className="font-medium text-primary underline-offset-2 hover:underline">
+            {/* <Link>, not <a>: /hr-attendance is a client route (main.tsx:27),
+                and a bare anchor forces a full document reload that throws away
+                the queue's in-flight state. HrAppShell.test.tsx pins this same
+                rule after the identical mistake was removed there. It still
+                renders href="/hr-attendance", so the assertion is unchanged —
+                but the test now needs a MemoryRouter wrapper, because <Link>
+                throws outside a router. */}
+            <Link to="/hr-attendance" className="font-medium text-primary underline-offset-2 hover:underline">
               {DEVICE_HEALTH_LABEL}
-            </a>
+            </Link>
           </p>
         </div>
       ) : null}
@@ -1088,7 +1220,7 @@ Expected: PASS, 15 tests.
 - [ ] **Step 5: Run the full unit suite and typecheck**
 
 Run: `npm run test:web && npm run typecheck`
-Expected: both clean; total test count up by 11.
+Expected: both clean; total test count up by 12 for this file, plus the 3 from Step 0.
 
 - [ ] **Step 6: Commit**
 
