@@ -26,15 +26,21 @@ import {
   partialFailureMessage,
   openCountAria,
   openCountLabel,
-  queueHeaderDescription,
+  queueSplitDescription,
   tierLabel,
 } from "@/lib/flagQueueLabels";
+import {
+  partitionQueue,
+  queuePeopleCount,
+  type OutageGroup,
+} from "@/lib/flagQueuePartition";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
 import { decideFlags } from "@/services/flags";
 import type { QueueEntry, QueuePayload, Tier } from "@/types/flags";
 import { FlagDecisionPanel } from "@/ui/FlagDecisionPanel";
 import { FlagQueueList, entryKey } from "@/ui/FlagQueueList";
+import { OutageBand } from "@/ui/OutageBand";
 
 /** get_flag_queue caps a request at QUEUE_MAX_RANGE_DAYS (31); two weeks is the
  *  window HR actually works and keeps the payload well under QUEUE_FLAG_LIMIT. */
@@ -233,6 +239,26 @@ export function FlagQueuePage() {
     error,
     refresh,
   } = useFlagQueue({ ...requestedRange, tier, includeDecided });
+
+  // The queue holds judgments; outages are a precondition and live in a band.
+  // Partitioned here rather than in the list so the header can count the two
+  // populations separately — "389 people" counted 256 who are waiting on a
+  // machine, not on HR.
+  const { outages, queue } = useMemo(() => partitionQueue(entries), [entries]);
+  const queuePeople = useMemo(() => queuePeopleCount(queue), [queue]);
+
+  const [excludedBranches, setExcludedBranches] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+
+  const handleToggleBranch = useCallback((groupKey: string) => {
+    setExcludedBranches((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
 
   // Memoised once for the whole list rather than rebuilt per row: the list
   // re-renders on every keystroke in the decision note, and forty rows would
@@ -469,6 +495,28 @@ export function FlagQueuePage() {
     [decide],
   );
 
+  // Routed through the same mutation as every other write, so the band inherits
+  // the needs_confirm -> blast-radius preview -> re-issue-with-confirm flow:
+  // decide_flags refuses more than DECIDE_CONFIRM_THRESHOLD (25) writes without
+  // one, and an "Excuse all" over thirteen branches is the largest write this
+  // page can start.
+  //
+  // groupKey: null for the reason handleSubmit spells out above — the server
+  // mints a fresh AFD-<hash> per call, and passing the band's own key would make
+  // reverse_decision_group undo every device-fault decision ever recorded for
+  // those branches.
+  const handleExcuseOutages = useCallback(
+    (identities: string[]) => {
+      if (identities.length === 0) return;
+      decide.mutate({
+        identities,
+        decision: { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" },
+        groupKey: null,
+      });
+    },
+    [decide],
+  );
+
   const handleDecideOneByOne = useCallback(() => {
     if (selectedEntry?.kind !== "group") return;
     setExpandedGroupKey(selectedEntry.group_key);
@@ -526,9 +574,15 @@ export function FlagQueuePage() {
         bulkFailure={bulkFailure}
         writeFailure={writeFailure}
         alerts={alerts}
+        outages={outages}
+        queuePeople={queuePeople}
+        queueRows={queue.length}
+        excludedBranches={excludedBranches}
+        onToggleBranch={handleToggleBranch}
+        onExcuseOutages={handleExcuseOutages}
         list={
           <FlagQueueList
-            entries={entries}
+            entries={queue}
             {...stripProps}
             selectedKey={selectedKey}
             expandedGroupKey={expandedGroupKey}
@@ -625,6 +679,16 @@ export type FlagQueueViewProps = {
    * turn out to be high", which is only answerable if the rate is visible.
    */
   orphans?: QueuePayload["orphans"];
+  /** Device outages, partitioned out of the queue. Empty on a healthy day. */
+  outages: OutageGroup[];
+  /** Distinct people in the judgment queue — NOT `counts.people`, which includes outage members. */
+  queuePeople: number;
+  /** Top-level rows in the judgment queue — NOT `counts.rows`, which counts the
+   *  outage groups too. This is `partitionQueue(...).queue.length`. */
+  queueRows: number;
+  excludedBranches: ReadonlySet<string>;
+  onToggleBranch: (groupKey: string) => void;
+  onExcuseOutages: (identities: string[]) => void;
   list: ReactNode;
   panel: ReactNode;
 };
@@ -649,11 +713,24 @@ export function FlagQueueView(props: FlagQueueViewProps) {
       : null,
   ].filter((line): line is string => line !== null);
 
+  // Everyone the outage touched, counted the same way the band's own headline
+  // counts them. NOT `counts.people`, which counts both populations together and
+  // so cannot answer either question — and NOT
+  // `outageWrite(...).coveredEmployeeCount`, which counts only members holding an
+  // undecided flag and therefore falls towards zero as the excuse lands. The
+  // header would then report nobody waiting on a device fault while the band
+  // directly above it still names thirteen branches.
+  const outagePeople = queuePeopleCount(props.outages);
+
   return (
     <Page>
       <PageHeader
         title="Flags"
-        description={counts ? queueHeaderDescription(counts) : "Loading…"}
+        description={
+          counts
+            ? queueSplitDescription(props.queuePeople, props.queueRows, outagePeople)
+            : "Loading…"
+        }
       >
         {/* The range and tier controls. Until these existed the banner below
             instructed HR to narrow a range the page gave them no way to change,
@@ -753,6 +830,27 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </div>
         ) : null}
       </PageHeader>
+
+      {/* Above the queue and outside it: an outage is the precondition that
+          explains the rows below, and it is not a judgment about anybody. Self-
+          hiding when there is no outage, so a healthy day looks exactly as it
+          did before.
+
+          Withheld on a failed load for the same reason `counts` and `orphans`
+          are one level up, and with more at stake than either: react-query keeps
+          the last good `data` when a refetch fails, so the entries behind this
+          band can outlive the payload they came from — and unlike a stale count,
+          this band is the page's largest WRITE. "Excuse 157 people" sitting
+          above "Flags didn't load" invites a mass decision over data the page
+          has just said it could not load. */}
+      {props.isLoading || props.error ? null : (
+        <OutageBand
+          outages={props.outages}
+          excludedBranches={props.excludedBranches}
+          onToggleBranch={props.onToggleBranch}
+          onExcuse={props.onExcuseOutages}
+        />
+      )}
 
       {/* Role 2, not role 3: the queue itself loaded fine, so no region is
           missing and there is nothing for FailureBlock to replace — the write

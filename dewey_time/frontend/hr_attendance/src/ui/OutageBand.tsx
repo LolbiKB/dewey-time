@@ -80,11 +80,22 @@ export function OutageBand(props: OutageBandProps) {
   return (
     <section
       aria-label={OUTAGE_BAND_LABEL}
-      className="rounded-md border border-amber-500/25 bg-amber-500/[0.06] text-sm animate-in fade-in"
+      // shrink-0, and a header row that wraps. The band is a flex item in the
+      // page's column, and the queue below it is `flex-1 basis-0` — which has a
+      // shrink weight of zero, so the queue cannot give up any height and every
+      // pixel the band takes is a pixel the queue loses. On a 412px phone the
+      // two shrink-0, whitespace-nowrap buttons left the headline a sliver to
+      // wrap in: the band grew to 474px and the queue was allotted exactly 0.
+      // Below sm the headline therefore takes the full row and the buttons drop
+      // beneath it (134px); from sm up `basis-0` restores the original single
+      // row exactly. This is the band's own stated rule — "an unbounded list
+      // would push the queue below the fold, the exact failure this band exists
+      // to prevent" — applied to its header instead of its list.
+      className="shrink-0 rounded-md border border-amber-500/25 bg-amber-500/[0.06] text-sm animate-in fade-in"
     >
-      <div className="flex items-center gap-2.5 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2.5 px-3 py-2">
         <TriangleAlertIcon className="size-4 shrink-0 text-amber-600" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-full sm:basis-0">
           <div className="font-medium text-foreground">
             {/* queuePeopleCount, NOT coveredEmployeeCount. This parameter is
                 "everyone the outage touched" and its docstring forbids the

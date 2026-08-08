@@ -246,11 +246,32 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   await expect(page).toHaveURL(/\/hr-flags/);
   await expect(page.getByText("Sign in required")).toHaveCount(0);
 
-  // BRANCH_NO_DEVICE_DATA group: the design doc's cause-grouping rule 1
-  // requires the branch name in the copy and explicitly forbids a device
-  // serial — "Siem Reap Depot" is therefore guaranteed to appear somewhere in
-  // this group's card.
-  await expect(page.getByText(/Siem Reap Depot/).first()).toBeVisible();
+  // BRANCH_NO_DEVICE_DATA group: the design doc's cause-grouping rule 1 still
+  // requires the branch name in the copy and still forbids a device serial, so
+  // "Siem Reap Depot" is still guaranteed to appear — but no longer in a queue
+  // row. An outage is a precondition, not a judgment about anybody, so it is
+  // now the band above the queue (OutageBand). The band leads with what
+  // happened and keeps its branch list behind a disclosure, collapsed on
+  // arrival so thirteen branches cannot push the queue below the fold.
+  const band = page.getByRole("region", { name: "Device outages" });
+  await expect(band.getByText(/1 branch had no device data/)).toBeVisible();
+
+  await band.getByRole("button", { name: /Review 1 branch/ }).click();
+  await expect(band.getByText("Siem Reap Depot")).toBeVisible();
+
+  // …and it left the queue: three entries came back, two of them are rows.
+  // aria-setsize is the number a screen-reader user is actually told, so this
+  // fails if the outage is still being listed as work waiting on HR.
+  const list = page.getByRole("list", { name: "Flag queue" });
+  await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "2");
+
+  // The band must not have taken the queue's height to say so. `Section grow`
+  // is `flex-1 basis-0`, whose flex shrink weight is zero, so every pixel the
+  // band occupies comes out of the list — and on a phone the band's header row
+  // wrapped itself to 474px and left the queue exactly 0. Visible, not merely
+  // present: this is a height assertion wearing a visibility assertion's
+  // clothes, and it is the only one of the two that a layout can fail.
+  await expect(list.getByRole("listitem").first()).toBeVisible();
 
   // ROUTINE_CODE group: same rule's copy example ("168 late starts, 6–20
   // min…") turns on the flag label, formatted through the shared

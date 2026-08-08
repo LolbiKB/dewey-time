@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
 import { outageKey } from "@/lib/flagStrip";
+import { partitionQueue } from "@/lib/flagQueuePartition";
 import {
   DECIDE_AGAIN_LABEL,
   SAME_REASON_LABEL,
@@ -273,7 +274,12 @@ function spanPersonEntry(): PersonEntry {
   };
 }
 
-/** Everything FlagQueueView needs except `counts`, which each test supplies. */
+/**
+ * Everything FlagQueueView needs except `counts`, which each test supplies.
+ *
+ * The band's props default to a healthy day — no outage, so no band — because
+ * that is the state every test here that is not about the band assumes.
+ */
 function viewProps(): Omit<FlagQueueViewProps, "counts"> {
   return {
     range: { startDate: "2026-07-21", endDate: "2026-08-03" },
@@ -284,6 +290,12 @@ function viewProps(): Omit<FlagQueueViewProps, "counts"> {
     error: null,
     onRetry: () => {},
     bulkFailure: null,
+    outages: [],
+    queuePeople: 0,
+    queueRows: 0,
+    excludedBranches: new Set<string>(),
+    onToggleBranch: () => {},
+    onExcuseOutages: () => {},
     list: <div />,
     panel: <div />,
   };
@@ -1297,18 +1309,25 @@ test("the same person in two entries produces two distinct row keys", () => {
   assert.notEqual(entryKey(loner), entryKey({ kind: "person", ...member }));
 });
 
-test("the header states people and rows", () => {
+test("the header states people and rows — the queue's own, not the payload's", () => {
+  // `counts` deliberately disagrees with the queue props here. Both payload
+  // numbers still include the outage entries the band now renders, so reading
+  // either one would put the band's population back into the sentence that says
+  // who is waiting on HR — the exact overcount the band exists to end.
   const html = renderToStaticMarkup(
     <FlagQueueView
       {...viewProps()}
-      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 40, rows: 12 }}
-      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 296, rows: 147 }}
+      queuePeople={40}
+      queueRows={12}
     />
   );
   // Not "40 people with something open": before nesting, the header counted
   // employees while the list showed one row per person-day, so the two numbers
   // described different things and disagreed on screen.
-  assert.match(html, /40 people · 12 rows/);
+  assert.match(html, /40 people need a decision · 12 rows/);
+  assert.doesNotMatch(html, /296/, "counts.people is not the header's people");
+  assert.doesNotMatch(html, /147/, "counts.rows is not the header's rows");
 });
 
 test("a flag card is dated by its own flag, not by the person's headline day", () => {
@@ -1559,4 +1578,110 @@ test("the page hands the list the payload's outages, not an empty set", () => {
     />
   );
   assert.doesNotMatch(rowWith(withoutOutage, "Sokheng Hon"), /bg-muted-foreground\/30/);
+});
+
+test("an outage group is rendered as the band, not as a queue row", () => {
+  const outageGroup: GroupEntry = {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
+    branch: "DIS Iconic",
+    flag_code: null,
+    attendance_date: null,
+    dates: [DATE],
+    day_count: 1,
+    rank: 134,
+    tier: "act",
+    members: [patternMember({ employee: "DI-1", name: "Ada Lovelace" })],
+  };
+  const person = missingTimePerson();
+
+  const { outages, queue } = partitionQueue([outageGroup, person]);
+
+  assert.equal(outages.length, 1);
+  assert.deepEqual(queue, [person]);
+
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 5, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false }}
+      outages={outages}
+      queuePeople={1}
+      queueRows={1}
+      excludedBranches={new Set()}
+      onToggleBranch={() => {}}
+      onExcuseOutages={() => {}}
+      list={<FlagQueueList {...listProps()} entries={queue} />}
+    />,
+  );
+
+  assert.match(html, /had no device data/, "the band states the outage");
+  assert.equal(
+    rowButtons(html).filter((row) => /had no device data/.test(row)).length,
+    0,
+    "and no queue row does",
+  );
+});
+
+test("a failed load withholds the band, not just the list", () => {
+  // react-query keeps the last good `data` when a refetch fails, so `outages`
+  // can outlive the payload it came from. Every other stale thing on this page
+  // is merely misleading; this one carries the largest write the page can make,
+  // and "Excuse 1 person · 3 flags" above "Flags didn't load" is an invitation
+  // to decide over data the page has just disowned.
+  const outages = partitionQueue([
+    {
+      kind: "group",
+      group_type: "BRANCH_NO_DEVICE_DATA",
+      group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
+      branch: "DIS Iconic",
+      flag_code: null,
+      attendance_date: null,
+      dates: [DATE],
+      day_count: 1,
+      rank: 134,
+      tier: "act",
+      members: [patternMember({ employee: "DI-1", name: "Ada Lovelace" })],
+    } satisfies GroupEntry,
+  ]).outages;
+  assert.equal(outages.length, 1, "the fixture is the stale-data case");
+
+  const failed = renderToStaticMarkup(
+    <FlagQueueView {...viewProps()} counts={null} error={new Error("Network request failed")} outages={outages} />
+  );
+  assert.doesNotMatch(failed, /had no device data/, "no band beside a failure");
+  assert.doesNotMatch(failed, /Excuse/, "and nothing to press");
+
+  const loading = renderToStaticMarkup(
+    <FlagQueueView {...viewProps()} counts={null} isLoading outages={outages} />
+  );
+  assert.doesNotMatch(loading, /had no device data/, "nor beside a spinner");
+
+  // …and it is back the moment the load succeeds, so this is a guard and not a
+  // way of losing the band.
+  const loaded = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 3, needs_re_review: 0, decided: 0, people: 1, rows: 1, open_capped: false }}
+      outages={outages}
+    />
+  );
+  assert.match(loaded, /had no device data/);
+});
+
+test("the header separates people waiting on HR from people waiting on a device", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 5, rows: 2, open_capped: false }}
+      outages={[]}
+      queuePeople={5}
+      queueRows={2}
+      excludedBranches={new Set()}
+      onToggleBranch={() => {}}
+      onExcuseOutages={() => {}}
+    />,
+  );
+  assert.match(html, /5 people need a decision/);
+  assert.ok(!/waiting on a device fault/.test(html), "no outages, no device line");
 });
