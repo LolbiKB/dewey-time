@@ -1,7 +1,7 @@
 # Flag Queue — The Page
 
 **Date:** 2026-08-08
-**Status:** draft — design approved, spec awaiting review
+**Status:** approved for planning
 **Depends on:** `2026-08-07-flag-queue-row-design.md`, `2026-08-06-flag-queue-pattern-nesting-design.md`
 
 ## What this is
