@@ -58,7 +58,12 @@ function outage(branch: string, members: QueuePerson[]): OutageGroup {
   };
 }
 
-function pattern(members: QueuePerson[]): OutageGroup {
+// Deliberately NOT OutageGroup — this builds the thing the partition must
+// reject. Annotating it as OutageGroup is what let the old, too-wide alias look
+// correct: the helper type-checked, so nothing said that a pattern group could
+// reach outageWrite. The broad group arm is the honest type, and the one test
+// that does hand this to outageWrite casts through `unknown` on purpose.
+function pattern(members: QueuePerson[]): Extract<QueueEntry, { kind: "group" }> {
   return {
     kind: "group",
     group_type: "REPEAT_PATTERN",
