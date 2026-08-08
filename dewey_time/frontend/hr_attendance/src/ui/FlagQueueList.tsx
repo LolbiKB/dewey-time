@@ -266,14 +266,23 @@ function PersonRow(props: {
       </DecorativeAvatars>
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-sm font-medium text-foreground">
+          {/* flex-[3_1_auto] against the badge's flex-[1_1_auto]: when the line
+              overflows, both give way and the name keeps roughly three quarters
+              of what is left. The badge used to be shrink-0, which made the name
+              the only shrinkable item on the row — so a 112px line spent 85px on
+              "also 1 elsewhere" and rendered the person as "B…". Whatever else a
+              triage row loses, it cannot lose whose row it is. */}
+          <span
+            className="min-w-0 flex-[3_1_auto] truncate text-sm font-medium text-foreground"
+            title={person.employee_name}
+          >
             {person.employee_name}
           </span>
           {/* The safeguard, in every entry this person appears in: excusing the
               pattern group without knowing about their other row is the whole
               risk the per-flag invariant introduced. */}
           {crossReference ? (
-            <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+            <span className="min-w-0 flex-[1_1_auto] truncate text-[11px] font-normal text-muted-foreground">
               {crossReference}
             </span>
           ) : null}

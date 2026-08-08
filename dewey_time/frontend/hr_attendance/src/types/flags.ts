@@ -88,8 +88,15 @@ export type QueueEntry =
       group_key: string;
       branch: string | null;
       flag_code: string | null;
-      /** null for REPEAT_PATTERN, which spans dates by definition. */
+      /**
+       * null for REPEAT_PATTERN and BRANCH_NO_DEVICE_DATA, both of which span
+       * dates by definition. Read `dates` / `day_count` instead.
+       */
       attendance_date: string | null;
+      /** Every date the flags in this group fall on, ascending. Never empty. */
+      dates: string[];
+      /** `dates.length`, carried so a caller need not recount to phrase a label. */
+      day_count: number;
       rank: number;
       tier: Tier;
       members: QueuePerson[];
@@ -97,14 +104,25 @@ export type QueueEntry =
 
 export type QueuePayload = {
   entries: QueueEntry[];
-  counts: { open: number; needs_re_review: number; decided: number; people: number; rows: number };
+  counts: {
+    open: number;
+    needs_re_review: number;
+    decided: number;
+    people: number;
+    rows: number;
+    /**
+     * True when the flag scan hit its row cap, which makes `open` the cap itself
+     * rather than a total. Render it through `openCountLabel`, never bare.
+     */
+    open_capped: boolean;
+  };
   orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number };
   alerts: { branch: string; local_date: string; status: string; last_error?: string | null }[];
   /**
    * (branch, date) pairs where no device data arrived — the strip's grey cells.
    *
    * Required, and safe to rely on: the queue's cache prefix is versioned by
-   * payload shape (`flag_queue:v2`, flag_queue_api.py) and was bumped when this
+   * payload shape (`_QUEUE_CACHE_PREFIX` in flag_queue_api.py) and was bumped when this
    * key and the person fields above were added, so a pre-deploy entry can never
    * be served to code that expects them. Adding a field here without bumping
    * that prefix reintroduces a 60-second window where cached responses arrive

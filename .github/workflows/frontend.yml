@@ -54,6 +54,14 @@ jobs:
       - if: ${{ failure() && steps.install.outcome == 'failure' }}
         run: echo "::error title=Typecheck could not run::npm install failed — grant this repo read access to the @lolbikb/dewey-ui GitHub Package (or add a read:packages PAT)"
       - run: npm run typecheck
+      # The build is a gate too, and not only because a broken one blocks the
+      # deploy: `npm run build` ends in scripts/check-fonts.mjs, which asserts
+      # that every webfont the stylesheet references was actually emitted and
+      # rewritten. That defect shipped once and nothing caught it — the build
+      # succeeded, tsc passed, every test passed, and the fonts 503'd in
+      # production behind a font-display:swap fallback. Only running the build
+      # can catch it.
+      - run: npm run build
 
   unit-web:
     runs-on: ubuntu-22.04

@@ -95,6 +95,32 @@ class _Recorder:
                 return False
         return True
 
+    @staticmethod
+    def _ordered(rows, order_by):
+        """Honour `order_by` before the limit slice.
+
+        A fake that ignores ordering cannot tell "keep the newest 5000" from "keep the
+        oldest 5000" — it slices whatever order the fixture happened to be written in,
+        so a mutant flipping the direction stays green. That is the same blindness
+        _matches was repaired for above, on the axis that decides WHICH rows survive
+        truncation rather than whether they match.
+
+        Sorts are stable, so applying the clauses right-to-left yields the multi-key
+        order. Values are compared as strings: an ISO date sorts identically either
+        way, and it keeps a date object and its string form from raising on compare.
+        """
+        for clause in reversed([c.strip() for c in str(order_by or "").split(",") if c.strip()]):
+            parts = clause.split()
+            field = parts[0]
+            if not any(field in row for row in rows):
+                continue
+            rows = sorted(
+                rows,
+                key=lambda row: (row.get(field) is None, str(row.get(field))),
+                reverse=len(parts) > 1 and parts[1].lower() == "desc",
+            )
+        return rows
+
     def __call__(self, doctype, **kwargs):
         self.calls.append((doctype, kwargs))
         rows = [
@@ -102,6 +128,7 @@ class _Recorder:
             for row in self.rows_by_doctype.get(doctype, [])
             if self._matches(row, kwargs.get("filters") or {})
         ]
+        rows = self._ordered(rows, kwargs.get("order_by"))
         limit = kwargs.get("limit_page_length")
         if limit:
             rows = rows[:limit]
@@ -269,6 +296,130 @@ class TestTruncation(unittest.TestCase):
         with _harness(_roster(3)):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
         self.assertFalse(payload["truncated"])
+
+    def test_open_is_marked_capped_when_the_scan_hits_the_limit(self):
+        """`open` counts the flags the scan returned, so at the cap it IS the cap.
+        Without this the toolbar renders a constant as a measured total."""
+        with _harness(_roster(3)), patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 3):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertTrue(payload["counts"]["open_capped"])
+
+    def test_open_is_not_marked_capped_below_the_limit(self):
+        with _harness(_roster(3)):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertFalse(payload["counts"]["open_capped"])
+
+    def test_open_capped_survives_the_tier_filter_recount(self):
+        """recount() rewrites people/rows for a filtered list; open_capped describes
+        the whole-range scan and must not be dropped on the way through."""
+        with _harness(_roster(3)), patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 3):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
+        self.assertTrue(payload["counts"]["open_capped"])
+
+    def test_the_flag_scan_asks_for_the_newest_flags_first(self):
+        """One word, and the queue starts hiding today's work — see _flag_rows."""
+        with _harness(_roster(3)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            order_by = h.recorder.kwargs_for("Attendance Flag")[0]["order_by"]
+        self.assertTrue(
+            order_by.startswith("attendance_date desc"),
+            f"expected the scan to lead with attendance_date desc, got {order_by!r}",
+        )
+
+    def test_truncation_drops_the_oldest_flags_not_the_newest(self):
+        days = ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
+        rows = {
+            "Attendance Flag": [_flag_row("HR-EMP-00000", attendance_date=day) for day in days],
+            "Attendance Flag Decision": [],
+            "Employee": [_employee_row("HR-EMP-00000")],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],
+        }
+        # Cap of 2 against 5 days of flags: only the two newest may survive.
+        with _harness(rows) as h, patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 2):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.build.call_args.kwargs["flags"]
+
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(sorted(flag["attendance_date"] for flag in flags), ["2026-08-04", "2026-08-05"])
+
+    def test_the_surviving_flags_reach_build_queue_oldest_first(self):
+        """The scan runs newest-first; everything downstream still sees ascending
+        order, so the dedupe's last-wins tiebreak does not flip with the query."""
+        days = ["2026-08-01", "2026-08-02", "2026-08-03"]
+        rows = {
+            "Attendance Flag": [_flag_row("HR-EMP-00000", attendance_date=day) for day in days],
+            "Attendance Flag Decision": [],
+            "Employee": [_employee_row("HR-EMP-00000")],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],
+        }
+        with _harness(rows) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.build.call_args.kwargs["flags"]
+        self.assertEqual([flag["attendance_date"] for flag in flags], days)
+
+    def test_the_decision_scan_asks_for_the_newest_decisions_first(self):
+        with _harness(_roster(3)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            order_by = h.recorder.kwargs_for("Attendance Flag Decision")[0]["order_by"]
+        self.assertTrue(
+            order_by.startswith("decided_at desc"),
+            f"expected the decision scan to lead with decided_at desc, got {order_by!r}",
+        )
+
+    def test_both_capped_scans_drop_the_same_end(self):
+        """The invariant, not just the direction.
+
+        Flags and decisions share one cap. If one keeps its newest rows while the
+        other keeps its oldest, the tails stop lining up: a flag survives while the
+        decision that settled it is dropped, so a settled flag reads as open again
+        and counts["decided"] undercounts. Asserting the two orderings agree is what
+        stops a later edit fixing one scan and forgetting the other.
+        """
+        with _harness(_roster(3)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            flags = h.recorder.kwargs_for("Attendance Flag")[0]
+            decisions = h.recorder.kwargs_for("Attendance Flag Decision")[0]
+
+        self.assertEqual(flags["limit_page_length"], decisions["limit_page_length"])
+        for kwargs in (flags, decisions):
+            self.assertIn(" desc", kwargs["order_by"], f"{kwargs['order_by']!r} is not newest-first")
+
+    def test_a_decided_flag_keeps_its_decision_when_the_scans_are_capped(self):
+        """The behaviour the invariant above protects: at the cap, the newest flag
+        and the decision that settled it must both survive."""
+        rows = {
+            "Attendance Flag": [
+                _flag_row("HR-EMP-00000", attendance_date=day)
+                for day in ("2026-08-01", "2026-08-02", "2026-08-05")
+            ],
+            "Attendance Flag Decision": [
+                {
+                    "name": f"AFD-{day}",
+                    "flag_identity": f"AUTO-{day}",
+                    "employee": "HR-EMP-00000",
+                    "attendance_date": day,
+                    "flag_code": "LATE_START",
+                    "outcome": "EXCUSED",
+                    "reason": "DEVICE_OR_DATA_FAULT",
+                    "note": "",
+                    "evidence_fingerprint": "fp",
+                    "group_key": "AFD-batch",
+                    "decided_by": "hr@example.com",
+                    "decided_at": f"{day} 09:00:00",
+                }
+                for day in ("2026-08-01", "2026-08-02", "2026-08-05")
+            ],
+            "Employee": [_employee_row("HR-EMP-00000")],
+            "Device Closeout Alert": [],
+            "Device Sync Status": [],
+        }
+        with _harness(rows) as h, patch.object(flag_queue_api, "QUEUE_FLAG_LIMIT", 1):
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            decisions = h.build.call_args.kwargs["decisions_by_identity"]
+        # The newest decision survived, not the oldest — matching the newest flag.
+        self.assertEqual(list(decisions), ["AUTO-2026-08-05"])
 
     def test_entry_limit_slices_and_marks_truncated(self):
         entries = [
@@ -618,8 +769,8 @@ class TestIncludeDecided(unittest.TestCase):
             [key for key, _ttl in cache.set_calls],
             [
                 # The default key is unchanged — the suffix is only ever added.
-                "flag_queue:v2:2026-08-01:2026-08-07:all",
-                "flag_queue:v2:2026-08-01:2026-08-07:all:decided",
+                "flag_queue:v3:2026-08-01:2026-08-07:all",
+                "flag_queue:v3:2026-08-01:2026-08-07:all:decided",
             ],
         )
 
@@ -636,11 +787,11 @@ class TestQueueCache(unittest.TestCase):
     def test_cache_key_and_ttl_match_the_contract(self):
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-            self.assertEqual(h.cache.set_calls, [("flag_queue:v2:2026-08-01:2026-08-07:all", 60)])
+            self.assertEqual(h.cache.set_calls, [("flag_queue:v3:2026-08-01:2026-08-07:all", 60)])
 
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
-            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v2:2026-08-01:2026-08-07:act")
+            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v3:2026-08-01:2026-08-07:act")
 
     def test_a_different_range_is_a_different_cache_entry(self):
         cache = _FakeCache()
@@ -656,7 +807,7 @@ class TestQueueCache(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             self.assertEqual(len(cache.store), 1)
             flag_queue_api.invalidate_flag_queue_cache()
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v3"])
         self.assertEqual(cache.store, {})
 
     def test_invalidate_accepts_doc_event_args(self):
@@ -664,7 +815,7 @@ class TestQueueCache(unittest.TestCase):
         with _harness(cache=cache):
             # Frappe doc_events call handlers as (doc, method); must not raise.
             flag_queue_api.invalidate_flag_queue_cache(doc=object(), method="on_update")
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v2"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v3"])
 
 
 class TestDriverDateShapes(unittest.TestCase):

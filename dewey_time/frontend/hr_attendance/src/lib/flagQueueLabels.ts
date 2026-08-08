@@ -93,10 +93,33 @@ export function flagDayLabel(attendanceDate: string): string {
  * formatter the one string guaranteed to throw, taking the whole list down
  * rather than wording one header badly.
  */
-export function branchNoDeviceDataHeader(branch: string, attendanceDate: string | null): string {
+export function branchNoDeviceDataHeader(
+  branch: string,
+  attendanceDate: string | null,
+  dates: string[] = [],
+): string {
   const label = formatBranchLabel(branch) ?? branch;
-  if (!attendanceDate) return `${label} had no device data`;
-  return `${label} had no device data on ${formatDayMonth(attendanceDate)}`;
+  // A device that stopped reporting is one fact spanning however many days it was
+  // down, so the headline counts days rather than naming one. Naming the first and
+  // leaving the rest implied is how eleven rows all read "…on 28 Jul" and looked
+  // like eleven separate incidents.
+  if (dates.length > 1) return `${label} had no device data on ${dates.length} days`;
+  const day = dates[0] ?? attendanceDate;
+  if (!day) return `${label} had no device data`;
+  return `${label} had no device data on ${formatDayMonth(day)}`;
+}
+
+/**
+ * "26 Jul – 5 Aug" for a span, the single day for one, "" for nothing.
+ *
+ * An en dash, not a hyphen: these sit next to "4h 30m" and a hyphen between two
+ * dates reads as subtraction at 12px.
+ */
+export function dateSpanLabel(dates: string[]): string {
+  if (dates.length === 0) return "";
+  const first = formatDayMonth(dates[0]);
+  if (dates.length === 1) return first;
+  return `${first} – ${formatDayMonth(dates[dates.length - 1])}`;
 }
 
 /**
@@ -192,10 +215,18 @@ export function repeatPatternHeader(flagCode: string): string {
  */
 export function groupSubline(entry: Extract<QueueEntry, { kind: "group" }>): string {
   const people = `${entry.members.length} ${entry.members.length === 1 ? "person" : "people"}`;
-  if (entry.group_type !== "REPEAT_PATTERN") return people;
-  const occurrences = entry.members.reduce((total, member) => total + member.flags.length, 0);
-  const { unit } = repeatPatternLabel(entry.flag_code ?? "");
-  return `${people} · ${occurrences} ${unit}`;
+  if (entry.group_type === "REPEAT_PATTERN") {
+    const occurrences = entry.members.reduce((total, member) => total + member.flags.length, 0);
+    const { unit } = repeatPatternLabel(entry.flag_code ?? "");
+    return `${people} · ${occurrences} ${unit}`;
+  }
+  // A multi-day outage's headline says how MANY days; the subline says which,
+  // because "11 days" alone leaves HR unable to tell a fault that ended last week
+  // from one still running this morning.
+  if (entry.group_type === "BRANCH_NO_DEVICE_DATA" && entry.dates.length > 1) {
+    return `${people} · ${dateSpanLabel(entry.dates)}`;
+  }
+  return people;
 }
 
 /**
@@ -214,6 +245,28 @@ export function crossReferenceLabel(person: QueuePerson): string | null {
     return `also ${person.also_count} outlier${person.also_count === 1 ? "" : "s"}`;
   }
   return `also ${person.also_count} elsewhere`;
+}
+
+/**
+ * The Open chip's number, and the only place allowed to format it.
+ *
+ * `open` counts the flags the scan returned, so once the scan hits its row cap
+ * the number IS the cap — 5000 today, 5000 tomorrow, and still 5000 after HR
+ * decides a thousand of them. Rendered bare it reads as a measured total and
+ * quietly teaches everyone that the numbers on this page are approximate, which
+ * is the one lesson that must not reach the evidence panel.
+ *
+ * "+" is the whole fix: it says "at least this many" without claiming a total
+ * nobody has counted. `openCountAria` carries the same fact to a screen reader,
+ * where a trailing plus is easily lost.
+ */
+export function openCountLabel(counts: QueuePayload["counts"]): string {
+  return counts.open_capped ? `${counts.open}+` : `${counts.open}`;
+}
+
+export function openCountAria(counts: QueuePayload["counts"]): string | undefined {
+  if (!counts.open_capped) return undefined;
+  return `Open: at least ${counts.open}. The scan reached its limit, so the true total is higher.`;
 }
 
 /**
@@ -321,7 +374,11 @@ export function decisionStateLabel(state: DecisionState): string {
  */
 export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): string {
   if (entry.group_type === "BRANCH_NO_DEVICE_DATA") {
-    return branchNoDeviceDataHeader(entry.branch ?? "Unknown branch", entry.attendance_date);
+    return branchNoDeviceDataHeader(
+      entry.branch ?? "Unknown branch",
+      entry.attendance_date,
+      entry.dates,
+    );
   }
   if (entry.group_type === "REPEAT_PATTERN") {
     return repeatPatternHeader(entry.flag_code ?? "flag");

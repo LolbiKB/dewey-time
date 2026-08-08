@@ -25,7 +25,9 @@ import { FlagDecisionPanel, type FlagDecisionPanelProps } from "./FlagDecisionPa
 import { FlagQueueList, entryKey } from "./FlagQueueList";
 import {
   FlagQueueView,
+  clampRange,
   decideEffect,
+  parseTierParam,
   stripInputs,
   type DecideArgs,
   type DecideEffect,
@@ -164,6 +166,8 @@ function patternGroupEntry(): GroupEntry {
     flag_code: "LATE_START",
     // A pattern spans dates by definition, so the backend sends no single one.
     attendance_date: null,
+    dates: [],
+    day_count: 0,
     rank: 20,
     tier: "routine",
     // Both members have a photo: a group header answers "who is in here?" with
@@ -272,6 +276,10 @@ function spanPersonEntry(): PersonEntry {
 /** Everything FlagQueueView needs except `counts`, which each test supplies. */
 function viewProps(): Omit<FlagQueueViewProps, "counts"> {
   return {
+    range: { startDate: "2026-07-21", endDate: "2026-08-03" },
+    onRangeChange: () => {},
+    tier: null,
+    onTierChange: () => {},
     isLoading: false,
     error: null,
     onRetry: () => {},
@@ -280,6 +288,49 @@ function viewProps(): Omit<FlagQueueViewProps, "counts"> {
     panel: <div />,
   };
 }
+
+// The range and tier were a module constant and a hard-coded null, so the page
+// told HR to "narrow the dates" while offering nothing that could, and the
+// backend's tier filter was never sent. These pin the parsing either side of the
+// URL, which is the part that can silently go wrong.
+test("an unknown tier param is ignored rather than filtering to nothing", () => {
+  // Passing it through would ask the server for a tier it rejects (417), and
+  // swallowing the error would render an empty queue that looks like "all clear".
+  assert.equal(parseTierParam("urgent"), null);
+  assert.equal(parseTierParam(""), null);
+  assert.equal(parseTierParam(null), null);
+});
+
+test("each real tier round-trips through the URL", () => {
+  assert.equal(parseTierParam("act"), "act");
+  assert.equal(parseTierParam("review"), "review");
+  assert.equal(parseTierParam("routine"), "routine");
+});
+
+test("a range longer than the server's cap gives up its OLDEST days", () => {
+  // Trimming the recent end would hide today's work — the same defect the flag
+  // scan's ordering was fixed for. 2026-01-01..2026-03-01 is 60 days; the cap is 31.
+  const range = clampRange("2026-01-01", "2026-03-01");
+  assert.equal(range.endDate, "2026-03-01", "the recent end is kept");
+  assert.equal(range.startDate, "2026-01-30", "31 days back from the end, inclusive");
+});
+
+test("a range inside the cap is left exactly as asked", () => {
+  const range = clampRange("2026-08-01", "2026-08-07");
+  assert.deepEqual(range, { startDate: "2026-08-01", endDate: "2026-08-07" });
+});
+
+test("an inverted or unparseable range falls back rather than throwing", () => {
+  // getdate() would 417 on an inverted range and the page would render its
+  // failure block — for a URL a user can produce by typing.
+  const inverted = clampRange("2026-08-07", "2026-08-01");
+  const garbage = clampRange("not-a-date", "2026-08-07");
+  for (const range of [inverted, garbage]) {
+    assert.match(range.startDate, /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(range.endDate, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(range.startDate <= range.endDate);
+  }
+});
 
 /** The panel's header, up to the first flag card — where the day is named. */
 function panelHeader(html: string): string {
@@ -380,6 +431,8 @@ test("a person with a routine flag and an act flag appears once, under Act", () 
     branch: null,
     flag_code: "LATE_START",
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 20,
     tier: "routine",
     members: [
@@ -405,8 +458,13 @@ test("a person with a routine flag and an act flag appears once, under Act", () 
     <FlagQueueList entries={[routineGroup, { kind: "person", ...ada }]} {...listProps()} />
   );
 
+  // `>Ada Lovelace<` — the name as TEXT, not as any occurrence of the string.
+  // A bare substring count also matched the `title` attribute the row carries
+  // for long names, so it counted markup rather than rows. This proxy is the
+  // stricter of the two: it still fails if the person is rendered twice, and it
+  // no longer fails when an attribute happens to repeat the name.
   assert.equal(
-    html.split("Ada Lovelace").length - 1,
+    html.split(">Ada Lovelace<").length - 1,
     1,
     "Ada must appear in exactly one row, not once as a person and once in the routine group"
   );
@@ -440,10 +498,12 @@ test("the group action count drops when members are excluded", () => {
   const group: QueueEntry = {
     kind: "group",
     group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
     branch: "Phnom Penh HQ",
     flag_code: null,
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 150,
     tier: "act",
     members,
@@ -606,10 +666,12 @@ test("bulk labels count what will actually be written, not undecided_count", () 
   const group: QueueEntry = {
     kind: "group",
     group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
+    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ",
     branch: "Phnom Penh HQ",
     flag_code: null,
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 150,
     tier: "act",
     members: [
@@ -689,10 +751,11 @@ test("a decided flag can be decided again, with the decision it replaces in view
 });
 
 test("the Decided count doubles as the control that surfaces decided people", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
+  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
 
   const off = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={counts}
       includeDecided={false}
       onToggleDecided={() => {}}
@@ -709,6 +772,7 @@ test("the Decided count doubles as the control that surfaces decided people", ()
 
   const on = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={counts}
       includeDecided
       onToggleDecided={() => {}}
@@ -733,6 +797,7 @@ test("the Decided count doubles as the control that surfaces decided people", ()
 test("a load failure renders exactly one assertive alert", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={null}
       isLoading={false}
       error={new Error("Network request failed")}
@@ -755,7 +820,8 @@ test("a load failure renders exactly one assertive alert", () => {
 test("a partial bulk failure is reported politely, with the failures disclosed", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -786,7 +852,8 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
 test("the toolbar reports open, needs re-review and decided counts", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -811,7 +878,8 @@ test("the toolbar reports open, needs re-review and decided counts", () => {
 test("device alert cards render from alerts, with no flags present", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      {...viewProps()}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -838,7 +906,8 @@ test("device alert cards render from alerts, with no flags present", () => {
 test("device alert cards never render a device serial", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      {...viewProps()}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -865,7 +934,8 @@ test("device alert cards never render a device serial", () => {
 test("device alert cards carry no decide action", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      {...viewProps()}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -953,7 +1023,8 @@ test("an over-threshold decide asks for confirmation and settles nothing", () =>
 test("a decide that fails outright is reported, politely, without hiding the queue", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 }}
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -984,6 +1055,8 @@ test("an expanded group can be put back together", () => {
     branch: null,
     flag_code: "LATE_START",
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 20,
     tier: "routine",
     members: [
@@ -1026,7 +1099,8 @@ test("an expanded group can be put back together", () => {
 test("no alert cards render when the array is empty", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 0, needs_re_review: 0, decided: 0, people: 0, rows: 0 }}
+      {...viewProps()}
+      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -1048,10 +1122,11 @@ test("no alert cards render when the array is empty", () => {
 // rate is on screen. Before this, get_flag_queue computed both counts and
 // nothing rendered them.
 test("orphaned decisions are reported, so the rate is visible rather than inferred", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
+  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
 
   const html = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={counts}
       orphans={{ orphaned_flag_gone: 3, orphaned_evidence_changed: 1 }}
       includeDecided={false}
@@ -1073,10 +1148,11 @@ test("orphaned decisions are reported, so the rate is visible rather than inferr
 // is noise on the overwhelmingly common day, and each line is independent —
 // one count being zero must not suppress the other.
 test("an orphan line appears only when its own count is non-zero", () => {
-  const counts = { open: 12, needs_re_review: 5, decided: 88, people: 40, rows: 12 };
+  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
   const render = (orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number }) =>
     renderToStaticMarkup(
       <FlagQueueView
+        {...viewProps()}
         counts={counts}
         orphans={orphans}
         includeDecided={false}
@@ -1109,6 +1185,7 @@ test("orphan lines are withheld while loading and on failure", () => {
 
   const loading = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={null}
       isLoading
       error={null}
@@ -1122,6 +1199,7 @@ test("orphan lines are withheld while loading and on failure", () => {
 
   const failed = renderToStaticMarkup(
     <FlagQueueView
+      {...viewProps()}
       counts={null}
       error={new Error("boom")}
       isLoading={false}
@@ -1217,7 +1295,8 @@ test("the same person in two entries produces two distinct row keys", () => {
 test("the header states people and rows", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
-      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 40, rows: 12 }}
+      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 40, rows: 12 }}
       {...viewProps()}
     />
   );
@@ -1270,14 +1349,20 @@ test("a repeat pattern group's panel header survives its null date", () => {
   assert.match(html, /2 people · 6 mornings/);
 });
 
+// ROUTINE_CODE, not BRANCH_NO_DEVICE_DATA: an outage group spans dates now and
+// build_queue always sends it a null attendance_date, so pinning the dated-header
+// branch on an outage would pin it on a shape the backend can no longer produce.
+// ROUTINE_CODE is keyed by code + date and is the group type that still has one.
 test("a dated group's panel header still names its day and its size", () => {
   const group: QueueEntry = {
     kind: "group",
-    group_type: "BRANCH_NO_DEVICE_DATA",
-    group_key: "BRANCH_NO_DEVICE_DATA:Phnom Penh HQ:2026-08-03",
-    branch: "Phnom Penh HQ",
-    flag_code: null,
+    group_type: "ROUTINE_CODE",
+    group_key: `ROUTINE_CODE:UNNOTIFIED_ABSENCE:${DATE}`,
+    branch: null,
+    flag_code: "UNNOTIFIED_ABSENCE",
     attendance_date: DATE,
+    dates: [DATE],
+    day_count: 1,
     rank: 150,
     tier: "act",
     members: [

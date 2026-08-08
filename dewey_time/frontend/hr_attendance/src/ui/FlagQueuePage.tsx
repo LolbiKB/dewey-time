@@ -1,12 +1,14 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
-import { format, subDays } from "date-fns";
+import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
 import { CloudOffIcon, TriangleAlertIcon } from "lucide-react";
-import { Navigate, useOutletContext } from "react-router-dom";
+import { Navigate, useOutletContext, useSearchParams } from "react-router-dom";
 
 import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Button } from "@/components/ui/button";
+import { DatePickerInput } from "@/components/ui/date-picker-input";
+import { Label } from "@/components/ui/label";
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
@@ -22,18 +24,59 @@ import {
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   partialFailureMessage,
+  openCountAria,
+  openCountLabel,
   queueHeaderDescription,
+  tierLabel,
 } from "@/lib/flagQueueLabels";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
 import { decideFlags } from "@/services/flags";
-import type { QueueEntry, QueuePayload } from "@/types/flags";
+import type { QueueEntry, QueuePayload, Tier } from "@/types/flags";
 import { FlagDecisionPanel } from "@/ui/FlagDecisionPanel";
 import { FlagQueueList, entryKey } from "@/ui/FlagQueueList";
 
 /** get_flag_queue caps a request at QUEUE_MAX_RANGE_DAYS (31); two weeks is the
  *  window HR actually works and keeps the payload well under QUEUE_FLAG_LIMIT. */
 const QUEUE_DAYS = 14;
+
+/** The server's own ceiling (flag_queue_api.QUEUE_MAX_RANGE_DAYS). Enforced on
+ *  the inputs so an over-long range is refused before it becomes a 417. */
+const QUEUE_MAX_RANGE_DAYS = 31;
+
+/**
+ * The range and tier live in the URL.
+ *
+ * They were a module constant and a hard-coded null: the page told HR to "narrow
+ * the dates to see the rest" while offering no control that could, and the
+ * backend's `tier` parameter — filtered, recounted and tested server-side — was
+ * never sent. Putting both in the URL also makes a filtered queue a link
+ * somebody can send.
+ */
+export function clampRange(from: string, to: string): { startDate: string; endDate: string } {
+  const start = parseISO(from);
+  const end = parseISO(to);
+  if (!isValid(start) || !isValid(end) || end < start) return defaultRange();
+  // Trim from the START: the recent end is the work that matters, so an
+  // over-long range gives up its oldest days rather than today's.
+  const span = differenceInCalendarDays(end, start) + 1;
+  const clamped = span > QUEUE_MAX_RANGE_DAYS ? subDays(end, QUEUE_MAX_RANGE_DAYS - 1) : start;
+  return { startDate: format(clamped, "yyyy-MM-dd"), endDate: format(end, "yyyy-MM-dd") };
+}
+
+function defaultRange(): { startDate: string; endDate: string } {
+  const today = new Date();
+  return {
+    startDate: format(subDays(today, QUEUE_DAYS - 1), "yyyy-MM-dd"),
+    endDate: format(today, "yyyy-MM-dd"),
+  };
+}
+
+const TIER_VALUES = ["act", "review", "routine"] as const;
+
+export function parseTierParam(raw: string | null): Tier | null {
+  return (TIER_VALUES as readonly string[]).includes(raw ?? "") ? (raw as Tier) : null;
+}
 
 export type BulkFailure = {
   saved: number;
@@ -129,13 +172,47 @@ export function stripInputs(queue: Pick<FlagQueue, "outageDates" | "range">) {
 export function FlagQueuePage() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
 
-  const requestedRange = useMemo(() => {
-    const today = new Date();
-    return {
-      startDate: format(subDays(today, QUEUE_DAYS - 1), "yyyy-MM-dd"),
-      endDate: format(today, "yyyy-MM-dd"),
-    };
-  }, []);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const fromParam = searchParams.get("from");
+  const toParam = searchParams.get("to");
+  const tier = parseTierParam(searchParams.get("tier"));
+
+  const requestedRange = useMemo(
+    () => (fromParam && toParam ? clampRange(fromParam, toParam) : defaultRange()),
+    [fromParam, toParam],
+  );
+
+  // `replace`, not push: dragging a date around should not fill the back button
+  // with intermediate ranges the user never meant to visit.
+  const setRange = useCallback(
+    (next: { startDate: string; endDate: string }) => {
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          params.set("from", next.startDate);
+          params.set("to", next.endDate);
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const setTier = useCallback(
+    (next: Tier | null) => {
+      setSearchParams(
+        (current) => {
+          const params = new URLSearchParams(current);
+          if (next) params.set("tier", next);
+          else params.delete("tier");
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   // Off by default: the queue's job is what is still waiting on HR. Turned on,
   // people who have nothing outstanding come back into the list, which is the
@@ -155,7 +232,7 @@ export function FlagQueuePage() {
     isLoading,
     error,
     refresh,
-  } = useFlagQueue({ ...requestedRange, includeDecided });
+  } = useFlagQueue({ ...requestedRange, tier, includeDecided });
 
   // Memoised once for the whole list rather than rebuilt per row: the list
   // re-renders on every keystroke in the decision note, and forty rows would
@@ -276,10 +353,20 @@ export function FlagQueuePage() {
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
       if (identities.length === 0) return;
-      const groupKey = selectedEntry?.kind === "group" ? selectedEntry.group_key : null;
-      decide.mutate({ identities, decision, groupKey });
+      // No groupKey: the server mints a fresh `AFD-<hash>` per call.
+      //
+      // A decision's group_key answers "which writes happened together, so which
+      // ones does reverse_decision_group undo together" — it is a batch id, not a
+      // name for the queue row the batch came from. Passing the entry's group_key
+      // conflated the two, and reversal supersedes EVERY live row sharing the key:
+      // two separate decisions on one group already collapsed into a single
+      // undo. Now that a branch outage is one entry spanning the whole range
+      // rather than one per day, that key would be stable across months, so
+      // undoing this morning's call would silently reverse every device-fault
+      // decision ever made for that branch.
+      decide.mutate({ identities, decision, groupKey: null });
     },
-    [decide, selectedEntry],
+    [decide],
   );
 
   const handleDecideOneByOne = useCallback(() => {
@@ -325,6 +412,10 @@ export function FlagQueuePage() {
         orphans={isLoading || error ? undefined : orphans}
         includeDecided={includeDecided}
         onToggleDecided={handleToggleDecided}
+        range={requestedRange}
+        onRangeChange={setRange}
+        tier={tier}
+        onTierChange={setTier}
         truncated={truncated}
         isLoading={isLoading}
         error={error}
@@ -402,6 +493,11 @@ export type FlagQueueViewProps = {
   /** Whether the queue is also listing people with nothing outstanding. */
   includeDecided?: boolean;
   onToggleDecided?: () => void;
+  /** The range the controls edit — the request, not the payload's answer. */
+  range: { startDate: string; endDate: string };
+  onRangeChange: (next: { startDate: string; endDate: string }) => void;
+  tier: Tier | null;
+  onTierChange: (next: Tier | null) => void;
   truncated?: boolean;
   isLoading: boolean;
   error: unknown;
@@ -452,10 +548,57 @@ export function FlagQueueView(props: FlagQueueViewProps) {
         title="Flags"
         description={counts ? queueHeaderDescription(counts) : "Loading…"}
       >
+        {/* The range and tier controls. Until these existed the banner below
+            instructed HR to narrow a range the page gave them no way to change,
+            which is worse than saying nothing: an unactionable warning in the
+            most urgent colour on the page teaches people to skip that colour. */}
+        <div className="flex flex-wrap items-end gap-3">
+          <DatePickerInput
+            label="From"
+            value={props.range.startDate}
+            max={parseISO(props.range.endDate)}
+            onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
+            className="w-40"
+          />
+          <DatePickerInput
+            label="To"
+            value={props.range.endDate}
+            min={parseISO(props.range.startDate)}
+            onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
+            className="w-40"
+          />
+          <div className="space-y-1.5">
+            <Label htmlFor="flag-tier" className="text-xs">
+              Consequence
+            </Label>
+            <select
+              id="flag-tier"
+              value={props.tier ?? ""}
+              onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+            >
+              <option value="">All</option>
+              {TIER_VALUES.map((value) => (
+                <option key={value} value={value}>
+                  {tierLabel(value)}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* An AttentionStrip like every other notice on this page, rather than a
+            bare coloured <p> with no icon, no container and no role — the one
+            message that says "your list is incomplete" was the only one skipping
+            the pattern. The copy now names levers that exist. */}
         {props.truncated ? (
-          <p className="text-xs text-brand-accent">
-            Showing the first flags in this range — more exist. Narrow the dates to see the rest.
-          </p>
+          <AttentionStrip
+            tone="accent"
+            icon={<TriangleAlertIcon className="size-4 text-brand-accent" aria-hidden="true" />}
+          >
+            More flags exist in this range than the queue can show at once. Narrow the dates, or
+            filter by consequence, to reach the rest.
+          </AttentionStrip>
         ) : null}
 
         {/* Open and Needs re-review are counts, not filters — they report the
@@ -468,11 +611,15 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           aria-label="Queue counts"
           className="flex w-full gap-1 rounded-lg bg-muted/40 p-1 sm:w-fit"
         >
-          <CountChip label="Open" value={counts?.open ?? 0} />
-          <CountChip label="Needs re-review" value={counts?.needs_re_review ?? 0} />
+          <CountChip
+            label="Open"
+            value={counts ? openCountLabel(counts) : "0"}
+            valueAria={counts ? openCountAria(counts) : undefined}
+          />
+          <CountChip label="Needs re-review" value={`${counts?.needs_re_review ?? 0}`} />
           <CountChip
             label="Decided"
-            value={counts?.decided ?? 0}
+            value={`${counts?.decided ?? 0}`}
             pressed={props.includeDecided}
             onToggle={props.onToggleDecided}
           />
@@ -576,9 +723,31 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             className="min-h-0"
           />
         ) : (
-          <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-            <div className="min-h-0 overflow-y-auto overscroll-contain">{props.list}</div>
-            <div className="min-h-0 overflow-y-auto overscroll-contain">{props.panel}</div>
+          // Below lg this is ONE scroll surface, not two stacked ones. As a grid
+          // it was two implicit auto rows in a definite-height container, and
+          // `min-h-0` on both children drops their min-content contribution to
+          // zero — so the tracks split the height evenly and a phone got a ~133px
+          // window onto 252 rows, shearing the third row through its sub-line
+          // while an unasked-for empty panel took the other half.
+          //
+          // The split starts at lg, not md: at 768px the panel would be 340px,
+          // narrower than the list beside it, and the decision form does not fit
+          // that. useIsMobile.ts:9 already puts the data table's break at lg.
+          //
+          // 24–30rem rather than a flat 22rem cap. The row's fixed chrome (avatar,
+          // gaps, +N badge, 117px strip) is ~240px, so 22rem left 112px for two
+          // lines of text and the name — the row's identity — was the only
+          // shrinkable thing in it, collapsing to "B…" beside a shrink-0 badge.
+          // The panel gives up width it measurably was not using: its longest
+          // line of prose ends ~277px short of the old edge.
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain",
+              "lg:grid lg:overflow-visible lg:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
+            )}
+          >
+            <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.list}</div>
+            <div className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">{props.panel}</div>
           </div>
         )}
       </Section>
@@ -588,7 +757,10 @@ export function FlagQueueView(props: FlagQueueViewProps) {
 
 function CountChip(props: {
   label: string;
-  value: number;
+  /** Pre-formatted: a capped count carries a trailing "+" (see openCountLabel). */
+  value: string;
+  /** Spoken form for a value whose printed shape under-states it, e.g. "5000+". */
+  valueAria?: string;
   /** Present only on a chip that also toggles what the list shows. */
   pressed?: boolean;
   onToggle?: () => void;
@@ -596,7 +768,15 @@ function CountChip(props: {
   const body = (
     <>
       {props.label}
-      <span className="tabular-nums text-foreground">{props.value}</span>
+      <span
+        className="tabular-nums text-foreground"
+        aria-label={props.valueAria}
+        // A bare "+" is the only thing distinguishing a floor from a total, and
+        // it is exactly the character a screen reader is likeliest to swallow.
+        role={props.valueAria ? "text" : undefined}
+      >
+        {props.value}
+      </span>
     </>
   );
   const shape =

@@ -49,7 +49,9 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # v2: person entries gained entry_key / dates / also_count / also_outlier_count and
 # employee_image; flags gained attendance_date; counts gained rows; and the payload
 # gained outage_dates.
-_QUEUE_CACHE_PREFIX = "flag_queue:v2"
+# v3: counts gained open_capped; branch-outage groups span dates, so their
+# attendance_date is now null, and every group carries `dates` / `day_count`.
+_QUEUE_CACHE_PREFIX = "flag_queue:v3"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
 # below is best-effort only: the engine deletes flags with raw frappe.db.delete()
@@ -149,12 +151,24 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
             "Attendance Flag",
             filters={"attendance_date": ["between", [start, end]], "source": "AUTO"},
             fields=["employee", "attendance_date", "flag_code", "severity", "day_closed", "evidence"],
-            # Deterministic so truncation at the cap always drops the same tail.
-            order_by="attendance_date asc, employee asc, creation asc",
+            # Deterministic so truncation at the cap always drops the same tail, and
+            # NEWEST-FIRST so the tail it drops is the oldest work rather than today's.
+            # This read ordered ascending until the queue saturated its cap in
+            # production: `truncated` went true, and the days it had silently dropped
+            # were the most recent ones — an outage that started this morning was not
+            # on a page whose only instruction is "work down from the top". `truncated`
+            # cannot warn about a day that never entered the result set, so the
+            # ordering is the only thing protecting the invariant.
+            order_by="attendance_date desc, employee desc, creation desc",
             limit_page_length=QUEUE_FLAG_LIMIT,
         )
         or []
     )
+    hit_cap = len(rows) >= QUEUE_FLAG_LIMIT
+    # Back to ascending before anything reads them. The dedupe below keeps the LAST row
+    # seen at equal day_closed, so which row survives an identity collision must not
+    # depend on the direction the scan happened to run in.
+    rows.reverse()
 
     # flag_identity deliberately excludes day_closed (that is the whole point of the
     # scheme), so inside the closeout window a provisional and its final replacement can
@@ -188,7 +202,7 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
         if previous is None or (flag.get("day_closed") or 0) >= (previous.get("day_closed") or 0):
             by_identity[identity] = flag
 
-    return list(by_identity.values()), len(rows) >= QUEUE_FLAG_LIMIT
+    return list(by_identity.values()), hit_cap
 
 
 def _decisions_by_identity(start, end) -> tuple[dict[str, dict], bool]:
@@ -211,11 +225,22 @@ def _decisions_by_identity(start, end) -> tuple[dict[str, dict], bool]:
                 "decided_by",
                 "decided_at",
             ],
-            order_by="decided_at asc",
+            # Newest-first for the same reason the flag scan is (_flag_rows), and it
+            # has to MATCH it: the two scans share a cap, and if one keeps its newest
+            # rows while the other keeps its oldest, the tails no longer line up. A
+            # recently-decided flag would come back with its decision dropped — so it
+            # reads as open again, and counts["decided"] undercounts. `truncated` goes
+            # true and bounds the damage, but "the flag you settled this morning is
+            # back in the queue" is not a state to leave reachable.
+            order_by="decided_at desc",
             limit_page_length=QUEUE_FLAG_LIMIT,
         )
         or []
     )
+    hit_cap = len(rows) >= QUEUE_FLAG_LIMIT
+    # Back to ascending: the loop below overwrites per identity, so last-seen wins,
+    # and the comment there depends on that being the NEWEST row.
+    rows.reverse()
 
     by_identity: dict[str, dict] = {}
     for row in rows:
@@ -230,7 +255,7 @@ def _decisions_by_identity(start, end) -> tuple[dict[str, dict], bool]:
         # decided_at asc means the newest wins if a write ever raced and left two.
         by_identity[row.get("flag_identity")] = row
 
-    return by_identity, len(rows) >= QUEUE_FLAG_LIMIT
+    return by_identity, hit_cap
 
 
 def _employees_by_id(employee_ids: set[str]) -> dict[str, dict]:
@@ -376,6 +401,14 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
 
     entries = queue.get("entries") or []
     counts = dict(queue.get("counts") or {})
+    # `open` counts the flags this scan actually returned, so when the scan hit its cap
+    # the number IS QUEUE_FLAG_LIMIT — a constant, not a measurement. Rendered bare it
+    # reads as a precise total, stays at 5000 after HR clears a thousand, and quietly
+    # teaches everyone that the numbers on this page are approximate. Flagged here so
+    # the toolbar can say "5000+" and mean it; the true total is unknown by design,
+    # because counting it exactly would cost the second unfiltered scan the fixed query
+    # budget exists to prevent.
+    counts["open_capped"] = bool(flags_capped)
     if tier:
         entries = [entry for entry in entries if entry.get("tier") == tier]
         # `people` and `rows` describe the LIST; leaving them whole-range would
