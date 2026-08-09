@@ -416,6 +416,13 @@ export const TIER_FILTER_ALL_LABEL = "Any consequence";
 
 export const DECIDED_TOGGLE_LABEL = "Decided";
 
+/** The toolbar's three control names. Visually hidden — this page trades the
+ *  visible label row for 22px of height — so these are the ONLY names a screen
+ *  reader has for the controls that determine the whole list. */
+export const RANGE_FROM_LABEL = "From";
+export const RANGE_TO_LABEL = "To";
+export const TIER_FILTER_LABEL = "Consequence";
+
 /** The affordance on a compressed flag one-liner. Lowercase: it sits inline at
  *  the end of a row of data, not as a button caption. */
 export const DECIDE_ONE_LABEL = "decide";

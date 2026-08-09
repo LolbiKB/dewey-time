@@ -8,8 +8,11 @@ import { outageKey } from "@/lib/flagStrip";
 import { outageWrite, partitionQueue, queuePeopleCount } from "@/lib/flagQueuePartition";
 import {
   DECIDE_AGAIN_LABEL,
+  RANGE_FROM_LABEL,
+  RANGE_TO_LABEL,
   SAME_REASON_LABEL,
   SHOWING_DECIDED_MESSAGE,
+  TIER_FILTER_LABEL,
   appliedDecisionLabel,
   applyToRemainingLabel,
   decisionStateLabel,
@@ -1797,8 +1800,24 @@ test("Decided survives the chip cull — it is the only one that ever did anythi
 
 test("the date controls carry accessible names without spending a row on labels", () => {
   const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} counts={null} />);
-  assert.match(html, /aria-label="From"/);
-  assert.match(html, /aria-label="To"/);
-  assert.match(html, /aria-label="Consequence"/);
-  assert.ok(!/class="text-xs"[^>]*>From</.test(html), "no visible label row");
+  // `aria-label` beats name-from-content unconditionally on a <button>, so it
+  // would silence the formatted date already inside it, leaving a screen
+  // reader hearing a bare "From" with no value — the exact regression a prior
+  // review round caught. The name is visually-hidden button CONTENT instead,
+  // so it composes with the date rather than replacing it. Matched against the
+  // module's own constants, not a hand-typed duplicate of them (Constraint 2 /
+  // "violation #6" on this plan).
+  assert.match(html, new RegExp(`<span class="sr-only">${RANGE_FROM_LABEL}</span>`));
+  assert.match(html, new RegExp(`<span class="sr-only">${RANGE_TO_LABEL}</span>`));
+  // The <select> has no visible value distinct from its accessible name the
+  // way a date button does — the browser always exposes the selected
+  // <option>'s own text as the control's value regardless of `aria-label` — so
+  // an attribute is fine here.
+  assert.match(html, new RegExp(`aria-label="${TIER_FILTER_LABEL}"`));
+  // No visible label row: dewey-ui's `Label` renders a `<label>` element, and
+  // the previous version of this assertion (`class="text-xs"`) could never
+  // fail — `cn()` merges that class into a long string, so the literal
+  // attribute value is never emitted, passing whether or not a visible label
+  // rendered. Asserted on the element itself instead.
+  assert.ok(!/<label[^>]*>From</.test(html), "no visible label row");
 });

@@ -313,6 +313,20 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   await expect(page.getByText(/^Open/)).toHaveCount(0);
   await expect(page.getByText(/needs re-review/i)).toHaveCount(0);
   await expect(page.getByText(/^Decided/)).toBeVisible();
+
+  // The two date buttons carry their name as visually-hidden CONTENT, not an
+  // `aria-label` attribute: `aria-label` beats name-from-content
+  // unconditionally, so it would have silenced the formatted date already
+  // inside the button and left a screen reader hearing a bare "From"/"To"
+  // with the current range excluded — on the control that determines the
+  // entire list. `getByRole` resolves the real accessible name end to end,
+  // computed the same way a screen reader would (unlike a `grep` over
+  // `aria-label="From"`, which kept passing through that exact regression).
+  // The date pattern after the name, not a bare `/^From/`, is the point:
+  // "From" alone is also a substring match of the broken, date-less name, so
+  // asserting only that prefix would pass whether or not this bug existed.
+  await expect(page.getByRole("button", { name: /^From \w{3} \d{1,2}, \d{4}/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^To \w{3} \d{1,2}, \d{4}/ })).toBeVisible();
 });
 
 test("a single decision persists after the queue refetches", async ({ page }) => {

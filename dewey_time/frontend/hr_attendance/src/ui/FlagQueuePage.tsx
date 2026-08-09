@@ -18,9 +18,12 @@ import {
   DECIDE_FAILED_MESSAGE,
   DECIDED_TOGGLE_LABEL,
   DEVICE_ALERT_EXPLAINER,
+  RANGE_FROM_LABEL,
+  RANGE_TO_LABEL,
   REASON_OPTIONS,
   SHOWING_DECIDED_MESSAGE,
   TIER_FILTER_ALL_LABEL,
+  TIER_FILTER_LABEL,
   deviceAlertHeadline,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
@@ -833,24 +836,34 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           // name moves onto the control itself, which is where a screen reader
           // reads it from anyway.
           //
-          // `max-w-[56vw]`, not the plain `flex-wrap` the width alone would
-          // suggest: `actions` renders inside dewey-ui's own `shrink-0` sibling
-          // of the title (page.tsx), which never gets asked to shrink and has
-          // no responsive stacking of its own — so on a phone this row's
-          // unwrapped intrinsic width (~575px measured at a 412px viewport)
-          // became this flex item's PREFERRED size regardless of `flex-wrap`
-          // on its own children, and `justify-between` took the entire deficit
-          // out of the title, down to 0 width. `max-w` is a hard clamp browsers
-          // honour over a flex item's preferred size even at `shrink-0`, and a
-          // `vw` unit resolves against the viewport rather than this flex
+          // `max-w-[calc(100vw-16rem)] … lg:max-w-none`, not the plain
+          // `flex-wrap` the width alone would suggest: `actions` renders
+          // inside dewey-ui's own `shrink-0` sibling of the title (page.tsx),
+          // which never gets asked to shrink and has no responsive stacking of
+          // its own — so on a phone this row's unwrapped intrinsic width
+          // (~575px measured at a 412px viewport) became this flex item's
+          // PREFERRED size regardless of `flex-wrap` on its own children, and
+          // `justify-between` took the entire deficit out of the title, down
+          // to 0 width. `max-w` is a hard clamp browsers honour over a flex
+          // item's preferred size even at `shrink-0`, and a `calc(100vw-…)`
+          // expression resolves against the viewport rather than this flex
           // item's own (circular) auto-sizing — so it forces the real wrap
-          // `flex-wrap` was already meant to do, without moving this off the
-          // title's row at the desktop widths this page is measured at, where
-          // 56vw is always wider than the toolbar's own content and the clamp
-          // never binds.
-          <div className="flex max-w-[56vw] flex-wrap items-center gap-2">
+          // `flex-wrap` was already meant to do. A fixed 16rem title column
+          // (not a fraction like `56vw`) is what keeps that from conceding
+          // chrome at the mid-size desktop widths this page is actually
+          // measured at — `56vw` bit from ~1027px down against this row's
+          // ~575px natural width, wrapping and costing ~48px even at a 900px
+          // viewport with 300+px of genuine slack beside the title. Released
+          // entirely at `lg` (1024px) and up, where dewey-ui's own `Page`
+          // padding step (`sm:px-8`) has already landed and there is always
+          // room. Regressing this clamp is caught by
+          // e2e/flags.spec.ts's "the flag queue renders groups and person
+          // rows with toolbar counts for HR staff", run under Playwright's
+          // `mobile` project — remove it and the header's description goes
+          // `hidden` there, squeezed to 0 width behind an unwrapped toolbar.
+          <div className="flex max-w-[calc(100vw-16rem)] flex-wrap items-center gap-2 lg:max-w-none">
             <DatePickerInput
-              ariaLabel="From"
+              ariaLabel={RANGE_FROM_LABEL}
               value={props.range.startDate}
               max={parseISO(props.range.endDate)}
               onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
@@ -860,14 +873,14 @@ export function FlagQueueView(props: FlagQueueViewProps) {
               –
             </span>
             <DatePickerInput
-              ariaLabel="To"
+              ariaLabel={RANGE_TO_LABEL}
               value={props.range.endDate}
               min={parseISO(props.range.startDate)}
               onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
               className="w-36 space-y-0"
             />
             <select
-              aria-label="Consequence"
+              aria-label={TIER_FILTER_LABEL}
               value={props.tier ?? ""}
               onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
               className="h-10 rounded-md border bg-background px-2 text-sm"
@@ -900,24 +913,6 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </div>
         }
       >
-        {/* An AttentionStrip like every other notice on this page, rather than a
-            bare coloured <p> with no icon, no container and no role — the one
-            message that says "your list is incomplete" was the only one skipping
-            the pattern. The copy now names levers that exist.
-            Kept here rather than dropped with the rest of the header: it is
-            conditional (only rendered while a range is over the server's row
-            cap) and does not cost height on an ordinary day, so it is outside
-            the 297px -> ~120px chrome this task is measuring. */}
-        {props.truncated ? (
-          <AttentionStrip
-            tone="accent"
-            icon={<TriangleAlertIcon className="size-4 text-brand-accent" aria-hidden="true" />}
-          >
-            More flags exist in this range than the queue can show at once. Narrow the dates, or
-            filter by consequence, to reach the rest.
-          </AttentionStrip>
-        ) : null}
-
         {/* Without this the extra rows read as a bug: entries with no action
             left on them, in a queue that promises everything in it is waiting
             on you. */}

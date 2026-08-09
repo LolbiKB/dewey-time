@@ -13,10 +13,15 @@ export type DatePickerInputProps = {
   label?: string;
   /**
    * Accessible name when there is no visible <Label>. The flag queue's toolbar
-   * puts three of these on one row and cannot spend 22px of label above each;
-   * the name moves onto the control, which is where a screen reader reads it
-   * from in either case. Ignored when `label` is set — a visible label already
-   * names the control, and two names is worse than one.
+   * puts three of these on one row and cannot spend 22px of label above each.
+   * Rendered as visually-hidden button CONTENT, not an `aria-label` attribute:
+   * `aria-label` beats name-from-content unconditionally, so it would silence
+   * the formatted date already inside the button and leave the accessible
+   * name as a bare "From" — true for naming the control, false for reporting
+   * its value, on the one control that determines the entire list. As
+   * content it composes instead, so the name reads "From Aug 1, 2026".
+   * Ignored when `label` is set — a visible label already names the control,
+   * and two names is worse than one.
    */
   ariaLabel?: string;
   value: string;
@@ -72,12 +77,12 @@ export function DatePickerInput(props: DatePickerInputProps) {
             type="button"
             variant="outline"
             disabled={props.disabled}
-            aria-label={props.label ? undefined : props.ariaLabel}
             className={cn(
               "h-10 w-full justify-start px-3 font-normal",
               !props.value && "text-muted-foreground"
             )}
           >
+            {props.label ? null : <span className="sr-only">{props.ariaLabel}</span>}
             <CalendarDaysIcon className="mr-2 size-4 shrink-0 opacity-60" />
             {props.value
               ? format(selected!, "MMM d, yyyy")
