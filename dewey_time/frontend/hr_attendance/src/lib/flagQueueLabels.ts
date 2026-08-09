@@ -752,10 +752,19 @@ export function applyToRemainingLabel(count: number): string {
 
 export const SAME_REASON_LABEL = "Same reason applies";
 
-/** The pinned repeat states its payload. Unlike the banner's version this
- *  control never scrolls away, so it is permanently one click from a write —
- *  it has to say which write. */
-export function sameReasonPinnedLabel(decision: PendingDecision): string {
+/**
+ * The repeat, stating the decision it would apply.
+ *
+ * Both callers need it and for the same reason — a one-click write should say
+ * which write — so it is one function rather than two hand-built sentences that
+ * happened to agree. They did agree, character for character, which is exactly
+ * how a pair like that drifts without anyone noticing.
+ *
+ * The person banner offers it in bulk across the remaining flags; the pinned
+ * footer button offers it for the one flag on the bottom edge, where it never
+ * scrolls away and is therefore permanently one click from a real write.
+ */
+export function sameReasonWithDecision(decision: PendingDecision): string {
   return `${SAME_REASON_LABEL} — ${outcomeLabel(decision.outcome)}, ${reasonLabel(decision.reason)}`;
 }
 

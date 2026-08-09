@@ -1169,12 +1169,20 @@ export function FlagQueueView(props: FlagQueueViewProps) {
               // takes the column from ~884px to ~658px and settles all three.
               //
               // It is NOT the reading half, and must not be retuned as if it
-              // were: `ch` here resolves against this element's inherited ~16px,
-              // while the prose it would be measuring is `text-xs`. The reading
-              // measure lives on the prose itself (FlagDecisionPanel's
-              // flagSummary paragraph and narrative block). Sizing this column
-              // for 62 characters of 12px text would need ~424px, which the same
-              // spec section rules out — "the decision form does not fit that".
+              // were: `ch` here resolves against this element's inherited ~16px
+              // (measured: 62ch = 657.7px, so ch = 10.61px), while the prose it
+              // would be measuring is 11-12px. The reading measure lives on the
+              // prose itself — FlagDecisionPanel's flagSummary paragraph and the
+              // two narrative paragraphs, each capped at its own font size.
+              // Sizing this column for 62 characters of 12px text would need
+              // ~424px, which the same spec section rules out: "the decision
+              // form does not fit that".
+              //
+              // What this cap actually bought the prose, measured at 1440px
+              // rather than estimated: 515px -> 493px, 64.7 -> 62.0 characters.
+              // Earlier notes on this task put the uncapped figure near 90-96;
+              // that is true only of the ~884px column this replaced, and a
+              // reader looking for a reflow of that size will not find one.
               //
               // `overflow-hidden`, not `overflow-y-auto`: the panel owns its own
               // scrolling now, and a second scroller around it would let the

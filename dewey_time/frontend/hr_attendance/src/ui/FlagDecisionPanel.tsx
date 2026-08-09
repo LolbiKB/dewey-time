@@ -32,12 +32,11 @@ import {
   groupHeadline,
   groupSubline,
   outcomeActionLabel,
-  outcomeLabel,
   personHeadline,
   priorDecisionLabel,
   reasonLabel,
   restHeading,
-  sameReasonPinnedLabel,
+  sameReasonWithDecision,
 } from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
 import type { Flag } from "@/types/calendar";
@@ -162,9 +161,11 @@ function PersonDecision(props: FlagDecisionPanelProps & { entry: PersonEntry }) 
             this person, which is what stops a stray click closing a whole day. */}
         {props.lastDecision && remaining.length > 1 ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2">
+            {/* The same sentence the pinned footer's button carries, from the
+                same function. These two were composed independently and agreed
+                character for character, which is how a pair like that drifts. */}
             <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-              {SAME_REASON_LABEL} — {outcomeLabel(props.lastDecision.outcome)},{" "}
-              {reasonLabel(props.lastDecision.reason)}
+              {sameReasonWithDecision(props.lastDecision)}
             </span>
             <Button
               size="sm"
@@ -310,7 +311,7 @@ function PersonDecision(props: FlagDecisionPanelProps & { entry: PersonEntry }) 
                     props.onSubmit(flagIdentities(worst), props.lastDecision as PendingDecision)
                   }
                 >
-                  {sameReasonPinnedLabel(props.lastDecision)}
+                  {sameReasonWithDecision(props.lastDecision)}
                 </Button>
               ) : null}
             </div>
@@ -427,12 +428,26 @@ function FlagCard(props: {
           dl/dt/dd idiom for the raw evidence.rows, unfiltered). This card
           always computes against EMPTY_NARRATIVE_DAY (see above) — this
           surface has no live calendar day. */}
-      {/* Prose, so it carries the reading measure too — see the explainer
-          above for why 62ch belongs on the text and not on the column. */}
-      <div className="max-w-[62ch] space-y-1">
-        <p className="text-xs font-medium leading-relaxed text-foreground">{narrative.headline}</p>
+      {/* Prose, so it carries the reading measure too — and on the two
+          paragraphs, not on the wrapper around them. A wrapper sets no
+          font-size, so its `ch` resolves against the inherited 16px: 62ch there
+          computes to 657.7px against a card interior of 632px, and never binds
+          at all. Measured at 1440px, the headline ran 632px = 78.3 characters
+          with the cap on the wrapper and 501px = 62.0 with it on the text.
+
+          On the text each also resolves at its OWN size, which the wrapper
+          could not do for both at once: the headline is `font-medium` (ch =
+          8.076px, so 62ch = 500.7px) and the summary above is normal weight
+          (ch = 7.956px, 62ch = 493.3px). Two different pixel widths, the same
+          62 characters — which is the whole point of measuring in `ch`. */}
+      <div className="space-y-1">
+        <p className="max-w-[62ch] text-xs font-medium leading-relaxed text-foreground">
+          {narrative.headline}
+        </p>
         {narrative.subline ? (
-          <p className="text-[11px] leading-relaxed text-muted-foreground">{narrative.subline}</p>
+          <p className="max-w-[62ch] text-[11px] leading-relaxed text-muted-foreground">
+            {narrative.subline}
+          </p>
         ) : null}
       </div>
 
@@ -630,10 +645,21 @@ function GroupDecision(props: FlagDecisionPanelProps & { entry: GroupEntry }) {
           is the one thing on this panel that must not move. Group arming is
           unchanged — this form has always been open, because a group decision
           is the entry's whole purpose and its submit label states the size of
-          the write it will make. */}
+          the write it will make.
+
+          `max-h-[70%] overflow-y-auto` matters MORE here than on a person's
+          footer, and this is the case that motivated it: a group's form is
+          ~285px before anything opens, against a person's 61px closed. Without
+          the cap, `shrink-0` inside an `h-full` shell inside `lg:overflow-hidden`
+          collapses the body to nothing on a short lg window — taking "Who this
+          covers" off screen entirely, with no scroll to bring it back. That
+          list is the cross-reference safeguard, and it has to stay on the read
+          path in front of a bulk excuse. Below that height the submit button
+          clips too, unreachable. The cap keeps the body a share and moves the
+          overflow inside the footer, where it can be scrolled to. */}
       <div
         data-slot="decision-footer"
-        className="shrink-0 space-y-2.5 border-t border-border/60 bg-background pt-2.5"
+        className="max-h-[70%] shrink-0 space-y-2.5 overflow-y-auto border-t border-border/60 bg-background pt-2.5"
       >
         <DecisionForm
           draft={props.draft}

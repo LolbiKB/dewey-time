@@ -1880,3 +1880,160 @@ test("the decision footer stays put while the evidence scrolls behind it", async
     0,
   );
 });
+
+/** Six people on one routine code — a group footer tall enough to matter. */
+const CAP_GROUP_MEMBERS = Array.from({ length: 6 }, (_, i) => ({
+  entry_key: `ROUTINE_CODE:LATE_START|p:HR-EMP-2000${i}`,
+  employee: `HR-EMP-2000${i}`,
+  employee_name: `Capped Member ${i + 1}`,
+  employee_branch: "Siem Reap Depot",
+  employee_image: null,
+  attendance_date: "2026-08-12",
+  dates: ["2026-08-12"],
+  rank: 20,
+  tier: "routine",
+  flags: [
+    {
+      flag_identity: `CAP-${i}`,
+      flag_code: "LATE_START",
+      attendance_date: "2026-08-12",
+      severity: "WARNING",
+      day_closed: 1,
+      evidence: { minutes: 12 + i },
+      rank: 20,
+      tier: "routine",
+      decision_state: "undecided",
+      decision: null,
+    },
+  ] satisfies FlagOut[],
+  undecided_count: 1,
+  also_count: 0,
+  also_outlier_count: 0,
+})) satisfies QueuePerson[];
+
+const CAP_GROUP = {
+  kind: "group",
+  group_type: "ROUTINE_CODE",
+  group_key: "ROUTINE_CODE:LATE_START",
+  branch: null,
+  flag_code: "LATE_START",
+  attendance_date: "2026-08-12",
+  dates: ["2026-08-12"],
+  day_count: 1,
+  rank: 20,
+  tier: "routine",
+  members: CAP_GROUP_MEMBERS,
+} satisfies QueueEntry;
+
+/**
+ * The footer's height cap, checked geometrically because that is the only way
+ * it CAN be checked — a unit assertion here could only read the class string
+ * back, which proves the class is present and nothing about whether it binds.
+ *
+ * Both modes, deliberately. The person footer is 61px closed and only grows
+ * past the cap once its form opens; the group's is ~285px before anything is
+ * touched, which is the case that motivated the cap and the one that shipped
+ * without it.
+ */
+async function assertFooterCapHoldsAndSubmitIsReachable(
+  page: import("@playwright/test").Page,
+) {
+  const footer = page.locator('[data-slot="decision-footer"]');
+  const panel = page.getByRole("region", { name: "Selected flag" });
+  await expect(footer).toBeVisible();
+
+  const panelBox = await panel.boundingBox();
+  const limit = (panelBox?.height ?? 0) * 0.7;
+
+  // Precondition, in the same spirit as the pin test's overflow check: the
+  // footer's CONTENT must want more than the cap allows, or the cap was never
+  // going to engage at this viewport and everything below passes vacuously.
+  const wanted = await footer.evaluate((el) => el.scrollHeight);
+  expect(
+    wanted,
+    "the uncapped footer must exceed 70% of the panel, or this proves nothing",
+  ).toBeGreaterThan(limit + 1);
+
+  // The cap binds …
+  const footerBox = await footer.boundingBox();
+  expect(footerBox?.height ?? 0).toBeLessThanOrEqual(limit + 1);
+  // … the body keeps a real share rather than collapsing to nothing …
+  const body = page.locator('[data-slot="decision-body"]');
+  expect((await body.boundingBox())?.height ?? 0).toBeGreaterThan(1);
+  // … and the write is still reachable, which is the whole point: `shrink-0`
+  // with no cap and no overflow strands it off the bottom of a short window.
+  const submit = footer.locator('[data-slot="button"]').filter({ hasText: "Excuse" });
+  await submit.scrollIntoViewIfNeeded();
+  await expect(submit).toBeInViewport();
+}
+
+test("a short window cannot strand the submit button — person", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 430 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 4,
+            people: 1,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+  // A person's footer only outgrows the cap once the form is open — which is
+  // the state HR is in for the whole of every decision.
+  await page
+    .locator('[data-slot="decision-footer"]')
+    .getByRole("button", { name: "Decide", exact: true })
+    .click();
+  await expect(page.getByRole("group", { name: "Outcome" })).toBeVisible();
+
+  await assertFooterCapHoldsAndSubmitIsReachable(page);
+});
+
+test("a short window cannot strand the submit button — group", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 430 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [CAP_GROUP] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 6,
+            people: 6,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator("button[aria-label]").filter({ hasText: "6 people" }).first().click();
+  // Nothing is opened first: a group's form is always armed, so its footer is
+  // over the cap from the moment the row is selected.
+  await assertFooterCapHoldsAndSubmitIsReachable(page);
+  // The safeguard list is what the body must not lose. Without the cap the
+  // body collapses and this becomes unreachable in front of a bulk excuse.
+  const covers = page.getByText("Who this covers");
+  await covers.scrollIntoViewIfNeeded();
+  await expect(covers).toBeInViewport();
+});

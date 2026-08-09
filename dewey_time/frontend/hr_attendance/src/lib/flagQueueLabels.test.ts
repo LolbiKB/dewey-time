@@ -55,7 +55,7 @@ import {
   reasonLabel,
   restHeading,
   routineCodeHeader,
-  sameReasonPinnedLabel,
+  sameReasonWithDecision,
   showDecidedLabel,
   stripAriaLabel,
   TIER_FILTER_ALL_LABEL,
@@ -989,15 +989,16 @@ test("two identical findings on different days do not get the same label", () =>
   assert.equal(decidingLabel(second), "Missing 4h · 4 Aug");
 });
 
-test("the pinned repeat states the decision it will write, not just its name", () => {
-  // This control never scrolls away: it is permanently one click from a real
-  // write on real employee records, so the caption has to say which write.
+test("the repeat states the decision it will write, not just its name", () => {
+  // Used by both the person banner and the pinned footer button. The footer's
+  // is the sharp case: it never scrolls away, so it is permanently one click
+  // from a real write on real employee records and has to say which write.
   assert.equal(
-    sameReasonPinnedLabel({ outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" }),
+    sameReasonWithDecision({ outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" }),
     "Same reason applies — Excused, Device or data fault",
   );
   assert.equal(
-    sameReasonPinnedLabel({ outcome: "UPHELD", reason: "OTHER", note: "spoke to them" }),
+    sameReasonWithDecision({ outcome: "UPHELD", reason: "OTHER", note: "spoke to them" }),
     "Same reason applies — Upheld, Other",
   );
 });

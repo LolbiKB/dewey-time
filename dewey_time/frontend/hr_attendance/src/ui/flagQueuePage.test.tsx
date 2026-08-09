@@ -19,7 +19,7 @@ import {
   outcomeActionLabel,
   partialFailureMessage,
   reasonLabel,
-  sameReasonPinnedLabel,
+  sameReasonWithDecision,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import type { DecisionState, FlagDecision, FlagOut, QueueEntry, QueuePerson, Tier } from "@/types/flags";
@@ -2001,22 +2001,25 @@ test("the panel is a scrolling body above a footer that is not in the scroll", (
   assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
   assert.equal(countOf(html, 'data-slot="decision-body"'), 1);
   assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
-  // The body scrolls and the footer does not. Asserted as separate substrings
-  // rather than one `data-slot=…[^>]*class=` regex: that form silently depends
-  // on JSX attribute order, so reordering two props would break the test
-  // without changing the rendered layout at all. Each class is matched on its
-  // own for the same reason one level down — Tailwind class order within a
-  // string is arbitrary, and `/shrink-0 border-t/` broke the moment a sizing
-  // utility was added between them.
+  // Matched as separate substrings rather than one `data-slot=…[^>]*class=`
+  // regex: that form silently depends on JSX attribute order, so reordering two
+  // props would break the test without changing the rendered layout at all. The
+  // same goes one level down — `/shrink-0 border-t/` broke the moment a sizing
+  // utility was added between those two classes.
+  //
+  // `border-t` only, and deliberately not `shrink-0`: this markup is full of
+  // shrink-0 (every one-liner's day column, every state badge), so that match
+  // was satisfied whether or not a footer existed and asserted nothing.
   assert.match(html, /data-slot="decision-body"/);
   assert.match(html, /overflow-y-auto/);
-  assert.match(html, /shrink-0/);
   assert.match(html, /border-t/);
-  // This is a STRUCTURE check and nothing more: it stays green if the footer
-  // is nested back inside the body, which is the likelier regression and the
-  // one a careless refactor produces. GC7 bars geometry from the unit suite,
-  // so the pin itself is proved in e2e/flags.spec.ts ("the decision footer
-  // stays put while the evidence scrolls behind it").
+  // This is a STRUCTURE check and nothing more. It stays green if the footer is
+  // nested back inside the body — the likelier regression, and the one a
+  // careless refactor produces — and it says nothing about whether the footer
+  // is pinned, capped or reachable. GC7 bars geometry from the unit suite, so
+  // e2e/flags.spec.ts owns every geometric claim: "the decision footer stays
+  // put while the evidence scrolls behind it" and "a short window cannot
+  // strand the submit button".
 });
 
 test("the pinned footer names the flag it is about to write", () => {
@@ -2125,11 +2128,12 @@ test("the last undecided flag keeps its one-click repeat", () => {
     <FlagDecisionPanel {...panelProps({ entry, lastDecision: repeat })} />,
   );
 
-  // The PINNED form of the label, which states the payload. This control never
-  // scrolls away, so it is permanently one click from a real write and has to
-  // say which write — the bare SAME_REASON_LABEL would not.
-  assert.match(html, new RegExp(`>${sameReasonPinnedLabel(repeat)}<`));
+  // The label that states the payload, not the bare SAME_REASON_LABEL: this
+  // control never scrolls away, so it is permanently one click from a real
+  // write and has to say which write.
+  assert.match(html, new RegExp(`>${sameReasonWithDecision(repeat)}<`));
   // The person-level banner is genuinely off, so this is not passing on the
-  // banner's copy by accident — the banner composes the same sentence.
+  // banner's copy by accident — the banner renders the same string, from the
+  // same function, so this assertion alone could not tell them apart.
   assert.doesNotMatch(html, /Apply to remaining/);
 });
