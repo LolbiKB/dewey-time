@@ -43,7 +43,7 @@ is that the spec no longer asks for one.
 | `dewey_time/attendance_engine/absence_intervals.py` | Add `_bridge_scheduled_lunch`; call it from `compute_missing_time_intervals`. | 1 |
 | `dewey_time/tests/test_absence_flags.py` | New `TestUnattendedLunchBridging` class appended. Existing 19 tests untouched. | 1 |
 | `dewey_time/attendance_engine/intraday.py` | Add `UNNOTIFIED_ABSENCE` to `INTRADAY_FLAG_CODES`; branch the absence block on `checkins_count == 0`. | 2 |
-| `dewey_time/tests/test_intraday.py` | New `TestIntradayNoShow` class appended. Existing 8 tests untouched. | 2 |
+| `dewey_time/tests/test_intraday.py` | New `TestIntradayNoShow` class appended (6 tests), plus `test_missing_time_when_zero_checkins` repointed onto the punched-day path — it pins the old behaviour and would otherwise fail. | 2 |
 | `dewey_time/attendance_engine/dev_tools.py` | Add `preview_regenerate_flags_for_range_api` and `regenerate_flags_for_range_api`. | 3 |
 | `dewey_time/tests/test_dev_tools.py` | New `TestRegenerateFlagsForRange` class appended. | 3 |
 
@@ -447,20 +447,6 @@ class TestIntradayNoShow(unittest.TestCase):
 
         self.assertEqual(self._codes(insert_flag), [])
 
-    def test_a_day_with_punches_still_takes_the_missing_time_path(self):
-        insert_flag, _ = self._run(
-            checkins=[
-                {
-                    "name": "IN-1",
-                    "time": datetime(2026, 5, 28, 8, 0),
-                    "custom_device_branch": "BRANCH-A",
-                }
-            ]
-        )
-
-        self.assertIn("MISSING_TIME", self._codes(insert_flag))
-        self.assertNotIn("UNNOTIFIED_ABSENCE", self._codes(insert_flag))
-
     def test_the_provisional_no_show_is_cleaned_up_on_the_next_pass(self):
         # The self-healing guarantee. Intraday deletes its own previous
         # provisional rows scoped to INTRADAY_FLAG_CODES; if UNNOTIFIED_ABSENCE
@@ -476,11 +462,53 @@ class TestIntradayNoShow(unittest.TestCase):
         )
 ```
 
-Add `dt_time` to the existing datetime import at the top of the file if it is not already there:
+Add `dt_time` to the existing datetime import at the top of the file — it is currently
+`from datetime import date, datetime` and `dt_time` is needed:
 
 ```python
 from datetime import date, datetime, time as dt_time
 ```
+
+- [ ] **Step 1a: Repoint the existing test that pins the old behaviour**
+
+`TestIntradayRefresh.test_missing_time_when_zero_checkins` (line 22) sets up exactly the
+scenario this task changes — zero checkins, both gates open, `evaluate_missing_time_flags`
+returning one row — and asserts the **old** outcome, including
+`self.assertNotIn("UNNOTIFIED_ABSENCE", flag_codes)`. After Step 4 all three of its
+outcome assertions fail and its `next(...)` raises `StopIteration`.
+
+Do not delete it. It carries two assertions nothing else makes: that the delete call is
+scoped to `day_closed=0`, and that the `MISSING_TIME` insert is written provisionally. Move
+it onto the punched-day path, where those assertions stay true and its
+`assertNotIn("UNNOTIFIED_ABSENCE", ...)` becomes a genuine guard — a day with punches must
+never produce a no-show.
+
+Rename the method:
+
+```python
+    def test_missing_time_is_written_provisionally(
+```
+
+and change its `_get_checkins_for_day` patch (line 18) from `return_value=[]` to a single
+punch whose branch matches the employee's, so the non-primary-site check stays silent and
+the insert list holds `MISSING_TIME` alone:
+
+```python
+    @patch(
+        "dewey_time.attendance_engine.intraday._get_checkins_for_day",
+        return_value=[
+            {
+                "name": "IN-1",
+                "time": datetime(2026, 5, 28, 8, 0),
+                "custom_device_branch": "BRANCH-A",
+            }
+        ],
+    )
+```
+
+Leave every assertion in its body unchanged. Leave its `datetime(...)` shift-meta values
+alone too — they parse to `None` under Global Constraint 2, but this test mocks
+`evaluate_missing_time_flags`, so nothing depends on them. Fixing that is not this task.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -488,7 +516,7 @@ from datetime import date, datetime, time as dt_time
 bash dev/sandbox/frappe-sandbox test --backend --fast --module test_intraday
 ```
 
-Expected: `test_zero_punches_raises_one_no_show_and_no_missing_time` fails with `['MISSING_TIME'] != ['UNNOTIFIED_ABSENCE']`; the provisional/origin test fails on `KeyError: 'reason'`; the cleanup test fails on the `assertIn` against `INTRADAY_FLAG_CODES`. `test_a_day_with_punches_still_takes_the_missing_time_path` and the two suppression tests PASS already — they are regression guards.
+Expected: `test_zero_punches_raises_one_no_show_and_no_missing_time` fails with `['MISSING_TIME'] != ['UNNOTIFIED_ABSENCE']`; `test_the_no_show_is_provisional_and_names_its_origin` fails on `KeyError: 'reason'`; `test_the_provisional_no_show_is_cleaned_up_on_the_next_pass` fails on the `assertIn` against `INTRADAY_FLAG_CODES`. The two suppression tests and the repointed `test_missing_time_is_written_provisionally` PASS already — they are regression guards, and the repointed one passing both before and after is the point: Step 1a moved it off the behaviour this task changes and onto behaviour it must not change.
 
 - [ ] **Step 3: Add the code to the delete list**
 
@@ -593,7 +621,7 @@ with:
 bash dev/sandbox/frappe-sandbox test --backend --fast --module test_intraday
 ```
 
-Expected: all pass. **The count must be 8 + 7 = 15.** Report the number.
+Expected: all pass. **The count must be 8 + 6 = 14** — six new tests, and the existing zero-checkin test repointed rather than added to. Report the number.
 
 - [ ] **Step 6: Mutation-check both halves (Global Constraint 6)**
 
