@@ -1801,3 +1801,82 @@ test("a many-flag person shows one card and the rest compressed, and any of them
   await expect(cards).toHaveCount(2);
   await expect(compressed).toHaveCount(2);
 });
+
+// The pin, which is a geometric claim and therefore cannot live in the unit
+// suite (Global Constraint 7: renderToStaticMarkup + regex, no layout). The
+// unit test beside this one asserts only that a body and a footer EXIST and
+// carry the right utilities — it stays green if the footer is nested back
+// inside the body, which is exactly what a careless refactor produces. This is
+// the test that catches that, so it must assert both halves:
+//
+//   1. the footer's box does not move while the body scrolls, and
+//   2. something that was below the fold is now above it.
+//
+// (1) alone passes for a footer that merely exists above an unscrollable body.
+// (2) is what makes it a pin rather than a static bar.
+test("the decision footer stays put while the evidence scrolls behind it", async ({ page }) => {
+  // Explicitly short and explicitly ≥ lg. The pin is an lg-only layout — below
+  // that breakpoint the panel has no bounded height and the whole column
+  // scrolls as one — and the four-flag fixture does not overflow a tall
+  // window. Set here rather than at project level so this runs identically in
+  // both the desktop and mobile projects.
+  await page.setViewportSize({ width: 1280, height: 460 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 4,
+            people: 1,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  const body = page.locator('[data-slot="decision-body"]');
+  const footer = page.locator('[data-slot="decision-footer"]');
+  await expect(footer).toBeVisible();
+
+  // Asserted, not assumed: if the fixture or the card ever shrinks enough to
+  // fit, everything below would pass vacuously and prove nothing.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, "the body must have more evidence than fits, or this proves nothing").toBeGreaterThan(40);
+
+  const lastOneLiner = page.locator('[data-slot="flag-one-liner"]').last();
+  const footerBefore = await footer.boundingBox();
+  const evidenceBefore = await lastOneLiner.boundingBox();
+
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(40);
+
+  const footerAfter = await footer.boundingBox();
+  const evidenceAfter = await lastOneLiner.boundingBox();
+
+  // 1. The footer did not move, in either position or size.
+  expect(footerAfter?.y).toBeCloseTo(footerBefore?.y ?? -1, 0);
+  expect(footerAfter?.height).toBeCloseTo(footerBefore?.height ?? -1, 0);
+  // 2. The evidence did — it travelled up, behind the footer that did not.
+  expect(evidenceAfter?.y ?? 0).toBeLessThan(evidenceBefore?.y ?? 0);
+
+  // And the footer's bottom edge is the panel column's bottom edge, which is
+  // what "pinned" means here. A footer merely sitting last in a scrolled body
+  // would satisfy neither this nor (1).
+  const panel = page.getByRole("region", { name: "Selected flag" });
+  const panelBox = await panel.boundingBox();
+  expect((footerAfter?.y ?? 0) + (footerAfter?.height ?? 0)).toBeCloseTo(
+    (panelBox?.y ?? 0) + (panelBox?.height ?? 0),
+    0,
+  );
+});

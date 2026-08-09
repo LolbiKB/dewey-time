@@ -37,6 +37,7 @@ import {
   priorDecisionLabel,
   reasonLabel,
   restHeading,
+  sameReasonPinnedLabel,
 } from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
 import type { Flag } from "@/types/calendar";
@@ -249,59 +250,73 @@ function PersonDecision(props: FlagDecisionPanelProps & { entry: PersonEntry }) 
       </div>
 
       {/* The one target HR hits hundreds of times a session, taken out of the
-          scroll. Guarded on `worst` for the same reason the card above is: a
-          person carrying no flags has nothing for this footer to write. */}
-      <div
-        data-slot="decision-footer"
-        className="shrink-0 border-t border-border/60 bg-background pt-2.5"
-      >
-        {worst ? (
-          <>
-            <div className="mb-1.5 text-xs text-muted-foreground">
-              {DECIDING_PREFIX}{" "}
-              <span className="font-medium text-foreground">
-                {decidingLabel(props.entry, worst)}
-              </span>
-            </div>
-            {props.activeIdentity === worst.flag_identity ? (
-              <DecisionForm
-                draft={props.draft}
-                onChange={props.onDraftChange}
-                submitLabel={outcomeActionLabel(props.draft.outcome)}
-                onSubmit={() => props.onSubmit(flagIdentities(worst), props.draft)}
-                onCancel={() => props.onOpenFlag(null)}
-                submitting={props.submitting}
-              />
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => props.onOpenFlag(worst.flag_identity)}>
-                  {worst.decision_state === "matched" ? DECIDE_AGAIN_LABEL : "Decide"}
+          scroll. The whole element is guarded on `worst`, not just its
+          contents: a person carrying no flags has nothing to write, and a bare
+          rule across the panel's bottom edge reads as a control that failed to
+          load rather than as one that was never needed.
+
+          `max-h-[70%] overflow-y-auto` is the escape hatch. `shrink-0` pins the
+          footer and the wrapper around this panel no longer scrolls, so on a
+          short lg window (split screen, or heavy browser chrome) a tall footer
+          — the group's form is 285px before anything opens — would otherwise be
+          clipped with no way to reach its submit button. The cap still leaves
+          the body a share; the overflow makes the remainder reachable. */}
+      {worst ? (
+        <div
+          data-slot="decision-footer"
+          className="max-h-[70%] shrink-0 overflow-y-auto border-t border-border/60 bg-background pt-2.5"
+        >
+          <div className="mb-1.5 text-xs text-muted-foreground">
+            {DECIDING_PREFIX}{" "}
+            <span className="font-medium text-foreground">{decidingLabel(worst)}</span>
+          </div>
+          {props.activeIdentity === worst.flag_identity ? (
+            <DecisionForm
+              draft={props.draft}
+              onChange={props.onDraftChange}
+              submitLabel={outcomeActionLabel(props.draft.outcome)}
+              onSubmit={() => props.onSubmit(flagIdentities(worst), props.draft)}
+              onCancel={() => props.onOpenFlag(null)}
+              submitting={props.submitting}
+            />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant={worst.decision_state === "matched" ? "outline" : "default"}
+                onClick={() => props.onOpenFlag(worst.flag_identity)}
+              >
+                {worst.decision_state === "matched" ? DECIDE_AGAIN_LABEL : "Decide"}
+              </Button>
+              {/* Moved from FlagCard's own button row along with Decide — the
+                  footer owns this flag's controls, and that block held two.
+                  Gated on the FLAG, not on `remaining.length > 1` like the
+                  banner above: when exactly one undecided flag is left it IS
+                  `worst`, so the banner is off and this is the only one-click
+                  repeat there is. Undecided flags only — repeating a decision
+                  onto a flag that already has one is a supersession nobody
+                  asked for, recorded under HR's name.
+
+                  It states its payload, which the card's version did not have
+                  to: that one scrolled away behind a full-height card, and this
+                  one sits on the bottom edge of every session. A permanent
+                  one-click write says which write. */}
+              {worst.decision_state !== "matched" && props.lastDecision ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={props.submitting}
+                  onClick={() =>
+                    props.onSubmit(flagIdentities(worst), props.lastDecision as PendingDecision)
+                  }
+                >
+                  {sameReasonPinnedLabel(props.lastDecision)}
                 </Button>
-                {/* Moved from FlagCard's own button row along with Decide — the
-                    footer owns this flag's controls, and that block held two.
-                    Gated on the FLAG, not on `remaining.length > 1` like the
-                    banner above: when exactly one undecided flag is left it IS
-                    `worst`, so the banner is off and this is the only one-click
-                    repeat there is. Undecided flags only — repeating a decision
-                    onto a flag that already has one is a supersession nobody
-                    asked for, recorded under HR's name. */}
-                {worst.decision_state !== "matched" && props.lastDecision ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={props.submitting}
-                    onClick={() =>
-                      props.onSubmit(flagIdentities(worst), props.lastDecision as PendingDecision)
-                    }
-                  >
-                    {SAME_REASON_LABEL}
-                  </Button>
-                ) : null}
-              </div>
-            )}
-          </>
-        ) : null}
-      </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -374,7 +389,24 @@ function FlagCard(props: {
               {flagDayLabel(props.dateKey)}
             </span>
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {/* The READING measure. It belongs here and not on the panel wrapper
+              because `ch` resolves against the element's own font: the wrapper
+              inherits ~16px, this runs at `text-xs`, so the same "62ch" means
+              two different widths in the two places. Measured at 1440px with
+              the wrapper's column cap in force — 12px text, ch = 7.96px — this
+              paragraph ran 515px ≈ 64.7 characters; with this cap it is 493px
+              = 62.0, which is the number Decision 2 asked for.
+
+              A 3-character trim, not a 30-character one: the column cap on the
+              wrapper had already done most of the work. The point of stating
+              the measure here anyway is that 62 becomes explicit and
+              font-relative instead of an accident of the column arithmetic —
+              retune the column and this stays put.
+
+              Prose only. The facts grid, the evidence table and the forms
+              below are tabular and control layout, and a measure would squeeze
+              them for nothing. */}
+          <p className="mt-1 max-w-[62ch] text-xs leading-relaxed text-muted-foreground">
             {flagSummary(flag.flag_code)}
           </p>
         </div>
@@ -395,7 +427,9 @@ function FlagCard(props: {
           dl/dt/dd idiom for the raw evidence.rows, unfiltered). This card
           always computes against EMPTY_NARRATIVE_DAY (see above) — this
           surface has no live calendar day. */}
-      <div className="space-y-1">
+      {/* Prose, so it carries the reading measure too — see the explainer
+          above for why 62ch belongs on the text and not on the column. */}
+      <div className="max-w-[62ch] space-y-1">
         <p className="text-xs font-medium leading-relaxed text-foreground">{narrative.headline}</p>
         {narrative.subline ? (
           <p className="text-[11px] leading-relaxed text-muted-foreground">{narrative.subline}</p>
@@ -554,7 +588,12 @@ function GroupDecision(props: FlagDecisionPanelProps & { entry: GroupEntry }) {
 
         <section className="space-y-1.5">
           <div className="text-xs font-medium text-muted-foreground">Who this covers</div>
-          <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 px-2 py-1.5">
+          {/* No `max-h-72` of its own any more. The cap always sat inside a
+              scroller, but that scroller used to be the whole panel column;
+              now it is a body roughly 270px tall, so a 288px cap never binds
+              and only plants a second scroll boundary within a few pixels of
+              the body's own — the worst place to put one. The body scrolls. */}
+          <ul className="space-y-0.5 rounded-lg border border-border/60 px-2 py-1.5">
             {entry.members.map((member) => {
               const crossReference = crossReferenceLabel(member);
               return (

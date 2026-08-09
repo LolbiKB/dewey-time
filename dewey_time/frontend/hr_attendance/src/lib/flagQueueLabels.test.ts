@@ -11,6 +11,7 @@ import {
   DECIDE_ONE_LABEL,
   DECIDED_TOGGLE_LABEL,
   DECIDING_PREFIX,
+  decidingLabel,
   DECISION_STATE_LABELS,
   decisionStateLabel,
   DEVICE_HEALTH_LABEL,
@@ -54,6 +55,7 @@ import {
   reasonLabel,
   restHeading,
   routineCodeHeader,
+  sameReasonPinnedLabel,
   showDecidedLabel,
   stripAriaLabel,
   TIER_FILTER_ALL_LABEL,
@@ -966,6 +968,38 @@ test("restHeading refuses to name one code as all of them", () => {
   const heading = restHeading([missingTime(60), lateStart(12)]);
   assert.equal(heading, "The other 2 — Mixed findings");
   assert.doesNotMatch(heading, /Missing time|Late start/);
+});
+
+test("decidingLabel names the pinned footer's target by finding AND day", () => {
+  // Both halves, joined by " · ". The joined form is also what tells the
+  // footer apart from the card above it in flagQueuePage.test.tsx — the card
+  // renders the same two facts in two separate spans — so the exact string
+  // matters, not just its parts.
+  assert.equal(decidingLabel(missingTime(240)), "Missing 4h · 3 Aug");
+  // A code whose label ignores its evidence still gets its day.
+  assert.equal(decidingLabel(lateStart(12)), "Late start · 3 Aug");
+});
+
+test("two identical findings on different days do not get the same label", () => {
+  // Why the day is in there at all: three "Missing 4h" cards in one entry are
+  // three different mornings, and the finding alone would name all three.
+  const first = missingTime(240);
+  const second = { ...missingTime(240), attendance_date: "2026-08-04" };
+  assert.notEqual(decidingLabel(first), decidingLabel(second));
+  assert.equal(decidingLabel(second), "Missing 4h · 4 Aug");
+});
+
+test("the pinned repeat states the decision it will write, not just its name", () => {
+  // This control never scrolls away: it is permanently one click from a real
+  // write on real employee records, so the caption has to say which write.
+  assert.equal(
+    sameReasonPinnedLabel({ outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" }),
+    "Same reason applies — Excused, Device or data fault",
+  );
+  assert.equal(
+    sameReasonPinnedLabel({ outcome: "UPHELD", reason: "OTHER", note: "spoke to them" }),
+    "Same reason applies — Upheld, Other",
+  );
 });
 
 test("every branch-row string is pinned, not just the ones a component happens to use", () => {

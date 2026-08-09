@@ -19,6 +19,7 @@ import {
   outcomeActionLabel,
   partialFailureMessage,
   reasonLabel,
+  sameReasonPinnedLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import type { DecisionState, FlagDecision, FlagOut, QueueEntry, QueuePerson, Tier } from "@/types/flags";
@@ -2003,10 +2004,19 @@ test("the panel is a scrolling body above a footer that is not in the scroll", (
   // The body scrolls and the footer does not. Asserted as separate substrings
   // rather than one `data-slot=…[^>]*class=` regex: that form silently depends
   // on JSX attribute order, so reordering two props would break the test
-  // without changing the rendered layout at all.
+  // without changing the rendered layout at all. Each class is matched on its
+  // own for the same reason one level down — Tailwind class order within a
+  // string is arbitrary, and `/shrink-0 border-t/` broke the moment a sizing
+  // utility was added between them.
   assert.match(html, /data-slot="decision-body"/);
   assert.match(html, /overflow-y-auto/);
-  assert.match(html, /shrink-0 border-t/);
+  assert.match(html, /shrink-0/);
+  assert.match(html, /border-t/);
+  // This is a STRUCTURE check and nothing more: it stays green if the footer
+  // is nested back inside the body, which is the likelier regression and the
+  // one a careless refactor produces. GC7 bars geometry from the unit suite,
+  // so the pin itself is proved in e2e/flags.spec.ts ("the decision footer
+  // stays put while the evidence scrolls behind it").
 });
 
 test("the pinned footer names the flag it is about to write", () => {
@@ -2053,13 +2063,17 @@ test("the footer arms nothing on its own", () => {
   assert.match(open, /role="group" aria-label="Outcome"/);
 });
 
-test("a person carrying no flags gets a footer with nothing to write", () => {
+test("a person carrying no flags gets no footer at all, not empty chrome", () => {
   const entry: PersonEntry = {
     kind: "person",
     ...makePerson({ employee: "HR-EMP-00022", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
   };
   const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
   assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  // Not merely "no controls in it". A guard around the CONTENTS still draws a
+  // rule across the panel's bottom edge, and empty chrome reads as a control
+  // that failed to load rather than as one that was never needed.
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 0);
   assert.doesNotMatch(html, /Deciding/);
 });
 
@@ -2106,17 +2120,16 @@ test("the last undecided flag keeps its one-click repeat", () => {
     }),
   };
 
+  const repeat: PendingDecision = { outcome: "EXCUSED", reason: "APPROVED_LEAVE", note: "" };
   const html = renderToStaticMarkup(
-    <FlagDecisionPanel
-      {...panelProps({
-        entry,
-        lastDecision: { outcome: "EXCUSED", reason: "APPROVED_LEAVE", note: "" },
-      })}
-    />,
+    <FlagDecisionPanel {...panelProps({ entry, lastDecision: repeat })} />,
   );
 
-  assert.match(html, new RegExp(`>${SAME_REASON_LABEL}<`));
+  // The PINNED form of the label, which states the payload. This control never
+  // scrolls away, so it is permanently one click from a real write and has to
+  // say which write — the bare SAME_REASON_LABEL would not.
+  assert.match(html, new RegExp(`>${sameReasonPinnedLabel(repeat)}<`));
   // The person-level banner is genuinely off, so this is not passing on the
-  // banner's copy by accident.
+  // banner's copy by accident — the banner composes the same sentence.
   assert.doesNotMatch(html, /Apply to remaining/);
 });

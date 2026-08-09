@@ -21,6 +21,7 @@
 import { format } from "date-fns";
 
 import { formatBranchLabel, parseDateKey } from "@/lib/attendanceTime";
+import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
 import { formatFlagLabel, formatMissingDuration, parseFlagEvidence } from "@/lib/flagLabels";
 import type { Strip } from "@/lib/flagStrip";
@@ -455,13 +456,15 @@ export function restHeading(rest: FlagOut[]): string {
 export const DECIDING_PREFIX = "Deciding";
 
 /**
- * Names what the pinned footer is about to write. A person's footer targets one
- * flag on one day, so it says both — three "Missing 4h" cards in one entry are
- * three different mornings. A group's footer targets its whole membership, and
- * groupSubline already states that size.
+ * Names what the pinned footer is about to write: one flag on one day, so it
+ * says both — three "Missing 4h" cards in one entry are three different
+ * mornings, and the finding alone would not tell them apart.
+ *
+ * A flag, not an entry. Only a person's footer names its target: a group's
+ * submit button already reads "Excuse 9", so "Deciding 9 people" above it would
+ * restate the size rather than disambiguate anything.
  */
-export function decidingLabel(entry: QueueEntry, flag: FlagOut): string {
-  if (entry.kind === "group") return groupSubline(entry);
+export function decidingLabel(flag: FlagOut): string {
   return `${formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))} · ${flagDayLabel(flag.attendance_date)}`;
 }
 
@@ -748,6 +751,13 @@ export function applyToRemainingLabel(count: number): string {
 }
 
 export const SAME_REASON_LABEL = "Same reason applies";
+
+/** The pinned repeat states its payload. Unlike the banner's version this
+ *  control never scrolls away, so it is permanently one click from a write —
+ *  it has to say which write. */
+export function sameReasonPinnedLabel(decision: PendingDecision): string {
+  return `${SAME_REASON_LABEL} — ${outcomeLabel(decision.outcome)}, ${reasonLabel(decision.reason)}`;
+}
 
 /** Breaks a cause group into its member rows when it turns out not to be uniform. */
 export const DECIDE_ONE_BY_ONE_LABEL = "Decide one by one";

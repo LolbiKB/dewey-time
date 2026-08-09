@@ -1161,11 +1161,20 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             <div
               role="region"
               aria-label="Selected flag"
-              // A measure, not a stretch. Decision 2: the panel took 724px and
-              // spent it on prose at 106 characters per line and a Reason select
-              // 724px wide for a 22-character option. Task 5 gave the list the
-              // width it was starved of; this stops the panel spreading into
-              // whatever is left on a wide screen.
+              // A measure, not a stretch. Decision 2 complained about two
+              // different things under one number, and they need two fixes.
+              // This cap is the CONTROLS half: a Reason select 724px wide for a
+              // 22-character option, a segmented control with its two options
+              // 360px apart, a facts grid placing `Gap` 320px from `4h`. It
+              // takes the column from ~884px to ~658px and settles all three.
+              //
+              // It is NOT the reading half, and must not be retuned as if it
+              // were: `ch` here resolves against this element's inherited ~16px,
+              // while the prose it would be measuring is `text-xs`. The reading
+              // measure lives on the prose itself (FlagDecisionPanel's
+              // flagSummary paragraph and narrative block). Sizing this column
+              // for 62 characters of 12px text would need ~424px, which the same
+              // spec section rules out — "the decision form does not fit that".
               //
               // `overflow-hidden`, not `overflow-y-auto`: the panel owns its own
               // scrolling now, and a second scroller around it would let the
