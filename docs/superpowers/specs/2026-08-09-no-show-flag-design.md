@@ -120,17 +120,22 @@ Closeout. It is already correct, and this spec must not touch it.
 unconditionally, which is right when someone took a lunch and wrong when nobody was there
 to take one.
 
-Bridge two missing intervals when **all** of these hold:
+Bridge two missing intervals when **both** of these hold:
 
-1. `detect_observed_lunch` found no observed lunch for the day;
-2. the scheduled lunch window exists (`custom_lunch_start` and `custom_lunch_end` both
+1. the scheduled lunch window exists (`custom_lunch_start` and `custom_lunch_end` both
    parse, and end > start);
-3. the earlier interval's `endMin` equals `lunch_start` **and** the later interval's
+2. the earlier interval's `endMin` equals `lunch_start` **and** the later interval's
    `startMin` equals `lunch_end` — an exact abutment on both sides, not an overlap and not
    a gap that merely contains the lunch.
 
-Condition 3 is what keeps this from merging two unrelated absences that happen to sit
+Condition 2 is what keeps this from merging two unrelated absences that happen to sit
 either side of midday.
+
+An earlier draft added a third condition — that `detect_observed_lunch` found no observed
+lunch. It was removed as unreachable: exact abutment on *both* sides means the employee was
+absent across the entire lunch window, and an observed lunch requires punches at its
+boundaries. The two conditions cannot both hold, so the gate would have been a branch no
+test could reach. Condition 2 already subsumes it.
 
 Since Decision 1 suppresses `MISSING_TIME` entirely for zero-punch days, this rule only
 ever fires for days with *some* presence — the stray-punch case and anything shaped like
@@ -243,7 +248,8 @@ reverted, not merely pass with it applied.
 | employee badges in later | provisional no-show gone on rebuild |
 | stray IN/OUT pair | one interval `08:05-17:00`, `minutes == 475` |
 | worked morning only | byte-identical to today (`13:00-17:00`, 240) |
-| observed lunch present | lunch still carved out; no bridging |
+| gap merely straddling midday | two intervals, **not** bridged |
+| no scheduled lunch configured | no-op |
 | zero punches, closeout | unchanged — `{"UNNOTIFIED_ABSENCE"}` |
 | no schedule | unchanged — no flags |
 

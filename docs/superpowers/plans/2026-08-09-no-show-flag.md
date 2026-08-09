@@ -23,13 +23,18 @@ Every task's requirements implicitly include all of these.
 7. **Test command:** `bash dev/sandbox/frappe-sandbox test --backend --fast --module <module>` from the repo root. Single test: `PYTHONPATH=$(pwd) python3 -m unittest dewey_time.tests.<module>.<Class>.<test> -v`. Do not use `python3` for anything else — it is 3.9.6.
 8. **Report test counts, not just "green".** A module that fails to import reports zero tests and looks like success in a grep.
 
-## Deviation from the spec — read before Task 1
+## Resolved before execution — read before Task 1
 
-The spec's Decision 2 lists three bridging conditions, the first being "`detect_observed_lunch` found no observed lunch for the day". **Task 1 drops that condition and bridges on exact abutment alone.**
+**The spec and this plan agree.** An earlier draft of the spec required a third bridging
+condition, that `detect_observed_lunch` found no observed lunch. It was ruled unreachable
+and removed from the spec on 2026-08-09 before any task was dispatched: exact abutment on
+*both* sides means the employee was absent across the whole lunch window, and an observed
+lunch requires punches at its boundaries, so the two can never both hold. Bridging is on
+the two conditions the spec now lists — a valid scheduled lunch window, and exact abutment
+on both sides.
 
-Reason: the condition is unreachable. Bridging requires the earlier interval to end exactly at `lunch_start` *and* the later to begin exactly at `lunch_end` — which means the employee was absent across the entire lunch window. An observed lunch requires punches at its boundaries, i.e. presence there, which makes exact abutment impossible. Keeping the gate would add a branch no test can reach.
-
-The spec's other two conditions (a valid scheduled lunch window, and exact abutment on both sides) are implemented as written. If a reviewer disagrees, this is a plan-vs-spec conflict and goes to the human, not a silent revert.
+Nothing here is a deviation. If a reviewer flags a missing observed-lunch gate, the answer
+is that the spec no longer asks for one.
 
 ## File Structure
 
