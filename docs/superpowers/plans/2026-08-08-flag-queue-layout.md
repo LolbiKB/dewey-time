@@ -2924,33 +2924,94 @@ git commit -m "feat(flag-queue): the decision controls stop moving"
 
 **Do not use `useIsMobile` here.** Its breakpoint is **768**, and its own comment says so: *"the data table switches later, at lg/1024"*. The grid splits at `lg`. Wiring the sheet to `useIsMobile` leaves **768–1023px showing neither** — no split (below `lg`) and no sheet (not "mobile") — which is a blank right-hand column and a decision form nothing can open. The spec fixes the split at `lg` deliberately: *"at 768px the panel would be 340px, narrower than the list beside it, and the decision form does not fit that."* So the sheet needs a breakpoint that matches the grid, not the nav shell.
 
+**Controller notes — read before Step 1.** Five things checked against the code after Tasks 8 and 9 landed. Three of them are defects in this task's first draft:
+
+1. **`ResponsiveModal` picks its own surface with `useIsMobile()` (768)** — `components/ResponsiveModal.tsx:52`: a bottom `Sheet` below 768, a centered `Dialog` above. So gating the modal's *presence* on `useIsBelowLg()` (1024) is correct and does close the dead band, but **in 768–1023px what opens is a Dialog, not a bottom sheet.** That is fine — the point of the task is that the decision reaches you rather than sitting below the list — but Step 5's manual check said "the sheet opens" at 900px and it will not. Do not chase that as a bug. Both legs render `role="dialog"` (Radix `SheetContent` is `DialogPrimitive` underneath), so a single locator covers both.
+2. **Step 1's test had no route stub.** Its comment said "Reuse the two-entry payload from the outage test" and the code only called `page.goto`. `stubFrappe` (`e2e/fixtures.ts:123`) stubs no queue data — it only skips the brand intro — so the list would be empty and the first click would time out. A real fixture is given below.
+3. **`toBeInViewport()` on the Outcome group could not pass after Task 9.** That group now renders only once the footer's form is opened, which needs a `Decide` click first. The assertion below checks the pinned footer is in the viewport — which is the task's actual claim — and only then opens the form.
+4. **Task 9's shell may not pin inside the sheet.** The panel is `flex h-full min-h-0 flex-col`; `ResponsiveModal`'s mobile body is `min-h-0 flex-1 overflow-y-auto overscroll-contain` inside a `max-h-[min(85dvh,42rem)] flex flex-col` `SheetContent`. That is two nested scrollers, and `h-full` resolving against a flex-sized parent. Pass `bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"` so the panel owns its own scrolling, and **prove the pin inside the sheet** rather than assuming it — Task 9 shipped exactly this assertion for the desktop split, and the mobile one is a different container.
+5. The `mobile` Playwright project is below 768, so it exercises the `Sheet` leg only. Nothing in this plan covers the `Dialog` leg at 900px except the manual check in Step 5.
+
 - [ ] **Step 1: Write the failing e2e test**
 
-Append to `e2e/flags.spec.ts` (the Playwright config already defines a `mobile` project):
+Append to `e2e/flags.spec.ts`, after `A11Y_PAYLOAD`'s declaration (~line 1004). The Playwright config already defines a `mobile` project. Global Constraint 10 applies to every literal — `satisfies` clauses naming the contract type.
 
 ```ts
 test("on a phone the decision comes to you, and the list keeps its place", async ({ page }) => {
-  // Reuse the two-entry payload from the outage test.
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
   await page.goto("/hr-flags");
 
   const list = page.getByRole("list", { name: "Flag queue" });
   await list.getByRole("button").first().click();
 
-  // The form is on screen without scrolling — today it is a sibling AFTER the
-  // full list, so on the real queue it sits 9,146px below the tap.
-  const form = page.getByRole("dialog");
-  await expect(form).toBeVisible();
-  await expect(form.getByRole("group", { name: "Outcome" })).toBeInViewport();
+  // The decision is on screen without scrolling — today the panel is a sibling
+  // AFTER the full list, so on the real queue it sits 9,146px below the tap.
+  // The pinned footer is what has to be reachable: the Outcome group does not
+  // exist until the form is opened, which is Task 9's deliberate un-arming.
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator('[data-slot="decision-footer"]')).toBeInViewport();
+
+  await sheet.getByRole("button", { name: "Decide", exact: true }).click();
+  await expect(sheet.getByRole("group", { name: "Outcome" })).toBeInViewport();
 
   await page.keyboard.press("Escape");
   await expect(list.getByRole("button").first()).toBeVisible();
 });
+
+test("the footer stays pinned inside the sheet, not just inside the split", async ({ page }) => {
+  // Task 9 proved the pin against the desktop panel column. The sheet is a
+  // different container — `max-h-[min(85dvh,42rem)]` with its own scroller —
+  // and `h-full` resolving against a flex-sized parent is exactly where a pin
+  // silently degrades into "the whole thing scrolls as one".
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  const footer = page.getByRole("dialog").locator('[data-slot="decision-footer"]');
+  const before = await footer.boundingBox();
+
+  const body = page.getByRole("dialog").locator('[data-slot="decision-body"]');
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+
+  // Byte-identical, and something that was below the fold is now above it —
+  // the second half is what distinguishes a pinned footer from a static one
+  // in a container that never scrolled at all.
+  expect(await footer.boundingBox()).toEqual(before);
+  await expect(page.locator('[data-slot="flag-one-liner"]').last()).toBeInViewport();
+});
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+`MANY_FLAG_PERSON` is Task 8's four-flag fixture, already in this file.
 
-Run: `npx playwright test e2e/flags.spec.ts -g "on a phone" --project=mobile`
-Expected: FAIL — no dialog.
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `npx playwright test e2e/flags.spec.ts -g "on a phone|pinned inside the sheet" --project=mobile`
+Expected: FAIL — no dialog. Record the real output.
 
 - [ ] **Step 3: Add the matching breakpoint hook**
 
@@ -3008,6 +3069,15 @@ Below `lg`, render the list alone at full height, and the panel inside a `Respon
             onOpenChange={props.onPanelOpenChange}
             title={props.panelTitle}
             size="lg"
+            // The panel owns its own scrolling since Task 9 — its body scrolls
+            // and its footer is pinned. ResponsiveModal's default body is
+            // `min-h-0 flex-1 overflow-y-auto`, which would wrap that in a
+            // SECOND scroller and let the pinned footer scroll away, which is
+            // the exact failure this task is supposed to fix on the surface
+            // where it matters most. `overflow-hidden` wins over the default
+            // through twMerge; `flex flex-col` gives the panel's `h-full` a
+            // parent whose height is actually resolved.
+            bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
           >
             {props.panel}
           </ResponsiveModal>
@@ -3049,7 +3119,10 @@ Pass `belowLg` to the view too, rather than calling the hook inside `FlagQueueVi
 - [ ] **Step 5: Check the 768–1023px band by hand**
 
 `npm run dev`, open `/hr-flags`, and resize to 900px wide. Click a row.
-Expected: the sheet opens. If you get a blank right-hand column instead, the sheet is wired to `useIsMobile` (768) rather than `useIsBelowLg` (1024) — the exact gap this task exists to avoid.
+
+Expected: **a centered Dialog opens** — not a bottom sheet. `ResponsiveModal` chooses its own surface with `useIsMobile()` at 768 (`components/ResponsiveModal.tsx:52`), so above that breakpoint it renders the Dialog leg. That is correct and is not a bug to chase. The failure this step looks for is a **blank right-hand column with nothing openable**, which would mean the modal's presence was wired to `useIsMobile` (768) rather than `useIsBelowLg` (1024) — the gap this task exists to close.
+
+Then check the same property the mobile test checks: scroll the panel body inside the Dialog and confirm the footer holds. The `mobile` Playwright project runs below 768, so it exercises the Sheet leg only — this manual step is the only coverage the Dialog leg gets.
 
 - [ ] **Step 6: Run the mobile project**
 
@@ -3061,10 +3134,16 @@ Expected: PASS.
 Run: `npm run test:e2e && npm run test:web && npm run typecheck`
 Expected: all pass. **Record the three counts.**
 
-- [ ] **Step 8: Mutation-test the sheet**
+- [ ] **Step 8: Mutation-test the sheet — two mutations, both required**
 
-Temporarily set `panelOpen` to a constant `false`. Run `npx playwright test -g "on a phone" --project=mobile`.
-Expected: FAIL. Revert.
+They are separate claims: that the decision reaches you at all, and that it stays reachable once you scroll.
+
+1. Set `panelOpen` to a constant `false`. Run `npx playwright test -g "on a phone" --project=mobile`.
+   Expected: FAIL. Revert.
+2. Remove the `bodyClassName` override from `ResponsiveModal`, so its default `overflow-y-auto` body wraps the panel in a second scroller. Run `npx playwright test -g "pinned inside the sheet" --project=mobile`.
+   Expected: FAIL — the footer's bounding box moves, because the sheet's own scroller carries it away. Revert.
+
+If mutation 2 passes, the pin test is not testing the pin — say so rather than moving on.
 
 - [ ] **Step 9: Build and commit**
 
