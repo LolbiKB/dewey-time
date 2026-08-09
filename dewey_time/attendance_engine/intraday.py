@@ -178,7 +178,15 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
                 company=employee_company,
                 attendance_date=attendance_date,
                 flag_code="UNNOTIFIED_ABSENCE",
-                evidence={**evidence, "reason": "on_shift_no_checkins_intraday"},
+                evidence={
+                    **evidence,
+                    "reason": "on_shift_no_checkins_intraday",
+                    # What the suppressed MISSING_TIME rows would have reported.
+                    # triage_rank bands a provisional no-show on these, so that a
+                    # day the engine has not finished judging does not outrank
+                    # every confirmed finding in the queue.
+                    "minutes": sum(extra.get("minutes") or 0 for _, extra in missing),
+                },
                 day_closed=0,
             )
         else:

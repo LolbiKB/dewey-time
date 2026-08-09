@@ -441,3 +441,35 @@ class TestUnattendedLunchBridging(unittest.TestCase):
         out = _bridge_scheduled_lunch(intervals, lunch_start=None, lunch_end=None)
 
         self.assertEqual(len(out), 2)
+
+    def test_a_real_zero_punch_day_yields_a_flag_above_the_threshold(self):
+        # intraday.py gates the no-show on this list being non-empty. Every
+        # test on both sides of that gate mocks this function, so without this
+        # an early `if not checkins: return []` added here would silence the
+        # no-show forever with both suites still green.
+        from dewey_time.attendance_engine.absence_flags import (
+            evaluate_missing_time_flags,
+        )
+
+        flags = evaluate_missing_time_flags(
+            checkins=[], shift_meta=self.SHIFT, attendance_date=self.DAY
+        )
+
+        self.assertEqual([code for code, _ in flags], ["MISSING_TIME"])
+        self.assertEqual(flags[0][1]["minutes"], 480)
+
+    def test_a_real_zero_punch_day_below_the_threshold_yields_nothing(self):
+        # The other half of the gate: 29 minutes in, no row -- which is why the
+        # no-show cannot appear earlier than the MISSING_TIME it replaces.
+        from dewey_time.attendance_engine.absence_flags import (
+            evaluate_missing_time_flags,
+        )
+
+        flags = evaluate_missing_time_flags(
+            checkins=[],
+            shift_meta=self.SHIFT,
+            attendance_date=self.DAY,
+            max_end_min=8 * 60 + 29,
+        )
+
+        self.assertEqual(flags, [])

@@ -441,3 +441,10 @@ class TestIntradayNoShow(unittest.TestCase):
         self.assertIn(
             "UNNOTIFIED_ABSENCE", delete_flags.call_args.kwargs["flag_codes"]
         )
+
+    def test_the_no_show_carries_the_minutes_it_stands_in_for(self):
+        # triage_rank cannot band a provisional no-show without them, and the
+        # queue would put a 31-minute absence above every real ATTENDANCE_ISSUE.
+        insert_flag, _ = self._run()
+
+        self.assertEqual(insert_flag.call_args_list[0].kwargs["evidence"]["minutes"], 480)
