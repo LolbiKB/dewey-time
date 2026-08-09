@@ -399,18 +399,38 @@ export function outageExcuseLabel(
  * for tier filters in 38fbea19, and `queueHeaderDescription`'s own docstring
  * explains why people-only counting misleads above a list that can hold one row
  * for several people. Dropping it here would silently undo both commits.
+ *
+ * @param includeDecided whether the `Decided` toggle is on. REQUIRED, and
+ *   deliberately not defaulted: it is the one control that changes WHO
+ *   `queuePeople` counts, so a caller that forgets it must not silently get the
+ *   wrong sentence. With it on, `queuePeopleCount(queue)` includes people whose
+ *   flags are already settled, and "N people need a decision" is then false
+ *   about every one of them — SHOWING_DECIDED_MESSAGE below the header
+ *   mitigates that and does not correct it. So the claim is dropped rather
+ *   than qualified, and the head falls back to the neutral count the page
+ *   carried before this sentence existed.
  */
 export function queueSplitDescription(
   queuePeople: number,
   queueRows: number,
   outagePeople: number,
+  includeDecided: boolean,
 ): string {
-  const head =
-    queuePeople === 0
-      ? "Nothing needs a decision"
-      : `${plural(queuePeople, "person needs", "people need")} a decision · ${plural(queueRows, "row", "rows")}`;
+  const head = splitHead(queuePeople, queueRows, includeDecided);
   if (outagePeople === 0) return head;
   return `${head} · ${outagePeople.toLocaleString("en-US")} waiting on a device fault`;
+}
+
+function splitHead(queuePeople: number, queueRows: number, includeDecided: boolean): string {
+  if (includeDecided) {
+    // "Nothing to show", not "Nothing needs a decision": with the toggle on a
+    // settled person is a row this list WOULD have shown, so an empty queue is
+    // a statement about the list, not about anyone's workload.
+    if (queuePeople === 0) return "Nothing to show";
+    return `${plural(queuePeople, "person", "people")} · ${plural(queueRows, "row", "rows")}`;
+  }
+  if (queuePeople === 0) return "Nothing needs a decision";
+  return `${plural(queuePeople, "person needs", "people need")} a decision · ${plural(queueRows, "row", "rows")}`;
 }
 
 /** A filter's no-filter option. "All consequences" reads as an inclusion

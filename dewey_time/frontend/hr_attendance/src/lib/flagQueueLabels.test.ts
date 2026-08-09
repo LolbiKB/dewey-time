@@ -897,30 +897,62 @@ test("the header splits waiting-on-you from waiting-on-a-device, and keeps rows"
   // because one row can stand for several people. Dropping it here would
   // silently undo both.
   assert.equal(
-    queueSplitDescription(134, 92, 256),
+    queueSplitDescription(134, 92, 256, false),
     "134 people need a decision · 92 rows · 256 waiting on a device fault",
   );
 });
 
 test("the header says nothing about device faults when there are none", () => {
-  assert.equal(queueSplitDescription(37, 21, 0), "37 people need a decision · 21 rows");
+  assert.equal(queueSplitDescription(37, 21, 0, false), "37 people need a decision · 21 rows");
 });
 
 test("one person left does not read as \"1 need a decision\"", () => {
   // The most common end state of a session, in the page's primary header.
-  assert.equal(queueSplitDescription(1, 1, 0), "1 person needs a decision · 1 row");
+  assert.equal(queueSplitDescription(1, 1, 0, false), "1 person needs a decision · 1 row");
 });
 
 test("a queue with nothing waiting still reads as a sentence", () => {
-  assert.equal(queueSplitDescription(0, 0, 0), "Nothing needs a decision");
+  assert.equal(queueSplitDescription(0, 0, 0, false), "Nothing needs a decision");
   assert.equal(
-    queueSplitDescription(0, 0, 256),
+    queueSplitDescription(0, 0, 256, false),
     "Nothing needs a decision · 256 waiting on a device fault",
   );
 });
 
 test("four-figure counts are grouped everywhere, not only in the band", () => {
-  assert.match(queueSplitDescription(1234, 900, 0), /1,234 people need/);
+  assert.match(queueSplitDescription(1234, 900, 0, false), /1,234 people need/);
+});
+
+// `Decided` is the one control that changes WHO is counted: with it on,
+// `queuePeopleCount(queue)` includes people whose flags are already settled, so
+// "N people need a decision" states something false about every one of them.
+// SHOWING_DECIDED_MESSAGE sits below the header and mitigates that; it does not
+// correct the sentence. These four pin the neutral wording that does.
+test("with decided rows included the header counts without claiming they need a decision", () => {
+  assert.equal(
+    queueSplitDescription(134, 92, 256, true),
+    "134 people · 92 rows · 256 waiting on a device fault",
+  );
+  assert.equal(queueSplitDescription(37, 21, 0, true), "37 people · 21 rows");
+});
+
+test("the neutral head is singular for one person and one row too", () => {
+  assert.equal(queueSplitDescription(1, 1, 0, true), "1 person · 1 row");
+});
+
+test("with decided rows included, an empty queue says nothing is showing", () => {
+  // NOT "Nothing needs a decision": with the toggle on, a settled person is a
+  // row this list would have shown, so the absence is about the list and not
+  // about anyone's workload.
+  assert.equal(queueSplitDescription(0, 0, 0, true), "Nothing to show");
+  assert.equal(
+    queueSplitDescription(0, 0, 256, true),
+    "Nothing to show · 256 waiting on a device fault",
+  );
+});
+
+test("thousands are grouped on the neutral head as well", () => {
+  assert.match(queueSplitDescription(1234, 900, 0, true), /^1,234 people · 900 rows$/);
 });
 
 test("the narrow-range levers name the window they set", () => {

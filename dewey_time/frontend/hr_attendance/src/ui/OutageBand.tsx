@@ -162,7 +162,6 @@ export function OutageBand(props: OutageBandProps) {
             {props.outages.map((group) => {
               const included = !props.excludedBranches.has(group.group_key);
               const branch = group.branch ?? UNKNOWN_BRANCH_LABEL;
-              const size = outageWrite([group], new Set<string>());
               return (
                 <li key={group.group_key}>
                   {/* The whole row is the hit target. A bare size-4 checkbox is

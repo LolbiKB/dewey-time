@@ -88,7 +88,11 @@ export type FlagDecisionPanelProps = {
   onOpenFlag: (identity: string | null) => void;
   /** Which of the compressed flags has been promoted to a full card. */
   expandedIdentity: string | null;
-  onExpandFlag: (identity: string | null) => void;
+  /** Promotion only — never `null`. A promoted one-liner becomes a full card
+   *  with no collapse affordance, so nothing here can un-promote one and a
+   *  `string | null` signature advertised a branch no caller can reach. The
+   *  page's own `setExpandedIdentity(null)` resets are internal to it. */
+  onExpandFlag: (identity: string) => void;
   /** The decision HR last recorded on THIS person — backs "Same reason applies". */
   lastDecision: PendingDecision | null;
   onSubmit: (identities: string[], decision: PendingDecision) => void;

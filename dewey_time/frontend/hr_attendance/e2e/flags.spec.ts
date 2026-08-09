@@ -1151,7 +1151,12 @@ test("deciding a row lands focus on the row that takes its place", async ({ page
         message: {
           ...A11Y_PAYLOAD,
           entries: remaining.map((person) => ({ kind: "person", ...person })),
-          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1211,7 +1216,12 @@ test("the next row's form is empty after a decide, not pre-filled with the last 
         message: {
           ...A11Y_PAYLOAD,
           entries: remaining.map((person) => ({ kind: "person", ...person })),
-          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1309,7 +1319,11 @@ test("a band excuse leaves the selected person's row and form alone", async ({ p
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        message: { ...A11Y_PAYLOAD, entries, counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } },
+        message: {
+          ...A11Y_PAYLOAD,
+          entries,
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
+        },
       }),
     });
   });
@@ -1391,7 +1405,7 @@ test("the band's button reports the band's own write, and no other", async ({ pa
             A11Y_OUTAGE,
             ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
           ],
-          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 },
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1448,7 +1462,7 @@ test("a branch unchecked for one outage is not still unchecked for the next", as
             A11Y_OUTAGE,
             ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
           ],
-          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 },
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1500,7 +1514,11 @@ test("deciding the last judgment row lands nowhere, not on the outage", async ({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        message: { ...A11Y_PAYLOAD, entries, counts: { ...A11Y_PAYLOAD.counts, people: 3, rows: 2 } },
+        message: {
+          ...A11Y_PAYLOAD,
+          entries,
+          counts: { ...A11Y_PAYLOAD.counts, people: 3, rows: 2 } satisfies QueuePayload["counts"],
+        },
       }),
     });
   });
@@ -1552,7 +1570,12 @@ test("a second save is announced too, not silently deduplicated", async ({ page 
         message: {
           ...A11Y_PAYLOAD,
           entries: remaining.map((person) => ({ kind: "person", ...person })),
-          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1738,7 +1761,7 @@ test("the keyboard model survives the band", async ({ page }) => {
             A11Y_OUTAGE,
             ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
           ],
-          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 },
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -2083,10 +2106,12 @@ test("a short window cannot strand the submit button — group", async ({ page }
 //
 // The viewport is set inside each test rather than left to the project, for the
 // same reason the pin test above states: `desktop` is 1280 wide, so without it
-// these two would pass in `mobile` and fail in `desktop`. A phone width also
-// pins WHICH surface opens — ResponsiveModal picks its own with useIsMobile()
-// at 768, so under 768 it is the bottom Sheet these two are named for. The
-// 768–1023px band gets the Dialog leg instead, which no project covers.
+// these would pass in `mobile` and fail in `desktop`. The width also pins WHICH
+// surface opens — ResponsiveModal picks its own with useIsMobile() at 768, so
+// under 768 it is the bottom Sheet, and the 768–1023px band gets the Dialog leg
+// instead. Neither project's own viewport lands in that band (`mobile` is a
+// Pixel 7 at 412, `desktop` is 1280), so the last test in this section sets 900
+// explicitly and is the only thing that exercises the Dialog leg at all.
 // ---------------------------------------------------------------------------
 const PHONE_VIEWPORT = { width: 412, height: 915 };
 
@@ -2096,13 +2121,20 @@ const PHONE_VIEWPORT = { width: 412, height: 915 };
  *  in a container that never scrolled. */
 const SHORT_PHONE_VIEWPORT = { width: 412, height: 480 };
 
+/** Inside ResponsiveModal's Dialog band (>= 768 so it is not the Sheet, < 1024
+ *  so it is not the split), and short for the same reason the phone one is:
+ *  a pin proves nothing in a container that never scrolled. */
+const TABLET_VIEWPORT = { width: 900, height: 500 };
+
 /**
- * The sheet slides up over ~200ms, and it is entirely below the fold for the
- * first frame of that. A box read mid-slide measures the animation, not the
- * layout — measured here, the "pinned" footer appeared to move 97px purely
- * because the two reads landed on different frames.
+ * The surface animates in over ~200ms — the sheet slides up from entirely below
+ * the fold, the dialog zooms — and a box read mid-animation measures the
+ * animation, not the layout. Measured here, the "pinned" footer appeared to
+ * move 97px purely because the two reads landed on different frames.
+ *
+ * Both legs of ResponsiveModal are `role="dialog"`, so this covers both.
  */
-async function sheetHasFinishedOpening(page: import("@playwright/test").Page) {
+async function modalHasFinishedOpening(page: import("@playwright/test").Page) {
   await page
     .getByRole("dialog")
     .evaluate((el) =>
@@ -2167,7 +2199,7 @@ test("the footer stays pinned inside the sheet, not just inside the split", asyn
   await page.goto("/hr-flags");
   await page.locator('button[aria-label*="Sopheak Chan"]').click();
 
-  await sheetHasFinishedOpening(page);
+  await modalHasFinishedOpening(page);
   const footer = page.getByRole("dialog").locator('[data-slot="decision-footer"]');
   const before = await footer.boundingBox();
 
@@ -2255,4 +2287,147 @@ test("after a phone write, focus does not land behind the sheet", async ({ page 
   });
   expect(focus.insideAriaHidden).toBe(false);
   expect(focus.insideDialog).toBe(true);
+});
+
+/**
+ * The 768–1023px band — the one surface on this page with no automated cover
+ * until now.
+ *
+ * `useIsBelowLg` (1024) opens the modal and `useIsMobile` (768) picks which one,
+ * so this band gets ResponsiveModal's DIALOG leg while every test above gets
+ * either the split (>= 1024) or the Sheet (< 768). It is a different container
+ * again: a centred, `sm:max-w-2xl`, `max-h-[min(85dvh,42rem)]` box rather than a
+ * full-width sheet anchored to the bottom edge, and `h-full` resolving against a
+ * differently-sized parent is exactly where a pin degrades into "the whole thing
+ * scrolls as one". Checked by hand once at 900px; this is the version that stays
+ * checked.
+ */
+test("in the tablet band the decision opens as a dialog, and its footer is pinned too", async ({
+  page,
+}) => {
+  await page.setViewportSize(TABLET_VIEWPORT);
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  // A dialog opened on selection — and it is the Dialog leg, not the Sheet.
+  // Without the second half this test would pass unchanged at 412px and prove
+  // nothing about the band it is named for.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="sheet-content"]')).toHaveCount(0);
+
+  await modalHasFinishedOpening(page);
+  const footer = dialog.locator('[data-slot="decision-footer"]');
+  const before = await footer.boundingBox();
+
+  const body = dialog.locator('[data-slot="decision-body"]');
+  // Asserted, not assumed, as both pin tests above assert it: if the fixture
+  // ever fits inside the dialog, nothing below scrolls and both assertions pass
+  // while proving nothing about a pin.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, "the dialog's body must hold more than fits, or this proves nothing").toBeGreaterThan(40);
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(40);
+
+  // Byte-identical, and something that was below the fold is now above it —
+  // the second half is what distinguishes a pinned footer from a static one in
+  // a container that never scrolled at all.
+  expect(await footer.boundingBox()).toEqual(before);
+  await expect(page.locator('[data-slot="flag-one-liner"]').last()).toBeInViewport();
+});
+
+/**
+ * ResponsiveModal is shared with eight other callers, and 89f6cf07 changed it
+ * from this branch without a test: it now passes `aria-describedby={undefined}`
+ * when it has no `description`, so Radix stops pointing at a description
+ * element that never renders.
+ *
+ * This is an e2e and not a unit test on purpose. Radix's Portal renders `null`
+ * until its mount effect runs, so `renderToStaticMarkup` emits nothing at all
+ * for an open modal — an assertion there would pass by looking for markup that
+ * was never produced. ResponsiveModal.test.tsx pins exactly that.
+ *
+ * Both halves, because either alone is worthless: the negative would also pass
+ * on a modal that failed to open, and the positive would also pass on a build
+ * that emitted the attribute unconditionally.
+ */
+test("a modal with no description does not claim to have one", async ({ page }) => {
+  // 900: ResponsiveModal's Dialog leg, and the page's two callers are both
+  // reachable from here — the panel modal passes no `description`, the
+  // over-threshold confirm modal passes one.
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          // The backend refuses more than 25 writes without an explicit
+          // confirm; that refusal is what opens the described modal.
+          message: {
+            needs_confirm: true,
+            preview: { count: 30, employees: 12 },
+          } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+
+  // Negative control: no `description` prop, so no attribute at all. Before
+  // 89f6cf07 this was Radix's own generated id pointing at nothing.
+  const panel = page.getByRole("dialog");
+  await expect(panel).toBeVisible();
+  expect(
+    await panel.getAttribute("aria-describedby"),
+    "a modal with no description must not point at one",
+  ).toBeNull();
+
+  // Positive control: the confirm modal DOES pass a description, so the
+  // attribute must be there and must resolve.
+  await panel.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  const confirm = page.getByRole("dialog", { name: "Confirm this decision" });
+  await expect(confirm).toBeVisible();
+  // Resolved through the DOM rather than compared as a string: the whole defect
+  // was an id that existed on the attribute and nowhere else, which any
+  // assertion on the attribute's own value would have passed.
+  const described = await confirm.evaluate((el) => {
+    const id = el.getAttribute("aria-describedby");
+    return id === null ? null : { text: document.getElementById(id)?.textContent ?? null };
+  });
+  expect(described, "a modal WITH a description must carry the attribute").not.toBeNull();
+  expect(described?.text, "and it must resolve to an element that exists").toBe(
+    "30 flags across 12 employees",
+  );
 });

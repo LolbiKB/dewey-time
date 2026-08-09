@@ -923,7 +923,12 @@ export function FlagQueueView(props: FlagQueueViewProps) {
         title="Flags"
         description={
           counts
-            ? queueSplitDescription(props.queuePeople, props.queueRows, outagePeople)
+            ? queueSplitDescription(
+                props.queuePeople,
+                props.queueRows,
+                outagePeople,
+                props.includeDecided ?? false,
+              )
             : "Loading…"
         }
         actions={

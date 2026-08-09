@@ -1350,6 +1350,26 @@ test("the header states people and rows — the queue's own, not the payload's",
   assert.doesNotMatch(html, /147/, "counts.rows is not the header's rows");
 });
 
+test("the header stops claiming a decision is needed once decided rows are showing", () => {
+  // The toggle is the one control that changes WHO `queuePeople` counts:
+  // `queuePeopleCount(queue)` counts settled people too once they are in
+  // `entries`. The wording has to follow the toggle, and this is the assertion
+  // that the toggle is actually WIRED to it — flagQueueLabels.test.ts pins the
+  // two strings, but a caller passing a constant `false` would satisfy that and
+  // still ship the false sentence.
+  const shared = {
+    counts: { open: 9, needs_re_review: 0, open_capped: false, decided: 88, people: 296, rows: 147 },
+    queuePeople: 40,
+    queueRows: 12,
+  };
+  const off = renderToStaticMarkup(<FlagQueueView {...viewProps()} {...shared} includeDecided={false} />);
+  const on = renderToStaticMarkup(<FlagQueueView {...viewProps()} {...shared} includeDecided />);
+
+  assert.match(off, /40 people need a decision · 12 rows/);
+  assert.match(on, /40 people · 12 rows/);
+  assert.doesNotMatch(on, /need a decision/, "a settled person does not need one");
+});
+
 test("a flag card is dated by its own flag, not by the person's headline day", () => {
   // A pattern member spans dates; dating every card by person.attendance_date
   // would label three different mornings as the same day.
