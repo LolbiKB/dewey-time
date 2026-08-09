@@ -90,8 +90,37 @@ below it there is no interval long enough to flag, so nothing appears. That is t
 moment* the first `MISSING_TIME` appears today, and `UNNOTIFIED_ABSENCE` and `MISSING_TIME`
 are **both CRITICAL**.
 
-So the queue gains no rows, and no row gets louder. A row that today says "missing 4 hours"
-tomorrow says "did not show up". That is the entire user-visible change.
+So the queue gains no rows. A row that today says "missing 4 hours" tomorrow says "did not
+show up". That is the entire user-visible change.
+
+### Rank — the correction
+
+This spec originally said "and no row gets louder", checked against `severity` alone. That
+was wrong, and Task 2's review caught it. Severity is not what orders the queue —
+`triage_rank` is, and it exists precisely because severity "cannot express some orderings
+HR needs" (`flag_triage.py:5-12`).
+
+`UNNOTIFIED_ABSENCE` is a fixed **150** (`flag_triage.py:29`), the top of the *act* tier and
+above `ATTENDANCE_ISSUE` at 140. The `MISSING_TIME` it replaces ranks **60** (*review*)
+below 120 minutes and 130-139 above. Measured for an 08:00 shift with nobody turning up:
+
+| time | before | after, uncorrected |
+|---|---|---|
+| 08:31 | rank 60, review | rank 150, top of act |
+| 10:00 | rank 132, act | rank 150 |
+| 15:00 | rank 136, act | rank 150 |
+
+Someone merely 31 minutes late would top the queue, above every confirmed finding, until
+they badged in.
+
+**A provisional no-show therefore ranks on the same banding as the `MISSING_TIME` it stands
+in for, and reaches 150 only when closeout confirms it.** Queue ordering then matches what
+shipped before and only the wording changes — which is what this decision set out to do.
+The provisional row carries the summed minutes of the intervals it suppresses, because
+`triage_rank` cannot band it otherwise.
+
+The rank table itself lives in `2026-08-05-hr-flag-management-design.md`; this is an
+addition to how `UNNOTIFIED_ABSENCE` is read, not a change to any published rank.
 
 Reusing the existing config knob also means the threshold stays tunable on the bench when
 real go-live data shows 30 is wrong — no code change, no redeploy.

@@ -1027,6 +1027,308 @@ per employee so a long run is not one transaction held open throughout."
 
 ---
 
+### Task 4: A no-show the day has not confirmed does not top the queue
+
+**Added after Task 2's review.** Task 2's design claim was "no new rows, no new urgency",
+and it was verified against `severity` only. It is false on `triage_rank`, which is what
+actually orders the queue: `UNNOTIFIED_ABSENCE` is a fixed **150** (`flag_triage.py:29`),
+top of the *act* tier and above `ATTENDANCE_ISSUE` at 140, while the `MISSING_TIME` row it
+replaces ranks **60** (*review*) until 120 minutes have elapsed and 130-139 after
+(`flag_triage.py:80-88`; `tier_for_rank` at :102 puts ≥100 in act, ≥50 in review).
+
+Measured for an 08:00 shift with nobody turning up: at 08:31 the row goes from rank 60
+(review) to 150 (top of act), and stays above everything all day. Someone merely 31
+minutes late tops the queue until they badge in.
+
+**The human ruled** that a provisional no-show ranks on the same banding as the
+`MISSING_TIME` it replaces, and only reaches 150 once closeout confirms it. Queue ordering
+then matches today exactly and only the wording changes — which is what Task 2 promised.
+
+**Files:**
+- Modify: `dewey_time/attendance_engine/intraday.py` (the provisional `_insert_flag` added by Task 2)
+- Modify: `dewey_time/attendance_engine/flag_triage.py` (`triage_rank`, and a new shared band helper)
+- Test: `dewey_time/tests/test_flag_triage.py` (append), `dewey_time/tests/test_intraday.py` (append to `TestIntradayNoShow`), `dewey_time/tests/test_absence_flags.py` (append to `TestUnattendedLunchBridging`)
+
+**Interfaces:**
+- Consumes: Task 2's provisional `UNNOTIFIED_ABSENCE` insert, whose evidence already carries `provisional: True` and `checkins_count`.
+- Produces: `_missing_time_band(minutes: int | None) -> int` in `flag_triage.py`, used by both the `MISSING_TIME` branch and the provisional-no-show branch.
+
+**Background the implementer needs:** `triage_rank(flag_code, evidence)` is pure, computed
+on read, never stored, and has one non-test consumer (`flag_grouping.py:172`). It checks
+`_FIXED_RANKS` **first**, so a provisional `UNNOTIFIED_ABSENCE` must be intercepted before
+that lookup. `_minutes(evidence)` (`flag_triage.py:40`) is deliberately total — it returns
+`None` rather than raising for any malformed input, because this sits on the queue read
+path and a raise would 500 the whole queue. Use it; do not parse `minutes` yourself.
+
+`flag_triage.py`'s header says its table is "transcribed verbatim" from
+`docs/superpowers/specs/2026-08-05-hr-flag-management-design.md`. That spec has been
+amended with a pointer to this change; you do not need to edit it.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `dewey_time/tests/test_flag_triage.py`:
+
+```python
+class TestProvisionalNoShowRank(unittest.TestCase):
+    """A no-show the day has not confirmed must not outrank everything.
+
+    UNNOTIFIED_ABSENCE is a fixed 150 -- top of act, above ATTENDANCE_ISSUE.
+    That is right for a confirmed no-show at closeout and wrong for a
+    provisional one raised 31 minutes into a shift, which replaces a
+    MISSING_TIME that ranked 60. Ranking the provisional row on the same
+    banding keeps queue ordering identical to before the no-show existed.
+    """
+
+    def test_a_confirmed_no_show_still_tops_the_queue(self):
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        self.assertEqual(triage_rank("UNNOTIFIED_ABSENCE", {}), 150)
+        self.assertEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"reason": "on_shift_no_checkins"}), 150
+        )
+
+    def test_a_provisional_no_show_ranks_like_the_missing_time_it_replaces(self):
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        # 31 minutes in: the MISSING_TIME this replaces ranked 60.
+        self.assertEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"provisional": True, "minutes": 31}),
+            triage_rank("MISSING_TIME", {"minutes": 31}),
+        )
+        # Six hours in: the same act-tier band, not a jump to 150.
+        self.assertEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"provisional": True, "minutes": 360}),
+            triage_rank("MISSING_TIME", {"minutes": 360}),
+        )
+        self.assertNotEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"provisional": True, "minutes": 360}), 150
+        )
+
+    def test_a_provisional_no_show_with_unreadable_minutes_takes_the_lowest_band(self):
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        # _minutes is total by design: a value it cannot read is not evidence
+        # of urgency, and must never promote a row to a top band.
+        for bad in ({"provisional": True}, {"provisional": True, "minutes": "nonsense"}):
+            self.assertEqual(triage_rank("UNNOTIFIED_ABSENCE", bad), 60, bad)
+
+    def test_the_provisional_flag_is_what_switches_it_not_the_minutes(self):
+        # minutes present but not provisional -> still the confirmed 150.
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        self.assertEqual(triage_rank("UNNOTIFIED_ABSENCE", {"minutes": 31}), 150)
+```
+
+Append to `TestIntradayNoShow` in `dewey_time/tests/test_intraday.py`:
+
+```python
+    def test_the_no_show_carries_the_minutes_it_stands_in_for(self):
+        # triage_rank cannot band a provisional no-show without them, and the
+        # queue would put a 31-minute absence above every real ATTENDANCE_ISSUE.
+        insert_flag, _ = self._run()
+
+        self.assertEqual(insert_flag.call_args_list[0].kwargs["evidence"]["minutes"], 480)
+```
+
+Append to `TestUnattendedLunchBridging` in `dewey_time/tests/test_absence_flags.py` — this
+is the Important finding Task 2's review raised, that nothing pins the real function at the
+seam Task 2 gates on:
+
+```python
+    def test_a_real_zero_punch_day_yields_a_flag_above_the_threshold(self):
+        # intraday.py gates the no-show on this list being non-empty. Every
+        # test on both sides of that gate mocks this function, so without this
+        # an early `if not checkins: return []` added here would silence the
+        # no-show forever with both suites still green.
+        from dewey_time.attendance_engine.absence_flags import (
+            evaluate_missing_time_flags,
+        )
+
+        flags = evaluate_missing_time_flags(
+            checkins=[], shift_meta=self.SHIFT, attendance_date=self.DAY
+        )
+
+        self.assertEqual([code for code, _ in flags], ["MISSING_TIME"])
+        self.assertEqual(flags[0][1]["minutes"], 480)
+
+    def test_a_real_zero_punch_day_below_the_threshold_yields_nothing(self):
+        # The other half of the gate: 29 minutes in, no row -- which is why the
+        # no-show cannot appear earlier than the MISSING_TIME it replaces.
+        from dewey_time.attendance_engine.absence_flags import (
+            evaluate_missing_time_flags,
+        )
+
+        flags = evaluate_missing_time_flags(
+            checkins=[],
+            shift_meta=self.SHIFT,
+            attendance_date=self.DAY,
+            max_end_min=8 * 60 + 29,
+        )
+
+        self.assertEqual(flags, [])
+```
+
+- [ ] **Step 2: Run all three modules and watch the new tests fail**
+
+```bash
+bash dev/sandbox/frappe-sandbox test --backend --fast --module test_flag_triage
+bash dev/sandbox/frappe-sandbox test --backend --fast --module test_intraday
+bash dev/sandbox/frappe-sandbox test --backend --fast --module test_absence_flags
+```
+
+Expected: in `test_flag_triage`, `test_a_provisional_no_show_ranks_like_the_missing_time_it_replaces` fails (150 != 60) and `test_a_provisional_no_show_with_unreadable_minutes_takes_the_lowest_band` fails (150 != 60); the other two pass already as regression guards. In `test_intraday`, the new test fails with `KeyError: 'minutes'`. **In `test_absence_flags`, both new tests PASS immediately** — they pin behaviour that already works, and that is the point: they are there so it cannot silently stop working.
+
+- [ ] **Step 3: Give the provisional no-show its minutes**
+
+In `dewey_time/attendance_engine/intraday.py`, in the `if checkins_count == 0 and missing:`
+branch Task 2 added, replace the `evidence=` argument of the `_insert_flag` call:
+
+```python
+                evidence={**evidence, "reason": "on_shift_no_checkins_intraday"},
+```
+
+with:
+
+```python
+                evidence={
+                    **evidence,
+                    "reason": "on_shift_no_checkins_intraday",
+                    # What the suppressed MISSING_TIME rows would have reported.
+                    # triage_rank bands a provisional no-show on these, so that a
+                    # day the engine has not finished judging does not outrank
+                    # every confirmed finding in the queue.
+                    "minutes": sum(extra.get("minutes") or 0 for _, extra in missing),
+                },
+```
+
+- [ ] **Step 4: Share the band, and use it for a provisional no-show**
+
+In `dewey_time/attendance_engine/flag_triage.py`, add above `triage_rank`:
+
+```python
+def _missing_time_band(minutes: int | None) -> int:
+    """The MISSING_TIME banding, shared with the provisional no-show.
+
+    Two bands: >=120 min scales up through act (130-139); everything else --
+    0-119, and a missing or unparseable value -- collapses to the single
+    review band at 60.
+    """
+    if minutes is not None and minutes >= 120:
+        return 130 + min(minutes // 60, 9)
+    return 60
+```
+
+Then replace the opening of `triage_rank`:
+
+```python
+    if flag_code in _FIXED_RANKS:
+        return _FIXED_RANKS[flag_code]
+
+    minutes = _minutes(evidence)
+
+    if flag_code == "MISSING_TIME":
+```
+
+with:
+
+```python
+    # Before the _FIXED_RANKS lookup: a no-show the day has not confirmed is
+    # not the 150 a closed-out one is. It stands in for MISSING_TIME rows that
+    # ranked 60 until two hours had elapsed, and promoting it to the top of act
+    # at 31 minutes would put someone who walks in at 08:45 above every real
+    # ATTENDANCE_ISSUE until they badge.
+    if flag_code == "UNNOTIFIED_ABSENCE" and isinstance(evidence, dict) and evidence.get(
+        "provisional"
+    ):
+        return _missing_time_band(_minutes(evidence))
+
+    if flag_code in _FIXED_RANKS:
+        return _FIXED_RANKS[flag_code]
+
+    minutes = _minutes(evidence)
+
+    if flag_code == "MISSING_TIME":
+```
+
+and replace the body of the `MISSING_TIME` branch — the `if minutes is not None and
+minutes >= 120: return 130 + min(minutes // 60, 9)` / `return 60` pair, keeping its
+existing comment — with:
+
+```python
+        return _missing_time_band(minutes)
+```
+
+- [ ] **Step 5: Run all three modules**
+
+```bash
+bash dev/sandbox/frappe-sandbox test --backend --fast --module test_flag_triage
+bash dev/sandbox/frappe-sandbox test --backend --fast --module test_intraday
+bash dev/sandbox/frappe-sandbox test --backend --fast --module test_absence_flags
+```
+
+Expected counts, all passing: `test_flag_triage` **30 + 4 = 34**, `test_intraday`
+**14 + 1 = 15**, `test_absence_flags` **25 + 2 = 27**. Report all three numbers. The
+existing 30 in `test_flag_triage` include a direct pin of `triage_rank("UNNOTIFIED_ABSENCE",
+{}) == 150` (`test_flag_triage.py:17`) — it must still pass, since an empty evidence dict
+is not provisional.
+
+- [ ] **Step 6: Mutation-check (Global Constraint 6)**
+
+Delete the whole `if flag_code == "UNNOTIFIED_ABSENCE" and ... provisional` block. Re-run
+`test_flag_triage`. Expected: the two banding tests fail with 150 != 60. Restore.
+
+Then change `evidence.get("provisional")` to `True`. Re-run. Expected:
+`test_a_confirmed_no_show_still_tops_the_queue` and
+`test_the_provisional_flag_is_what_switches_it_not_the_minutes` both fail — a confirmed
+no-show would have lost its 150. Restore.
+
+Then remove the `"minutes":` line from the intraday evidence. Re-run `test_intraday`.
+Expected: `test_the_no_show_carries_the_minutes_it_stands_in_for` fails with `KeyError`.
+Restore, re-run all three modules, confirm 34 / 15 / 27.
+
+Record all three results.
+
+- [ ] **Step 7: Run the whole local lane**
+
+```bash
+bash dev/sandbox/frappe-sandbox test --backend
+```
+
+There is no bench, so this will not start a stack; run the full local lane instead and
+report which suites executed and which self-skipped. `test_flag_grouping` is the one to
+watch — it is the only non-test consumer of `triage_rank` and it asserts specific ranks in
+several places (e.g. `test_flag_grouping.py:569`). Any failure there is yours.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add dewey_time/attendance_engine/intraday.py dewey_time/attendance_engine/flag_triage.py dewey_time/tests/test_flag_triage.py dewey_time/tests/test_intraday.py dewey_time/tests/test_absence_flags.py
+git commit -m "fix(triage): a no-show the day has not confirmed does not top the queue
+
+Task 2 claimed 'no new rows, no new urgency', and that was checked against
+severity only. It is false on triage_rank, which is what orders the queue:
+UNNOTIFIED_ABSENCE is a fixed 150 -- top of act, above ATTENDANCE_ISSUE at
+140 -- while the MISSING_TIME it replaces ranked 60 until two hours had
+elapsed. At 08:31 on an 08:00 shift the row went from review to the top of
+act and stayed above everything all day, so someone merely half an hour late
+outranked every confirmed finding until they badged in.
+
+A provisional no-show now ranks on the same banding as the MISSING_TIME it
+stands in for, and reaches 150 only once closeout confirms it. Queue
+ordering matches what shipped before; only the wording changes, which is
+what Task 2 set out to do.
+
+The banding is extracted rather than copied, so the two cannot drift, and
+the provisional row carries the minutes it stands in for -- the sum of the
+suppressed intervals -- because triage_rank cannot band it otherwise.
+
+Also pins the seam Task 2's review found unguarded: nothing exercised the
+real evaluate_missing_time_flags for a zero-punch day, so an early return
+added there would have silenced the no-show forever with every suite green."
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage.** Decision 1 → Task 2. Decision 2 → Task 1. Decision 3 → Task 3. Spec's testing table: every row maps to a named test above except "observed lunch present; lunch still carved out, no bridging", which the deviation note removes as unreachable, and "zero punches, closeout — unchanged" / "no schedule — unchanged", which are covered by Task 2 Step 7 re-running `test_integration_pilot_matrix` and `test_closeout` rather than by new tests, since those pins already exist. Spec's Risks table: each mitigation has a test except the last two, which are documentation-only by design.
