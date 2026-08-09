@@ -11,6 +11,19 @@ import { cn } from "@/lib/utils";
 export type DatePickerInputProps = {
   id?: string;
   label?: string;
+  /**
+   * Accessible name when there is no visible <Label>. The flag queue's toolbar
+   * puts three of these on one row and cannot spend 22px of label above each.
+   * Rendered as visually-hidden button CONTENT, not an `aria-label` attribute:
+   * `aria-label` beats name-from-content unconditionally, so it would silence
+   * the formatted date already inside the button and leave the accessible
+   * name as a bare "From" — true for naming the control, false for reporting
+   * its value, on the one control that determines the entire list. As
+   * content it composes instead, so the name reads "From Aug 1, 2026".
+   * Ignored when `label` is set — a visible label already names the control,
+   * and two names is worse than one.
+   */
+  ariaLabel?: string;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
@@ -69,6 +82,14 @@ export function DatePickerInput(props: DatePickerInputProps) {
               !props.value && "text-muted-foreground"
             )}
           >
+            {/* Gated on ariaLabel too, not just the absence of a visible label:
+                the two callers that pass neither prop (WeeklySchedulePage's
+                generate-through picker, GroupEffectiveDates' per-group override)
+                would otherwise render an always-empty sr-only span. Harmless to
+                the accessible name, but it is a node that did not exist before. */}
+            {!props.label && props.ariaLabel ? (
+              <span className="sr-only">{props.ariaLabel}</span>
+            ) : null}
             <CalendarDaysIcon className="mr-2 size-4 shrink-0 opacity-60" />
             {props.value
               ? format(selected!, "MMM d, yyyy")

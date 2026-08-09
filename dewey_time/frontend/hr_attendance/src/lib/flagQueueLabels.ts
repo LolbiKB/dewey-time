@@ -21,11 +21,14 @@
 import { format } from "date-fns";
 
 import { formatBranchLabel, parseDateKey } from "@/lib/attendanceTime";
+import type { PendingDecision } from "@/lib/flagDecisionState";
+import { formatFlagContextDate } from "@/lib/flagDetails";
 import { formatFlagLabel, formatMissingDuration, parseFlagEvidence } from "@/lib/flagLabels";
 import type { Strip } from "@/lib/flagStrip";
 import type {
   DecisionState,
   FlagDecision,
+  FlagOut,
   Outcome,
   QueueEntry,
   QueuePayload,
@@ -282,6 +285,243 @@ export function queueHeaderDescription(counts: QueuePayload["counts"]): string {
 }
 
 /**
+ * Copy for the device-outage band.
+ *
+ * The band exists because a device outage is not a judgment about anybody, and
+ * its wording has to keep saying so — an amber strip carrying 256 people's
+ * names reads as an accusation unless it states otherwise in words.
+ *
+ * Every string here observes this module's device rule: branch is the finest
+ * granularity the data supports (`_outage_branch_dates`: "nothing in this app
+ * maps a device to a branch"), so none of these functions takes a parameter a
+ * serial could arrive through.
+ */
+export const OUTAGE_NOT_A_JUDGMENT = "the machines didn't record — nobody is being judged here";
+
+export const OUTAGE_CEILING_NOTE =
+  "Branch and days only — nothing here maps a device to a branch.";
+
+export const DEVICE_HEALTH_LABEL = "Device health";
+
+/** The band's accessible name — the only thing a screen-reader user hears on
+ *  entering the landmark, so it is copy like any other string here. */
+export const OUTAGE_BAND_LABEL = "Device outages";
+
+/** Unreachable against build_queue's output, which always sets `branch` for a
+ *  BRANCH_NO_DEVICE_DATA group, but the contract types it nullable. */
+export const UNKNOWN_BRANCH_LABEL = "Unknown branch";
+
+/** The checkbox's only accessible name. Without it the control is unnamed. */
+export function outageBranchCheckboxLabel(branch: string): string {
+  return `Include ${branch}`;
+}
+
+/** Shown while the write is in flight. A greyed button still reading "Excuse
+ *  157 people" gives no sign that anything is happening during a multi-second
+ *  write over thousands of flags. */
+export const OUTAGE_EXCUSING_LABEL = "Excusing…";
+
+function plural(count: number, one: string, many: string): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
+}
+
+/**
+ * @param outageBranchCount EVERY branch in the outage — never a filtered or
+ *   still-checked subset. This sentence states what happened; it must not move
+ *   when the user unchecks a box, or the page reports "1 branch had no device
+ *   data" when thirteen did.
+ * @param affectedPeopleCount everyone the outage touched. Deliberately NOT the
+ *   count the excuse button shows: that one is `coveredEmployeeCount`, which is
+ *   smaller. "affected" is what makes the two numbers legible side by side.
+ */
+export function outageBandHeadline(
+  outageBranchCount: number,
+  affectedPeopleCount: number,
+): string {
+  const branches = plural(outageBranchCount, "branch", "branches");
+  return `${branches} had no device data · ${plural(affectedPeopleCount, "person", "people")} affected`;
+}
+
+export function outageBandSubline(dates: string[], flagCount: number): string {
+  // dateSpanLabel returns "" for an empty array, which would leave a dangling
+  // " · " at the head of the line. personSubline has a dedicated test for this
+  // same failure; the guard is one line.
+  const span = dateSpanLabel(dates);
+  const head = span ? `${span} · ` : "";
+  return `${head}${plural(flagCount, "flag", "flags")} · ${OUTAGE_NOT_A_JUDGMENT}`;
+}
+
+export function outageBranchDays(dayCount: number): string {
+  return `${plural(dayCount, "day", "days")} with no sync row`;
+}
+
+export function outageBranchSummary(affectedPeopleCount: number, flagCount: number): string {
+  return `${plural(affectedPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+}
+
+/** @param outageBranchCount every branch, not the checked subset — "Review 13"
+ *  must not become "Review 4" as boxes are unchecked. */
+export function outageReviewLabel(outageBranchCount: number): string {
+  return `Review ${plural(outageBranchCount, "branch", "branches")}`;
+}
+
+/**
+ * The band's write action.
+ *
+ * Three states, not two. Zero-with-nothing-selected and zero-with-nothing-left
+ * are different facts and must not share words: "Nothing LEFT to excuse" over an
+ * empty selection reads as "this outage has already been handled", when the user
+ * has merely unchecked everything to start again. "Left" is a completion word.
+ *
+ * @param coveredPeopleCount MUST be `outageWrite(...).coveredEmployeeCount` —
+ *   Global Constraint 4. Never `branchCount`, never a raw member count.
+ * @param flagCount MUST be `outageWrite(...).identities.length`.
+ * @param selectedBranchCount how many branches are still checked.
+ */
+export function outageExcuseLabel(
+  coveredPeopleCount: number,
+  flagCount: number,
+  selectedBranchCount: number,
+): string {
+  if (selectedBranchCount === 0) return "Select a branch to excuse";
+  if (flagCount === 0) return "Nothing left to excuse";
+  return `Excuse ${plural(coveredPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
+}
+
+/**
+ * Replaces `queueHeaderDescription` on this page.
+ *
+ * "389 people · 147 rows" counted the outage members among the people waiting on
+ * HR, which is the specific lie the band exists to end: 256 of those 389 are
+ * waiting on a machine, and no amount of HR attention moves them.
+ *
+ * `rows` survives the rewrite. It was added deliberately in 20c016fc and fixed
+ * for tier filters in 38fbea19, and `queueHeaderDescription`'s own docstring
+ * explains why people-only counting misleads above a list that can hold one row
+ * for several people. Dropping it here would silently undo both commits.
+ *
+ * @param includeDecided whether the `Decided` toggle is on. REQUIRED, and
+ *   deliberately not defaulted: it is the one control that changes WHO
+ *   `queuePeople` counts, so a caller that forgets it must not silently get the
+ *   wrong sentence. With it on, `queuePeopleCount(queue)` includes people whose
+ *   flags are already settled, and "N people need a decision" is then false
+ *   about every one of them — SHOWING_DECIDED_MESSAGE below the header
+ *   mitigates that and does not correct it. So the claim is dropped rather
+ *   than qualified, and the head falls back to the neutral count the page
+ *   carried before this sentence existed.
+ */
+export function queueSplitDescription(
+  queuePeople: number,
+  queueRows: number,
+  outagePeople: number,
+  includeDecided: boolean,
+): string {
+  const head = splitHead(queuePeople, queueRows, includeDecided);
+  if (outagePeople === 0) return head;
+  return `${head} · ${outagePeople.toLocaleString("en-US")} waiting on a device fault`;
+}
+
+function splitHead(queuePeople: number, queueRows: number, includeDecided: boolean): string {
+  if (includeDecided) {
+    // "Nothing to show", not "Nothing needs a decision": with the toggle on a
+    // settled person is a row this list WOULD have shown, so an empty queue is
+    // a statement about the list, not about anyone's workload.
+    if (queuePeople === 0) return "Nothing to show";
+    return `${plural(queuePeople, "person", "people")} · ${plural(queueRows, "row", "rows")}`;
+  }
+  if (queuePeople === 0) return "Nothing needs a decision";
+  return `${plural(queuePeople, "person needs", "people need")} a decision · ${plural(queueRows, "row", "rows")}`;
+}
+
+/** A filter's no-filter option. "All consequences" reads as an inclusion
+ *  criterion — "only flags that carry a consequence" — which is the opposite. */
+export const TIER_FILTER_ALL_LABEL = "Any consequence";
+
+export const DECIDED_TOGGLE_LABEL = "Decided";
+
+/** The toolbar's three control names. Visually hidden — this page trades the
+ *  visible label row for 22px of height — so these are the ONLY names a screen
+ *  reader has for the controls that determine the whole list. */
+export const RANGE_FROM_LABEL = "From";
+export const RANGE_TO_LABEL = "To";
+export const TIER_FILTER_LABEL = "Consequence";
+
+/** The affordance on a compressed flag one-liner. Lowercase: it sits inline at
+ *  the end of a row of data, not as a button caption. */
+export const DECIDE_ONE_LABEL = "decide";
+
+/** When the compressed flags differ in kind, no one label is honest about the
+ *  set, and naming only the first would be a lie about the other twelve. */
+const MIXED_FINDINGS_LABEL = "Mixed findings";
+
+/**
+ * Names the compressed set: "The other 13 — Missing time", or "One more —
+ * Mixed findings". Called with a non-empty `rest`, so `codes` is never empty.
+ *
+ * `formatFlagLabel(code, null)` and not `(code, evidence)`: this heading is
+ * about the whole set, and an evidence-derived label ("Missing 3h 20m") is one
+ * member's number presented as all of theirs.
+ */
+export function restHeading(rest: FlagOut[]): string {
+  const codes = new Set(rest.map((flag) => flag.flag_code));
+  // "The other 1" is not English, and this heading sits above the single most
+  // common multi-flag case — a person with exactly two flags.
+  const count = rest.length === 1 ? "One more" : `The other ${rest.length}`;
+  const label = codes.size === 1 ? formatFlagLabel([...codes][0], null) : MIXED_FINDINGS_LABEL;
+  return `${count} — ${label}`;
+}
+
+/** Names the pinned footer's target, so a control that never moves is never
+ *  ambiguous about what it is about to write. */
+export const DECIDING_PREFIX = "Deciding";
+
+/**
+ * Names what the pinned footer is about to write: one flag on one day, so it
+ * says both — three "Missing 4h" cards in one entry are three different
+ * mornings, and the finding alone would not tell them apart.
+ *
+ * A flag, not an entry. Only a person's footer names its target: a group's
+ * submit button already reads "Excuse 9", so "Deciding 9 people" above it would
+ * restate the size rather than disambiguate anything.
+ */
+export function decidingLabel(flag: FlagOut): string {
+  return `${formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))} · ${flagDayLabel(flag.attendance_date)}`;
+}
+
+export function narrowRangeLabel(days: number): string {
+  return `Last ${plural(days, "day", "days")}`;
+}
+
+/**
+ * The capped notice, as a control rather than a lecture.
+ *
+ * The old copy named two levers ("narrow the dates, or filter by consequence")
+ * and offered neither, in the loudest colour on the page, on a queue where
+ * capping is structural and therefore never clears. A permanent unactionable
+ * warning teaches people to skip that colour.
+ */
+export function cappedHeadline(open: number): string {
+  return `Showing the newest ${open.toLocaleString("en-US")} flags`;
+}
+
+export const CAPPED_EXPLAINER =
+  "Older days in this range aren't loaded. Narrow the dates to reach them.";
+
+export const NOTHING_WAITING_TITLE = "Nothing waiting";
+
+export function nothingWaitingDetail(startDate: string, endDate: string): string {
+  return `Every flag between ${formatFlagContextDate(startDate)} and ${formatFlagContextDate(endDate)} has a decision.`;
+}
+
+export function showDecidedLabel(count: number): string {
+  return `Show the ${count} decided`;
+}
+
+/** The skeleton rows' accessible name while the queue is loading — Global
+ *  Constraint 2 reaches `aria-label` text too, not just visible copy. */
+export const QUEUE_LOADING_LABEL = "Loading flags";
+
+/**
  * Orphan-state summaries for the two counts `get_flag_queue` returns under
  * `orphans`. Both describe a past decision, never an action the toolbar can
  * take — see the design doc's "Orphaning" table (`orphaned_flag_gone`,
@@ -384,6 +624,18 @@ export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): st
     return repeatPatternHeader(entry.flag_code ?? "flag");
   }
   return routineCodeHeader(entry.flag_code ?? "flag", entry.members);
+}
+
+/**
+ * What the decision surface is called when it is a modal rather than a column.
+ *
+ * The split's panel is titled by its `aria-label` alone ("Selected flag") and
+ * needs nothing visible — the row it belongs to is still on screen beside it.
+ * A sheet covers that row, so it has to name the thing being decided. Same
+ * text as the list row's own headline, so the tap and what it opened agree.
+ */
+export function decisionSurfaceTitle(entry: QueueEntry): string {
+  return entry.kind === "group" ? groupHeadline(entry) : entry.employee_name;
 }
 
 /**
@@ -531,6 +783,22 @@ export function applyToRemainingLabel(count: number): string {
 }
 
 export const SAME_REASON_LABEL = "Same reason applies";
+
+/**
+ * The repeat, stating the decision it would apply.
+ *
+ * Both callers need it and for the same reason — a one-click write should say
+ * which write — so it is one function rather than two hand-built sentences that
+ * happened to agree. They did agree, character for character, which is exactly
+ * how a pair like that drifts without anyone noticing.
+ *
+ * The person banner offers it in bulk across the remaining flags; the pinned
+ * footer button offers it for the one flag on the bottom edge, where it never
+ * scrolls away and is therefore permanently one click from a real write.
+ */
+export function sameReasonWithDecision(decision: PendingDecision): string {
+  return `${SAME_REASON_LABEL} — ${outcomeLabel(decision.outcome)}, ${reasonLabel(decision.reason)}`;
+}
 
 /** Breaks a cause group into its member rows when it turns out not to be uniform. */
 export const DECIDE_ONE_BY_ONE_LABEL = "Decide one by one";

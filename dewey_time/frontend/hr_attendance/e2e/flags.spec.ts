@@ -246,11 +246,45 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   await expect(page).toHaveURL(/\/hr-flags/);
   await expect(page.getByText("Sign in required")).toHaveCount(0);
 
-  // BRANCH_NO_DEVICE_DATA group: the design doc's cause-grouping rule 1
-  // requires the branch name in the copy and explicitly forbids a device
-  // serial — "Siem Reap Depot" is therefore guaranteed to appear somewhere in
-  // this group's card.
-  await expect(page.getByText(/Siem Reap Depot/).first()).toBeVisible();
+  // BRANCH_NO_DEVICE_DATA group: the design doc's cause-grouping rule 1 still
+  // requires the branch name in the copy and still forbids a device serial, so
+  // "Siem Reap Depot" is still guaranteed to appear — but no longer in a queue
+  // row. An outage is a precondition, not a judgment about anybody, so it is
+  // now the band above the queue (OutageBand). The band leads with what
+  // happened and keeps its branch list behind a disclosure, collapsed on
+  // arrival so thirteen branches cannot push the queue below the fold.
+  const band = page.getByRole("region", { name: "Device outages" });
+  await expect(band.getByText(/1 branch had no device data/)).toBeVisible();
+
+  await band.getByRole("button", { name: /Review 1 branch/ }).click();
+  await expect(band.getByText("Siem Reap Depot")).toBeVisible();
+
+  // …and it left the queue: three entries came back, two of them are rows.
+  // aria-setsize is the number a screen-reader user is actually told, so this
+  // fails if the outage is still being listed as work waiting on HR.
+  const list = page.getByRole("list", { name: "Flag queue" });
+  await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "2");
+
+  // The band must not have taken the queue's height to say so. `Section grow`
+  // is `flex-1 basis-0`, whose flex shrink weight is zero, so every pixel the
+  // band occupies comes out of the list — and on a phone the band's header row
+  // wrapped itself to 474px and left the queue exactly 0. Visible, not merely
+  // present: this is a height assertion wearing a visibility assertion's
+  // clothes, and it is the only one of the two that a layout can fail.
+  await expect(list.getByRole("listitem").first()).toBeVisible();
+
+  // The header, against a payload whose own `counts` disagrees with all three
+  // numbers in it: `people: 5, rows: 3` count the outage's two members and the
+  // outage row along with the judgment work. Only the real page can catch these
+  // — the split is computed in `FlagQueuePage`'s body, which the unit suite has
+  // no react-query harness to reach.
+  //
+  //   3 people   = queuePeopleCount(queue): EMP-401, EMP-402, EMP-001
+  //   2 rows     = queue.length, not counts.rows (3)
+  //   2 waiting  = queuePeopleCount(outages): EMP-301, EMP-302
+  await expect(
+    page.getByText("3 people need a decision · 2 rows · 2 waiting on a device fault"),
+  ).toBeVisible();
 
   // ROUTINE_CODE group: same rule's copy example ("168 late starts, 6–20
   // min…") turns on the flag label, formatted through the shared
@@ -266,15 +300,33 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // Toolbar counts (design doc, UI section: "Toolbar counts: Open · Explained
   // · Needs re-review · Decided". "Explained" is Spec 2 scope and is not a
   // key on this endpoint's `counts` dict, so it is not asserted here).
-  // CountChip (FlagQueuePage.tsx) renders `{label}<span>{value}</span>` with no
-  // whitespace between the JSX expression and the following element, so the
-  // chip's real DOM text content is "Open6" / "Decided2" — a trailing `\b`
-  // fails between a letter and a digit. Anchor at the start instead; a
-  // trailing `\b` is unnecessary once the match is anchored to the chip's own
-  // label prefix.
-  await expect(page.getByText(/^Open/)).toBeVisible();
-  await expect(page.getByText(/needs re-review/i)).toBeVisible();
+  // Open and Needs re-review were permanent chips beside Decided; both are
+  // gone from the toolbar now (Open moved into the header's description line
+  // via queueSplitDescription, and Needs re-review read 0 on every day the
+  // queue has ever seen — flag-queue-layout task 5). Decided is the one
+  // survivor and the toolbar's only remaining count. The toggle button
+  // renders `{label}<span>{value}</span>` with no whitespace between the JSX
+  // expression and the following element, so its real DOM text content is
+  // "Decided2" — a trailing `\b` fails between a letter and a digit. Anchor
+  // at the start instead; a trailing `\b` is unnecessary once the match is
+  // anchored to the button's own label prefix.
+  await expect(page.getByText(/^Open/)).toHaveCount(0);
+  await expect(page.getByText(/needs re-review/i)).toHaveCount(0);
   await expect(page.getByText(/^Decided/)).toBeVisible();
+
+  // The two date buttons carry their name as visually-hidden CONTENT, not an
+  // `aria-label` attribute: `aria-label` beats name-from-content
+  // unconditionally, so it would have silenced the formatted date already
+  // inside the button and left a screen reader hearing a bare "From"/"To"
+  // with the current range excluded — on the control that determines the
+  // entire list. `getByRole` resolves the real accessible name end to end,
+  // computed the same way a screen reader would (unlike a `grep` over
+  // `aria-label="From"`, which kept passing through that exact regression).
+  // The date pattern after the name, not a bare `/^From/`, is the point:
+  // "From" alone is also a substring match of the broken, date-less name, so
+  // asserting only that prefix would pass whether or not this bug existed.
+  await expect(page.getByRole("button", { name: /^From \w{3} \d{1,2}, \d{4}/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^To \w{3} \d{1,2}, \d{4}/ })).toBeVisible();
 });
 
 test("a single decision persists after the queue refetches", async ({ page }) => {
@@ -723,7 +775,11 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
   });
 
   await page.goto("/hr-flags");
-  await expect(page.getByText("Nothing to triage in this range.")).toBeVisible();
+  // "Nothing to triage in this range." is FlagQueueList's own fallback, and it
+  // never mounts here: an empty judgment queue with no outages renders the
+  // richer "Nothing waiting" state in FlagQueueView instead (flag-queue-layout
+  // Task 6), so this is the text actually on screen.
+  await expect(page.getByText("Nothing waiting")).toBeVisible();
   await expect(page.getByText("Noor Aziz")).toHaveCount(0);
 
   // The Decided count is the control: it already answers "how many", so it also
@@ -1063,6 +1119,14 @@ test("the queue carries a polite live region for its own state changes", async (
 });
 
 test("deciding a row lands focus on the row that takes its place", async ({ page }) => {
+  // Explicitly >= lg: landing focus ON A ROW is the split's answer, where the
+  // list is beside the panel and still visible. Below lg the panel is a modal
+  // and Radix marks the list behind it `aria-hidden="true"`, so focusing a row
+  // there would put the keyboard on an element the accessibility tree says does
+  // not exist — the page deliberately leaves focus inside the sheet instead,
+  // which "after a phone write, focus does not land behind the sheet" covers.
+  // Set here rather than at project level so it runs identically in both.
+  await page.setViewportSize({ width: 1280, height: 900 });
   // The list shrinks by one on the refetch, exactly as it does in production
   // once the server says every flag on that person is settled.
   let decided = false;
@@ -1087,7 +1151,12 @@ test("deciding a row lands focus on the row that takes its place", async ({ page
         message: {
           ...A11Y_PAYLOAD,
           entries: remaining.map((person) => ({ kind: "person", ...person })),
-          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1147,7 +1216,12 @@ test("the next row's form is empty after a decide, not pre-filled with the last 
         message: {
           ...A11Y_PAYLOAD,
           entries: remaining.map((person) => ({ kind: "person", ...person })),
-          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1166,9 +1240,308 @@ test("the next row's form is empty after a decide, not pre-filled with the last 
   // We land on Sokha Phlat. Opening her form must not present Vandy's note or
   // Vandy's reason as if they were hers — resetRowState's own stated error,
   // "one person's reasoning applied to the next".
-  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  //
+  // Selection, not focus: the leak this test is about is layout-independent and
+  // matters at least as much below lg, where dismissing the sheet is a NEW
+  // deselection path. Focus is not — below lg the page deliberately leaves it
+  // inside the sheet rather than on a row behind `aria-hidden`, so asserting
+  // `toBeFocused` here would pin the split's answer onto both layouts and this
+  // test would stop running on a phone at all.
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await page.getByRole("button", { name: "Decide", exact: true }).click();
   await expect(page.getByRole("textbox").first()).toHaveValue("");
+});
+
+/** The a11y queue's three people, plus the branch whose reader died that day. */
+const A11Y_OUTAGE = {
+  kind: "group",
+  group_type: "BRANCH_NO_DEVICE_DATA",
+  group_key: "BRANCH_NO_DEVICE_DATA:Siem Reap Depot",
+  branch: "Siem Reap Depot",
+  flag_code: null,
+  attendance_date: "2026-08-13",
+  dates: ["2026-08-13"],
+  day_count: 1,
+  // Ranked ABOVE the person rows on purpose. Interleaving is what makes the two
+  // arrays disagree: with the outage first, every person's slot in `entries` is
+  // one further down than its slot in the rendered list, and removing the
+  // outage shifts them all back again.
+  rank: 140,
+  tier: "act",
+  members: [
+    a11yPerson({ employee: "HR-EMP-00031", name: "Chanthou Ny", minutes: 300 }),
+    a11yPerson({ employee: "HR-EMP-00032", name: "Rithy Sen", minutes: 310 }),
+  ],
+} satisfies QueueEntry;
+
+// The band's write must not run the panel's success path. `decide` is shared by
+// both surfaces, and its onSuccess arms two effects scoped to the SELECTED
+// PERSON: the "Same reason applies" repeat, and the post-write restore. A band
+// excuse that ran either would leave a device-fault reason one click from an
+// unrelated person's genuine attendance flags, and would carry the user off the
+// row they were working on — the excuse removes the outage entries, so every
+// later slot shifts. Both are reachable by an ordinary sequence: select a row,
+// notice the amber band, click Excuse.
+test("a band excuse leaves the selected person's row and form alone", async ({ page }) => {
+  // Explicitly ≥ lg, the same way the pin test below is explicitly short: the
+  // sequence this describes — select a row, start typing, notice the band,
+  // click Excuse — needs the panel and the band reachable AT ONCE, and that is
+  // the split's property. Below lg the panel is a modal that covers the band
+  // and puts it behind `aria-hidden`, so the band's button cannot be clicked
+  // without dismissing the form first. What is being tested (a band write is
+  // scoped to the band) is layout-independent; only this way of reaching it is
+  // not. Set here rather than at project level so it runs identically in both.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  let excused = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      excused = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 2, group_key: "AFD-band", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    // The outage leaves the payload once excused, exactly as it does in
+    // production once every flag behind it is settled.
+    const entries: QueueEntry[] = [
+      ...(excused ? [] : [A11Y_OUTAGE]),
+      ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+    ];
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries,
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const vandy = page.locator('button[aria-label*="Vandy In"]');
+  await vandy.click();
+  await expect(vandy).toHaveAttribute("aria-current", "true");
+
+  // Mid-sentence about Vandy — the sequence in full is: select a row, start
+  // typing, notice the amber band, click Excuse. The free-text note is the
+  // sharpest thing to lose, because it is the only part of a decision that
+  // cannot be retyped from the row itself.
+  const note = "Spoke to Vandy, family emergency";
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page.getByRole("textbox").first().fill(note);
+
+  const band = page.getByRole("region", { name: "Device outages" });
+  await band.getByRole("button", { name: /^Excuse\b/ }).click();
+
+  // The write landed, was announced, and cleared the band.
+  await expect(page.locator('[role="status"][aria-live="polite"]')).toHaveText(/saved/i);
+  await expect(band).toHaveCount(0);
+
+  // None of it was about Vandy. Her row is still the selected one, her form is
+  // still open, and her half-written note is still in it — the restore effect
+  // resets the draft on arrival, so arming it here would have wiped exactly
+  // this text.
+  await expect(vandy).toHaveAttribute("aria-current", "true");
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).not.toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(page.getByRole("textbox").first()).toHaveValue(note);
+
+  // And "Excused · Device or data fault" is not on offer as her reason. It was
+  // never a decision about her; it was a statement about a dead card reader.
+  // The repeat only renders on a CLOSED flag card, so the form has to be shut
+  // to look for it — with it open the button is absent either way and the
+  // assertion would prove nothing.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("button", { name: "Same reason applies" })).toHaveCount(0);
+});
+
+// The band's button starts the largest write on the page, and the `decide`
+// mutation behind it is shared with the panel. Two things have to hold at once:
+// it must lock while its OWN write runs — a second click issues a second
+// mutation, and two needs_confirm responses then race into the same preview —
+// and it must stay quiet while the PANEL writes, because an unqualified
+// `decide.isPending` would put "Excusing…" on the band every time somebody
+// decided a single person, announcing a mass excuse they never asked for.
+test("the band's button reports the band's own write, and no other", async ({ page }) => {
+  // ≥ lg for the reason the band test above states: this reads the band WHILE
+  // the panel's own write is in flight, so both have to be on screen together,
+  // which below lg they no longer are.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.route("**/api/method/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      // Held open on purpose: an in-flight state that is never observed cannot
+      // be asserted on, and this whole test is about one.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-slow", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [
+            A11Y_OUTAGE,
+            ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+          ],
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  const bandExcuse = band.getByRole("button", { name: /Excus/ });
+  const panelSubmit = page.getByRole("button", { name: /^Excuse\b/ }).last();
+
+  // A panel write, mid-flight.
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await panelSubmit.click();
+
+  // The panel's own submit is disabled while its write runs, which is the proof
+  // that the band is being read mid-flight rather than after everything
+  // settled.
+  await expect(panelSubmit).toBeDisabled();
+  // Snapshot reads, NOT `expect(...).toBeEnabled()`. A web-first assertion
+  // retries for five seconds, so a negative one about a two-second window
+  // passes the moment the window shuts — it would report the band as quiet
+  // simply by outlasting the write it was supposed to be watching.
+  expect(await bandExcuse.isDisabled()).toBe(false);
+  expect(await bandExcuse.textContent()).not.toMatch(/Excusing/);
+  await expect(panelSubmit).toBeEnabled({ timeout: 10_000 });
+
+  // The band's own write, mid-flight.
+  await bandExcuse.click();
+  await expect(bandExcuse).toBeDisabled();
+  await expect(bandExcuse).toHaveText(/Excusing/);
+});
+
+// `excludedBranches` is keyed by `group_key`, and a branch outage's group_key
+// is stable across months — the same fact that makes it unsafe to send as a
+// decision's group_key. Left standing across a change of question, a branch
+// unchecked for last week's outage silently narrows this week's write, and the
+// band is collapsed by default so the only trace is a smaller number inside a
+// button label.
+test("a branch unchecked for one outage is not still unchecked for the next", async ({ page }) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [
+            A11Y_OUTAGE,
+            ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+          ],
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
+
+  await band.getByRole("button", { name: /Review 1 branch/ }).click();
+  await band.getByRole("checkbox", { name: "Include Siem Reap Depot" }).click();
+  await expect(bandExcuse).toHaveText("Select a branch to excuse");
+
+  // A different consequence filter is a different question, and the answer to
+  // the old one must not be carried into it.
+  await page.getByLabel("Consequence").selectOption("routine");
+  await expect(bandExcuse).toHaveText(/^Excuse /);
+});
+
+// The restore effect remembers a SLOT, because the row it was on is about to
+// stop existing. Remembered against the payload rather than against the rendered
+// list, the slot vacated by the last person is filled by the outage group — and
+// the page opens a decision form over a device fault, which is the single thing
+// this layout exists to prevent. `focusKey` then names a row the list never
+// renders, so `onFocusHandled` never fires and focus drops to <body>: the exact
+// regression the restore effect was built to fix.
+test("deciding the last judgment row lands nowhere, not on the outage", async ({ page }) => {
+  let decided = false;
+  const person = A11Y_PEOPLE[0];
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-z", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    // One person and one outage; deciding her leaves the outage alone in the
+    // payload and the rendered list empty.
+    const entries: QueueEntry[] = decided
+      ? [A11Y_OUTAGE]
+      : [A11Y_OUTAGE, { kind: "person", ...person } satisfies QueueEntry];
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries,
+          counts: { ...A11Y_PAYLOAD.counts, people: 3, rows: 2 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+  await page.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveCount(0);
+
+  // Nothing is selected, and the panel says so. Landing on the outage would
+  // have put its branch, its members and an excuse control in here instead.
+  const panel = page.getByRole("region", { name: "Selected flag" });
+  await expect(panel.getByText("Pick a row to review")).toBeVisible();
+  await expect(panel).not.toContainText("Siem Reap Depot");
+
+  // The outage itself is untouched — still a band, still awaiting its own
+  // acknowledgement.
+  await expect(page.getByRole("region", { name: "Device outages" })).toBeVisible();
 });
 
 test("a second save is announced too, not silently deduplicated", async ({ page }) => {
@@ -1197,7 +1570,12 @@ test("a second save is announced too, not silently deduplicated", async ({ page 
         message: {
           ...A11Y_PAYLOAD,
           entries: remaining.map((person) => ({ kind: "person", ...person })),
-          counts: { ...A11Y_PAYLOAD.counts, open: remaining.length, people: remaining.length, rows: remaining.length },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
@@ -1220,8 +1598,883 @@ test("a second save is announced too, not silently deduplicated", async ({ page 
   const first = await live.textContent();
 
   await decideSelected(); // we were landed on the next row already
-  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  // Selection, not focus, and deliberately still running on a phone: the live
+  // region this test is about is rendered TWICE — once in the split branch and
+  // once in the modal branch — so pinning this to >= lg would leave the second
+  // copy, the newer one, asserted by nothing. Focus below lg stays inside the
+  // sheet by design; "after a phone write, focus does not land behind the
+  // sheet" is where that belongs.
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   // Same words, different text node — otherwise nothing is announced at all.
   await expect(live).toHaveText(/saved/i);
   expect(await live.textContent()).not.toBe(first);
+});
+
+// `outageExcuseLabel` takes `coveredPeopleCount` for exactly one reason: the
+// button's number must fall as branches are unchecked, not just switch between
+// "everything" (`:1428` covers the all-unchecked floor, "Select a branch to
+// excuse") and "nothing left". Two branches here, so unchecking ONE still
+// leaves the other counted — the countdown itself, never exercised until now.
+test("unchecking a branch takes its people out of the excuse", async ({ page }) => {
+  const queuePayload = {
+    entries: [
+      {
+        kind: "group",
+        group_type: "BRANCH_NO_DEVICE_DATA",
+        group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
+        branch: "DIS Iconic",
+        flag_code: null,
+        attendance_date: null,
+        dates: ["2026-08-03", "2026-08-04"],
+        day_count: 2,
+        rank: 134,
+        tier: "act",
+        members: [
+          {
+            entry_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic|p:DI-1",
+            employee: "DI-1",
+            employee_name: "Ada Lovelace",
+            employee_branch: "DIS Iconic",
+            employee_image: null,
+            attendance_date: "2026-08-03",
+            dates: ["2026-08-03"],
+            rank: 134,
+            tier: "act",
+            flags: [
+              {
+                flag_identity: "f-outage-1",
+                flag_code: "MISSING_TIME",
+                attendance_date: "2026-08-03",
+                day_closed: 1,
+                evidence: { minutes: 240 },
+                rank: 134,
+                tier: "act",
+                decision_state: "undecided",
+                decision: null,
+              } satisfies FlagOut,
+            ],
+            undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
+          } satisfies QueuePerson,
+        ],
+      },
+      {
+        kind: "group",
+        group_type: "BRANCH_NO_DEVICE_DATA",
+        group_key: "BRANCH_NO_DEVICE_DATA:ISBB",
+        branch: "ISBB",
+        flag_code: null,
+        attendance_date: null,
+        dates: ["2026-08-03"],
+        day_count: 1,
+        rank: 134,
+        tier: "act",
+        members: [
+          {
+            entry_key: "BRANCH_NO_DEVICE_DATA:ISBB|p:DI-2",
+            employee: "DI-2",
+            employee_name: "Grace Hopper",
+            employee_branch: "ISBB",
+            employee_image: null,
+            attendance_date: "2026-08-03",
+            dates: ["2026-08-03"],
+            rank: 134,
+            tier: "act",
+            flags: [
+              {
+                flag_identity: "f-outage-2",
+                flag_code: "MISSING_TIME",
+                attendance_date: "2026-08-03",
+                day_closed: 1,
+                evidence: { minutes: 210 },
+                rank: 134,
+                tier: "act",
+                decision_state: "undecided",
+                decision: null,
+              } satisfies FlagOut,
+            ],
+            undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
+          } satisfies QueuePerson,
+        ],
+      },
+    ] satisfies QueueEntry[],
+    counts: { open: 2, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false },
+    orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
+    alerts: [],
+    outage_dates: [
+      { branch: "DIS Iconic", date: "2026-08-03" },
+      { branch: "DIS Iconic", date: "2026-08-04" },
+      { branch: "ISBB", date: "2026-08-03" },
+    ],
+    truncated: false,
+    start_date: "2026-07-26",
+    end_date: "2026-08-08",
+  } satisfies QueuePayload;
+
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: queuePayload }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  await band.getByRole("button", { name: /^Review 2/ }).click();
+
+  const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
+  await expect(bandExcuse).toHaveText("Excuse 2 people · 2 flags");
+
+  await band.getByRole("checkbox", { name: "Include ISBB" }).click();
+
+  // Ada's branch is still checked, so the count falls to her alone — not to
+  // zero, and not to the "nothing left" floor — and singularises at 1.
+  await expect(bandExcuse).toHaveText("Excuse 1 person · 1 flag");
+});
+
+// `A11Y_PAYLOAD` (used by every roving-tabindex test above) carries no outage,
+// so those tests have only ever proven the keyboard model on a healthy day.
+// The band mounts two extra focusable controls (its disclosure and its Excuse
+// button) ABOVE the list; this proves the roving tabindex and the arrow-key
+// model still hold with both of them present, and that they stay scoped to
+// the list rather than reaching up into the band.
+test("the keyboard model survives the band", async ({ page }) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [
+            A11Y_OUTAGE,
+            ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+          ],
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  await expect(band).toBeVisible();
+
+  const list = page.getByRole("list", { name: "Flag queue" });
+  const rows = list.getByRole("button");
+  await expect(rows).toHaveCount(3);
+
+  // aria-setsize counts only the judgment rows the list actually holds — the
+  // outage was already partitioned out before FlagQueueList ever saw it — so
+  // it must read 3, not 4.
+  await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "3");
+
+  // Roving tabindex: exactly one row is tabbable, scoped to the list — the
+  // band's own disclosure and Excuse button are real tab stops of their own
+  // and must not be counted here.
+  await expect(list.locator('button[tabindex="0"]')).toHaveCount(1);
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveAttribute("tabindex", "0");
+
+  // The arrows move within the list only, clamped at the last row rather than
+  // escaping upward into the band's controls.
+  await page.locator('button[aria-label*="Vandy In"]').focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  await expect(band.getByRole("button", { name: /Review 1 branch/ })).not.toBeFocused();
+});
+
+/** One person, four mornings — a compressed list small enough to count by eye. */
+const MANY_FLAG_PERSON = {
+  entry_key: "p:HR-EMP-00041",
+  employee: "HR-EMP-00041",
+  employee_name: "Sopheak Chan",
+  employee_branch: "Siem Reap Depot",
+  employee_image: null,
+  attendance_date: "2026-08-10",
+  dates: ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"],
+  rank: 134,
+  tier: "act",
+  flags: ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"].map((date, index) => ({
+    flag_identity: `MANY-${index}`,
+    flag_code: "MISSING_TIME",
+    attendance_date: date,
+    severity: "WARNING",
+    day_closed: 1,
+    evidence: { minutes: 240 - index * 10 },
+    rank: 134,
+    tier: "act",
+    decision_state: "undecided",
+    decision: null,
+  })) satisfies FlagOut[],
+  undecided_count: 4,
+  also_count: 0,
+  also_outlier_count: 0,
+} satisfies QueuePerson;
+
+test("a many-flag person shows one card and the rest compressed, and any of them opens", async ({
+  page,
+}) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 4,
+            people: 1,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  const cards = page.locator('[data-slot="flag-card"]');
+  const compressed = page.locator('[data-slot="flag-one-liner"]');
+  await expect(cards).toHaveCount(1);
+  await expect(compressed).toHaveCount(3);
+
+  // The click path the unit suite cannot reach: the middle one, so neither
+  // "always the first" nor "always the last" would satisfy this.
+  await compressed.nth(1).click();
+  await expect(cards).toHaveCount(2);
+  await expect(compressed).toHaveCount(2);
+});
+
+// The pin, which is a geometric claim and therefore cannot live in the unit
+// suite (Global Constraint 7: renderToStaticMarkup + regex, no layout). The
+// unit test beside this one asserts only that a body and a footer EXIST and
+// carry the right utilities — it stays green if the footer is nested back
+// inside the body, which is exactly what a careless refactor produces. This is
+// the test that catches that, so it must assert both halves:
+//
+//   1. the footer's box does not move while the body scrolls, and
+//   2. something that was below the fold is now above it.
+//
+// (1) alone passes for a footer that merely exists above an unscrollable body.
+// (2) is what makes it a pin rather than a static bar.
+test("the decision footer stays put while the evidence scrolls behind it", async ({ page }) => {
+  // Explicitly short and explicitly ≥ lg. The pin is an lg-only layout — below
+  // that breakpoint the panel has no bounded height and the whole column
+  // scrolls as one — and the four-flag fixture does not overflow a tall
+  // window. Set here rather than at project level so this runs identically in
+  // both the desktop and mobile projects.
+  await page.setViewportSize({ width: 1280, height: 460 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 4,
+            people: 1,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  const body = page.locator('[data-slot="decision-body"]');
+  const footer = page.locator('[data-slot="decision-footer"]');
+  await expect(footer).toBeVisible();
+
+  // Asserted, not assumed: if the fixture or the card ever shrinks enough to
+  // fit, everything below would pass vacuously and prove nothing.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, "the body must have more evidence than fits, or this proves nothing").toBeGreaterThan(40);
+
+  const lastOneLiner = page.locator('[data-slot="flag-one-liner"]').last();
+  const footerBefore = await footer.boundingBox();
+  const evidenceBefore = await lastOneLiner.boundingBox();
+
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(40);
+
+  const footerAfter = await footer.boundingBox();
+  const evidenceAfter = await lastOneLiner.boundingBox();
+
+  // 1. The footer did not move, in either position or size.
+  expect(footerAfter?.y).toBeCloseTo(footerBefore?.y ?? -1, 0);
+  expect(footerAfter?.height).toBeCloseTo(footerBefore?.height ?? -1, 0);
+  // 2. The evidence did — it travelled up, behind the footer that did not.
+  expect(evidenceAfter?.y ?? 0).toBeLessThan(evidenceBefore?.y ?? 0);
+
+  // And the footer's bottom edge is the panel column's bottom edge, which is
+  // what "pinned" means here. A footer merely sitting last in a scrolled body
+  // would satisfy neither this nor (1).
+  const panel = page.getByRole("region", { name: "Selected flag" });
+  const panelBox = await panel.boundingBox();
+  expect((footerAfter?.y ?? 0) + (footerAfter?.height ?? 0)).toBeCloseTo(
+    (panelBox?.y ?? 0) + (panelBox?.height ?? 0),
+    0,
+  );
+});
+
+/** Six people on one routine code — a group footer tall enough to matter. */
+const CAP_GROUP_MEMBERS = Array.from({ length: 6 }, (_, i) => ({
+  entry_key: `ROUTINE_CODE:LATE_START|p:HR-EMP-2000${i}`,
+  employee: `HR-EMP-2000${i}`,
+  employee_name: `Capped Member ${i + 1}`,
+  employee_branch: "Siem Reap Depot",
+  employee_image: null,
+  attendance_date: "2026-08-12",
+  dates: ["2026-08-12"],
+  rank: 20,
+  tier: "routine",
+  flags: [
+    {
+      flag_identity: `CAP-${i}`,
+      flag_code: "LATE_START",
+      attendance_date: "2026-08-12",
+      severity: "WARNING",
+      day_closed: 1,
+      evidence: { minutes: 12 + i },
+      rank: 20,
+      tier: "routine",
+      decision_state: "undecided",
+      decision: null,
+    },
+  ] satisfies FlagOut[],
+  undecided_count: 1,
+  also_count: 0,
+  also_outlier_count: 0,
+})) satisfies QueuePerson[];
+
+const CAP_GROUP = {
+  kind: "group",
+  group_type: "ROUTINE_CODE",
+  group_key: "ROUTINE_CODE:LATE_START",
+  branch: null,
+  flag_code: "LATE_START",
+  attendance_date: "2026-08-12",
+  dates: ["2026-08-12"],
+  day_count: 1,
+  rank: 20,
+  tier: "routine",
+  members: CAP_GROUP_MEMBERS,
+} satisfies QueueEntry;
+
+/**
+ * The footer's height cap, checked geometrically because that is the only way
+ * it CAN be checked — a unit assertion here could only read the class string
+ * back, which proves the class is present and nothing about whether it binds.
+ *
+ * Both modes, deliberately. The person footer is 61px closed and only grows
+ * past the cap once its form opens; the group's is ~285px before anything is
+ * touched, which is the case that motivated the cap and the one that shipped
+ * without it.
+ */
+async function assertFooterCapHoldsAndSubmitIsReachable(
+  page: import("@playwright/test").Page,
+) {
+  const footer = page.locator('[data-slot="decision-footer"]');
+  const panel = page.getByRole("region", { name: "Selected flag" });
+  await expect(footer).toBeVisible();
+
+  const panelBox = await panel.boundingBox();
+  const limit = (panelBox?.height ?? 0) * 0.7;
+
+  // Precondition, in the same spirit as the pin test's overflow check: the
+  // footer's CONTENT must want more than the cap allows, or the cap was never
+  // going to engage at this viewport and everything below passes vacuously.
+  const wanted = await footer.evaluate((el) => el.scrollHeight);
+  expect(
+    wanted,
+    "the uncapped footer must exceed 70% of the panel, or this proves nothing",
+  ).toBeGreaterThan(limit + 1);
+
+  // The cap binds …
+  const footerBox = await footer.boundingBox();
+  expect(footerBox?.height ?? 0).toBeLessThanOrEqual(limit + 1);
+  // … the body keeps a real share rather than collapsing to nothing …
+  const body = page.locator('[data-slot="decision-body"]');
+  expect((await body.boundingBox())?.height ?? 0).toBeGreaterThan(1);
+  // … and the write is still reachable, which is the whole point: `shrink-0`
+  // with no cap and no overflow strands it off the bottom of a short window.
+  const submit = footer.locator('[data-slot="button"]').filter({ hasText: "Excuse" });
+  await submit.scrollIntoViewIfNeeded();
+  await expect(submit).toBeInViewport();
+}
+
+test("a short window cannot strand the submit button — person", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 430 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 4,
+            people: 1,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+  // A person's footer only outgrows the cap once the form is open — which is
+  // the state HR is in for the whole of every decision.
+  await page
+    .locator('[data-slot="decision-footer"]')
+    .getByRole("button", { name: "Decide", exact: true })
+    .click();
+  await expect(page.getByRole("group", { name: "Outcome" })).toBeVisible();
+
+  await assertFooterCapHoldsAndSubmitIsReachable(page);
+});
+
+test("a short window cannot strand the submit button — group", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 430 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [CAP_GROUP] satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 6,
+            people: 6,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator("button[aria-label]").filter({ hasText: "6 people" }).first().click();
+  // Nothing is opened first: a group's form is always armed, so its footer is
+  // over the cap from the moment the row is selected.
+  await assertFooterCapHoldsAndSubmitIsReachable(page);
+  // The safeguard list is what the body must not lose. Without the cap the
+  // body collapses and this becomes unreachable in front of a bulk excuse.
+  const covers = page.getByText("Who this covers");
+  await covers.scrollIntoViewIfNeeded();
+  await expect(covers).toBeInViewport();
+});
+
+// ---------------------------------------------------------------------------
+// Below lg the panel is a modal, not a column below the list.
+//
+// The viewport is set inside each test rather than left to the project, for the
+// same reason the pin test above states: `desktop` is 1280 wide, so without it
+// these would pass in `mobile` and fail in `desktop`. The width also pins WHICH
+// surface opens — ResponsiveModal picks its own with useIsMobile() at 768, so
+// under 768 it is the bottom Sheet, and the 768–1023px band gets the Dialog leg
+// instead. Neither project's own viewport lands in that band (`mobile` is a
+// Pixel 7 at 412, `desktop` is 1280), so the last test in this section sets 900
+// explicitly and is the only thing that exercises the Dialog leg at all.
+// ---------------------------------------------------------------------------
+const PHONE_VIEWPORT = { width: 412, height: 915 };
+
+/** The same phone on a shorter screen, so the sheet's own cap actually bites.
+ *  The pin above it needed the same treatment for the same reason: the
+ *  four-flag fixture does not overflow a tall window, and a pin proves nothing
+ *  in a container that never scrolled. */
+const SHORT_PHONE_VIEWPORT = { width: 412, height: 480 };
+
+/** Inside ResponsiveModal's Dialog band (>= 768 so it is not the Sheet, < 1024
+ *  so it is not the split), and short for the same reason the phone one is:
+ *  a pin proves nothing in a container that never scrolled. */
+const TABLET_VIEWPORT = { width: 900, height: 500 };
+
+/**
+ * The surface animates in over ~200ms — the sheet slides up from entirely below
+ * the fold, the dialog zooms — and a box read mid-animation measures the
+ * animation, not the layout. Measured here, the "pinned" footer appeared to
+ * move 97px purely because the two reads landed on different frames.
+ *
+ * Both legs of ResponsiveModal are `role="dialog"`, so this covers both.
+ */
+async function modalHasFinishedOpening(page: import("@playwright/test").Page) {
+  await page
+    .getByRole("dialog")
+    .evaluate((el) =>
+      Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)),
+    );
+}
+
+test("on a phone the decision comes to you, and the list keeps its place", async ({ page }) => {
+  await page.setViewportSize(PHONE_VIEWPORT);
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+
+  const list = page.getByRole("list", { name: "Flag queue" });
+  await list.getByRole("button").first().click();
+
+  // The decision is on screen without scrolling — today the panel is a sibling
+  // AFTER the full list, so on the real queue it sits 9,146px below the tap.
+  // The pinned footer is what has to be reachable: the Outcome group does not
+  // exist until the form is opened, which is Task 9's deliberate un-arming.
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator('[data-slot="decision-footer"]')).toBeInViewport();
+
+  await sheet.getByRole("button", { name: "Decide", exact: true }).click();
+  await expect(sheet.getByRole("group", { name: "Outcome" })).toBeInViewport();
+
+  await page.keyboard.press("Escape");
+  await expect(list.getByRole("button").first()).toBeVisible();
+});
+
+test("the footer stays pinned inside the sheet, not just inside the split", async ({ page }) => {
+  // Task 9 proved the pin against the desktop panel column. The sheet is a
+  // different container — `max-h-[min(85dvh,42rem)]` with its own scroller —
+  // and `h-full` resolving against a flex-sized parent is exactly where a pin
+  // silently degrades into "the whole thing scrolls as one".
+  await page.setViewportSize(SHORT_PHONE_VIEWPORT);
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  await modalHasFinishedOpening(page);
+  const footer = page.getByRole("dialog").locator('[data-slot="decision-footer"]');
+  const before = await footer.boundingBox();
+
+  const body = page.getByRole("dialog").locator('[data-slot="decision-body"]');
+  // Asserted, not assumed, exactly as the desktop pin test asserts it: if the
+  // fixture ever fits inside the sheet, nothing below scrolls and both
+  // assertions pass while proving nothing about a pin.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, "the sheet's body must hold more than fits, or this proves nothing").toBeGreaterThan(40);
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+
+  // Byte-identical, and something that was below the fold is now above it —
+  // the second half is what distinguishes a pinned footer from a static one
+  // in a container that never scrolled at all.
+  expect(await footer.boundingBox()).toEqual(before);
+  await expect(page.locator('[data-slot="flag-one-liner"]').last()).toBeInViewport();
+});
+
+test("after a phone write, focus does not land behind the sheet", async ({ page }) => {
+  // The post-write restore hands focus to the next row, which is the right
+  // answer beside the split and the wrong one under a modal: Radix marks
+  // everything behind the sheet `aria-hidden="true"`, so focusing that row puts
+  // the keyboard on an element the accessibility tree says does not exist,
+  // while the sheet in front announces the very same person. Measured before
+  // the fix: activeElement was the "Sokha Phlat" row button, insideAriaHidden
+  // true, insideDialog false, dialog open and titled "Sokha Phlat".
+  await page.setViewportSize(PHONE_VIEWPORT);
+  let decided = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-f", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = decided ? A11Y_PEOPLE.slice(1) : A11Y_PEOPLE;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })) satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("button", { name: "Decide", exact: true }).click();
+  await page.getByRole("combobox", { name: /reason/i }).selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  // The write landed and the sheet moved on to the next person.
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveCount(0);
+  await expect(sheet).toBeVisible();
+
+  // Asserted, not assumed: if nothing is aria-hidden the premise is gone and
+  // this test proves nothing, so fail loudly rather than pass on an empty set.
+  const hiddenCount = await page.locator('[aria-hidden="true"]').count();
+  expect(hiddenCount, "the sheet must hide the page behind it, or this proves nothing").toBeGreaterThan(0);
+
+  const focus = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return {
+      insideAriaHidden: el?.closest('[aria-hidden="true"]') != null,
+      insideDialog: el?.closest('[role="dialog"]') != null,
+    };
+  });
+  expect(focus.insideAriaHidden).toBe(false);
+  expect(focus.insideDialog).toBe(true);
+});
+
+/**
+ * The 768–1023px band — the one surface on this page with no automated cover
+ * until now.
+ *
+ * `useIsBelowLg` (1024) opens the modal and `useIsMobile` (768) picks which one,
+ * so this band gets ResponsiveModal's DIALOG leg while every test above gets
+ * either the split (>= 1024) or the Sheet (< 768). It is a different container
+ * again: a centred, `sm:max-w-2xl`, `max-h-[min(85dvh,42rem)]` box rather than a
+ * full-width sheet anchored to the bottom edge, and `h-full` resolving against a
+ * differently-sized parent is exactly where a pin degrades into "the whole thing
+ * scrolls as one". Checked by hand once at 900px; this is the version that stays
+ * checked.
+ */
+test("in the tablet band the decision opens as a dialog, and its footer is pinned too", async ({
+  page,
+}) => {
+  await page.setViewportSize(TABLET_VIEWPORT);
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  // A dialog opened on selection — and it is the Dialog leg, not the Sheet.
+  // Without the second half this test would pass unchanged at 412px and prove
+  // nothing about the band it is named for.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="sheet-content"]')).toHaveCount(0);
+
+  await modalHasFinishedOpening(page);
+  const footer = dialog.locator('[data-slot="decision-footer"]');
+  const before = await footer.boundingBox();
+
+  const body = dialog.locator('[data-slot="decision-body"]');
+  // Asserted, not assumed, as both pin tests above assert it: if the fixture
+  // ever fits inside the dialog, nothing below scrolls and both assertions pass
+  // while proving nothing about a pin.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, "the dialog's body must hold more than fits, or this proves nothing").toBeGreaterThan(40);
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(40);
+
+  // Byte-identical, and something that was below the fold is now above it —
+  // the second half is what distinguishes a pinned footer from a static one in
+  // a container that never scrolled at all.
+  expect(await footer.boundingBox()).toEqual(before);
+  await expect(page.locator('[data-slot="flag-one-liner"]').last()).toBeInViewport();
+});
+
+/**
+ * ResponsiveModal is shared with eight other callers, and 89f6cf07 changed it
+ * from this branch without a test: it now passes `aria-describedby={undefined}`
+ * when it has no `description`, so Radix stops pointing at a description
+ * element that never renders.
+ *
+ * This is an e2e and not a unit test on purpose. Radix's Portal renders `null`
+ * until its mount effect runs, so `renderToStaticMarkup` emits nothing at all
+ * for an open modal — an assertion there would pass by looking for markup that
+ * was never produced. ResponsiveModal.test.tsx pins exactly that.
+ *
+ * Both halves, because either alone is worthless: the negative would also pass
+ * on a modal that failed to open, and the positive would also pass on a build
+ * that emitted the attribute unconditionally.
+ */
+test("a modal with no description does not claim to have one", async ({ page }) => {
+  // 900: ResponsiveModal's Dialog leg, and the page's two callers are both
+  // reachable from here — the panel modal passes no `description`, the
+  // over-threshold confirm modal passes one.
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          // The backend refuses more than 25 writes without an explicit
+          // confirm; that refusal is what opens the described modal.
+          message: {
+            needs_confirm: true,
+            preview: { count: 30, employees: 12 },
+          } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+
+  // Negative control: no `description` prop, so no attribute at all. Before
+  // 89f6cf07 this was Radix's own generated id pointing at nothing.
+  const panel = page.getByRole("dialog");
+  await expect(panel).toBeVisible();
+  expect(
+    await panel.getAttribute("aria-describedby"),
+    "a modal with no description must not point at one",
+  ).toBeNull();
+
+  // Positive control: the confirm modal DOES pass a description, so the
+  // attribute must be there and must resolve.
+  await panel.getByRole("button", { name: "Decide", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: /reason/i })
+    .selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  const confirm = page.getByRole("dialog", { name: "Confirm this decision" });
+  await expect(confirm).toBeVisible();
+  // Resolved through the DOM rather than compared as a string: the whole defect
+  // was an id that existed on the attribute and nowhere else, which any
+  // assertion on the attribute's own value would have passed.
+  const described = await confirm.evaluate((el) => {
+    const id = el.getAttribute("aria-describedby");
+    return id === null ? null : { text: document.getElementById(id)?.textContent ?? null };
+  });
+  expect(described, "a modal WITH a description must carry the attribute").not.toBeNull();
+  expect(described?.text, "and it must resolve to an element that exists").toBe(
+    "30 flags across 12 employees",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The list column's width, which nothing else pins.
+//
+// This branch dropped the page's max-w-7xl cap to reclaim ~300px at 1512, and
+// the spec's Decision 4 spends it on the list: "width converts directly into
+// rows that stop truncating". It very nearly did not. The grid ceiling was
+// byte-identical to the branch point until the final review caught it, and the
+// first fix was a MEASURED NO-OP — Tailwind v4 emits every arbitrary min-width
+// variant as one group BEFORE the named breakpoints rather than interleaving
+// them by width, so `min-[1374px]:` lost the cascade to `lg:` and the list
+// stayed 480px at 1920. Both ceilings are arbitrary variants now, so they sort
+// by value.
+//
+// Two viewports on purpose. One would prove the list is wide somewhere; the
+// pair proves the BREAKPOINT is where it is — deleting the class fails the
+// first, making 40rem unconditional fails the second. 1374 = 640 + 12 + 658 +
+// 64: the width at which the panel first reaches its own 62ch cap, so nothing
+// narrows at any width below it.
+// ---------------------------------------------------------------------------
+test("above 1374 the list gets the width the page reclaimed, and not below it", async ({
+  page,
+}) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const list = page.getByRole("list", { name: "Flag queue" });
+
+  // Below the step: the 30rem ceiling, unchanged from before this branch.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(list).toBeVisible();
+  const narrow = (await list.boundingBox())!.width;
+  expect(narrow, "at 1280 the list keeps the 30rem ceiling").toBeLessThan(520);
+
+  // Above it: 40rem, which is where the reclaimed width finally lands.
+  await page.setViewportSize({ width: 1512, height: 900 });
+  const wide = (await list.boundingBox())!.width;
+  expect(wide, "at 1512 the list takes the 40rem ceiling").toBeGreaterThan(560);
 });

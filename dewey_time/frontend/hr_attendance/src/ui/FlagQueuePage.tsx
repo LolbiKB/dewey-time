@@ -2,39 +2,57 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
 import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
-import { CloudOffIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, CloudOffIcon, TriangleAlertIcon } from "lucide-react";
 import { Navigate, useOutletContext, useSearchParams } from "react-router-dom";
 
 import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Button } from "@/components/ui/button";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
-import { Label } from "@/components/ui/label";
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
+import { useIsBelowLg } from "@/hooks/useIsMobile";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
+  CAPPED_EXPLAINER,
   DECIDE_FAILED_MESSAGE,
+  DECIDED_TOGGLE_LABEL,
   DEVICE_ALERT_EXPLAINER,
+  NOTHING_WAITING_TITLE,
+  QUEUE_LOADING_LABEL,
+  RANGE_FROM_LABEL,
+  RANGE_TO_LABEL,
   REASON_OPTIONS,
   SHOWING_DECIDED_MESSAGE,
+  TIER_FILTER_ALL_LABEL,
+  TIER_FILTER_LABEL,
+  cappedHeadline,
+  decisionSurfaceTitle,
   deviceAlertHeadline,
+  narrowRangeLabel,
+  nothingWaitingDetail,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   partialFailureMessage,
-  openCountAria,
-  openCountLabel,
-  queueHeaderDescription,
+  queueSplitDescription,
+  showDecidedLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
+import {
+  partitionQueue,
+  queuePeopleCount,
+  type OutageGroup,
+} from "@/lib/flagQueuePartition";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
 import { decideFlags } from "@/services/flags";
 import type { QueueEntry, QueuePayload, Tier } from "@/types/flags";
 import { FlagDecisionPanel } from "@/ui/FlagDecisionPanel";
 import { FlagQueueList, entryKey } from "@/ui/FlagQueueList";
+import { OutageBand } from "@/ui/OutageBand";
 
 /** get_flag_queue caps a request at QUEUE_MAX_RANGE_DAYS (31); two weeks is the
  *  window HR actually works and keeps the payload well under QUEUE_FLAG_LIMIT. */
@@ -89,6 +107,15 @@ export type DecideArgs = {
   decision: PendingDecision;
   groupKey?: string | null;
   confirm?: boolean;
+  /**
+   * Which surface issued the write.
+   *
+   * The band excuses branches; the panel decides a person. Only the panel's
+   * write may offer its reason as a repeat or move the selection — a band
+   * excuse that set `lastDecision` would put "Excused · Device or data fault"
+   * one click away from being applied to an unrelated person's genuine flags.
+   */
+  source: "panel" | "band";
 };
 
 /**
@@ -148,6 +175,31 @@ export function decideEffect(result: DecideResponse, args: DecideArgs): DecideEf
   };
 }
 
+/**
+ * The confirmed re-issue of a call the backend refused as too large.
+ *
+ * "Identical, plus confirm" is the whole contract: the preview the user was
+ * shown described THIS call, so any field that changes on the way back makes the
+ * blast radius they approved a description of something else. `source` is the
+ * one that would bite hardest — a band excuse re-issued as `"panel"` would, on
+ * success, offer "Excused · Device or data fault" as the selected person's
+ * repeat and drag them to a different row, which is precisely what the
+ * discriminant exists to prevent, and only on the over-25 path that the biggest
+ * writes always take.
+ *
+ * Exported and lifted out of the modal's onClick for the reason `decideEffect`
+ * and `stripInputs` are: this suite has no react-query harness, so a spread left
+ * inline there is a line no test can reach.
+ */
+export function confirmArgs(args: DecideArgs): DecideArgs {
+  return { ...args, confirm: true };
+}
+
+/** Stable identity so an un-wired view does not hand ResponsiveModal a new
+ *  callback on every render. `belowLg` is only ever set by FlagQueuePage, which
+ *  always passes the real handler alongside it. */
+const noop = () => {};
+
 /** A fresh draft for a newly selected row. REASON_OPTIONS[0] only seeds the
  *  <select>'s value; nothing is written until HR clicks, and decisionIsComplete
  *  still gates the button. */
@@ -199,6 +251,19 @@ export function FlagQueuePage() {
     [setSearchParams],
   );
 
+  // Trims from the START, matching clampRange: the recent end is the work that
+  // matters, so a narrower window gives up its oldest days, never today's.
+  const handleNarrowRange = useCallback(
+    (days: number) => {
+      const end = parseISO(requestedRange.endDate);
+      setRange({
+        startDate: format(subDays(end, days - 1), "yyyy-MM-dd"),
+        endDate: requestedRange.endDate,
+      });
+    },
+    [requestedRange.endDate, setRange],
+  );
+
   const setTier = useCallback(
     (next: Tier | null) => {
       setSearchParams(
@@ -234,6 +299,41 @@ export function FlagQueuePage() {
     refresh,
   } = useFlagQueue({ ...requestedRange, tier, includeDecided });
 
+  // The queue holds judgments; outages are a precondition and live in a band.
+  // Partitioned here rather than in the list so the header can count the two
+  // populations separately — "389 people" counted 256 who are waiting on a
+  // machine, not on HR.
+  const { outages, queue } = useMemo(() => partitionQueue(entries), [entries]);
+  const queuePeople = useMemo(() => queuePeopleCount(queue), [queue]);
+
+  const [excludedBranches, setExcludedBranches] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+
+  const handleToggleBranch = useCallback((groupKey: string) => {
+    setExcludedBranches((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  // An exclusion belongs to the outage it was made about, and nothing else does
+  // that bookkeeping. `group_key` for a branch outage is stable across months
+  // (handleSubmit's comment says so, which is why it must never be sent as a
+  // decision's group_key), so a branch unchecked for last week's outage stays
+  // unchecked for this week's — and the band is collapsed by default, so the
+  // only trace is a smaller number inside a button label.
+  //
+  // Keyed on the range and tier rather than reset inside their two setters: the
+  // URL is the source of truth for both, and it also changes via the back
+  // button and via any link somebody was sent. Identity is preserved when the
+  // set is already empty, so the overwhelmingly common case does not re-render.
+  useEffect(() => {
+    setExcludedBranches((prev) => (prev.size === 0 ? prev : new Set<string>()));
+  }, [requestedRange.startDate, requestedRange.endDate, tier]);
+
   // Memoised once for the whole list rather than rebuilt per row: the list
   // re-renders on every keystroke in the decision note, and forty rows would
   // otherwise each rebuild the same set each time.
@@ -243,6 +343,7 @@ export function FlagQueuePage() {
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<PendingDecision>(emptyDraft);
   const [activeIdentity, setActiveIdentity] = useState<string | null>(null);
+  const [expandedIdentity, setExpandedIdentity] = useState<string | null>(null);
   const [lastDecision, setLastDecision] = useState<PendingDecision | null>(null);
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [bulkFailure, setBulkFailure] = useState<BulkFailure | null>(null);
@@ -269,10 +370,16 @@ export function FlagQueuePage() {
 
   // The selected row can be a group member surfaced by "Decide one by one",
   // which is not itself a top-level entry — so resolve against the expanded
-  // group's members too, not just `entries`.
+  // group's members too, not just the top-level rows.
+  //
+  // `queue`, not `entries`: an outage is not selectable, because the list does
+  // not render one. Resolving against `entries` let a stale or mis-aimed
+  // selection land on an outage group and open the decision panel over it — a
+  // judgment form for a dead card reader, which is the precondition this page
+  // now refuses to judge.
   const selectedEntry = useMemo<QueueEntry | null>(() => {
     if (!selectedKey) return null;
-    for (const entry of entries) {
+    for (const entry of queue) {
       if (entryKey(entry) === selectedKey) return entry;
       if (entry.kind === "group" && entry.group_key === expandedGroupKey) {
         for (const member of entry.members) {
@@ -282,7 +389,7 @@ export function FlagQueuePage() {
       }
     }
     return null;
-  }, [entries, expandedGroupKey, selectedKey]);
+  }, [queue, expandedGroupKey, selectedKey]);
 
   // Everything reset here is per-row state: a draft, a repeat decision, an
   // exclusion set or a failure notice leaking across a selection change would
@@ -290,6 +397,15 @@ export function FlagQueuePage() {
   const resetRowState = useCallback(() => {
     setDraft(emptyDraft());
     setActiveIdentity(null);
+    // Unobservable today and deliberately untested: a flag identity is unique
+    // across the payload, so a stale one cannot match anything on the next
+    // person. Cleared anyway, so it matches `activeIdentity` at both of the
+    // ROW-RESET sites rather than becoming the one piece of per-row state that
+    // persists. Both, and only those two: `activeIdentity` is cleared at a third
+    // site — the mutation's onSuccess, closing the form after a panel write —
+    // which `expandedIdentity` deliberately does not mirror, so a promoted card
+    // stays promoted and shows HR the outcome they just recorded on it.
+    setExpandedIdentity(null);
     setLastDecision(null);
     setExcluded(new Set<string>());
     setBulkFailure(null);
@@ -357,11 +473,22 @@ export function FlagQueuePage() {
       }
 
       setPendingConfirm(null);
-      setActiveIdentity(null);
+      // The open flag form belongs to the selected person, so it closes when
+      // THEIR write lands and not when the band's does. Same rule as the two
+      // gates below, and the same sequence reaches it: a half-typed decision
+      // should not snap shut because somebody acknowledged an outage.
+      if (args.source === "panel") setActiveIdentity(null);
       setWriteFailure(null);
       // null only when the call wrote nothing; keep whatever repeat was already
       // on offer rather than clearing a decision that did land earlier.
-      if (effect.lastDecision) setLastDecision(effect.lastDecision);
+      //
+      // Panel writes only. A band excuse announces and refreshes; it must not
+      // touch anything scoped to the selected row. Offering "Excused · Device
+      // or data fault" as this person's repeat, when the write was about a
+      // branch's dead reader and not about them at all, is resetRowState's own
+      // stated failure — one person's reasoning applied to the next — arriving
+      // by a path resetRowState cannot intercept, because no selection changed.
+      if (effect.lastDecision && args.source === "panel") setLastDecision(effect.lastDecision);
       setBulkFailure(effect.bulkFailure);
 
       // Say what happened. Until now the only signal that a decision landed was
@@ -390,11 +517,18 @@ export function FlagQueuePage() {
       // unrelated refetch (this query is staleTime 0 with refetchOnWindowFocus)
       // finally changed the data, then steal focus and clobber the selection at
       // an arbitrary moment, possibly mid-note.
-      if (effect.lastDecision) {
+      //
+      // Panel writes only, for the second time on this handler and for a
+      // different reason: a band excuse removes N outage entries, so every later
+      // slot shifts. With thirteen branches down the user is carried from row i
+      // to row i+13, focus follows, and the draft they were part-way through —
+      // including its free-text note — is wiped. They asked to acknowledge an
+      // outage, not to leave the row they were working on.
+      if (effect.lastDecision && args.source === "panel") {
         // Members of an expanded group are not top-level entries, so fall back to
         // the group that owns the selected member — that is the row the list
         // renders in its place.
-        const index = entries.findIndex(
+        const index = queue.findIndex(
           (entry) =>
             entryKey(entry) === selectedKey ||
             (entry.kind === "group" &&
@@ -402,8 +536,16 @@ export function FlagQueuePage() {
                 (member) => entryKey({ kind: "person", ...member }) === selectedKey,
               )),
         );
-        setRestore(index >= 0 ? { index, from: entries } : null);
+        setRestore(index >= 0 ? { index, from: queue } : null);
       }
+
+      // The branches just excused are about to leave the queue, so the choice of
+      // which ones to include has nothing left to describe. Left standing it
+      // would silently narrow the next outage's write. Same "something was
+      // actually written" guard as the restore above: a call that wrote nothing
+      // has not settled anything, and the user's selection is still the one they
+      // will want when they retry.
+      if (effect.lastDecision && args.source === "band") setExcludedBranches(new Set<string>());
 
       // Refetch rather than patch local state: the rows that failed come back as
       // needs_re_review, and a person only leaves the queue once the server says
@@ -422,13 +564,21 @@ export function FlagQueuePage() {
     },
   });
 
+  // Owned by the page, not the view: the view is the piece that renders under
+  // renderToStaticMarkup, and a hook reading window width during render would
+  // make every existing view test depend on a jsdom-less global.
+  //
+  // Declared above the restore effect because that effect reads it — the row it
+  // would hand focus to is behind the modal on this breakpoint.
+  const belowLg = useIsBelowLg();
+
   useEffect(() => {
     if (!restore) return;
-    if (entries === restore.from) return; // the refetch has not landed yet
+    if (queue === restore.from) return; // the refetch has not landed yet
     setRestore(null);
     // Clamped: deciding the last row leaves the slot past the end, and the row
     // above it is where a human would look next.
-    const next = entries[Math.min(restore.index, entries.length - 1)];
+    const next = queue[Math.min(restore.index, queue.length - 1)];
     if (!next) {
       setSelectedKey(null);
       return;
@@ -446,9 +596,20 @@ export function FlagQueuePage() {
     // `writeFailure` describe the write that just happened and must outlive it.
     setDraft(emptyDraft());
     setActiveIdentity(null);
+    setExpandedIdentity(null);
     setExcluded(new Set<string>());
-    setFocusKey(key);
-  }, [restore, entries]);
+    // Only where that row is something the user can see. At and above lg the
+    // list sits beside the panel and landing on the next row is the whole point
+    // of this effect. Below lg the panel is a modal covering that list, and
+    // Radix marks everything behind it `aria-hidden="true"` — so focusing the
+    // row there puts the keyboard on an element the accessibility tree says
+    // does not exist, while the sheet in front announces the same person.
+    // Measured, not assumed: the probe returned insideAriaHidden true,
+    // insideDialog false, with the dialog open and titled for that person.
+    // The modal owns focus on this breakpoint; leaving it alone is what lets
+    // Radix's focus scope keep it inside the surface the user is actually on.
+    if (!belowLg) setFocusKey(key);
+  }, [restore, queue, belowLg]);
 
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
@@ -464,7 +625,30 @@ export function FlagQueuePage() {
       // rather than one per day, that key would be stable across months, so
       // undoing this morning's call would silently reverse every device-fault
       // decision ever made for that branch.
-      decide.mutate({ identities, decision, groupKey: null });
+      decide.mutate({ identities, decision, groupKey: null, source: "panel" });
+    },
+    [decide],
+  );
+
+  // Routed through the same mutation as every other write, so the band inherits
+  // the needs_confirm -> blast-radius preview -> re-issue-with-confirm flow:
+  // decide_flags refuses more than DECIDE_CONFIRM_THRESHOLD (25) writes without
+  // one, and an "Excuse all" over thirteen branches is the largest write this
+  // page can start.
+  //
+  // groupKey: null for the reason handleSubmit spells out above — the server
+  // mints a fresh AFD-<hash> per call, and passing the band's own key would make
+  // reverse_decision_group undo every device-fault decision ever recorded for
+  // those branches.
+  const handleExcuseOutages = useCallback(
+    (identities: string[]) => {
+      if (identities.length === 0) return;
+      decide.mutate({
+        identities,
+        decision: { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" },
+        groupKey: null,
+        source: "band",
+      });
     },
     [decide],
   );
@@ -476,9 +660,29 @@ export function FlagQueuePage() {
     cancelRestore();
   }, [selectedEntry, cancelRestore]);
 
+  const panelOpen = belowLg && selectedEntry != null;
+
+  const handlePanelOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) return;
+      // Dismissing the sheet is a deselection, so it owes the same per-row reset
+      // every other deselection does — otherwise a half-typed note follows the
+      // next tap onto somebody else's form.
+      setSelectedKey(null);
+      resetRowState();
+      cancelRestore();
+    },
+    [resetRowState, cancelRestore],
+  );
+
   const handleCollapseGroup = useCallback(() => {
     if (!expandedGroupKey) return;
-    const group = entries.find(
+    // `queue` for the same reason as everywhere else: this looks up a row the
+    // list is rendering, and `entries` is the payload. Equivalent today, since
+    // an expansion can only start from `selectedEntry` and an outage can never
+    // be selected — but it was the last lookup in this component still reaching
+    // past the partition, which is precisely the shape of the bug above.
+    const group = queue.find(
       (entry) => entry.kind === "group" && entry.group_key === expandedGroupKey,
     );
     setExpandedGroupKey(null);
@@ -487,7 +691,7 @@ export function FlagQueuePage() {
     setSelectedKey(group ? entryKey(group) : null);
     resetRowState();
     cancelRestore();
-  }, [entries, expandedGroupKey, resetRowState, cancelRestore]);
+  }, [queue, expandedGroupKey, resetRowState, cancelRestore]);
 
   if (sessionLoading) {
     return (
@@ -517,6 +721,7 @@ export function FlagQueuePage() {
         announcement={announcement}
         range={requestedRange}
         onRangeChange={setRange}
+        onNarrowRange={handleNarrowRange}
         tier={tier}
         onTierChange={setTier}
         truncated={truncated}
@@ -526,9 +731,26 @@ export function FlagQueuePage() {
         bulkFailure={bulkFailure}
         writeFailure={writeFailure}
         alerts={alerts}
+        outages={outages}
+        queuePeople={queuePeople}
+        queueRows={queue.length}
+        excludedBranches={excludedBranches}
+        onToggleBranch={handleToggleBranch}
+        onExcuseOutages={handleExcuseOutages}
+        // Narrowed to the band's own write, not a bare `decide.isPending`. The
+        // mutation is shared with the panel, so the unqualified flag would put
+        // "Excusing…" on the band every time somebody decided a single person —
+        // telling them a mass excuse was under way when they had asked for
+        // nothing of the sort. This still closes the hazard the flag is for: a
+        // second click on the band while the band's own write is in flight.
+        excusing={decide.isPending && decide.variables?.source === "band"}
+        belowLg={belowLg}
+        panelOpen={panelOpen}
+        onPanelOpenChange={handlePanelOpenChange}
+        panelTitle={selectedEntry == null ? null : decisionSurfaceTitle(selectedEntry)}
         list={
           <FlagQueueList
-            entries={entries}
+            entries={queue}
             {...stripProps}
             selectedKey={selectedKey}
             expandedGroupKey={expandedGroupKey}
@@ -545,6 +767,8 @@ export function FlagQueuePage() {
             onDraftChange={setDraft}
             activeIdentity={activeIdentity}
             onOpenFlag={setActiveIdentity}
+            expandedIdentity={expandedIdentity}
+            onExpandFlag={setExpandedIdentity}
             lastDecision={lastDecision}
             onSubmit={handleSubmit}
             excluded={excluded}
@@ -576,7 +800,7 @@ export function FlagQueuePage() {
               size="sm"
               disabled={decide.isPending}
               onClick={() => {
-                if (pendingConfirm) decide.mutate({ ...pendingConfirm.args, confirm: true });
+                if (pendingConfirm) decide.mutate(confirmArgs(pendingConfirm.args));
               }}
             >
               Write {pendingConfirm?.preview.count ?? 0} decisions
@@ -603,6 +827,9 @@ export type FlagQueueViewProps = {
   /** The range the controls edit — the request, not the payload's answer. */
   range: { startDate: string; endDate: string };
   onRangeChange: (next: { startDate: string; endDate: string }) => void;
+  /** The capped notice's two levers — narrows `range` to the last N days,
+   *  trimmed from the start (same rule as `clampRange`). */
+  onNarrowRange: (days: number) => void;
   tier: Tier | null;
   onTierChange: (next: Tier | null) => void;
   truncated?: boolean;
@@ -625,6 +852,33 @@ export type FlagQueueViewProps = {
    * turn out to be high", which is only answerable if the rate is visible.
    */
   orphans?: QueuePayload["orphans"];
+  /** Device outages, partitioned out of the queue. Empty on a healthy day. */
+  outages: OutageGroup[];
+  /** Distinct people in the judgment queue — NOT `counts.people`, which includes outage members. */
+  queuePeople: number;
+  /** Top-level rows in the judgment queue — NOT `counts.rows`, which counts the
+   *  outage groups too. This is `partitionQueue(...).queue.length`. */
+  queueRows: number;
+  excludedBranches: ReadonlySet<string>;
+  onToggleBranch: (groupKey: string) => void;
+  onExcuseOutages: (identities: string[]) => void;
+  /** A band excuse is in flight — NOT any write. Disables the band's button and
+   *  is the only thing that may make it say "Excusing…". */
+  excusing?: boolean;
+  /**
+   * Narrower than the `lg:grid` split — so the panel is a modal, not a second
+   * column. Read by the PAGE and handed down, never read here: this component
+   * renders under renderToStaticMarkup with no `window`, and a width-reading
+   * hook inside it would take every one of those tests with it.
+   */
+  belowLg?: boolean;
+  /** Whether the modal is showing. Only ever true below `lg`. */
+  panelOpen?: boolean;
+  /** Dismissal, which is a deselection and resets the row's draft with it. */
+  onPanelOpenChange?: (open: boolean) => void;
+  /** What the modal is deciding. The split needs no visible title — the row is
+   *  still on screen beside it — but a sheet covers the row it came from. */
+  panelTitle?: ReactNode;
   list: ReactNode;
   panel: ReactNode;
 };
@@ -649,88 +903,145 @@ export function FlagQueueView(props: FlagQueueViewProps) {
       : null,
   ].filter((line): line is string => line !== null);
 
+  // Everyone the outage touched, counted the same way the band's own headline
+  // counts them. NOT `counts.people`, which counts both populations together and
+  // so cannot answer either question — and NOT
+  // `outageWrite(...).coveredEmployeeCount`, which counts only members holding an
+  // undecided flag and therefore falls towards zero as the excuse lands. The
+  // header would then report nobody waiting on a device fault while the band
+  // directly above it still names thirteen branches.
+  const outagePeople = queuePeopleCount(props.outages);
+
   return (
-    <Page>
+    // max-w-none: dewey-ui's Page caps at max-w-7xl so "pages across both apps
+    // share the same content width", which is right for a form and wrong here.
+    // At 1512 the cap plus padding threw away 296px; at 1920, 704px — 36.7% of
+    // the monitor — on the one page where width converts directly into rows
+    // that stop truncating. cn() is twMerge, so this beats the default.
+    <Page className="max-w-none">
       <PageHeader
         title="Flags"
-        description={counts ? queueHeaderDescription(counts) : "Loading…"}
-      >
-        {/* The range and tier controls. Until these existed the banner below
-            instructed HR to narrow a range the page gave them no way to change,
-            which is worse than saying nothing: an unactionable warning in the
-            most urgent colour on the page teaches people to skip that colour. */}
-        <div className="flex flex-wrap items-end gap-3">
-          <DatePickerInput
-            label="From"
-            value={props.range.startDate}
-            max={parseISO(props.range.endDate)}
-            onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
-            className="w-40"
-          />
-          <DatePickerInput
-            label="To"
-            value={props.range.endDate}
-            min={parseISO(props.range.startDate)}
-            onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
-            className="w-40"
-          />
-          <div className="space-y-1.5">
-            <Label htmlFor="flag-tier" className="text-xs">
-              Consequence
-            </Label>
+        description={
+          counts
+            ? queueSplitDescription(
+                props.queuePeople,
+                props.queueRows,
+                outagePeople,
+                props.includeDecided ?? false,
+              )
+            : "Loading…"
+        }
+        actions={
+          // One row, inline, no stacked labels. The three controls previously
+          // cost 62px because each carried a <Label> above it; the accessible
+          // name moves onto the control itself, which is where a screen reader
+          // reads it from anyway.
+          //
+          // `max-w-[calc(100vw-16rem)] … lg:max-w-none`, not the plain
+          // `flex-wrap` the width alone would suggest: `actions` renders
+          // inside dewey-ui's own `shrink-0` sibling of the title (page.tsx),
+          // which never gets asked to shrink and has no responsive stacking of
+          // its own — so on a phone this row's unwrapped intrinsic width
+          // (~575px measured at a 412px viewport) became this flex item's
+          // PREFERRED size regardless of `flex-wrap` on its own children, and
+          // `justify-between` took the entire deficit out of the title, down
+          // to 0 width. `max-w` is a hard clamp browsers honour over a flex
+          // item's preferred size even at `shrink-0`, and a `calc(100vw-…)`
+          // expression resolves against the viewport rather than this flex
+          // item's own (circular) auto-sizing — so it forces the real wrap
+          // `flex-wrap` was already meant to do. A fixed 16rem title column
+          // (not a fraction like `56vw`) is what keeps that from conceding
+          // chrome at the mid-size desktop widths this page is actually
+          // measured at — `56vw` bit from ~1027px down against this row's
+          // ~575px natural width, wrapping and costing ~48px even at a 900px
+          // viewport with 300+px of genuine slack beside the title. Released
+          // entirely at `lg` (1024px) and up, where dewey-ui's own `Page`
+          // padding step (`sm:px-8`) has already landed and there is always
+          // room. Regressing this clamp is caught by
+          // e2e/flags.spec.ts's "the flag queue renders groups and person
+          // rows with toolbar counts for HR staff", run under Playwright's
+          // `mobile` project — remove it and the header's description goes
+          // `hidden` there, squeezed to 0 width behind an unwrapped toolbar.
+          <div className="flex max-w-[calc(100vw-16rem)] flex-wrap items-center gap-2 lg:max-w-none">
+            <DatePickerInput
+              ariaLabel={RANGE_FROM_LABEL}
+              value={props.range.startDate}
+              max={parseISO(props.range.endDate)}
+              onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
+              className="w-36 space-y-0"
+            />
+            <span className="text-muted-foreground" aria-hidden="true">
+              –
+            </span>
+            <DatePickerInput
+              ariaLabel={RANGE_TO_LABEL}
+              value={props.range.endDate}
+              min={parseISO(props.range.startDate)}
+              onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
+              className="w-36 space-y-0"
+            />
             <select
-              id="flag-tier"
+              aria-label={TIER_FILTER_LABEL}
               value={props.tier ?? ""}
               onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+              className="h-10 rounded-md border bg-background px-2 text-sm"
             >
-              <option value="">All</option>
+              <option value="">{TIER_FILTER_ALL_LABEL}</option>
               {TIER_VALUES.map((value) => (
                 <option key={value} value={value}>
                   {tierLabel(value)}
                 </option>
               ))}
             </select>
+            {/* The one count that was ever a control. Open and Needs re-review
+                reported the size of the job and could not be pressed; Open has
+                moved into the description line and Needs re-review has read 0
+                on every day of this queue's life. */}
+            <button
+              type="button"
+              aria-pressed={props.includeDecided ?? false}
+              onClick={props.onToggleDecided}
+              className={cn(
+                "flex h-10 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors",
+                props.includeDecided
+                  ? "border-primary/30 bg-primary/5 text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {DECIDED_TOGGLE_LABEL}
+              <span className="tabular-nums text-foreground">{counts?.decided ?? 0}</span>
+            </button>
           </div>
-        </div>
-
-        {/* An AttentionStrip like every other notice on this page, rather than a
-            bare coloured <p> with no icon, no container and no role — the one
-            message that says "your list is incomplete" was the only one skipping
-            the pattern. The copy now names levers that exist. */}
-        {props.truncated ? (
+        }
+      >
+        {/* Only when capping is actually reachable by the user. The levers are
+            buttons now: the old copy told HR to narrow a range while the strip
+            offered no way to do it. Capping is structural on a queue at
+            production volume — it never clears — so this stays a control
+            rather than the permanent lecture the old strip was. */}
+        {props.truncated && counts ? (
           <AttentionStrip
-            tone="accent"
-            icon={<TriangleAlertIcon className="size-4 text-brand-accent" aria-hidden="true" />}
+            tone="amber"
+            icon={<TriangleAlertIcon className="size-4 text-amber-600" aria-hidden="true" />}
           >
-            More flags exist in this range than the queue can show at once. Narrow the dates, or
-            filter by consequence, to reach the rest.
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="font-medium">{cappedHeadline(counts.open)}</span>{" "}
+                <span className="text-muted-foreground">{CAPPED_EXPLAINER}</span>
+              </span>
+              {[7, 3].map((days) => (
+                <Button
+                  key={days}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => props.onNarrowRange(days)}
+                >
+                  {narrowRangeLabel(days)}
+                </Button>
+              ))}
+            </span>
           </AttentionStrip>
         ) : null}
-
-        {/* Open and Needs re-review are counts, not filters — they report the
-            size of the job, and letting them hide rows is how a queue starts
-            hiding work. Decided is the one exception, and it only ever ADDS:
-            pressed, the settled people it counts come back into the list so a
-            decision can be replaced. Nothing here can subtract from the queue. */}
-        <div
-          role="group"
-          aria-label="Queue counts"
-          className="flex w-full gap-1 rounded-lg bg-muted/40 p-1 sm:w-fit"
-        >
-          <CountChip
-            label="Open"
-            value={counts ? openCountLabel(counts) : "0"}
-            valueAria={counts ? openCountAria(counts) : undefined}
-          />
-          <CountChip label="Needs re-review" value={`${counts?.needs_re_review ?? 0}`} />
-          <CountChip
-            label="Decided"
-            value={`${counts?.decided ?? 0}`}
-            pressed={props.includeDecided}
-            onToggle={props.onToggleDecided}
-          />
-        </div>
 
         {/* Without this the extra rows read as a bug: entries with no action
             left on them, in a queue that promises everything in it is waiting
@@ -739,10 +1050,6 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           <p className="text-xs text-muted-foreground">{SHOWING_DECIDED_MESSAGE}</p>
         ) : null}
 
-        {/* Deliberately prose, not a CountChip: a chip sits in a group whose
-            every member is either a size-of-the-job count or a filter, and
-            these are neither — there is nothing to open and nothing to press.
-            Rendered only when non-zero, so a healthy queue stays quiet. */}
         {orphanLines.length > 0 ? (
           <div className="space-y-0.5">
             {orphanLines.map((line) => (
@@ -753,6 +1060,28 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </div>
         ) : null}
       </PageHeader>
+
+      {/* Above the queue and outside it: an outage is the precondition that
+          explains the rows below, and it is not a judgment about anybody. Self-
+          hiding when there is no outage, so a healthy day looks exactly as it
+          did before.
+
+          Withheld on a failed load for the same reason `counts` and `orphans`
+          are one level up, and with more at stake than either: react-query keeps
+          the last good `data` when a refetch fails, so the entries behind this
+          band can outlive the payload they came from — and unlike a stale count,
+          this band is the page's largest WRITE. "Excuse 157 people" sitting
+          above "Flags didn't load" invites a mass decision over data the page
+          has just said it could not load. */}
+      {props.isLoading || props.error ? null : (
+        <OutageBand
+          outages={props.outages}
+          excludedBranches={props.excludedBranches}
+          onToggleBranch={props.onToggleBranch}
+          onExcuse={props.onExcuseOutages}
+          submitting={props.excusing}
+        />
+      )}
 
       {/* Role 2, not role 3: the queue itself loaded fine, so no region is
           missing and there is nothing for FailureBlock to replace — the write
@@ -816,7 +1145,21 @@ export function FlagQueueView(props: FlagQueueViewProps) {
 
       <Section grow>
         {props.isLoading ? (
-          <EmptyState icon={Spinner} title="Loading flags…" />
+          // Skeleton rows at the row's real height, not a centred spinner: the
+          // spinner sits in the middle of an empty pane and every row jumps into
+          // place when data lands. These hold the layout still.
+          <div className="space-y-1" aria-busy="true" aria-label={QUEUE_LOADING_LABEL}>
+            {Array.from({ length: 8 }, (_, index) => (
+              <div key={index} className="flex items-center gap-2 px-2.5 py-2">
+                <Skeleton className="size-10 shrink-0 rounded-full" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <Skeleton className="h-3.5 w-1/3" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+                <Skeleton className="h-[17px] w-[117px] shrink-0" />
+              </div>
+            ))}
+          </div>
         ) : props.error ? (
           // Replaces the region the queue would occupy rather than sitting above
           // it — a page showing both a banner and a replaced region reports one
@@ -829,28 +1172,143 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             onRetry={props.onRetry}
             className="min-h-0"
           />
+        ) : props.queuePeople === 0 && props.outages.length === 0 ? (
+          // The richer "nothing waiting" state, rendered here and ONLY here:
+          // `props.list` (FlagQueueList) is not mounted on this path, so its own
+          // "Nothing to triage in this range." early return never fires
+          // alongside this one — an empty queue must not report itself twice.
+          <EmptyState
+            icon={CheckIcon}
+            title={NOTHING_WAITING_TITLE}
+            description={nothingWaitingDetail(props.range.startDate, props.range.endDate)}
+            className="border-none"
+            action={
+              counts?.decided ? (
+                <Button size="sm" variant="outline" onClick={props.onToggleDecided}>
+                  {showDecidedLabel(counts.decided)}
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : props.belowLg ? (
+          // Below lg the panel is a modal, not the bottom of a stack.
+          //
+          // As a sibling after the list it sat below every row — 9,146px below
+          // the tap on the real queue — so making a decision meant scrolling
+          // past the whole backlog and then back up to carry on. The list stays
+          // mounted and scrolled where it was, so dismissing returns you exactly
+          // where you were: the property the desktop split has and the stack
+          // lost.
+          //
+          // `useIsBelowLg`, not `useIsMobile`. The grid splits at 1024 and the
+          // nav shell at 768, so wiring this to the shell's breakpoint would
+          // leave 768–1023px with neither — no split and no modal, which is a
+          // decision form nothing can open. What ResponsiveModal opens in that
+          // band is its Dialog leg rather than the bottom Sheet, because it
+          // picks its own surface with useIsMobile; both are a decision that
+          // comes to you, which is the whole claim.
+          <div className="flex min-h-0 flex-1 flex-col">
+            {/* Both branches carry it, and only one branch renders at a time,
+                so the queue still has exactly one live region. */}
+            <p className="sr-only" role="status" aria-live="polite">
+              {props.announcement}
+            </p>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{props.list}</div>
+            <ResponsiveModal
+              open={props.panelOpen ?? false}
+              onOpenChange={props.onPanelOpenChange ?? noop}
+              title={props.panelTitle}
+              size="lg"
+              // The panel owns its own scrolling since the pinned footer landed:
+              // its body scrolls and its footer does not. ResponsiveModal's
+              // default body is `min-h-0 flex-1 overflow-y-auto`, which would
+              // wrap that in a SECOND scroller and let the pinned footer scroll
+              // away — the exact failure this branch exists to fix, on the
+              // surface where it matters most. `overflow-hidden` wins over the
+              // default through twMerge; `flex flex-col` gives the panel's
+              // `h-full` a parent whose height is actually resolved.
+              bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
+            >
+              {/* The same named region the split gives it. Redundant beside the
+                  dialog's own name, and kept anyway: the panel is one thing on
+                  both surfaces, and a screen-reader user who has learnt to jump
+                  to "Selected flag" should not lose it by turning a phone. */}
+              <div role="region" aria-label="Selected flag" className="flex min-h-0 flex-1 flex-col">
+                {props.panel}
+              </div>
+            </ResponsiveModal>
+          </div>
         ) : (
-          // Below lg this is ONE scroll surface, not two stacked ones. As a grid
-          // it was two implicit auto rows in a definite-height container, and
+          // At lg and up, two columns — and, for a render handed no `belowLg`
+          // at all, the one-scroll-surface stack that keeps a narrow window
+          // usable rather than a half-height grid. As a grid below lg it was
+          // two implicit auto rows in a definite-height container, and
           // `min-h-0` on both children drops their min-content contribution to
-          // zero — so the tracks split the height evenly and a phone got a ~133px
-          // window onto 252 rows, shearing the third row through its sub-line
-          // while an unasked-for empty panel took the other half.
+          // zero — so the tracks split the height evenly and a phone got a
+          // ~133px window onto 252 rows, shearing the third row through its
+          // sub-line while an unasked-for empty panel took the other half.
           //
           // The split starts at lg, not md: at 768px the panel would be 340px,
           // narrower than the list beside it, and the decision form does not fit
           // that. useIsMobile.ts:9 already puts the data table's break at lg.
           //
-          // 24–30rem rather than a flat 22rem cap. The row's fixed chrome (avatar,
-          // gaps, +N badge, 117px strip) is ~240px, so 22rem left 112px for two
-          // lines of text and the name — the row's identity — was the only
-          // shrinkable thing in it, collapsing to "B…" beside a shrink-0 badge.
-          // The panel gives up width it measurably was not using: its longest
-          // line of prose ends ~277px short of the old edge.
+          // Three numbers, each load-bearing, and none of them interchangeable.
+          //
+          // The 24rem FLOOR is measured. The row's fixed chrome (avatar, gaps,
+          // +N badge, 117px strip) is ~240px, so a 22rem track left 112px for
+          // two lines of text, and the name — the row's identity — was the only
+          // shrinkable thing in it: it collapsed to "B…" beside a shrink-0
+          // badge.
+          //
+          // The 30rem CEILING holds below 1374px, and must not be widened
+          // there. `minmax(24rem,40rem)` looks like the obvious simplification
+          // and is a regression: CSS grid fills a non-flexible track to its
+          // ceiling BEFORE the 1fr track expands, so the list takes 40rem the
+          // moment it fits and the panel gets whatever is left. Measured, not
+          // reasoned: at 1024 that is a 640px list and a 308px panel — narrower
+          // than the 340px this very file rejects nineteen lines up as too
+          // small for the decision form. At 1152 it is 436px, and at 1280 it is
+          // 564px, which also puts the panel under the 62ch cap below and makes
+          // that cap inert at the width the e2e suite measures at.
+          //
+          // 1374px is where the wider ceiling becomes free, and it is derived,
+          // not chosen: 640 (the 40rem list) + 12 (gap-3) + 658 (the panel's own
+          // 62ch cap, measured below) + 64 (sm:px-8). At exactly that width the
+          // panel track lands on its cap to the pixel, so from there up the list
+          // can take 40rem without the panel giving up anything at all — it was
+          // going to leave that space blank regardless. Below 1374 nothing
+          // changes; above it, the width `max-w-none` reclaimed finally reaches
+          // the list, which is what Decision 4 promised and what a 30rem ceiling
+          // alone quietly turned into whitespace (298px of it at 1512).
+          //
+          // `min-[1024px]:` and NOT `lg:` for the narrow ceiling, even though
+          // 1024 IS `lg`. The two grid-cols declarations are the only classes
+          // here that collide, so their order in the stylesheet decides the
+          // winner at >= 1374 — and Tailwind v4 emits every arbitrary
+          // min-width variant BEFORE the named breakpoints, not interleaved by
+          // width. Written as `lg:` + `min-[1374px]:`, the built CSS put the
+          // 40rem rule at byte 126508 and the 30rem rule at 130661, so `lg:`
+          // won at every width and the wider ceiling was dead code: measured
+          // in-browser, the list stayed 480px at 1512 and at 1920. Expressed as
+          // two arbitrary variants they sort by value and the later one wins as
+          // intended. Verified, not reasoned, both times — in the emitted CSS
+          // and again with getBoundingClientRect.
+          //
+          // `lg:grid` and `lg:overflow-visible` stay named: nothing collides
+          // with them, so their order cannot matter. The 1024 literal is the
+          // same number `useIsMobile.ts`'s LG_BREAKPOINT already hard-codes to
+          // decide whether this branch renders at all, so the two cannot drift
+          // apart silently.
+          //
+          // twMerge keeps both grid-cols classes — different variant prefixes
+          // are different keys — which is also verified rather than assumed:
+          // `max-w-none` beating `max-w-7xl` through this same `cn` is how the
+          // width above was reclaimed in the first place.
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain",
-              "lg:grid lg:overflow-visible lg:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
+              "lg:grid lg:overflow-visible min-[1024px]:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
+              "min-[1374px]:grid-cols-[minmax(24rem,40rem)_minmax(0,1fr)]",
             )}
           >
             {/* polite, not assertive: these confirm what the user just did, so
@@ -863,7 +1321,33 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             <div
               role="region"
               aria-label="Selected flag"
-              className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain"
+              // A measure, not a stretch. Decision 2 complained about two
+              // different things under one number, and they need two fixes.
+              // This cap is the CONTROLS half: a Reason select 724px wide for a
+              // 22-character option, a segmented control with its two options
+              // 360px apart, a facts grid placing `Gap` 320px from `4h`. It
+              // takes the column from ~884px to ~658px and settles all three.
+              //
+              // It is NOT the reading half, and must not be retuned as if it
+              // were: `ch` here resolves against this element's inherited ~16px
+              // (measured: 62ch = 657.7px, so ch = 10.61px), while the prose it
+              // would be measuring is 11-12px. The reading measure lives on the
+              // prose itself — FlagDecisionPanel's flagSummary paragraph and the
+              // two narrative paragraphs, each capped at its own font size.
+              // Sizing this column for 62 characters of 12px text would need
+              // ~424px, which the same spec section rules out: "the decision
+              // form does not fit that".
+              //
+              // What this cap actually bought the prose, measured at 1440px
+              // rather than estimated: 515px -> 493px, 64.7 -> 62.0 characters.
+              // Earlier notes on this task put the uncapped figure near 90-96;
+              // that is true only of the ~884px column this replaced, and a
+              // reader looking for a reflow of that size will not find one.
+              //
+              // `overflow-hidden`, not `overflow-y-auto`: the panel owns its own
+              // scrolling now, and a second scroller around it would let the
+              // pinned footer scroll away.
+              className="lg:min-h-0 lg:w-full lg:max-w-[62ch] lg:overflow-hidden"
             >
               {props.panel}
             </div>
@@ -871,52 +1355,5 @@ export function FlagQueueView(props: FlagQueueViewProps) {
         )}
       </Section>
     </Page>
-  );
-}
-
-function CountChip(props: {
-  label: string;
-  /** Pre-formatted: a capped count carries a trailing "+" (see openCountLabel). */
-  value: string;
-  /** Spoken form for a value whose printed shape under-states it, e.g. "5000+". */
-  valueAria?: string;
-  /** Present only on a chip that also toggles what the list shows. */
-  pressed?: boolean;
-  onToggle?: () => void;
-}) {
-  const body = (
-    <>
-      {props.label}
-      <span
-        className="tabular-nums text-foreground"
-        aria-label={props.valueAria}
-        // A bare "+" is the only thing distinguishing a floor from a total, and
-        // it is exactly the character a screen reader is likeliest to swallow.
-        role={props.valueAria ? "text" : undefined}
-      >
-        {props.value}
-      </span>
-    </>
-  );
-  const shape =
-    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium sm:flex-none";
-
-  if (!props.onToggle) {
-    return <span className={cn(shape, "text-muted-foreground")}>{body}</span>;
-  }
-
-  return (
-    <button
-      type="button"
-      aria-pressed={props.pressed}
-      onClick={props.onToggle}
-      className={cn(
-        shape,
-        "transition-colors hover:text-foreground",
-        props.pressed ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-      )}
-    >
-      {body}
-    </button>
   );
 }

@@ -5,18 +5,40 @@ import { formatFlagLabel, formatMissingDuration } from "@/lib/flagLabels";
 import {
   appliedDecisionLabel,
   branchNoDeviceDataHeader,
+  CAPPED_EXPLAINER,
+  cappedHeadline,
   crossReferenceLabel,
+  DECIDE_ONE_LABEL,
+  DECIDED_TOGGLE_LABEL,
+  DECIDING_PREFIX,
+  decidingLabel,
   DECISION_STATE_LABELS,
   decisionStateLabel,
+  decisionSurfaceTitle,
+  DEVICE_HEALTH_LABEL,
   deviceAlertHeadline,
   earlierMarkerLabel,
   groupHeadline,
   groupSubline,
   hiddenMemberLabel,
+  narrowRangeLabel,
+  NOTHING_WAITING_TITLE,
+  nothingWaitingDetail,
   openCountAria,
   openCountLabel,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
+  OUTAGE_BAND_LABEL,
+  OUTAGE_CEILING_NOTE,
+  OUTAGE_EXCUSING_LABEL,
+  OUTAGE_NOT_A_JUDGMENT,
+  outageBandHeadline,
+  outageBandSubline,
+  outageBranchCheckboxLabel,
+  outageBranchDays,
+  outageBranchSummary,
+  outageExcuseLabel,
+  outageReviewLabel,
   OUTCOME_ACTION_LABELS,
   OUTCOME_LABELS,
   OUTCOME_OPTIONS,
@@ -27,12 +49,19 @@ import {
   personSubline,
   priorDecisionLabel,
   queueHeaderDescription,
+  queueSplitDescription,
+  QUEUE_LOADING_LABEL,
   REASON_LABELS,
   REASON_OPTIONS,
   reasonLabel,
+  restHeading,
   routineCodeHeader,
+  sameReasonWithDecision,
+  showDecidedLabel,
   stripAriaLabel,
+  TIER_FILTER_ALL_LABEL,
   tierLabel,
+  UNKNOWN_BRANCH_LABEL,
 } from "@/lib/flagQueueLabels";
 import type { Strip } from "@/lib/flagStrip";
 import type {
@@ -559,6 +588,22 @@ test("groupHeadline dispatches on group_type", () => {
   assert.notEqual(groupHeadline(routine), groupHeadline(outage));
 });
 
+// Below lg the panel is a modal, and its title is the only thing naming what
+// is being decided — the row it came from is covered by the surface itself.
+test("the decision surface is titled by the row it was opened from", () => {
+  const person = routinePerson("HR-EMP-1", "LATE_START", 6);
+  assert.equal(
+    decisionSurfaceTitle({ kind: "person", ...person }),
+    person.employee_name,
+    "a person's modal is titled with their name, not their finding",
+  );
+
+  const group = routineGroup("LATE_START", [9, 20]);
+  // Deferring to groupHeadline rather than composing a second sentence: a
+  // group's row and the modal it opens must not describe it differently.
+  assert.equal(decisionSurfaceTitle(group), groupHeadline(group));
+});
+
 test("a repeat pattern is headlined by what it is, not by a count", () => {
   const entry = patternGroup("LATE_START", 8);
   assert.equal(groupHeadline(entry), "Repeatedly late");
@@ -795,4 +840,227 @@ test("a person's sub-line dates by the entry's days, and stays empty when there 
   });
   assert.equal(personSubline(oneDayTwoFlags), "2 late starts · worst 31 min · Thu 6 Aug");
   assert.equal(personSubline(person({ dates: ["2026-08-06"], flags: [] })), "");
+});
+
+test("the outage band headline names branches and people, never a device", () => {
+  const headline = outageBandHeadline(13, 256);
+  assert.equal(headline, "13 branches had no device data · 256 people affected");
+  assert.ok(!/serial|device [A-Z]{2}-/i.test(headline));
+});
+
+test("a single branch and a single person read in the singular", () => {
+  assert.equal(outageBandHeadline(1, 1), "1 branch had no device data · 1 person affected");
+});
+
+test("the headline says AFFECTED, so it can differ from what the button excuses", () => {
+  // The button reads coveredEmployeeCount, which is smaller. Without "affected"
+  // an HR reader sees 256 then 157 and concludes the button is broken.
+  assert.match(outageBandHeadline(13, 256), /256 people affected$/);
+  assert.equal(outageExcuseLabel(157, 2287, 13), "Excuse 157 people · 2,287 flags");
+});
+
+test("the band subline carries the range, the flag count, and the disclaimer", () => {
+  const subline = outageBandSubline(["2026-07-30", "2026-08-08"], 3277);
+  assert.match(subline, /30 Jul/);
+  assert.match(subline, /8 Aug/);
+  assert.match(subline, /3,277 flags/);
+  assert.match(subline, /nobody is being judged here/);
+});
+
+test("the excuse label states both dimensions of the write", () => {
+  assert.equal(outageExcuseLabel(1, 1, 1), "Excuse 1 person · 1 flag");
+});
+
+test("nothing SELECTED and nothing LEFT are different sentences", () => {
+  // "Left" is a completion word. Saying it over an empty selection tells the
+  // user the outage is handled when they have merely unchecked everything.
+  assert.equal(outageExcuseLabel(0, 0, 0), "Select a branch to excuse");
+  assert.equal(outageExcuseLabel(0, 0, 3), "Nothing left to excuse");
+});
+
+test("the ceiling note refuses to promise device granularity", () => {
+  assert.equal(
+    OUTAGE_CEILING_NOTE,
+    "Branch and days only — nothing here maps a device to a branch.",
+  );
+});
+
+test("the band's own accessible names are copy, not markup", () => {
+  assert.equal(OUTAGE_BAND_LABEL, "Device outages");
+  assert.equal(UNKNOWN_BRANCH_LABEL, "Unknown branch");
+  assert.equal(outageBranchCheckboxLabel("DIS Iconic"), "Include DIS Iconic");
+  assert.equal(OUTAGE_EXCUSING_LABEL, "Excusing…");
+});
+
+test("the header splits waiting-on-you from waiting-on-a-device, and keeps rows", () => {
+  // `rows` was added in 20c016fc and fixed for tier filters in 38fbea19,
+  // because one row can stand for several people. Dropping it here would
+  // silently undo both.
+  assert.equal(
+    queueSplitDescription(134, 92, 256, false),
+    "134 people need a decision · 92 rows · 256 waiting on a device fault",
+  );
+});
+
+test("the header says nothing about device faults when there are none", () => {
+  assert.equal(queueSplitDescription(37, 21, 0, false), "37 people need a decision · 21 rows");
+});
+
+test("one person left does not read as \"1 need a decision\"", () => {
+  // The most common end state of a session, in the page's primary header.
+  assert.equal(queueSplitDescription(1, 1, 0, false), "1 person needs a decision · 1 row");
+});
+
+test("a queue with nothing waiting still reads as a sentence", () => {
+  assert.equal(queueSplitDescription(0, 0, 0, false), "Nothing needs a decision");
+  assert.equal(
+    queueSplitDescription(0, 0, 256, false),
+    "Nothing needs a decision · 256 waiting on a device fault",
+  );
+});
+
+test("four-figure counts are grouped everywhere, not only in the band", () => {
+  assert.match(queueSplitDescription(1234, 900, 0, false), /1,234 people need/);
+});
+
+// `Decided` is the one control that changes WHO is counted: with it on,
+// `queuePeopleCount(queue)` includes people whose flags are already settled, so
+// "N people need a decision" states something false about every one of them.
+// SHOWING_DECIDED_MESSAGE sits below the header and mitigates that; it does not
+// correct the sentence. These four pin the neutral wording that does.
+test("with decided rows included the header counts without claiming they need a decision", () => {
+  assert.equal(
+    queueSplitDescription(134, 92, 256, true),
+    "134 people · 92 rows · 256 waiting on a device fault",
+  );
+  assert.equal(queueSplitDescription(37, 21, 0, true), "37 people · 21 rows");
+});
+
+test("the neutral head is singular for one person and one row too", () => {
+  assert.equal(queueSplitDescription(1, 1, 0, true), "1 person · 1 row");
+});
+
+test("with decided rows included, an empty queue says nothing is showing", () => {
+  // NOT "Nothing needs a decision": with the toggle on, a settled person is a
+  // row this list would have shown, so the absence is about the list and not
+  // about anyone's workload.
+  assert.equal(queueSplitDescription(0, 0, 0, true), "Nothing to show");
+  assert.equal(
+    queueSplitDescription(0, 0, 256, true),
+    "Nothing to show · 256 waiting on a device fault",
+  );
+});
+
+test("thousands are grouped on the neutral head as well", () => {
+  assert.match(queueSplitDescription(1234, 900, 0, true), /^1,234 people · 900 rows$/);
+});
+
+test("the narrow-range levers name the window they set", () => {
+  assert.equal(narrowRangeLabel(7), "Last 7 days");
+  assert.equal(narrowRangeLabel(3), "Last 3 days");
+  assert.equal(narrowRangeLabel(1), "Last 1 day");
+});
+
+// The capped notice as a control, not the old strip's lecture: it states what
+// is shown and lets the four-figure count read like `openCountLabel`'s own
+// grouping, rather than a bare "5000" that reads as a measured total.
+test("the capped headline reads as a floor, grouped the same way as elsewhere", () => {
+  assert.equal(cappedHeadline(5000), "Showing the newest 5,000 flags");
+  assert.equal(cappedHeadline(42), "Showing the newest 42 flags");
+});
+
+test("the capped explainer names no lever the notice does not itself offer", () => {
+  assert.equal(
+    CAPPED_EXPLAINER,
+    "Older days in this range aren't loaded. Narrow the dates to reach them.",
+  );
+});
+
+test("the empty-queue state names the range it found nothing in", () => {
+  assert.equal(NOTHING_WAITING_TITLE, "Nothing waiting");
+  assert.equal(
+    nothingWaitingDetail("2026-07-21", "2026-08-03"),
+    "Every flag between Tue, Jul 21, 2026 and Mon, Aug 3, 2026 has a decision.",
+  );
+});
+
+test("the decided-count affordance states what pressing it reveals", () => {
+  assert.equal(showDecidedLabel(88), "Show the 88 decided");
+  assert.equal(showDecidedLabel(1), "Show the 1 decided");
+});
+
+test("control labels live here, not inline in the components", () => {
+  // Global Constraint 2. These are the ones that leak, because they read as
+  // markup rather than as copy.
+  assert.equal(TIER_FILTER_ALL_LABEL, "Any consequence");
+  assert.equal(DECIDED_TOGGLE_LABEL, "Decided");
+  assert.equal(DECIDE_ONE_LABEL, "decide");
+  assert.equal(DECIDING_PREFIX, "Deciding");
+  assert.equal(DEVICE_HEALTH_LABEL, "Device health");
+  assert.equal(QUEUE_LOADING_LABEL, "Loading flags");
+});
+
+test("restHeading names the compressed set by its shared finding", () => {
+  assert.equal(
+    restHeading([missingTime(60), missingTime(90), missingTime(120)]),
+    "The other 3 — Missing time",
+  );
+});
+
+test("restHeading does not say 'The other 1'", () => {
+  assert.equal(restHeading([missingTime(60)]), "One more — Missing time");
+});
+
+test("restHeading refuses to name one code as all of them", () => {
+  // Naming only the first would be a lie about the rest, so a mixed set gets no
+  // finding name at all.
+  const heading = restHeading([missingTime(60), lateStart(12)]);
+  assert.equal(heading, "The other 2 — Mixed findings");
+  assert.doesNotMatch(heading, /Missing time|Late start/);
+});
+
+test("decidingLabel names the pinned footer's target by finding AND day", () => {
+  // Both halves, joined by " · ". The joined form is also what tells the
+  // footer apart from the card above it in flagQueuePage.test.tsx — the card
+  // renders the same two facts in two separate spans — so the exact string
+  // matters, not just its parts.
+  assert.equal(decidingLabel(missingTime(240)), "Missing 4h · 3 Aug");
+  // A code whose label ignores its evidence still gets its day.
+  assert.equal(decidingLabel(lateStart(12)), "Late start · 3 Aug");
+});
+
+test("two identical findings on different days do not get the same label", () => {
+  // Why the day is in there at all: three "Missing 4h" cards in one entry are
+  // three different mornings, and the finding alone would name all three.
+  const first = missingTime(240);
+  const second = { ...missingTime(240), attendance_date: "2026-08-04" };
+  assert.notEqual(decidingLabel(first), decidingLabel(second));
+  assert.equal(decidingLabel(second), "Missing 4h · 4 Aug");
+});
+
+test("the repeat states the decision it will write, not just its name", () => {
+  // Used by both the person banner and the pinned footer button. The footer's
+  // is the sharp case: it never scrolls away, so it is permanently one click
+  // from a real write on real employee records and has to say which write.
+  assert.equal(
+    sameReasonWithDecision({ outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" }),
+    "Same reason applies — Excused, Device or data fault",
+  );
+  assert.equal(
+    sameReasonWithDecision({ outcome: "UPHELD", reason: "OTHER", note: "spoke to them" }),
+    "Same reason applies — Upheld, Other",
+  );
+});
+
+test("every branch-row string is pinned, not just the ones a component happens to use", () => {
+  assert.equal(outageBranchDays(10), "10 days with no sync row");
+  assert.equal(outageBranchDays(1), "1 day with no sync row");
+  assert.equal(outageBranchSummary(99, 990), "99 people · 990 flags");
+  assert.equal(outageReviewLabel(13), "Review 13 branches");
+  assert.equal(outageReviewLabel(1), "Review 1 branch");
+  assert.equal(OUTAGE_NOT_A_JUDGMENT, "the machines didn't record — nobody is being judged here");
+});
+
+test("an empty date span leaves no dangling separator", () => {
+  assert.match(outageBandSubline([], 5), /^5 flags · /);
 });

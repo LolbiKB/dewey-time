@@ -91,6 +91,8 @@ function baseProps(): FlagDecisionPanelProps {
     onDraftChange: () => {},
     activeIdentity: null,
     onOpenFlag: () => {},
+    expandedIdentity: null,
+    onExpandFlag: () => {},
     lastDecision: null,
     onSubmit: () => {},
     excluded: new Set<string>(),

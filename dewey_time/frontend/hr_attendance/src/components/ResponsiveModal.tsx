@@ -52,12 +52,24 @@ export function ResponsiveModal(props: ResponsiveModalProps) {
   const isMobile = useIsMobile();
   const size = props.size ?? "md";
 
+  // `description` is optional by design — a surface whose body already says
+  // what it is needs no second sentence — but Radix points its
+  // `aria-describedby` at a description element that then never renders, and
+  // warns on every open unless the omission is stated as
+  // `aria-describedby={undefined}`. Say it, rather than inventing prose to
+  // quiet a console warning. An own key holding `undefined` is what does the
+  // work: spread last, it drops the attribute Radix set.
+  const describedBy: { "aria-describedby"?: undefined } = props.description
+    ? {}
+    : { "aria-describedby": undefined };
+
   if (isMobile) {
     return (
       <Sheet open={props.open} onOpenChange={props.onOpenChange}>
         <SheetContent
           side="bottom"
           onOpenAutoFocus={(e) => e.preventDefault()}
+          {...describedBy}
           className={cn(
             "flex max-h-[min(85dvh,42rem)] flex-col gap-0 rounded-t-2xl p-0 pb-[env(safe-area-inset-bottom)]",
             props.className,
@@ -84,6 +96,7 @@ export function ResponsiveModal(props: ResponsiveModalProps) {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         showCloseButton={props.showCloseButton ?? true}
+        {...describedBy}
         className={cn(
           "flex max-h-[min(85dvh,42rem)] flex-col gap-0 p-0",
           SIZE_MAXW[size],

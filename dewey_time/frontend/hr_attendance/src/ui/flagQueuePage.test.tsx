@@ -5,16 +5,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
 import { outageKey } from "@/lib/flagStrip";
+import { outageWrite, partitionQueue, queuePeopleCount } from "@/lib/flagQueuePartition";
 import {
   DECIDE_AGAIN_LABEL,
+  RANGE_FROM_LABEL,
+  RANGE_TO_LABEL,
   SAME_REASON_LABEL,
   SHOWING_DECIDED_MESSAGE,
+  TIER_FILTER_LABEL,
   appliedDecisionLabel,
   applyToRemainingLabel,
   decisionStateLabel,
   outcomeActionLabel,
   partialFailureMessage,
   reasonLabel,
+  sameReasonWithDecision,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import type { DecisionState, FlagDecision, FlagOut, QueueEntry, QueuePerson, Tier } from "@/types/flags";
@@ -26,6 +31,7 @@ import { FlagQueueList, entryKey } from "./FlagQueueList";
 import {
   FlagQueueView,
   clampRange,
+  confirmArgs,
   decideEffect,
   parseTierParam,
   stripInputs,
@@ -273,17 +279,29 @@ function spanPersonEntry(): PersonEntry {
   };
 }
 
-/** Everything FlagQueueView needs except `counts`, which each test supplies. */
+/**
+ * Everything FlagQueueView needs except `counts`, which each test supplies.
+ *
+ * The band's props default to a healthy day — no outage, so no band — because
+ * that is the state every test here that is not about the band assumes.
+ */
 function viewProps(): Omit<FlagQueueViewProps, "counts"> {
   return {
     range: { startDate: "2026-07-21", endDate: "2026-08-03" },
     onRangeChange: () => {},
+    onNarrowRange: () => {},
     tier: null,
     onTierChange: () => {},
     isLoading: false,
     error: null,
     onRetry: () => {},
     bulkFailure: null,
+    outages: [],
+    queuePeople: 0,
+    queueRows: 0,
+    excludedBranches: new Set<string>(),
+    onToggleBranch: () => {},
+    onExcuseOutages: () => {},
     list: <div />,
     panel: <div />,
   };
@@ -392,6 +410,8 @@ function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisi
     onDraftChange: () => {},
     activeIdentity: null,
     onOpenFlag: () => {},
+    expandedIdentity: null,
+    onExpandFlag: () => {},
     lastDecision: null,
     onSubmit: () => {},
     excluded: new Set<string>(),
@@ -822,6 +842,11 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
     <FlagQueueView
       {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
+      // Non-zero: the queue itself must render below the strip, and a queue
+      // with nothing in it now renders the "Nothing waiting" empty state
+      // instead of `list`/`panel` — the exact swap this test's sentinels
+      // exist to catch.
+      queuePeople={1}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -849,7 +874,11 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
   assert.ok(html.includes("LIST-SENTINEL"));
 });
 
-test("the toolbar reports open, needs re-review and decided counts", () => {
+// Open and Needs re-review used to be permanent chips beside Decided; both are
+// gone now (Open moved into the header's description line via
+// queueSplitDescription, and Needs re-review read 0 on every day the queue has
+// ever seen). Decided is the one survivor, and it is the toolbar's only count.
+test("the toolbar reports the decided count, and nothing else", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
       {...viewProps()}
@@ -863,12 +892,10 @@ test("the toolbar reports open, needs re-review and decided counts", () => {
     />
   );
 
-  assert.ok(html.includes("Open"));
-  assert.ok(html.includes("Needs re-review"));
   assert.ok(html.includes("Decided"));
-  assert.ok(html.includes(">12<"));
-  assert.ok(html.includes(">5<"));
   assert.ok(html.includes(">88<"));
+  assert.ok(!/Needs re-review/.test(html));
+  assert.ok(!/>Open</.test(html));
 });
 
 // The alerts array is NOT derived from flags — it is read straight from Device
@@ -957,6 +984,7 @@ const ARGS: DecideArgs = {
   identities: ["id-1", "id-2", "id-3"],
   decision: DRAFT,
   groupKey: null,
+  source: "panel",
 };
 
 function settled(effect: DecideEffect) {
@@ -1025,6 +1053,10 @@ test("a decide that fails outright is reported, politely, without hiding the que
     <FlagQueueView
       {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
+      // Non-zero for the same reason as the bulk-failure test above: an empty
+      // queue now renders the "Nothing waiting" state instead of these
+      // sentinels.
+      queuePeople={1}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -1297,18 +1329,45 @@ test("the same person in two entries produces two distinct row keys", () => {
   assert.notEqual(entryKey(loner), entryKey({ kind: "person", ...member }));
 });
 
-test("the header states people and rows", () => {
+test("the header states people and rows — the queue's own, not the payload's", () => {
+  // `counts` deliberately disagrees with the queue props here. Both payload
+  // numbers still include the outage entries the band now renders, so reading
+  // either one would put the band's population back into the sentence that says
+  // who is waiting on HR — the exact overcount the band exists to end.
   const html = renderToStaticMarkup(
     <FlagQueueView
       {...viewProps()}
-      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 40, rows: 12 }}
-      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 296, rows: 147 }}
+      queuePeople={40}
+      queueRows={12}
     />
   );
   // Not "40 people with something open": before nesting, the header counted
   // employees while the list showed one row per person-day, so the two numbers
   // described different things and disagreed on screen.
-  assert.match(html, /40 people · 12 rows/);
+  assert.match(html, /40 people need a decision · 12 rows/);
+  assert.doesNotMatch(html, /296/, "counts.people is not the header's people");
+  assert.doesNotMatch(html, /147/, "counts.rows is not the header's rows");
+});
+
+test("the header stops claiming a decision is needed once decided rows are showing", () => {
+  // The toggle is the one control that changes WHO `queuePeople` counts:
+  // `queuePeopleCount(queue)` counts settled people too once they are in
+  // `entries`. The wording has to follow the toggle, and this is the assertion
+  // that the toggle is actually WIRED to it — flagQueueLabels.test.ts pins the
+  // two strings, but a caller passing a constant `false` would satisfy that and
+  // still ship the false sentence.
+  const shared = {
+    counts: { open: 9, needs_re_review: 0, open_capped: false, decided: 88, people: 296, rows: 147 },
+    queuePeople: 40,
+    queueRows: 12,
+  };
+  const off = renderToStaticMarkup(<FlagQueueView {...viewProps()} {...shared} includeDecided={false} />);
+  const on = renderToStaticMarkup(<FlagQueueView {...viewProps()} {...shared} includeDecided />);
+
+  assert.match(off, /40 people need a decision · 12 rows/);
+  assert.match(on, /40 people · 12 rows/);
+  assert.doesNotMatch(on, /need a decision/, "a settled person does not need one");
 });
 
 test("a flag card is dated by its own flag, not by the person's headline day", () => {
@@ -1559,4 +1618,542 @@ test("the page hands the list the payload's outages, not an empty set", () => {
     />
   );
   assert.doesNotMatch(rowWith(withoutOutage, "Sokheng Hon"), /bg-muted-foreground\/30/);
+});
+
+/**
+ * One branch that lost its device, with two people behind it — and the second
+ * one already decided.
+ *
+ * That second member is the whole point of the fixture. She is still someone
+ * the outage touched, so `queuePeopleCount` counts her (2), but she has nothing
+ * left to write, so `outageWrite(...).coveredEmployeeCount` does not (1). With a
+ * single undecided member the two numbers are equal and the header could read
+ * from either source while every assertion passed — which is the state the Task
+ * 4 review found this fixture in, after three earlier rounds had established
+ * that only one of the two sources is correct.
+ */
+function outageBranchEntry(): GroupEntry {
+  return {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
+    branch: "DIS Iconic",
+    flag_code: null,
+    attendance_date: null,
+    dates: [DATE],
+    day_count: 1,
+    rank: 134,
+    tier: "act",
+    members: [
+      patternMember({ employee: "DI-1", name: "Ada Lovelace" }),
+      makePerson({
+        employee: "DI-2",
+        name: "Grace Hopper",
+        rank: 134,
+        tier: "act",
+        entryKey: "BRANCH_NO_DEVICE_DATA:DIS Iconic|p:DI-2",
+        flags: [
+          makeFlag({
+            identity: "id-outage-DI-2",
+            code: "ATTENDANCE_ISSUE",
+            rank: 134,
+            tier: "act",
+            evidence: { reason: "single_checkin" },
+            state: "matched",
+            decision: PRIOR,
+          }),
+        ],
+      }),
+    ],
+  };
+}
+
+test("an outage group is rendered as the band, not as a queue row", () => {
+  const outageGroup = outageBranchEntry();
+  const person = missingTimePerson();
+
+  const { outages, queue } = partitionQueue([outageGroup, person]);
+
+  assert.equal(outages.length, 1);
+  assert.deepEqual(queue, [person]);
+
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 5, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false }}
+      outages={outages}
+      queuePeople={1}
+      queueRows={1}
+      excludedBranches={new Set()}
+      onToggleBranch={() => {}}
+      onExcuseOutages={() => {}}
+      list={<FlagQueueList {...listProps()} entries={queue} />}
+    />,
+  );
+
+  assert.match(html, /had no device data/, "the band states the outage");
+  assert.equal(
+    rowButtons(html).filter((row) => /had no device data/.test(row)).length,
+    0,
+    "and no queue row does",
+  );
+});
+
+test("a failed load withholds the band, not just the list", () => {
+  // react-query keeps the last good `data` when a refetch fails, so `outages`
+  // can outlive the payload it came from. Every other stale thing on this page
+  // is merely misleading; this one carries the largest write the page can make,
+  // and "Excuse 1 person · 3 flags" above "Flags didn't load" is an invitation
+  // to decide over data the page has just disowned.
+  const outages = partitionQueue([outageBranchEntry()]).outages;
+  assert.equal(outages.length, 1, "the fixture is the stale-data case");
+
+  const failed = renderToStaticMarkup(
+    <FlagQueueView {...viewProps()} counts={null} error={new Error("Network request failed")} outages={outages} />
+  );
+  assert.doesNotMatch(failed, /had no device data/, "no band beside a failure");
+  assert.doesNotMatch(failed, /Excuse/, "and nothing to press");
+
+  const loading = renderToStaticMarkup(
+    <FlagQueueView {...viewProps()} counts={null} isLoading outages={outages} />
+  );
+  assert.doesNotMatch(loading, /had no device data/, "nor beside a spinner");
+
+  // …and it is back the moment the load succeeds, so this is a guard and not a
+  // way of losing the band.
+  const loaded = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 3, needs_re_review: 0, decided: 0, people: 1, rows: 1, open_capped: false }}
+      outages={outages}
+    />
+  );
+  assert.match(loaded, /had no device data/);
+});
+
+test("the header separates people waiting on HR from people waiting on a device", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 5, rows: 2, open_capped: false }}
+      outages={[]}
+      queuePeople={5}
+      queueRows={2}
+      excludedBranches={new Set()}
+      onToggleBranch={() => {}}
+      onExcuseOutages={() => {}}
+    />,
+  );
+  assert.match(html, /5 people need a decision/);
+  assert.ok(!/waiting on a device fault/.test(html), "no outages, no device line");
+});
+
+test("the header's device line counts everyone the outage touched, not just the write", () => {
+  // Three rounds of review settled that this number is `queuePeopleCount`, and
+  // no test would have failed if it were swapped back to
+  // `outageWrite(...).coveredEmployeeCount`. The difference only shows on a
+  // fixture where some of the outage's flags are already decided — which is the
+  // ordinary state of an outage part-way through being cleared, and the state
+  // this line goes wrong in: covered shrinks as decisions land and reaches zero
+  // once the excuse is complete, so the header would announce that nobody is
+  // waiting on a device fault while the band directly above it still names the
+  // branch.
+  const outages = partitionQueue([outageBranchEntry()]).outages;
+  assert.equal(queuePeopleCount(outages), 2, "two people are behind this outage");
+  assert.equal(
+    outageWrite(outages, new Set<string>()).coveredEmployeeCount,
+    1,
+    "…but only one of them still has anything to write",
+  );
+
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 7, rows: 3, open_capped: false }}
+      outages={outages}
+      queuePeople={5}
+      queueRows={2}
+    />
+  );
+
+  assert.match(html, /5 people need a decision · 2 rows · 2 waiting on a device fault/);
+  assert.doesNotMatch(html, /1 waiting on a device fault/, "not the write's covered count");
+});
+
+test("a confirmed re-issue is the same call plus confirm — including its source", () => {
+  // decide_flags refuses more than 25 writes without an explicit confirm, so
+  // every large write takes this path: the user is shown a blast radius and the
+  // identical call is sent again. Any field that changes in between makes the
+  // preview they approved a description of a different call. `source` is the one
+  // that would do real harm — a band excuse re-issued as "panel" would offer
+  // "Excused · Device or data fault" as the selected person's repeat and drag
+  // them off their row, which is exactly what the discriminant prevents, and it
+  // would do it only on the path the biggest writes always take.
+  const band: DecideArgs = {
+    identities: ["id-1", "id-2"],
+    decision: { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" },
+    groupKey: null,
+    source: "band",
+  };
+
+  assert.deepEqual(confirmArgs(band), { ...band, confirm: true });
+  assert.equal(confirmArgs(band).source, "band", "the surface survives the round trip");
+  assert.equal(confirmArgs(ARGS).source, "panel");
+  // The original is untouched: it stays in `pendingConfirm` while the modal is
+  // open, and the user may yet cancel.
+  assert.equal(band.confirm, undefined);
+});
+
+test("the page gives up the reading-width cap — it is a list, not prose", () => {
+  const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} counts={null} />);
+  assert.match(html, /max-w-none/, "1216px of 1512 was 296px thrown away");
+});
+
+test("the two permanently-zero counts are gone from the toolbar", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 0, decided: 0, people: 4, rows: 4, open_capped: false }}
+    />,
+  );
+  assert.ok(!/Needs re-review/.test(html), "it reads 0 on every day so far");
+  assert.ok(!/Queue counts/.test(html), "the chip group is gone");
+});
+
+test("Decided survives the chip cull — it is the only one that ever did anything", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 0, decided: 7, people: 4, rows: 4, open_capped: false }}
+    />,
+  );
+  assert.match(html, /Decided/);
+  assert.match(html, /aria-pressed="false"/);
+});
+
+test("the date controls carry accessible names without spending a row on labels", () => {
+  const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} counts={null} />);
+  // `aria-label` beats name-from-content unconditionally on a <button>, so it
+  // would silence the formatted date already inside it, leaving a screen
+  // reader hearing a bare "From" with no value — the exact regression a prior
+  // review round caught. The name is visually-hidden button CONTENT instead,
+  // so it composes with the date rather than replacing it. Matched against the
+  // module's own constants, not a hand-typed duplicate of them (Constraint 2 /
+  // "violation #6" on this plan).
+  assert.match(html, new RegExp(`<span class="sr-only">${RANGE_FROM_LABEL}</span>`));
+  assert.match(html, new RegExp(`<span class="sr-only">${RANGE_TO_LABEL}</span>`));
+  // The <select> has no visible value distinct from its accessible name the
+  // way a date button does — the browser always exposes the selected
+  // <option>'s own text as the control's value regardless of `aria-label` — so
+  // an attribute is fine here.
+  assert.match(html, new RegExp(`aria-label="${TIER_FILTER_LABEL}"`));
+  // No visible label row: dewey-ui's `Label` renders a `<label>` element, and
+  // the previous version of this assertion (`class="text-xs"`) could never
+  // fail — `cn()` merges that class into a long string, so the literal
+  // attribute value is never emitted, passing whether or not a visible label
+  // rendered. Asserted on the element itself instead.
+  assert.ok(!/<label[^>]*>From</.test(html), "no visible label row");
+});
+
+// The old strip named two levers ("narrow the dates, or filter by consequence")
+// and offered neither. This one has to actually offer them.
+test("the capped notice offers narrower ranges instead of naming levers", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      truncated
+      counts={{ open: 5000, needs_re_review: 0, decided: 0, people: 389, rows: 147, open_capped: true }}
+    />,
+  );
+  assert.match(html, /Showing the newest 5,000 flags/);
+  assert.match(html, /Last 7 days/);
+  assert.match(html, /Last 3 days/);
+});
+
+test("an uncapped queue shows no capped notice at all", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      truncated={false}
+      counts={{ open: 12, needs_re_review: 0, decided: 0, people: 4, rows: 4, open_capped: false }}
+    />,
+  );
+  assert.ok(!/Showing the newest/.test(html));
+});
+
+test("loading renders skeleton rows, so the layout does not jump when data lands", () => {
+  const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} isLoading counts={null} />);
+  assert.match(html, /animate-pulse/);
+  assert.ok(!/Loading flags…/.test(html), "a centred spinner reflows the whole pane");
+});
+
+/** Fourteen mornings on one person — the shape the spec measured at 5,069px. */
+function fourteenFlagPerson(): PersonEntry {
+  return {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00019",
+      name: "Sreylak Min",
+      rank: 134,
+      tier: "act",
+      flags: Array.from({ length: 14 }, (_, index) =>
+        makeFlag({
+          identity: `f-${index}`,
+          code: "MISSING_TIME",
+          rank: 134,
+          tier: "act",
+          date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+          evidence: { minutes: 240 - index * 5 },
+        }),
+      ),
+    }),
+  };
+}
+
+/** A substring of flagSummary("MISSING_TIME") (lib/flagDetails.ts). It is the
+ *  per-CODE explainer: identical on all fourteen cards, so its render count is
+ *  the render count of the repetition this task removes. */
+const MISSING_TIME_EXPLAINER = "on-shift gap of at least 30 minutes";
+
+function countOf(html: string, needle: string): number {
+  return html.split(needle).length - 1;
+}
+
+test("a fourteen-flag person renders ONE full card, not fourteen", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  assert.equal(countOf(html, MISSING_TIME_EXPLAINER), 1);
+});
+
+test("the other thirteen are still individually reachable", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 13);
+});
+
+test("expanding a one-liner promotes it and leaves the rest compressed", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel
+      {...panelProps({ entry: fourteenFlagPerson() })}
+      expandedIdentity="f-5"
+    />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 2, "the worst one, plus the one asked for");
+  assert.equal(countOf(html, MISSING_TIME_EXPLAINER), 2);
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 12);
+});
+
+test("a person with a single flag renders no compressed list at all", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: missingTimePerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  // Both assertions, deliberately: the one-liner count alone still passes if the
+  // section and its heading render around an empty list.
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 0);
+  assert.equal(countOf(html, 'data-slot="flag-rest"'), 0);
+});
+
+test("the full card goes to the worst flag STILL AWAITING a decision", () => {
+  // With "Decided" on, a person's matched flags come back in the same array.
+  // Spending the one full card on a decision already made would compress the
+  // only thing HR opened this person to do.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00020",
+      name: "Bopha Chea",
+      rank: 130,
+      tier: "act",
+      flags: [
+        makeFlag({
+          identity: "f-done",
+          code: "MISSING_TIME",
+          rank: 130,
+          tier: "act",
+          state: "matched",
+          decision: {
+            name: "AFD-done",
+            outcome: "EXCUSED",
+            reason: "APPROVED_LEAVE",
+            note: "",
+            decided_by: "hr@example.com",
+            decided_at: "2026-08-07 09:00:00",
+          },
+        }),
+        makeFlag({ identity: "f-open", code: "MISSING_TIME", rank: 129, tier: "act" }),
+      ],
+    }),
+  };
+
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  // A decided card's button reads DECIDE_AGAIN_LABEL, an undecided one "Decide".
+  // That is how we tell WHICH flag got the card. The compressed row's own
+  // affordance is lowercase "decide", so it cannot satisfy either match.
+  assert.match(html, />Decide</);
+  assert.doesNotMatch(html, />Decide again</);
+  // The matched flag is compressed, not dropped: a decision already made is
+  // still a decision HR can revisit, and this is the only route to it.
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 1);
+});
+
+test("a person carrying no flags renders instead of throwing", () => {
+  // The code being replaced is `person.flags.map(...)`, which is total.
+  // Destructuring a worst flag out of the array is not.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({ employee: "HR-EMP-00021", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
+  };
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.match(html, /Nobody Here/);
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 0);
+});
+
+test("the panel is a scrolling body above a footer that is not in the scroll", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  assert.equal(countOf(html, 'data-slot="decision-body"'), 1);
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
+  // Matched as separate substrings rather than one `data-slot=…[^>]*class=`
+  // regex: that form silently depends on JSX attribute order, so reordering two
+  // props would break the test without changing the rendered layout at all. The
+  // same goes one level down — `/shrink-0 border-t/` broke the moment a sizing
+  // utility was added between those two classes.
+  //
+  // `border-t` only, and deliberately not `shrink-0`: this markup is full of
+  // shrink-0 (every one-liner's day column, every state badge), so that match
+  // was satisfied whether or not a footer existed and asserted nothing.
+  assert.match(html, /data-slot="decision-body"/);
+  assert.match(html, /overflow-y-auto/);
+  assert.match(html, /border-t/);
+  // This is a STRUCTURE check and nothing more. It stays green if the footer is
+  // nested back inside the body — the likelier regression, and the one a
+  // careless refactor produces — and it says nothing about whether the footer
+  // is pinned, capped or reachable. GC7 bars geometry from the unit suite, so
+  // e2e/flags.spec.ts owns every geometric claim: "the decision footer stays
+  // put while the evidence scrolls behind it" and "a short window cannot
+  // strand the submit button".
+});
+
+test("the pinned footer names the flag it is about to write", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  // f-0 is the worst flag: 240 minutes on 1 Aug. The JOINED form is the tell —
+  // the card above renders the same label and the same day, but in two separate
+  // spans, so "Missing 4h · 1 Aug" can only have come from decidingLabel.
+  assert.match(html, /Deciding/);
+  assert.match(html, /Missing 4h · 1 Aug/);
+});
+
+test("the footer targets the WORST flag even while a promoted one is open", () => {
+  // Both forms can be on screen. The footer's own label is the only thing that
+  // says which flag its submit button writes to, which is why it exists.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel
+      {...panelProps({ entry: fourteenFlagPerson() })}
+      expandedIdentity="f-5"
+      activeIdentity="f-5"
+    />,
+  );
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
+  // f-5 is 215 minutes — "Missing 3h 35m". The footer still names f-0's 4h, and
+  // f-5's label never appears in the joined form because nothing but the footer
+  // produces one.
+  assert.match(html, /Missing 4h · 1 Aug/);
+  assert.doesNotMatch(html, /Missing 3h 35m ·/);
+});
+
+test("the footer arms nothing on its own", () => {
+  // The empty draft is EXCUSED / APPROVED_LEAVE / "", which decisionIsComplete
+  // accepts. An always-open form would therefore put a real write on real
+  // employee records one stray click away. Person mode keeps its click.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.doesNotMatch(html, /role="group" aria-label="Outcome"/);
+
+  const open = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson(), activeIdentity: "f-0" })} />,
+  );
+  assert.match(open, /role="group" aria-label="Outcome"/);
+});
+
+test("a person carrying no flags gets no footer at all, not empty chrome", () => {
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({ employee: "HR-EMP-00022", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
+  };
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  // Not merely "no controls in it". A guard around the CONTENTS still draws a
+  // rule across the panel's bottom edge, and empty chrome reads as a control
+  // that failed to load rather than as one that was never needed.
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 0);
+  assert.doesNotMatch(html, /Deciding/);
+});
+
+test("the worst card no longer carries its own decide button", () => {
+  // It moved to the footer. Two decide affordances for the same flag, one of
+  // them scrolling away, is the thing this task removes.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, ">Decide<"), 1, "exactly one, and it is the footer's");
+});
+
+test("the last undecided flag keeps its one-click repeat", () => {
+  // The tail of the main loop, and the case both existing SAME_REASON tests
+  // miss. A two-flag person decides one, `lastDecision` is set, `remaining`
+  // drops to 1 — so the person-level banner is off (it needs > 1) and the
+  // surviving flag IS `worst`, so the footer is the only place the repeat can
+  // live. Before this task it lived on the card's own button row.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00023",
+      name: "Chariya Meas",
+      rank: 131,
+      tier: "act",
+      flags: [
+        makeFlag({
+          identity: "f-settled",
+          code: "MISSING_TIME",
+          rank: 131,
+          tier: "act",
+          state: "matched",
+          decision: {
+            name: "AFD-settled",
+            outcome: "EXCUSED",
+            reason: "APPROVED_LEAVE",
+            note: "",
+            decided_by: "hr@example.com",
+            decided_at: "2026-08-07 09:00:00",
+          },
+        }),
+        makeFlag({ identity: "f-last", code: "MISSING_TIME", rank: 130, tier: "act" }),
+      ],
+    }),
+  };
+
+  const repeat: PendingDecision = { outcome: "EXCUSED", reason: "APPROVED_LEAVE", note: "" };
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry, lastDecision: repeat })} />,
+  );
+
+  // The label that states the payload, not the bare SAME_REASON_LABEL: this
+  // control never scrolls away, so it is permanently one click from a real
+  // write and has to say which write.
+  assert.match(html, new RegExp(`>${sameReasonWithDecision(repeat)}<`));
+  // The person-level banner is genuinely off, so this is not passing on the
+  // banner's copy by accident — the banner renders the same string, from the
+  // same function, so this assertion alone could not tell them apart.
+  assert.doesNotMatch(html, /Apply to remaining/);
 });

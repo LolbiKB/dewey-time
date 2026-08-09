@@ -22,3 +22,31 @@ export function useIsMobile(): boolean {
 
   return isMobile;
 }
+
+/**
+ * The GRID's breakpoint, not the nav shell's.
+ *
+ * MOBILE_BREAKPOINT above is 768 and drives the phone-vs-desktop shell. The
+ * flag queue's split is `lg:grid` at 1024, because at 768 the panel would be
+ * 340px and the decision form does not fit. Anything keyed to the split — the
+ * bottom sheet that replaces it — must use this, or 768–1023px gets neither
+ * the split nor the sheet.
+ */
+const LG_BREAKPOINT = 1024;
+
+const readBelowLg = () =>
+  typeof window !== "undefined" && window.innerWidth < LG_BREAKPOINT;
+
+export function useIsBelowLg(): boolean {
+  const [below, setBelow] = useState(readBelowLg);
+
+  useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${LG_BREAKPOINT - 1}px)`);
+    const onChange = () => setBelow(readBelowLg());
+    mql.addEventListener("change", onChange);
+    onChange();
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  return below;
+}
