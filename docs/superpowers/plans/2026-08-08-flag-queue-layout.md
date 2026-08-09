@@ -2000,7 +2000,28 @@ git commit -m "fix(flag-queue): the capped notice becomes a control, loading sto
 
 ---
 
-## Task 7: Phase 1 e2e
+## Task 7: Phase 1 e2e — SCOPE REDUCED, see note
+
+> **Controller note, 2026-08-09.** This task was written before Tasks 4–6 ran, on the
+> assumption that e2e would be added in one pass at the end. In practice each
+> implementer added its own e2e as it went, and the Task 4 and 5 reviews demanded more.
+> Two of the three tests below are already delivered and must NOT be rewritten:
+>
+> - *"an outage becomes a band, and the queue counts only judgments"* — delivered.
+>   `e2e/flags.spec.ts:256` asserts the `Device outages` region, `:266` asserts
+>   `aria-setsize="2"` so the outage is provably not a list row, and `:286` asserts the
+>   split header `"3 people need a decision · 2 rows · 2 waiting on a device fault"`.
+> - *"unchecking a branch takes its people out of the excuse"* — **partially** delivered.
+>   `:1428-1432` covers the all-unchecked state (`"Select a branch to excuse"`). Nothing
+>   asserts that unchecking **one** branch of several reduces the count — the countdown
+>   itself, which is the property the label exists for.
+> - *"the keyboard model survives the band"* — **not** delivered. `A11Y_PAYLOAD`
+>   (`:1004`) contains no `BRANCH_NO_DEVICE_DATA` entry, so the roving-tabindex tests at
+>   `:1067` and `:1094` never run with the band's two extra focusable controls above the
+>   list. The Task 4 review flagged this: *"one tab reaches the list"* is currently only
+>   true on a healthy day.
+>
+> **Remaining scope is the two gaps only.**
 
 **Files:**
 - Modify: `e2e/flags.spec.ts`
