@@ -564,6 +564,14 @@ export function FlagQueuePage() {
     },
   });
 
+  // Owned by the page, not the view: the view is the piece that renders under
+  // renderToStaticMarkup, and a hook reading window width during render would
+  // make every existing view test depend on a jsdom-less global.
+  //
+  // Declared above the restore effect because that effect reads it — the row it
+  // would hand focus to is behind the modal on this breakpoint.
+  const belowLg = useIsBelowLg();
+
   useEffect(() => {
     if (!restore) return;
     if (queue === restore.from) return; // the refetch has not landed yet
@@ -590,8 +598,18 @@ export function FlagQueuePage() {
     setActiveIdentity(null);
     setExpandedIdentity(null);
     setExcluded(new Set<string>());
-    setFocusKey(key);
-  }, [restore, queue]);
+    // Only where that row is something the user can see. At and above lg the
+    // list sits beside the panel and landing on the next row is the whole point
+    // of this effect. Below lg the panel is a modal covering that list, and
+    // Radix marks everything behind it `aria-hidden="true"` — so focusing the
+    // row there puts the keyboard on an element the accessibility tree says
+    // does not exist, while the sheet in front announces the same person.
+    // Measured, not assumed: the probe returned insideAriaHidden true,
+    // insideDialog false, with the dialog open and titled for that person.
+    // The modal owns focus on this breakpoint; leaving it alone is what lets
+    // Radix's focus scope keep it inside the surface the user is actually on.
+    if (!belowLg) setFocusKey(key);
+  }, [restore, queue, belowLg]);
 
   const handleSubmit = useCallback(
     (identities: string[], decision: PendingDecision) => {
@@ -642,10 +660,6 @@ export function FlagQueuePage() {
     cancelRestore();
   }, [selectedEntry, cancelRestore]);
 
-  // Owned by the page, not the view: the view is the piece that renders under
-  // renderToStaticMarkup, and a hook reading window width during render would
-  // make every existing view test depend on a jsdom-less global.
-  const belowLg = useIsBelowLg();
   const panelOpen = belowLg && selectedEntry != null;
 
   const handlePanelOpenChange = useCallback(

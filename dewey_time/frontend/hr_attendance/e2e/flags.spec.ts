@@ -1119,6 +1119,14 @@ test("the queue carries a polite live region for its own state changes", async (
 });
 
 test("deciding a row lands focus on the row that takes its place", async ({ page }) => {
+  // Explicitly >= lg: landing focus ON A ROW is the split's answer, where the
+  // list is beside the panel and still visible. Below lg the panel is a modal
+  // and Radix marks the list behind it `aria-hidden="true"`, so focusing a row
+  // there would put the keyboard on an element the accessibility tree says does
+  // not exist — the page deliberately leaves focus inside the sheet instead,
+  // which "after a phone write, focus does not land behind the sheet" covers.
+  // Set here rather than at project level so it runs identically in both.
+  await page.setViewportSize({ width: 1280, height: 900 });
   // The list shrinks by one on the refetch, exactly as it does in production
   // once the server says every flag on that person is settled.
   let decided = false;
@@ -1222,7 +1230,17 @@ test("the next row's form is empty after a decide, not pre-filled with the last 
   // We land on Sokha Phlat. Opening her form must not present Vandy's note or
   // Vandy's reason as if they were hers — resetRowState's own stated error,
   // "one person's reasoning applied to the next".
-  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  //
+  // Selection, not focus: the leak this test is about is layout-independent and
+  // matters at least as much below lg, where dismissing the sheet is a NEW
+  // deselection path. Focus is not — below lg the page deliberately leaves it
+  // inside the sheet rather than on a row behind `aria-hidden`, so asserting
+  // `toBeFocused` here would pin the split's answer onto both layouts and this
+  // test would stop running on a phone at all.
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await page.getByRole("button", { name: "Decide", exact: true }).click();
   await expect(page.getByRole("textbox").first()).toHaveValue("");
 });
@@ -1557,7 +1575,16 @@ test("a second save is announced too, not silently deduplicated", async ({ page 
   const first = await live.textContent();
 
   await decideSelected(); // we were landed on the next row already
-  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  // Selection, not focus, and deliberately still running on a phone: the live
+  // region this test is about is rendered TWICE — once in the split branch and
+  // once in the modal branch — so pinning this to >= lg would leave the second
+  // copy, the newer one, asserted by nothing. Focus below lg stays inside the
+  // sheet by design; "after a phone write, focus does not land behind the
+  // sheet" is where that belongs.
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   // Same words, different text node — otherwise nothing is announced at all.
   await expect(live).toHaveText(/saved/i);
   expect(await live.textContent()).not.toBe(first);
@@ -2157,4 +2184,75 @@ test("the footer stays pinned inside the sheet, not just inside the split", asyn
   // in a container that never scrolled at all.
   expect(await footer.boundingBox()).toEqual(before);
   await expect(page.locator('[data-slot="flag-one-liner"]').last()).toBeInViewport();
+});
+
+test("after a phone write, focus does not land behind the sheet", async ({ page }) => {
+  // The post-write restore hands focus to the next row, which is the right
+  // answer beside the split and the wrong one under a modal: Radix marks
+  // everything behind the sheet `aria-hidden="true"`, so focusing that row puts
+  // the keyboard on an element the accessibility tree says does not exist,
+  // while the sheet in front announces the very same person. Measured before
+  // the fix: activeElement was the "Sokha Phlat" row button, insideAriaHidden
+  // true, insideDialog false, dialog open and titled "Sokha Phlat".
+  await page.setViewportSize(PHONE_VIEWPORT);
+  let decided = false;
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.includes("decide_flags")) {
+      decided = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: { ok: true, written: 1, group_key: "AFD-f", errors: [] } satisfies DecideFlagsResult,
+        }),
+      });
+    }
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    const remaining = decided ? A11Y_PEOPLE.slice(1) : A11Y_PEOPLE;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: remaining.map((person) => ({ kind: "person", ...person })) satisfies QueueEntry[],
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: remaining.length,
+            people: remaining.length,
+            rows: remaining.length,
+          } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Vandy In"]').click();
+
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("button", { name: "Decide", exact: true }).click();
+  await page.getByRole("combobox", { name: /reason/i }).selectOption({ label: "Approved leave or holiday" });
+  await page.getByRole("button", { name: /^Excuse\b/ }).last().click();
+
+  // The write landed and the sheet moved on to the next person.
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveCount(0);
+  await expect(sheet).toBeVisible();
+
+  // Asserted, not assumed: if nothing is aria-hidden the premise is gone and
+  // this test proves nothing, so fail loudly rather than pass on an empty set.
+  const hiddenCount = await page.locator('[aria-hidden="true"]').count();
+  expect(hiddenCount, "the sheet must hide the page behind it, or this proves nothing").toBeGreaterThan(0);
+
+  const focus = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return {
+      insideAriaHidden: el?.closest('[aria-hidden="true"]') != null,
+      insideDialog: el?.closest('[role="dialog"]') != null,
+    };
+  });
+  expect(focus.insideAriaHidden).toBe(false);
+  expect(focus.insideDialog).toBe(true);
 });
