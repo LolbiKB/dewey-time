@@ -1549,3 +1549,188 @@ test("a second save is announced too, not silently deduplicated", async ({ page 
   await expect(live).toHaveText(/saved/i);
   expect(await live.textContent()).not.toBe(first);
 });
+
+// `outageExcuseLabel` takes `coveredPeopleCount` for exactly one reason: the
+// button's number must fall as branches are unchecked, not just switch between
+// "everything" (`:1428` covers the all-unchecked floor, "Select a branch to
+// excuse") and "nothing left". Two branches here, so unchecking ONE still
+// leaves the other counted — the countdown itself, never exercised until now.
+test("unchecking a branch takes its people out of the excuse", async ({ page }) => {
+  const queuePayload = {
+    entries: [
+      {
+        kind: "group",
+        group_type: "BRANCH_NO_DEVICE_DATA",
+        group_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic",
+        branch: "DIS Iconic",
+        flag_code: null,
+        attendance_date: null,
+        dates: ["2026-08-03", "2026-08-04"],
+        day_count: 2,
+        rank: 134,
+        tier: "act",
+        members: [
+          {
+            entry_key: "BRANCH_NO_DEVICE_DATA:DIS Iconic|p:DI-1",
+            employee: "DI-1",
+            employee_name: "Ada Lovelace",
+            employee_branch: "DIS Iconic",
+            employee_image: null,
+            attendance_date: "2026-08-03",
+            dates: ["2026-08-03"],
+            rank: 134,
+            tier: "act",
+            flags: [
+              {
+                flag_identity: "f-outage-1",
+                flag_code: "MISSING_TIME",
+                attendance_date: "2026-08-03",
+                day_closed: 1,
+                evidence: { minutes: 240 },
+                rank: 134,
+                tier: "act",
+                decision_state: "undecided",
+                decision: null,
+              } satisfies FlagOut,
+            ],
+            undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
+          } satisfies QueuePerson,
+        ],
+      },
+      {
+        kind: "group",
+        group_type: "BRANCH_NO_DEVICE_DATA",
+        group_key: "BRANCH_NO_DEVICE_DATA:ISBB",
+        branch: "ISBB",
+        flag_code: null,
+        attendance_date: null,
+        dates: ["2026-08-03"],
+        day_count: 1,
+        rank: 134,
+        tier: "act",
+        members: [
+          {
+            entry_key: "BRANCH_NO_DEVICE_DATA:ISBB|p:DI-2",
+            employee: "DI-2",
+            employee_name: "Grace Hopper",
+            employee_branch: "ISBB",
+            employee_image: null,
+            attendance_date: "2026-08-03",
+            dates: ["2026-08-03"],
+            rank: 134,
+            tier: "act",
+            flags: [
+              {
+                flag_identity: "f-outage-2",
+                flag_code: "MISSING_TIME",
+                attendance_date: "2026-08-03",
+                day_closed: 1,
+                evidence: { minutes: 210 },
+                rank: 134,
+                tier: "act",
+                decision_state: "undecided",
+                decision: null,
+              } satisfies FlagOut,
+            ],
+            undecided_count: 1,
+            also_count: 0,
+            also_outlier_count: 0,
+          } satisfies QueuePerson,
+        ],
+      },
+    ] satisfies QueueEntry[],
+    counts: { open: 2, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false },
+    orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
+    alerts: [],
+    outage_dates: [
+      { branch: "DIS Iconic", date: "2026-08-03" },
+      { branch: "DIS Iconic", date: "2026-08-04" },
+      { branch: "ISBB", date: "2026-08-03" },
+    ],
+    truncated: false,
+    start_date: "2026-07-26",
+    end_date: "2026-08-08",
+  } satisfies QueuePayload;
+
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: queuePayload }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  await band.getByRole("button", { name: /^Review 2/ }).click();
+
+  const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
+  await expect(bandExcuse).toHaveText("Excuse 2 people · 2 flags");
+
+  await band.getByRole("checkbox", { name: "Include ISBB" }).click();
+
+  // Ada's branch is still checked, so the count falls to her alone — not to
+  // zero, and not to the "nothing left" floor — and singularises at 1.
+  await expect(bandExcuse).toHaveText("Excuse 1 person · 1 flag");
+});
+
+// `A11Y_PAYLOAD` (used by every roving-tabindex test above) carries no outage,
+// so those tests have only ever proven the keyboard model on a healthy day.
+// The band mounts two extra focusable controls (its disclosure and its Excuse
+// button) ABOVE the list; this proves the roving tabindex and the arrow-key
+// model still hold with both of them present, and that they stay scoped to
+// the list rather than reaching up into the band.
+test("the keyboard model survives the band", async ({ page }) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [
+            A11Y_OUTAGE,
+            ...A11Y_PEOPLE.map((person) => ({ kind: "person", ...person }) satisfies QueueEntry),
+          ],
+          counts: { ...A11Y_PAYLOAD.counts, people: 5, rows: 4 },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const band = page.getByRole("region", { name: "Device outages" });
+  await expect(band).toBeVisible();
+
+  const list = page.getByRole("list", { name: "Flag queue" });
+  const rows = list.getByRole("button");
+  await expect(rows).toHaveCount(3);
+
+  // aria-setsize counts only the judgment rows the list actually holds — the
+  // outage was already partitioned out before FlagQueueList ever saw it — so
+  // it must read 3, not 4.
+  await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "3");
+
+  // Roving tabindex: exactly one row is tabbable, scoped to the list — the
+  // band's own disclosure and Excuse button are real tab stops of their own
+  // and must not be counted here.
+  await expect(list.locator('button[tabindex="0"]')).toHaveCount(1);
+  await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveAttribute("tabindex", "0");
+
+  // The arrows move within the list only, clamped at the last row rather than
+  // escaping upward into the band's controls.
+  await page.locator('button[aria-label*="Vandy In"]').focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Sokha Phlat"]')).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
+  await expect(band.getByRole("button", { name: /Review 1 branch/ })).not.toBeFocused();
+});
