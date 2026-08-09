@@ -19,12 +19,14 @@ import {
   DECIDE_AGAIN_LABEL,
   DECIDE_ONE_BY_ONE_LABEL,
   DECIDE_ONE_LABEL,
+  DECIDING_PREFIX,
   OUTCOME_OPTIONS,
   REASON_OPTIONS,
   SAME_REASON_LABEL,
   appliedDecisionLabel,
   applyToRemainingLabel,
   crossReferenceLabel,
+  decidingLabel,
   decisionStateLabel,
   flagDayLabel,
   groupHeadline,
@@ -38,10 +40,11 @@ import {
 } from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
 import type { Flag } from "@/types/calendar";
-import type { FlagOut, QueueEntry, QueuePerson, Reason } from "@/types/flags";
+import type { FlagOut, QueueEntry, Reason } from "@/types/flags";
 import { FlagEvidenceTimeline } from "@/ui/FlagEvidenceTimeline";
 
 type GroupEntry = Extract<QueueEntry, { kind: "group" }>;
+type PersonEntry = Extract<QueueEntry, { kind: "person" }>;
 
 /**
  * flag_queue_api.get_flag_queue (attendance_engine/flag_queue_api.py) never
@@ -111,12 +114,15 @@ export function FlagDecisionPanel(props: FlagDecisionPanelProps) {
   return props.entry.kind === "group" ? (
     <GroupDecision {...props} entry={props.entry} />
   ) : (
-    <PersonDecision {...props} person={props.entry} />
+    <PersonDecision {...props} entry={props.entry} />
   );
 }
 
-function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson }) {
-  const { person } = props;
+// The narrowed `entry`, the same way GroupDecision takes one: the pinned
+// footer's naming line reads the ENTRY, not just the person, so the nullable
+// `entry` off FlagDecisionPanelProps does not typecheck here any more.
+function PersonDecision(props: FlagDecisionPanelProps & { entry: PersonEntry }) {
+  const person = props.entry;
   const remaining = remainingIdentities(person);
   // The one card that stays open is the worst flag STILL AWAITING a decision.
   // build_queue hands the array over worst-first, so the first unresolved flag is
@@ -130,110 +136,172 @@ function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson })
   const rest = person.flags.filter((flag) => flag !== worst);
 
   return (
-    <div className="space-y-4 pb-4">
-      <header>
-        <div className="text-base font-semibold tracking-tight">{person.employee_name}</div>
-        <div className="mt-1 text-sm text-muted-foreground">
-          {/* An entry can span dates now — a pattern member holds several
-              mornings. Naming only the headline day would label the others
-              wrongly, so a multi-day entry states its range end to end. */}
-          {person.dates.length > 1
-            ? `${formatFlagContextDate(person.dates[0])} – ${formatFlagContextDate(person.dates[person.dates.length - 1])}`
-            : formatFlagContextDate(person.attendance_date)}
-          {person.employee_branch ? (
-            <span className="text-muted-foreground/80"> · {person.employee_branch}</span>
-          ) : null}
-        </div>
-      </header>
+    <div data-slot="decision-shell" className="flex h-full min-h-0 flex-col">
+      <div
+        data-slot="decision-body"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-3"
+      >
+        <header>
+          <div className="text-base font-semibold tracking-tight">{person.employee_name}</div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            {/* An entry can span dates now — a pattern member holds several
+                mornings. Naming only the headline day would label the others
+                wrongly, so a multi-day entry states its range end to end. */}
+            {person.dates.length > 1
+              ? `${formatFlagContextDate(person.dates[0])} – ${formatFlagContextDate(person.dates[person.dates.length - 1])}`
+              : formatFlagContextDate(person.attendance_date)}
+            {person.employee_branch ? (
+              <span className="text-muted-foreground/80"> · {person.employee_branch}</span>
+            ) : null}
+          </div>
+        </header>
 
-      {/* One click, one write — this prefills nothing and submits nothing on its
-          own. It only exists once HR has actually decided something on this
-          person, which is what stops a stray click closing a whole day. */}
-      {props.lastDecision && remaining.length > 1 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2">
-          <span className="min-w-0 flex-1 text-xs text-muted-foreground">
-            {SAME_REASON_LABEL} — {outcomeLabel(props.lastDecision.outcome)},{" "}
-            {reasonLabel(props.lastDecision.reason)}
-          </span>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={props.submitting}
-            onClick={() => props.onSubmit(remaining, props.lastDecision as PendingDecision)}
-          >
-            {applyToRemainingLabel(remaining.length)}
-          </Button>
-        </div>
-      ) : null}
+        {/* One click, one write — this prefills nothing and submits nothing on
+            its own. It only exists once HR has actually decided something on
+            this person, which is what stops a stray click closing a whole day. */}
+        {props.lastDecision && remaining.length > 1 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2">
+            <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+              {SAME_REASON_LABEL} — {outcomeLabel(props.lastDecision.outcome)},{" "}
+              {reasonLabel(props.lastDecision.reason)}
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={props.submitting}
+              onClick={() => props.onSubmit(remaining, props.lastDecision as PendingDecision)}
+            >
+              {applyToRemainingLabel(remaining.length)}
+            </Button>
+          </div>
+        ) : null}
 
-      {/* The worst flag in full, the rest as one-liners.
-          The path through a multi-flag person is: read the worst one, decide it,
-          then "same reason applies" to the remainder — which is what
-          remainingIdentities and applyToRemainingLabel are already for. Fourteen
-          full cards rendered the same per-code explainer fourteen times and
-          restated each flag's own numbers twice (prose, then a facts table), for
-          5,069px in a 345px pane. Nothing is removed here except repetition:
-          every flag is still individually decidable through its one-liner.
+        {/* The worst flag in full, the rest as one-liners.
+            The path through a multi-flag person is: read the worst one, decide
+            it, then "same reason applies" to the remainder — which is what
+            remainingIdentities and applyToRemainingLabel are already for.
+            Fourteen full cards rendered the same per-code explainer fourteen
+            times and restated each flag's own numbers twice (prose, then a
+            facts table), for 5,069px in a 345px pane. Nothing is removed here
+            except repetition: every flag is still individually decidable
+            through its one-liner.
 
-          The `worst` guard is load-bearing at RUNTIME and nowhere else: this
-          tsconfig leaves `noUncheckedIndexedAccess` unset, so `person.flags[0]`
-          types as FlagOut even when the array is empty and the compiler would
-          accept this guard's deletion. Delete it and a person carrying no flags
-          throws inside FlagCard on `flag.attendance_date`. A fragment rather than
-          a wrapper div, so the parent's `space-y-4` keeps applying between the
-          card and the list. */}
-      {worst ? (
-        <>
-          <FlagCard
-            key={worst.flag_identity}
-            flag={worst}
-            dateKey={worst.attendance_date}
-            open={props.activeIdentity === worst.flag_identity}
-            draft={props.draft}
-            onDraftChange={props.onDraftChange}
-            onOpen={() => props.onOpenFlag(worst.flag_identity)}
-            onClose={() => props.onOpenFlag(null)}
-            lastDecision={props.lastDecision}
-            onSubmit={props.onSubmit}
-            submitting={props.submitting}
-          />
+            The `worst` guard is load-bearing at RUNTIME and nowhere else: this
+            tsconfig leaves `noUncheckedIndexedAccess` unset, so `person.flags[0]`
+            types as FlagOut even when the array is empty and the compiler would
+            accept this guard's deletion. Delete it and a person carrying no flags
+            throws inside FlagCard on `flag.attendance_date`. A fragment rather
+            than a wrapper div, so the body's `space-y-4` keeps applying between
+            the card and the list. */}
+        {worst ? (
+          <>
+            <FlagCard
+              key={worst.flag_identity}
+              flag={worst}
+              dateKey={worst.attendance_date}
+              open={props.activeIdentity === worst.flag_identity}
+              pinned
+              draft={props.draft}
+              onDraftChange={props.onDraftChange}
+              onOpen={() => props.onOpenFlag(worst.flag_identity)}
+              onClose={() => props.onOpenFlag(null)}
+              lastDecision={props.lastDecision}
+              onSubmit={props.onSubmit}
+              submitting={props.submitting}
+            />
 
-          {rest.length > 0 ? (
-            <section data-slot="flag-rest" className="space-y-1.5">
-              <div className="text-xs font-medium text-muted-foreground">
-                {restHeading(rest)}
+            {rest.length > 0 ? (
+              <section data-slot="flag-rest" className="space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {restHeading(rest)}
+                </div>
+                <ul className="divide-y divide-border/60 rounded-lg border border-border/60">
+                  {rest.map((flag) =>
+                    props.expandedIdentity === flag.flag_identity ? (
+                      <li key={flag.flag_identity} className="p-1.5">
+                        <FlagCard
+                          flag={flag}
+                          dateKey={flag.attendance_date}
+                          open={props.activeIdentity === flag.flag_identity}
+                          draft={props.draft}
+                          onDraftChange={props.onDraftChange}
+                          onOpen={() => props.onOpenFlag(flag.flag_identity)}
+                          onClose={() => props.onOpenFlag(null)}
+                          lastDecision={props.lastDecision}
+                          onSubmit={props.onSubmit}
+                          submitting={props.submitting}
+                        />
+                      </li>
+                    ) : (
+                      <li key={flag.flag_identity}>
+                        <FlagOneLiner
+                          flag={flag}
+                          onExpand={() => props.onExpandFlag(flag.flag_identity)}
+                        />
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </section>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+
+      {/* The one target HR hits hundreds of times a session, taken out of the
+          scroll. Guarded on `worst` for the same reason the card above is: a
+          person carrying no flags has nothing for this footer to write. */}
+      <div
+        data-slot="decision-footer"
+        className="shrink-0 border-t border-border/60 bg-background pt-2.5"
+      >
+        {worst ? (
+          <>
+            <div className="mb-1.5 text-xs text-muted-foreground">
+              {DECIDING_PREFIX}{" "}
+              <span className="font-medium text-foreground">
+                {decidingLabel(props.entry, worst)}
+              </span>
+            </div>
+            {props.activeIdentity === worst.flag_identity ? (
+              <DecisionForm
+                draft={props.draft}
+                onChange={props.onDraftChange}
+                submitLabel={outcomeActionLabel(props.draft.outcome)}
+                onSubmit={() => props.onSubmit(flagIdentities(worst), props.draft)}
+                onCancel={() => props.onOpenFlag(null)}
+                submitting={props.submitting}
+              />
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => props.onOpenFlag(worst.flag_identity)}>
+                  {worst.decision_state === "matched" ? DECIDE_AGAIN_LABEL : "Decide"}
+                </Button>
+                {/* Moved from FlagCard's own button row along with Decide — the
+                    footer owns this flag's controls, and that block held two.
+                    Gated on the FLAG, not on `remaining.length > 1` like the
+                    banner above: when exactly one undecided flag is left it IS
+                    `worst`, so the banner is off and this is the only one-click
+                    repeat there is. Undecided flags only — repeating a decision
+                    onto a flag that already has one is a supersession nobody
+                    asked for, recorded under HR's name. */}
+                {worst.decision_state !== "matched" && props.lastDecision ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={props.submitting}
+                    onClick={() =>
+                      props.onSubmit(flagIdentities(worst), props.lastDecision as PendingDecision)
+                    }
+                  >
+                    {SAME_REASON_LABEL}
+                  </Button>
+                ) : null}
               </div>
-              <ul className="divide-y divide-border/60 rounded-lg border border-border/60">
-                {rest.map((flag) =>
-                  props.expandedIdentity === flag.flag_identity ? (
-                    <li key={flag.flag_identity} className="p-1.5">
-                      <FlagCard
-                        flag={flag}
-                        dateKey={flag.attendance_date}
-                        open={props.activeIdentity === flag.flag_identity}
-                        draft={props.draft}
-                        onDraftChange={props.onDraftChange}
-                        onOpen={() => props.onOpenFlag(flag.flag_identity)}
-                        onClose={() => props.onOpenFlag(null)}
-                        lastDecision={props.lastDecision}
-                        onSubmit={props.onSubmit}
-                        submitting={props.submitting}
-                      />
-                    </li>
-                  ) : (
-                    <li key={flag.flag_identity}>
-                      <FlagOneLiner
-                        flag={flag}
-                        onExpand={() => props.onExpandFlag(flag.flag_identity)}
-                      />
-                    </li>
-                  ),
-                )}
-              </ul>
-            </section>
-          ) : null}
-        </>
-      ) : null}
+            )}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -269,6 +337,12 @@ function FlagCard(props: {
   flag: FlagOut;
   dateKey: string;
   open: boolean;
+  /** The footer owns this flag's controls, so the card renders evidence only.
+   *  A second decide button for the same flag — one of them scrolling away —
+   *  is what this task exists to remove. Promoted one-liners are NOT pinned:
+   *  those keep their inline form, because a detour off the main loop should
+   *  not reach past the card it belongs to. */
+  pinned?: boolean;
   draft: PendingDecision;
   onDraftChange: (draft: PendingDecision) => void;
   onOpen: () => void;
@@ -401,8 +475,12 @@ function FlagCard(props: {
           only way HR can correct a decision they got wrong: the write is an
           ordinary decide_flags call on the same flag_identity, which the backend
           records as a new row superseding the old one — nothing is edited and
-          nothing is deleted. */}
-      {props.open ? (
+          nothing is deleted.
+
+          Unless the card is pinned: then the footer holds every control in this
+          block, and rendering them here too would put a second decide button on
+          the same flag — the one that scrolls away from the one that does not. */}
+      {props.pinned ? null : props.open ? (
         <DecisionForm
           draft={props.draft}
           onChange={props.onDraftChange}
@@ -447,74 +525,89 @@ function GroupDecision(props: FlagDecisionPanelProps & { entry: GroupEntry }) {
   const payload = groupPayload(entry.members, props.excluded);
 
   return (
-    <div className="space-y-4 pb-4">
-      <header>
-        <div className="text-base font-semibold tracking-tight">{groupHeadline(entry)}</div>
-        {/* REPEAT_PATTERN spans dates by definition and carries no single one,
-            so the day is conditional — handing that null to a date formatter
-            throws, which would take the whole panel down the first time HR
-            opened a pattern group. The size line is never conditional, and it
-            is groupSubline's job so the panel and the list row agree. */}
-        <div className="mt-1 text-sm text-muted-foreground">
-          {entry.attendance_date ? (
-            <>
-              {formatFlagContextDate(entry.attendance_date)}
-              <span className="text-muted-foreground/80 tabular-nums">
-                {" "}
-                · {groupSubline(entry)}
-              </span>
-            </>
-          ) : (
-            <span className="tabular-nums">{groupSubline(entry)}</span>
-          )}
-        </div>
-      </header>
-
-      <DecisionForm
-        draft={props.draft}
-        onChange={props.onDraftChange}
-        submitLabel={`${outcomeActionLabel(props.draft.outcome)} ${payload.coveredEmployeeCount}`}
-        onSubmit={() => props.onSubmit(payload.identities, props.draft)}
-        submitting={props.submitting || payload.coveredEmployeeCount === 0}
-      />
-
-      <Button variant="outline" size="sm" onClick={props.onDecideOneByOne}>
-        {DECIDE_ONE_BY_ONE_LABEL}
-      </Button>
-
-      <section className="space-y-1.5">
-        <div className="text-xs font-medium text-muted-foreground">Who this covers</div>
-        <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 px-2 py-1.5">
-          {entry.members.map((member) => {
-            const crossReference = crossReferenceLabel(member);
-            return (
-              <li key={member.employee} className="flex items-center gap-2 py-1">
-                <Checkbox
-                  checked={!props.excluded.has(member.employee)}
-                  onCheckedChange={() => props.onToggleMember(member.employee)}
-                  aria-label={`Include ${member.employee_name}`}
-                />
-                <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-                  {member.employee_name}
+    <div data-slot="decision-shell" className="flex h-full min-h-0 flex-col">
+      <div
+        data-slot="decision-body"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-3"
+      >
+        <header>
+          <div className="text-base font-semibold tracking-tight">{groupHeadline(entry)}</div>
+          {/* REPEAT_PATTERN spans dates by definition and carries no single one,
+              so the day is conditional — handing that null to a date formatter
+              throws, which would take the whole panel down the first time HR
+              opened a pattern group. The size line is never conditional, and it
+              is groupSubline's job so the panel and the list row agree. */}
+          <div className="mt-1 text-sm text-muted-foreground">
+            {entry.attendance_date ? (
+              <>
+                {formatFlagContextDate(entry.attendance_date)}
+                <span className="text-muted-foreground/80 tabular-nums">
+                  {" "}
+                  · {groupSubline(entry)}
                 </span>
-                {/* The safeguard's primary surface. This list, with its exclude
-                    checkboxes, is what HR reads immediately before a bulk
-                    excuse — the exact moment the badge is for. Reaching it only
-                    through "Decide one by one" would mean it never appears on
-                    the path it exists to guard. */}
-                {crossReference ? (
-                  <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
-                    {crossReference}
+              </>
+            ) : (
+              <span className="tabular-nums">{groupSubline(entry)}</span>
+            )}
+          </div>
+        </header>
+
+        <section className="space-y-1.5">
+          <div className="text-xs font-medium text-muted-foreground">Who this covers</div>
+          <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 px-2 py-1.5">
+            {entry.members.map((member) => {
+              const crossReference = crossReferenceLabel(member);
+              return (
+                <li key={member.employee} className="flex items-center gap-2 py-1">
+                  <Checkbox
+                    checked={!props.excluded.has(member.employee)}
+                    onCheckedChange={() => props.onToggleMember(member.employee)}
+                    aria-label={`Include ${member.employee_name}`}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                    {member.employee_name}
                   </span>
-                ) : null}
-                <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {personHeadline(member)}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+                  {/* The safeguard's primary surface. This list, with its exclude
+                      checkboxes, is what HR reads immediately before a bulk
+                      excuse — the exact moment the badge is for. Reaching it only
+                      through "Decide one by one" would mean it never appears on
+                      the path it exists to guard. */}
+                  {crossReference ? (
+                    <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                      {crossReference}
+                    </span>
+                  ) : null}
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {personHeadline(member)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      </div>
+
+      {/* The same pinned controls as a person's, and the same reason: the write
+          is the one thing on this panel that must not move. Group arming is
+          unchanged — this form has always been open, because a group decision
+          is the entry's whole purpose and its submit label states the size of
+          the write it will make. */}
+      <div
+        data-slot="decision-footer"
+        className="shrink-0 space-y-2.5 border-t border-border/60 bg-background pt-2.5"
+      >
+        <DecisionForm
+          draft={props.draft}
+          onChange={props.onDraftChange}
+          submitLabel={`${outcomeActionLabel(props.draft.outcome)} ${payload.coveredEmployeeCount}`}
+          onSubmit={() => props.onSubmit(payload.identities, props.draft)}
+          submitting={props.submitting || payload.coveredEmployeeCount === 0}
+        />
+
+        <Button variant="outline" size="sm" onClick={props.onDecideOneByOne}>
+          {DECIDE_ONE_BY_ONE_LABEL}
+        </Button>
+      </div>
     </div>
   );
 }

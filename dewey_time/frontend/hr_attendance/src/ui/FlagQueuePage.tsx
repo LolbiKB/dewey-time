@@ -1161,7 +1161,16 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             <div
               role="region"
               aria-label="Selected flag"
-              className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain"
+              // A measure, not a stretch. Decision 2: the panel took 724px and
+              // spent it on prose at 106 characters per line and a Reason select
+              // 724px wide for a 22-character option. Task 5 gave the list the
+              // width it was starved of; this stops the panel spreading into
+              // whatever is left on a wide screen.
+              //
+              // `overflow-hidden`, not `overflow-y-auto`: the panel owns its own
+              // scrolling now, and a second scroller around it would let the
+              // pinned footer scroll away.
+              className="lg:min-h-0 lg:w-full lg:max-w-[62ch] lg:overflow-hidden"
             >
               {props.panel}
             </div>

@@ -1992,3 +1992,131 @@ test("a person carrying no flags renders instead of throwing", () => {
   assert.match(html, /Nobody Here/);
   assert.equal(countOf(html, 'data-slot="flag-card"'), 0);
 });
+
+test("the panel is a scrolling body above a footer that is not in the scroll", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  assert.equal(countOf(html, 'data-slot="decision-body"'), 1);
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
+  // The body scrolls and the footer does not. Asserted as separate substrings
+  // rather than one `data-slot=…[^>]*class=` regex: that form silently depends
+  // on JSX attribute order, so reordering two props would break the test
+  // without changing the rendered layout at all.
+  assert.match(html, /data-slot="decision-body"/);
+  assert.match(html, /overflow-y-auto/);
+  assert.match(html, /shrink-0 border-t/);
+});
+
+test("the pinned footer names the flag it is about to write", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  // f-0 is the worst flag: 240 minutes on 1 Aug. The JOINED form is the tell —
+  // the card above renders the same label and the same day, but in two separate
+  // spans, so "Missing 4h · 1 Aug" can only have come from decidingLabel.
+  assert.match(html, /Deciding/);
+  assert.match(html, /Missing 4h · 1 Aug/);
+});
+
+test("the footer targets the WORST flag even while a promoted one is open", () => {
+  // Both forms can be on screen. The footer's own label is the only thing that
+  // says which flag its submit button writes to, which is why it exists.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel
+      {...panelProps({ entry: fourteenFlagPerson() })}
+      expandedIdentity="f-5"
+      activeIdentity="f-5"
+    />,
+  );
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
+  // f-5 is 215 minutes — "Missing 3h 35m". The footer still names f-0's 4h, and
+  // f-5's label never appears in the joined form because nothing but the footer
+  // produces one.
+  assert.match(html, /Missing 4h · 1 Aug/);
+  assert.doesNotMatch(html, /Missing 3h 35m ·/);
+});
+
+test("the footer arms nothing on its own", () => {
+  // The empty draft is EXCUSED / APPROVED_LEAVE / "", which decisionIsComplete
+  // accepts. An always-open form would therefore put a real write on real
+  // employee records one stray click away. Person mode keeps its click.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.doesNotMatch(html, /role="group" aria-label="Outcome"/);
+
+  const open = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson(), activeIdentity: "f-0" })} />,
+  );
+  assert.match(open, /role="group" aria-label="Outcome"/);
+});
+
+test("a person carrying no flags gets a footer with nothing to write", () => {
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({ employee: "HR-EMP-00022", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
+  };
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  assert.doesNotMatch(html, /Deciding/);
+});
+
+test("the worst card no longer carries its own decide button", () => {
+  // It moved to the footer. Two decide affordances for the same flag, one of
+  // them scrolling away, is the thing this task removes.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, ">Decide<"), 1, "exactly one, and it is the footer's");
+});
+
+test("the last undecided flag keeps its one-click repeat", () => {
+  // The tail of the main loop, and the case both existing SAME_REASON tests
+  // miss. A two-flag person decides one, `lastDecision` is set, `remaining`
+  // drops to 1 — so the person-level banner is off (it needs > 1) and the
+  // surviving flag IS `worst`, so the footer is the only place the repeat can
+  // live. Before this task it lived on the card's own button row.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00023",
+      name: "Chariya Meas",
+      rank: 131,
+      tier: "act",
+      flags: [
+        makeFlag({
+          identity: "f-settled",
+          code: "MISSING_TIME",
+          rank: 131,
+          tier: "act",
+          state: "matched",
+          decision: {
+            name: "AFD-settled",
+            outcome: "EXCUSED",
+            reason: "APPROVED_LEAVE",
+            note: "",
+            decided_by: "hr@example.com",
+            decided_at: "2026-08-07 09:00:00",
+          },
+        }),
+        makeFlag({ identity: "f-last", code: "MISSING_TIME", rank: 130, tier: "act" }),
+      ],
+    }),
+  };
+
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel
+      {...panelProps({
+        entry,
+        lastDecision: { outcome: "EXCUSED", reason: "APPROVED_LEAVE", note: "" },
+      })}
+    />,
+  );
+
+  assert.match(html, new RegExp(`>${SAME_REASON_LABEL}<`));
+  // The person-level banner is genuinely off, so this is not passing on the
+  // banner's copy by accident.
+  assert.doesNotMatch(html, /Apply to remaining/);
+});

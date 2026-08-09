@@ -454,6 +454,17 @@ export function restHeading(rest: FlagOut[]): string {
  *  ambiguous about what it is about to write. */
 export const DECIDING_PREFIX = "Deciding";
 
+/**
+ * Names what the pinned footer is about to write. A person's footer targets one
+ * flag on one day, so it says both — three "Missing 4h" cards in one entry are
+ * three different mornings. A group's footer targets its whole membership, and
+ * groupSubline already states that size.
+ */
+export function decidingLabel(entry: QueueEntry, flag: FlagOut): string {
+  if (entry.kind === "group") return groupSubline(entry);
+  return `${formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))} · ${flagDayLabel(flag.attendance_date)}`;
+}
+
 export function narrowRangeLabel(days: number): string {
   return `Last ${plural(days, "day", "days")}`;
 }
