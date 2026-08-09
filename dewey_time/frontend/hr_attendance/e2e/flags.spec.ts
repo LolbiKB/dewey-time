@@ -2431,3 +2431,50 @@ test("a modal with no description does not claim to have one", async ({ page }) 
     "30 flags across 12 employees",
   );
 });
+
+// ---------------------------------------------------------------------------
+// The list column's width, which nothing else pins.
+//
+// This branch dropped the page's max-w-7xl cap to reclaim ~300px at 1512, and
+// the spec's Decision 4 spends it on the list: "width converts directly into
+// rows that stop truncating". It very nearly did not. The grid ceiling was
+// byte-identical to the branch point until the final review caught it, and the
+// first fix was a MEASURED NO-OP — Tailwind v4 emits every arbitrary min-width
+// variant as one group BEFORE the named breakpoints rather than interleaving
+// them by width, so `min-[1374px]:` lost the cascade to `lg:` and the list
+// stayed 480px at 1920. Both ceilings are arbitrary variants now, so they sort
+// by value.
+//
+// Two viewports on purpose. One would prove the list is wide somewhere; the
+// pair proves the BREAKPOINT is where it is — deleting the class fails the
+// first, making 40rem unconditional fails the second. 1374 = 640 + 12 + 658 +
+// 64: the width at which the panel first reaches its own 62ch cap, so nothing
+// narrows at any width below it.
+// ---------------------------------------------------------------------------
+test("above 1374 the list gets the width the page reclaimed, and not below it", async ({
+  page,
+}) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  const list = page.getByRole("list", { name: "Flag queue" });
+
+  // Below the step: the 30rem ceiling, unchanged from before this branch.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(list).toBeVisible();
+  const narrow = (await list.boundingBox())!.width;
+  expect(narrow, "at 1280 the list keeps the 30rem ceiling").toBeLessThan(520);
+
+  // Above it: 40rem, which is where the reclaimed width finally lands.
+  await page.setViewportSize({ width: 1512, height: 900 });
+  const wide = (await list.boundingBox())!.width;
+  expect(wide, "at 1512 the list takes the 40rem ceiling").toBeGreaterThan(560);
+});
