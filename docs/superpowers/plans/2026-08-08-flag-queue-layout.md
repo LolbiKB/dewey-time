@@ -2665,36 +2665,119 @@ git commit -m "perf(flag-queue): a 14-flag person stops rendering the same expla
 
 **Files:**
 - Modify: `src/ui/FlagDecisionPanel.tsx`
+- Modify: `src/lib/flagQueueLabels.ts`
 - Modify: `src/ui/FlagQueuePage.tsx`
 - Modify: `src/ui/flagQueuePage.test.tsx`
 
 **Interfaces:**
-- Produces: `FlagDecisionPanel` renders a two-part shell — `<div className="flex h-full min-h-0 flex-col">` with a scrolling body and a `shrink-0` footer. The panel's wrapper in `FlagQueueView` drops its own `overflow-y-auto`, since the body now owns scrolling.
+- Consumes: `DECIDING_PREFIX` from `@/lib/flagQueueLabels` (already exported, currently unused by any component).
+- Produces: `FlagDecisionPanel` renders a two-part shell — `<div data-slot="decision-shell">` holding a scrolling `data-slot="decision-body"` and a `shrink-0` `data-slot="decision-footer"`. `FlagCard` gains `pinned?: boolean`, which suppresses its own action row because the footer owns those controls. New label export `decidingLabel(entry, flag)`. The panel wrapper in `FlagQueueView` drops its own `overflow-y-auto`, since the body now owns scrolling.
 
-- [ ] **Step 1: Write the failing test**
+**Controller notes — read before Step 1.** Four things the plan's first draft left ambiguous or missing, resolved here so the implementer does not have to guess:
+
+1. **The footer is not an always-armed form.** The spec's mock (`design.md:183-196`) draws the outcome/reason controls in the footer unconditionally, and taken literally that is a safety regression: the empty draft is `EXCUSED / APPROVED_LEAVE / ""`, `decisionIsComplete` accepts it, so an always-open form puts a real write on real employee records one stray click away. `FlagDecisionPanel.tsx:134-136` already states the rule this page lives by — *"One click, one write — this prefills nothing and submits nothing on its own… which is what stops a stray click closing a whole day."* So **person mode keeps its click**: the footer holds the decide affordance, and the form expands in place inside the footer. What the spec actually asks for is that the control stop *moving*, and a footer pinned to the bottom edge delivers that whether it currently holds a button or a form. **Group mode's form stays always-visible**, because it already is today and moving it changes nothing about its arming.
+2. **The footer always targets the *worst* flag**, never a promoted one. A promoted one-liner keeps its inline form (Task 8's recorded decision — two form placements, deliberate). That means both can be on screen at once, which is exactly why `DECIDING_PREFIX` exists: the footer names its own target so it is never ambiguous about what it is about to write.
+3. **A person carrying no flags gets no footer form.** Task 8 established that `person.flags` may be empty and `worst` may be `undefined`. The footer is guarded on the same value.
+4. **The spec's panel measure cap has no task and is added here.** `design.md:204-210` requires the panel's own content capped at ~62ch. Task 5 delivered the grid half of Decision 2 (with a documented deviation — `minmax(24rem,30rem)` rather than the spec's `minmax(30rem,40rem)`, justified by measurement) but not the measure. This is the panel task; it belongs here.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `src/ui/flagQueuePage.test.tsx`. `fourteenFlagPerson()`, `countOf()`, `makePerson()`, `panelProps()` and the `PersonEntry` type already exist there from Task 8 and earlier; `patternGroupEntry()` (line ~165) and `outageBranchEntry()` (line ~1614) are the group fixtures if you need one.
+
+Note `flagDayLabel` formats as `"d MMM"` — `"1 Aug"`, not `"Aug 1"`.
 
 ```tsx
 test("the panel is a scrolling body above a footer that is not in the scroll", () => {
   const html = renderToStaticMarkup(
     <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
   );
-  assert.match(html, /flex h-full min-h-0 flex-col/, "the panel is a column shell");
-  assert.match(html, /data-slot="decision-footer"[^>]*class="[^"]*shrink-0/);
-  assert.match(html, /data-slot="decision-body"[^>]*class="[^"]*overflow-y-auto/);
+  assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  assert.equal(countOf(html, 'data-slot="decision-body"'), 1);
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
+  // The body scrolls and the footer does not. Asserted as separate substrings
+  // rather than one `data-slot=…[^>]*class=` regex: that form silently depends
+  // on JSX attribute order, so reordering two props would break the test
+  // without changing the rendered layout at all.
+  assert.match(html, /data-slot="decision-body"/);
+  assert.match(html, /overflow-y-auto/);
+  assert.match(html, /shrink-0 border-t/);
+});
+
+test("the pinned footer names the flag it is about to write", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  // f-0 is the worst flag: 240 minutes on 1 Aug. The JOINED form is the tell —
+  // the card above renders the same label and the same day, but in two separate
+  // spans, so "Missing 4h · 1 Aug" can only have come from decidingLabel.
+  assert.match(html, /Deciding/);
+  assert.match(html, /Missing 4h · 1 Aug/);
+});
+
+test("the footer targets the WORST flag even while a promoted one is open", () => {
+  // Both forms can be on screen. The footer's own label is the only thing that
+  // says which flag its submit button writes to, which is why it exists.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel
+      {...panelProps({ entry: fourteenFlagPerson() })}
+      expandedIdentity="f-5"
+      activeIdentity="f-5"
+    />,
+  );
+  assert.equal(countOf(html, 'data-slot="decision-footer"'), 1);
+  // f-5 is 215 minutes — "Missing 3h 35m". The footer still names f-0's 4h, and
+  // f-5's label never appears in the joined form because nothing but the footer
+  // produces one.
+  assert.match(html, /Missing 4h · 1 Aug/);
+  assert.doesNotMatch(html, /Missing 3h 35m ·/);
+});
+
+test("the footer arms nothing on its own", () => {
+  // The empty draft is EXCUSED / APPROVED_LEAVE / "", which decisionIsComplete
+  // accepts. An always-open form would therefore put a real write on real
+  // employee records one stray click away. Person mode keeps its click.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.doesNotMatch(html, /role="group" aria-label="Outcome"/);
+
+  const open = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson(), activeIdentity: "f-0" })} />,
+  );
+  assert.match(open, /role="group" aria-label="Outcome"/);
+});
+
+test("a person carrying no flags gets a footer with nothing to write", () => {
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({ employee: "HR-EMP-00022", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
+  };
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.equal(countOf(html, 'data-slot="decision-shell"'), 1);
+  assert.doesNotMatch(html, /Deciding/);
+});
+
+test("the worst card no longer carries its own decide button", () => {
+  // It moved to the footer. Two decide affordances for the same flag, one of
+  // them scrolling away, is the thing this task removes.
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, ">Decide<"), 1, "exactly one, and it is the footer's");
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2: Run to verify they fail**
 
 Run: `npx tsx --test src/ui/flagQueuePage.test.tsx`
-Expected: FAIL.
+Expected: FAIL. Record the real output — do not predict which assertion trips first.
 
 - [ ] **Step 3: Implement the shell**
 
 Wrap `PersonDecision`'s and `GroupDecision`'s returns in:
 
 ```tsx
-    <div className="flex h-full min-h-0 flex-col">
+    <div data-slot="decision-shell" className="flex h-full min-h-0 flex-col">
       <div
         data-slot="decision-body"
         className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-3"
@@ -2705,40 +2788,125 @@ Wrap `PersonDecision`'s and `GroupDecision`'s returns in:
         data-slot="decision-footer"
         className="shrink-0 border-t border-border/60 bg-background pt-2.5"
       >
-        {/* DecisionForm + the submit row */}
+        {/* the naming line, then the form or the affordance that opens it */}
       </div>
     </div>
 ```
 
-The `DecisionForm` moves out of `FlagCard` for the **worst** flag only and into the footer; the one-liner-promoted `FlagCard`s keep their inline form, because those are a deliberate detour rather than the main loop.
+The two `space-y-4 pb-4` wrappers currently on `PersonDecision` and `GroupDecision` are replaced by this shell — do not nest one inside the other.
 
-Add a line above the form naming what is being decided, so the pinned control is never ambiguous about its target:
+`FlagCard` gains:
 
 ```tsx
-        <div className="mb-1.5 text-xs text-muted-foreground">
-          {DECIDING_PREFIX} <span className="font-medium text-foreground">{decidingLabel}</span>
-        </div>
+  /** The footer owns this flag's controls, so the card renders evidence only.
+   *  A second decide button for the same flag — one of them scrolling away —
+   *  is what this task exists to remove. Promoted one-liners are NOT pinned:
+   *  those keep their inline form, because a detour off the main loop should
+   *  not reach past the card it belongs to. */
+  pinned?: boolean;
 ```
 
-where `decidingLabel` is `formatFlagLabel(...) + " · " + flagDayLabel(...)` for a person, and `groupSubline(entry)` for a group.
+and returns `null` in place of its whole trailing `props.open ? <DecisionForm …/> : <div className="flex flex-wrap gap-2">…</div>` block when `props.pinned` is true. Pass `pinned` on the worst card only.
 
-- [ ] **Step 4: Let the panel column fill its height**
+- [ ] **Step 4: Fill the footer**
 
-In `FlagQueueView`, change the panel wrapper from
+Person mode:
+
+```tsx
+      {worst ? (
+        <>
+          <div className="mb-1.5 text-xs text-muted-foreground">
+            {DECIDING_PREFIX}{" "}
+            <span className="font-medium text-foreground">{decidingLabel(props.entry, worst)}</span>
+          </div>
+          {props.activeIdentity === worst.flag_identity ? (
+            <DecisionForm
+              draft={props.draft}
+              onChange={props.onDraftChange}
+              submitLabel={outcomeActionLabel(props.draft.outcome)}
+              onSubmit={() => props.onSubmit(flagIdentities(worst), props.draft)}
+              onCancel={() => props.onOpenFlag(null)}
+              submitting={props.submitting}
+            />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => props.onOpenFlag(worst.flag_identity)}>
+                {worst.decision_state === "matched" ? DECIDE_AGAIN_LABEL : "Decide"}
+              </Button>
+            </div>
+          )}
+        </>
+      ) : null}
+```
+
+Group mode keeps its existing always-visible `DecisionForm` and its `Decide one by one` button, moved verbatim into the footer. Its arming does not change.
+
+**`"Decide"` above is the pre-existing inline literal moved from `FlagCard`, not a new one.** Global Constraint 2 forbids adding inline copy; this task neither adds nor fixes it. Leave it exactly as it is so the diff shows a move rather than a rewrite.
+
+Add `decidingLabel` to `flagQueueLabels.ts` — the footer's target name is copy, and composing it in the component would be a Global Constraint 2 violation:
+
+```ts
+/**
+ * Names what the pinned footer is about to write. A person's footer targets one
+ * flag on one day, so it says both — three "Missing 4h" cards in one entry are
+ * three different mornings. A group's footer targets its whole membership, and
+ * groupSubline already states that size.
+ */
+export function decidingLabel(entry: QueueEntry, flag: FlagOut): string {
+  if (entry.kind === "group") return groupSubline(entry);
+  return `${formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))} · ${flagDayLabel(flag.attendance_date)}`;
+}
+```
+
+- [ ] **Step 5: Let the panel column fill its height, and give it a measure**
+
+In `FlagQueueView` (`FlagQueuePage.tsx:1161-1167`), change the panel wrapper from
 `className="lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain"`
 to
 `className="lg:min-h-0 lg:overflow-hidden"`
 — the panel owns its own scrolling now, and a second scroller around it would let the footer scroll away.
 
-- [ ] **Step 5: Run tests**
+Then add the measure the spec asks for and nothing has yet delivered (`design.md:204-210`, "the panel's own content capped at ~62ch"). On the same wrapper:
+
+```tsx
+              className="lg:min-h-0 lg:overflow-hidden"
+```
+
+becomes
+
+```tsx
+              // A measure, not a stretch. Decision 2: the panel took 724px and
+              // spent it on prose at 106 characters per line and a Reason select
+              // 724px wide for a 22-character option. Task 5 gave the list the
+              // width it was starved of; this stops the panel spreading into
+              // whatever is left on a wide screen.
+              className="lg:min-h-0 lg:w-full lg:max-w-[62ch] lg:overflow-hidden"
+```
+
+- [ ] **Step 6: Run tests**
 
 Run: `npm run test:web && npm run typecheck`
-Expected: PASS.
+Expected: PASS. Record the counts.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Mutation-test the pin**
+
+Two mutations, both required, because the shell and the arming are separate claims:
+
+1. Remove `overflow-y-auto` from the body's className. Run `npm run test:web`. Expected: the shell test fails.
+2. Make the footer render its `DecisionForm` unconditionally (drop the `props.activeIdentity === worst.flag_identity` check). Run `npm run test:web`. Expected: **"the footer arms nothing on its own"** fails on its first assertion.
+
+Restore both, re-run, confirm green. Paste all four outputs.
+
+- [ ] **Step 8: Check the pin by hand**
+
+`npm run dev`, open `/hr-flags`, select a person with many flags, and scroll the panel.
+Expected: the footer stays on the bottom edge; the evidence scrolls behind it. If the whole panel scrolls as one, Step 5's wrapper change did not land.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/ui/FlagDecisionPanel.tsx src/ui/FlagQueuePage.tsx src/ui/flagQueuePage.test.tsx
+git add src/ui/FlagDecisionPanel.tsx src/lib/flagQueueLabels.ts src/ui/FlagQueuePage.tsx \
+        src/ui/flagQueuePage.test.tsx
 git commit -m "feat(flag-queue): the decision controls stop moving"
 ```
 
@@ -2969,7 +3137,9 @@ The PR body must state the four measurements, and must repeat the spec's two out
 
 ## Self-review notes
 
-**Spec coverage.** Decision 1 → Tasks 1–4, 7. Decision 2 (split + pinned) → Task 9. Decision 3 (chrome) → Task 5. Decision 4 (width) → Task 5, Step 4. Decision 5 (density) → Task 8. Decision 6 (mobile) → Task 10. Other states → Task 6. Testing section → Tasks 7, 10, 11. Phasing → the Phase 1 / Phase 2 headings.
+**Spec coverage.** Decision 1 → Tasks 1–4, 7. Decision 2 (split + pinned + the ~62ch panel measure) → Task 9; its grid half landed in Task 5 with a documented deviation (`minmax(24rem,30rem)` rather than the spec's `minmax(30rem,40rem)`, justified by measurement). Decision 3 (chrome) → Task 5. Decision 4 (width) → Task 5, Step 4. Decision 5 (density) → Task 8. Decision 6 (mobile) → Task 10. Other states → Task 6. Testing section → Tasks 7, 10, 11. Phasing → the Phase 1 / Phase 2 headings.
+
+**Amendment log.** Task 8 was rewritten before dispatch (`cbda1e03`) — its e2e steps referenced a fixture that gives every person one flag, so there was no compressed row to click, and its mutation test could not fail. Task 9 was rewritten before dispatch for four reasons recorded in its own controller-notes block; the load-bearing one is that the spec's mock, taken literally, would leave a valid write armed behind one stray click.
 
 **Type consistency.** `partitionQueue` → `{ outages, queue }` and `outageWrite` → `{ identities, branchCount, coveredEmployeeCount }` are used under those exact names in Tasks 1, 3, 4 and 6. The band's own prop is `onExcuse`; the view-level prop that feeds it is `onExcuseOutages`, mapped in Task 4, Step 5. `queuePeopleCount` (function) and `queuePeople` (prop) are deliberately different names for the same number at two layers.
 
