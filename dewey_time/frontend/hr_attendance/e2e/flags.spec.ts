@@ -1734,3 +1734,65 @@ test("the keyboard model survives the band", async ({ page }) => {
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
   await expect(band.getByRole("button", { name: /Review 1 branch/ })).not.toBeFocused();
 });
+
+/** One person, four mornings — a compressed list small enough to count by eye. */
+const MANY_FLAG_PERSON = {
+  entry_key: "p:HR-EMP-00041",
+  employee: "HR-EMP-00041",
+  employee_name: "Sopheak Chan",
+  employee_branch: "Siem Reap Depot",
+  employee_image: null,
+  attendance_date: "2026-08-10",
+  dates: ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"],
+  rank: 134,
+  tier: "act",
+  flags: ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"].map((date, index) => ({
+    flag_identity: `MANY-${index}`,
+    flag_code: "MISSING_TIME",
+    attendance_date: date,
+    severity: "WARNING",
+    day_closed: 1,
+    evidence: { minutes: 240 - index * 10 },
+    rank: 134,
+    tier: "act",
+    decision_state: "undecided",
+    decision: null,
+  })) satisfies FlagOut[],
+  undecided_count: 4,
+  also_count: 0,
+  also_outlier_count: 0,
+} satisfies QueuePerson;
+
+test("a many-flag person shows one card and the rest compressed, and any of them opens", async ({
+  page,
+}) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  const cards = page.locator('[data-slot="flag-card"]');
+  const compressed = page.locator('[data-slot="flag-one-liner"]');
+  await expect(cards).toHaveCount(1);
+  await expect(compressed).toHaveCount(3);
+
+  // The click path the unit suite cannot reach: the middle one, so neither
+  // "always the first" nor "always the last" would satisfy this.
+  await compressed.nth(1).click();
+  await expect(cards).toHaveCount(2);
+  await expect(compressed).toHaveCount(2);
+});

@@ -18,6 +18,7 @@ import { formatFlagLabel, parseFlagEvidence } from "@/lib/flagLabels";
 import {
   DECIDE_AGAIN_LABEL,
   DECIDE_ONE_BY_ONE_LABEL,
+  DECIDE_ONE_LABEL,
   OUTCOME_OPTIONS,
   REASON_OPTIONS,
   SAME_REASON_LABEL,
@@ -33,6 +34,7 @@ import {
   personHeadline,
   priorDecisionLabel,
   reasonLabel,
+  restHeading,
 } from "@/lib/flagQueueLabels";
 import { cn } from "@/lib/utils";
 import type { Flag } from "@/types/calendar";
@@ -81,6 +83,9 @@ export type FlagDecisionPanelProps = {
   /** Person mode: which flag currently has its decide form open. */
   activeIdentity: string | null;
   onOpenFlag: (identity: string | null) => void;
+  /** Which of the compressed flags has been promoted to a full card. */
+  expandedIdentity: string | null;
+  onExpandFlag: (identity: string | null) => void;
   /** The decision HR last recorded on THIS person — backs "Same reason applies". */
   lastDecision: PendingDecision | null;
   onSubmit: (identities: string[], decision: PendingDecision) => void;
@@ -113,6 +118,16 @@ export function FlagDecisionPanel(props: FlagDecisionPanelProps) {
 function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson }) {
   const { person } = props;
   const remaining = remainingIdentities(person);
+  // The one card that stays open is the worst flag STILL AWAITING a decision.
+  // build_queue hands the array over worst-first, so the first unresolved flag is
+  // the worst unresolved one — the same rule _person() uses to choose the row's
+  // headline date. When every flag is already decided (the "Decided" toggle is
+  // on) nothing is awaiting, and the worst flag overall takes the card.
+  const worstIndex = person.flags.findIndex((flag) => flag.decision_state !== "matched");
+  const worst = person.flags[worstIndex === -1 ? 0 : worstIndex];
+  // Identity comparison, not index arithmetic: each FlagOut is a distinct object,
+  // and this keeps build_queue's order for everything that is not the card.
+  const rest = person.flags.filter((flag) => flag !== worst);
 
   return (
     <div className="space-y-4 pb-4">
@@ -151,27 +166,98 @@ function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson })
         </div>
       ) : null}
 
-      {/* Worst-first, exactly as build_queue ordered them, and every one of them
-          individually decidable: the person only leaves the queue when all of
-          their flags are decided. */}
-      {person.flags.map((flag) => (
-        <FlagCard
-          key={flag.flag_identity}
-          flag={flag}
-          // The flag's own day, not the person's headline one: an entry can
-          // hold four mornings, and the card is a decision about exactly one.
-          dateKey={flag.attendance_date}
-          open={props.activeIdentity === flag.flag_identity}
-          draft={props.draft}
-          onDraftChange={props.onDraftChange}
-          onOpen={() => props.onOpenFlag(flag.flag_identity)}
-          onClose={() => props.onOpenFlag(null)}
-          lastDecision={props.lastDecision}
-          onSubmit={props.onSubmit}
-          submitting={props.submitting}
-        />
-      ))}
+      {/* The worst flag in full, the rest as one-liners.
+          The path through a multi-flag person is: read the worst one, decide it,
+          then "same reason applies" to the remainder — which is what
+          remainingIdentities and applyToRemainingLabel are already for. Fourteen
+          full cards rendered the same per-code explainer fourteen times and
+          restated each flag's own numbers twice (prose, then a facts table), for
+          5,069px in a 345px pane. Nothing is removed here except repetition:
+          every flag is still individually decidable through its one-liner.
+
+          Guarded on `worst` rather than on a length check so the type narrows for
+          FlagCard, and a fragment rather than a wrapper div so the parent's
+          `space-y-4` keeps applying between the card and the list. */}
+      {worst ? (
+        <>
+          <FlagCard
+            key={worst.flag_identity}
+            flag={worst}
+            dateKey={worst.attendance_date}
+            open={props.activeIdentity === worst.flag_identity}
+            draft={props.draft}
+            onDraftChange={props.onDraftChange}
+            onOpen={() => props.onOpenFlag(worst.flag_identity)}
+            onClose={() => props.onOpenFlag(null)}
+            lastDecision={props.lastDecision}
+            onSubmit={props.onSubmit}
+            submitting={props.submitting}
+          />
+
+          {rest.length > 0 ? (
+            <section data-slot="flag-rest" className="space-y-1.5">
+              <div className="text-xs font-medium text-muted-foreground">
+                {restHeading(rest)}
+              </div>
+              <ul className="divide-y divide-border/60 rounded-lg border border-border/60">
+                {rest.map((flag) =>
+                  props.expandedIdentity === flag.flag_identity ? (
+                    <li key={flag.flag_identity} className="p-1.5">
+                      <FlagCard
+                        flag={flag}
+                        dateKey={flag.attendance_date}
+                        open={props.activeIdentity === flag.flag_identity}
+                        draft={props.draft}
+                        onDraftChange={props.onDraftChange}
+                        onOpen={() => props.onOpenFlag(flag.flag_identity)}
+                        onClose={() => props.onOpenFlag(null)}
+                        lastDecision={props.lastDecision}
+                        onSubmit={props.onSubmit}
+                        submitting={props.submitting}
+                      />
+                    </li>
+                  ) : (
+                    <li key={flag.flag_identity}>
+                      <FlagOneLiner
+                        flag={flag}
+                        onExpand={() => props.onExpandFlag(flag.flag_identity)}
+                      />
+                    </li>
+                  ),
+                )}
+              </ul>
+            </section>
+          ) : null}
+        </>
+      ) : null}
     </div>
+  );
+}
+
+/** One flag, compressed to what distinguishes it from its siblings: the day and
+ *  the magnitude. Everything else on a full card is either identical across the
+ *  set (the per-code explainer) or a second telling of these same two numbers. */
+function FlagOneLiner(props: { flag: FlagOut; onExpand: () => void }) {
+  return (
+    <button
+      type="button"
+      data-slot="flag-one-liner"
+      onClick={props.onExpand}
+      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-muted/40"
+    >
+      <span className="w-14 shrink-0 text-muted-foreground tabular-nums">
+        {flagDayLabel(props.flag.attendance_date)}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-foreground">
+        {formatFlagLabel(props.flag.flag_code, parseFlagEvidence(props.flag.evidence))}
+      </span>
+      {props.flag.decision_state !== "undecided" ? (
+        <Badge variant="outline" className="shrink-0 rounded-md text-[10px]">
+          {decisionStateLabel(props.flag.decision_state)}
+        </Badge>
+      ) : null}
+      <span className="shrink-0 text-[11px] font-medium text-primary">{DECIDE_ONE_LABEL}</span>
+    </button>
   );
 }
 
@@ -193,7 +279,10 @@ function FlagCard(props: {
   const decided = flag.decision_state === "matched";
 
   return (
-    <section className="space-y-2.5 rounded-xl border border-border/60 bg-card px-3 py-3">
+    <section
+      data-slot="flag-card"
+      className="space-y-2.5 rounded-xl border border-border/60 bg-card px-3 py-3"
+    >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">

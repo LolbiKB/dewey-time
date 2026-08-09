@@ -336,6 +336,7 @@ export function FlagQueuePage() {
   const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<PendingDecision>(emptyDraft);
   const [activeIdentity, setActiveIdentity] = useState<string | null>(null);
+  const [expandedIdentity, setExpandedIdentity] = useState<string | null>(null);
   const [lastDecision, setLastDecision] = useState<PendingDecision | null>(null);
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [bulkFailure, setBulkFailure] = useState<BulkFailure | null>(null);
@@ -389,6 +390,11 @@ export function FlagQueuePage() {
   const resetRowState = useCallback(() => {
     setDraft(emptyDraft());
     setActiveIdentity(null);
+    // Unobservable today and deliberately untested: a flag identity is unique
+    // across the payload, so a stale one cannot match anything on the next
+    // person. Cleared anyway, so this behaves like `activeIdentity` beside it
+    // rather than becoming the one piece of per-row state that persists.
+    setExpandedIdentity(null);
     setLastDecision(null);
     setExcluded(new Set<string>());
     setBulkFailure(null);
@@ -571,6 +577,7 @@ export function FlagQueuePage() {
     // `writeFailure` describe the write that just happened and must outlive it.
     setDraft(emptyDraft());
     setActiveIdentity(null);
+    setExpandedIdentity(null);
     setExcluded(new Set<string>());
     setFocusKey(key);
   }, [restore, queue]);
@@ -712,6 +719,8 @@ export function FlagQueuePage() {
             onDraftChange={setDraft}
             activeIdentity={activeIdentity}
             onOpenFlag={setActiveIdentity}
+            expandedIdentity={expandedIdentity}
+            onExpandFlag={setExpandedIdentity}
             lastDecision={lastDecision}
             onSubmit={handleSubmit}
             excluded={excluded}

@@ -27,6 +27,7 @@ import type { Strip } from "@/lib/flagStrip";
 import type {
   DecisionState,
   FlagDecision,
+  FlagOut,
   Outcome,
   QueueEntry,
   QueuePayload,
@@ -427,6 +428,27 @@ export const TIER_FILTER_LABEL = "Consequence";
 /** The affordance on a compressed flag one-liner. Lowercase: it sits inline at
  *  the end of a row of data, not as a button caption. */
 export const DECIDE_ONE_LABEL = "decide";
+
+/** When the compressed flags differ in kind, no one label is honest about the
+ *  set, and naming only the first would be a lie about the other twelve. */
+const MIXED_FINDINGS_LABEL = "Mixed findings";
+
+/**
+ * Names the compressed set: "The other 13 — Missing time", or "One more —
+ * Mixed findings". Called with a non-empty `rest`, so `codes` is never empty.
+ *
+ * `formatFlagLabel(code, null)` and not `(code, evidence)`: this heading is
+ * about the whole set, and an evidence-derived label ("Missing 3h 20m") is one
+ * member's number presented as all of theirs.
+ */
+export function restHeading(rest: FlagOut[]): string {
+  const codes = new Set(rest.map((flag) => flag.flag_code));
+  // "The other 1" is not English, and this heading sits above the single most
+  // common multi-flag case — a person with exactly two flags.
+  const count = rest.length === 1 ? "One more" : `The other ${rest.length}`;
+  const label = codes.size === 1 ? formatFlagLabel([...codes][0], null) : MIXED_FINDINGS_LABEL;
+  return `${count} — ${label}`;
+}
 
 /** Names the pinned footer's target, so a control that never moves is never
  *  ambiguous about what it is about to write. */

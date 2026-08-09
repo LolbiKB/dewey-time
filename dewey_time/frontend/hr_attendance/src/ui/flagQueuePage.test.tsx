@@ -409,6 +409,8 @@ function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisi
     onDraftChange: () => {},
     activeIdentity: null,
     onOpenFlag: () => {},
+    expandedIdentity: null,
+    onExpandFlag: () => {},
     lastDecision: null,
     onSubmit: () => {},
     excluded: new Set<string>(),
@@ -1862,4 +1864,128 @@ test("loading renders skeleton rows, so the layout does not jump when data lands
   const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} isLoading counts={null} />);
   assert.match(html, /animate-pulse/);
   assert.ok(!/Loading flags…/.test(html), "a centred spinner reflows the whole pane");
+});
+
+/** Fourteen mornings on one person — the shape the spec measured at 5,069px. */
+function fourteenFlagPerson(): PersonEntry {
+  return {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00019",
+      name: "Sreylak Min",
+      rank: 134,
+      tier: "act",
+      flags: Array.from({ length: 14 }, (_, index) =>
+        makeFlag({
+          identity: `f-${index}`,
+          code: "MISSING_TIME",
+          rank: 134,
+          tier: "act",
+          date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+          evidence: { minutes: 240 - index * 5 },
+        }),
+      ),
+    }),
+  };
+}
+
+/** A substring of flagSummary("MISSING_TIME") (lib/flagDetails.ts). It is the
+ *  per-CODE explainer: identical on all fourteen cards, so its render count is
+ *  the render count of the repetition this task removes. */
+const MISSING_TIME_EXPLAINER = "on-shift gap of at least 30 minutes";
+
+function countOf(html: string, needle: string): number {
+  return html.split(needle).length - 1;
+}
+
+test("a fourteen-flag person renders ONE full card, not fourteen", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  assert.equal(countOf(html, MISSING_TIME_EXPLAINER), 1);
+});
+
+test("the other thirteen are still individually reachable", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 13);
+});
+
+test("expanding a one-liner promotes it and leaves the rest compressed", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel
+      {...panelProps({ entry: fourteenFlagPerson() })}
+      expandedIdentity="f-5"
+    />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 2, "the worst one, plus the one asked for");
+  assert.equal(countOf(html, MISSING_TIME_EXPLAINER), 2);
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 12);
+});
+
+test("a person with a single flag renders no compressed list at all", () => {
+  const html = renderToStaticMarkup(
+    <FlagDecisionPanel {...panelProps({ entry: missingTimePerson() })} />,
+  );
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  // Both assertions, deliberately: the one-liner count alone still passes if the
+  // section and its heading render around an empty list.
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 0);
+  assert.equal(countOf(html, 'data-slot="flag-rest"'), 0);
+});
+
+test("the full card goes to the worst flag STILL AWAITING a decision", () => {
+  // With "Decided" on, a person's matched flags come back in the same array.
+  // Spending the one full card on a decision already made would compress the
+  // only thing HR opened this person to do.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00020",
+      name: "Bopha Chea",
+      rank: 130,
+      tier: "act",
+      flags: [
+        makeFlag({
+          identity: "f-done",
+          code: "MISSING_TIME",
+          rank: 130,
+          tier: "act",
+          state: "matched",
+          decision: {
+            name: "AFD-done",
+            outcome: "EXCUSED",
+            reason: "APPROVED_LEAVE",
+            note: "",
+            decided_by: "hr@example.com",
+            decided_at: "2026-08-07 09:00:00",
+          },
+        }),
+        makeFlag({ identity: "f-open", code: "MISSING_TIME", rank: 129, tier: "act" }),
+      ],
+    }),
+  };
+
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  // A decided card's button reads DECIDE_AGAIN_LABEL, an undecided one "Decide".
+  // That is how we tell WHICH flag got the card. The compressed row's own
+  // affordance is lowercase "decide", so it cannot satisfy either match.
+  assert.match(html, />Decide</);
+  assert.doesNotMatch(html, />Decide again</);
+});
+
+test("a person carrying no flags renders instead of throwing", () => {
+  // The code being replaced is `person.flags.map(...)`, which is total.
+  // Destructuring a worst flag out of the array is not.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({ employee: "HR-EMP-00021", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
+  };
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.match(html, /Nobody Here/);
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 0);
 });
