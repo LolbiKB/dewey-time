@@ -1726,6 +1726,62 @@ test("the date controls carry accessible names without spending a row on labels"
 });
 ```
 
+- [ ] **Step 5f: Remove the capped strip — it is Task 6's job, not this one's**
+
+The spec removes it by name and gives the reason (`2026-08-08-flag-queue-layout-design.md:222-232`): *"capping is structural — it never clears, so a permanent warning in the loudest colour on the page teaches people to skip that colour. It returns only when actionable, and then as a control rather than a lecture."* 38px of this task's budget is allocated to its removal.
+
+Delete the whole `props.truncated ? <AttentionStrip …>` block from `PageHeader`. Task 6 reintroduces the capacity notice as a control with `Last 7 days` / `Last 3 days` buttons. **There is a one-task window with no capacity warning; that is the sequencing the plan chose, and it is not shipped in between.**
+
+Then **re-measure Step 7 with `truncated: true`** — the previous measurement used a one-row uncapped payload, where this strip does not render at all, so 125px was not representative of the production state the spec describes. On a capped day the real number was ~165px, over this task's own ≤140 gate.
+
+- [ ] **Step 5g: The date controls must still announce their value**
+
+`aria-label` beats name-from-content unconditionally, so the two date buttons now announce exactly `"From"` and `"To"` — the formatted date inside the button is excluded from the accessible name. A screen-reader user tabbing this toolbar cannot hear the current range, on the control that determines the entire list, on the page that just removed the visible label.
+
+In `src/components/ui/date-picker-input.tsx`, drop the `aria-label` and render the name as visually-hidden content instead, so the button's name becomes `"From Aug 1, 2026"`:
+
+```tsx
+        <Button …>
+          {props.label ? null : <span className="sr-only">{props.ariaLabel}</span>}
+          <CalendarDaysIcon … />
+```
+
+Update the plan-mandated assertion at `flagQueuePage.test.tsx` accordingly — it currently greps for `aria-label="From"`, which will no longer be there.
+
+Add two real accessible-name lookups to an existing e2e test that already loads the page, so this cannot regress into a grep again:
+
+```ts
+  await expect(page.getByLabel(/^From/)).toBeVisible();
+  await expect(page.getByLabel(/^To/)).toBeVisible();
+```
+
+- [ ] **Step 5h: The three control names are copy (violation #6)**
+
+`ariaLabel="From"`, `ariaLabel="To"` and `aria-label="Consequence"` are inline in the component. Constraint 2 covers `aria-label` explicitly, and this is the sixth instance on this plan. Add to `flagQueueLabels.ts`:
+
+```ts
+/** The toolbar's three control names. Visually hidden — this page trades the
+ *  visible label row for 22px of height — so these are the ONLY names a screen
+ *  reader has for the controls that determine the whole list. */
+export const RANGE_FROM_LABEL = "From";
+export const RANGE_TO_LABEL = "To";
+export const TIER_FILTER_LABEL = "Consequence";
+```
+
+with an assertion beside the other control-label test.
+
+- [ ] **Step 5i: Fix an assertion that cannot fail, and scope the toolbar clamp**
+
+`assert.ok(!/class="text-xs"[^>]*>From</.test(html), "no visible label row")` can never fail: dewey-ui's `Label` merges `text-xs` into a long class string via `cn`, so the literal `class="text-xs"` is never emitted. Replace with `assert.ok(!/<label[^>]*>From</.test(html))`.
+
+`max-w-[56vw]` is sound in mechanism — a percentage is circular against an auto-sized parent, so `vw` is the only unit that resolves — but the value concedes chrome at the width the spec argues from. The toolbar's natural width is ~575px, so the clamp bites from ~1027px down; at the 900px viewport the spec uses for its headline gain, it forces a second row and hands back ~48px. Scope it:
+
+```tsx
+          <div className="flex max-w-[calc(100vw-16rem)] flex-wrap items-center gap-2 lg:max-w-none">
+```
+
+This reserves a fixed column for the title instead of a fraction, and releases entirely above `lg` where there is room. Add a comment naming the test that guards it, so deleting the clamp fails a test whose title explains why.
+
 - [ ] **Step 6: Run tests**
 
 Run: `npm run test:web && npm run typecheck`
