@@ -51,17 +51,29 @@ def _day_is_over(attendance_date) -> bool:
     return getdate(attendance_date) < getdate()
 
 
-def _reject_future_end(end):
-    """A regeneration range must not run past today.
+def _clamp_end_to_today(start, end):
+    """Trim a range at today rather than refusing it. Returns (end, clamped).
 
-    Regenerating a day that has not happened is never what anyone meant, and
-    for a future date `_day_is_over` would withhold the closeout half anyway --
-    so the range would silently do less than it said. Refuse it at the edge
-    instead, where the operator can see why.
+    Refusing outright was the first attempt and it broke the primary caller:
+    RunEngineDialog defaults end_date to the displayed week's Sunday
+    (RunEngineDialog.tsx, weekStart + 6), and the displayed week is the current
+    one, so on every day but Sunday the dialog's out-of-the-box range ends in
+    the future. A throw there is a raw server error on the button's default
+    state, six days in seven.
+
+    Asking for "this week" and getting everything in it that has happened is
+    the only sensible reading, so clamp -- and say so in the response, since
+    the caller asked for more days than it is getting back.
+
+    A range starting after today has nothing left after clamping, and silently
+    doing nothing is worse than saying so.
     """
     today = getdate()
+    if start > today:
+        frappe.throw(f"start_date cannot be after today ({today})")
     if end > today:
-        frappe.throw(f"end_date cannot be after today ({today})")
+        return today, True
+    return end, False
 
 
 @frappe.whitelist(methods=["POST"])
@@ -86,7 +98,9 @@ def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode:
     day_count = (end - start).days + 1
     if day_count > MAX_RANGE_DAYS:
         frappe.throw(f"Date range cannot exceed {MAX_RANGE_DAYS} days")
-    _reject_future_end(end)
+    # Capped on what was asked for, clamped after: a 200-day request is a
+    # mistake whether or not most of it is in the future.
+    end, end_was_clamped = _clamp_end_to_today(start, end)
 
     mode = (mode or "both").strip().lower()
     if mode not in VALID_MODES:
@@ -139,11 +153,20 @@ def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode:
         days_processed=days_processed,
         days_protected=days_protected,
         days_deferred=days_deferred,
+        end_was_clamped=end_was_clamped,
     )
 
 
 def _build_response(
-    *, employee, start_date, end_date, mode, days_processed, days_protected=0, days_deferred=0
+    *,
+    employee,
+    start_date,
+    end_date,
+    mode,
+    days_processed,
+    days_protected=0,
+    days_deferred=0,
+    end_was_clamped=False,
 ):
     flags = (
         frappe.get_all(
@@ -176,9 +199,12 @@ def _build_response(
         "mode": mode,
         "days_processed": days_processed,
         # Reported, not silent: a caller comparing before/after needs to know
-        # why part of the range did not move.
+        # why part of the range did not move. days_deferred is not disjoint
+        # from days_processed -- mode="both" over today runs its intraday half
+        # and defers only its closeout half, and counts in both.
         "days_protected_by_delivery_failure": days_protected,
         "closeout_days_deferred_until_the_day_ends": days_deferred,
+        "end_date_clamped_to_today": end_was_clamped,
         "flags_after": len(flags),
         "days": days,
     }
@@ -373,8 +399,8 @@ def _validate_bulk_range(start_date, end_date):
     day_count = (end - start).days + 1
     if day_count > MAX_BULK_RANGE_DAYS:
         frappe.throw(f"Date range cannot exceed {MAX_BULK_RANGE_DAYS} days")
-    _reject_future_end(end)
-    return start, end
+    end, end_was_clamped = _clamp_end_to_today(start, end)
+    return start, end, end_was_clamped
 
 
 def _active_employee_names() -> list[str]:
@@ -390,13 +416,14 @@ def _active_employee_names() -> list[str]:
 def preview_regenerate_flags_for_range_api(start_date=None, end_date=None):
     """Dev-only: what a bulk flag rebuild would touch, before it touches it."""
     _require_system_manager_for_clear()
-    start, end = _validate_bulk_range(
+    start, end, end_was_clamped = _validate_bulk_range(
         start_date or frappe.form_dict.get("start_date"),
         end_date or frappe.form_dict.get("end_date"),
     )
     return {
         "start_date": str(start),
         "end_date": str(end),
+        "end_date_clamped_to_today": end_was_clamped,
         "days": (end - start).days + 1,
         "employees": len(_active_employee_names()),
         "auto_flags_in_range": frappe.db.count(
@@ -423,7 +450,7 @@ def regenerate_flags_for_range_api(
     refused call cannot even read, let alone delete.
     """
     _require_system_manager_for_clear()
-    start, end = _validate_bulk_range(
+    start, end, end_was_clamped = _validate_bulk_range(
         start_date or frappe.form_dict.get("start_date"),
         end_date or frappe.form_dict.get("end_date"),
     )
@@ -486,8 +513,19 @@ def regenerate_flags_for_range_api(
                 # Explicit, because mode="intraday" alone would otherwise leave stale
                 # finals behind: refresh_intraday only deletes its own provisional
                 # rows, scoped to INTRADAY_FLAG_CODES.
+                #
+                # But only where a closeout pass is going to put the finals back.
+                # A branch device can close out at 18:00 and write today's
+                # day_closed=1 rows; withholding the closeout half (above) while
+                # still wiping unscoped would delete those with nothing left to
+                # rebuild them -- permanently, since the fallback covers only
+                # yesterday and the webhook fires once per device-date. This is
+                # the same hole intraday.py's own delete is scoped to avoid, and
+                # for the same reason.
                 _delete_auto_flags_for_employee_date(
-                    employee=employee, attendance_date=current
+                    employee=employee,
+                    attendance_date=current,
+                    day_closed=None if run_closeout else 0,
                 )
                 if run_intraday:
                     refresh_intraday_flags_for_employee_date(employee, current)
@@ -535,7 +573,10 @@ def regenerate_flags_for_range_api(
         # had, so a caller comparing before/after knows why some of the range
         # did not move.
         "days_protected_by_delivery_failure": days_protected,
+        # Not disjoint from days_processed: mode="both" over today runs its
+        # intraday half and defers only its closeout half, and counts in both.
         "closeout_days_deferred_until_the_day_ends": days_deferred,
+        "end_date_clamped_to_today": end_was_clamped,
         # Logged to Error Log with the employee and date; surfaced here so a
         # re-run is an informed choice rather than a hope.
         "days_failed": days_failed,

@@ -545,13 +545,41 @@ class TestRegeneratorsRefuseToConfirmAnUnfinishedDay(unittest.TestCase):
         self.assertEqual(result["days_processed"], 0)
         self.assertEqual(result["closeout_days_deferred_until_the_day_ends"], 1)
 
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
     @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
     @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
     @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
     @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
-    def test_a_range_running_past_today_is_refused(
-        self, get_all, _count, _refresh, generate_closeout
+    def test_a_range_running_past_today_is_trimmed_and_says_so(
+        self, get_all, _count, _refresh, generate_closeout, _delete
     ):
+        # Clamped, not refused. RunEngineDialog defaults end_date to the
+        # displayed week's Sunday, and the displayed week is the current one --
+        # refusing outright turns the button's default state into a raw server
+        # error on six days out of seven.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-09", confirm=True
+        )
+
+        self.assertEqual(result["end_date"], "2026-05-02")
+        self.assertTrue(result["end_date_clamped_to_today"])
+        # 05-01 only: 05-02 is today, so its closeout half is withheld.
+        self.assertEqual(
+            [c.kwargs["attendance_date"] for c in generate_closeout.call_args_list],
+            [date(2026, 5, 1)],
+        )
+
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_a_range_starting_after_today_is_refused(self, get_all, _count):
+        # Nothing survives the clamp, and quietly doing nothing would read as
+        # success.
         from dewey_time.attendance_engine.dev_tools import (
             regenerate_flags_for_range_api,
         )
@@ -560,9 +588,40 @@ class TestRegeneratorsRefuseToConfirmAnUnfinishedDay(unittest.TestCase):
 
         with self.assertRaises(Exception):
             regenerate_flags_for_range_api(
-                start_date="2026-05-01", end_date="2026-05-09", confirm=True
+                start_date="2026-05-03", end_date="2026-05-09", confirm=True
             )
-        generate_closeout.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_today_keeps_the_finals_a_device_already_wrote(
+        self, get_all, _count, delete_flags, _refresh, _generate
+    ):
+        # A branch device can close out at 18:00 and write today's day_closed=1
+        # rows. Withholding the closeout half while still wiping unscoped would
+        # delete those with nothing left to rebuild them: the fallback covers
+        # only yesterday, and the webhook fires once per device-date. Scoping
+        # the delete is what keeps deferral from being worse than doing nothing.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-02", confirm=True, mode="both"
+        )
+
+        scoping = {
+            c.kwargs["attendance_date"]: c.kwargs.get("day_closed")
+            for c in delete_flags.call_args_list
+        }
+        # Yesterday is rebuilt in full, so it is wiped in full.
+        self.assertIsNone(scoping[date(2026, 5, 1)])
+        # Today only loses the provisional rows the intraday pass will replace.
+        self.assertEqual(scoping[date(2026, 5, 2)], 0)
 
     @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
     @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
@@ -593,22 +652,30 @@ class TestRegeneratorsRefuseToConfirmAnUnfinishedDay(unittest.TestCase):
     @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
     @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
     @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
-    def test_the_per_employee_tool_refuses_a_range_past_today(
+    def test_the_per_employee_tool_trims_a_range_past_today(
         self, _refresh, generate_closeout, get_all
     ):
+        # This is the one the dialog actually hits: its default end_date is the
+        # displayed week's Sunday, which is in the future Monday through
+        # Saturday.
         from dewey_time.attendance_engine.dev_tools import run_engine_for_employee
 
         frappe.get_roles.return_value = ["HR User"]
         get_all.return_value = []
 
-        with self.assertRaises(Exception):
-            run_engine_for_employee(
-                employee="DI-1138",
-                start_date="2026-05-01",
-                end_date="2026-05-09",
-                mode="both",
-            )
-        generate_closeout.assert_not_called()
+        result = run_engine_for_employee(
+            employee="DI-1138",
+            start_date="2026-05-01",
+            end_date="2026-05-09",
+            mode="both",
+        )
+
+        self.assertEqual(result["end_date"], "2026-05-02")
+        self.assertTrue(result["end_date_clamped_to_today"])
+        self.assertEqual(
+            [c.kwargs["attendance_date"] for c in generate_closeout.call_args_list],
+            [date(2026, 5, 1)],
+        )
 
 
 class TestPerEmployeeToolProtectsUndeliveredDays(unittest.TestCase):
