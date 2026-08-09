@@ -179,3 +179,171 @@ class TestRunEngineForEmployee(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRegenerateFlagsForRange(unittest.TestCase):
+    """Bulk wipe-and-rebuild, so the queue speaks one language after a change.
+
+    The module-level setup in this file installs real getdate/add_days and
+    reloads dev_tools; the shared frappe mock's add_days is a no-op that would
+    hang every date loop below.
+    """
+
+    def setUp(self):
+        frappe.db.commit.reset_mock()
+        frappe.session.user = "hr@example.com"
+        frappe.get_roles.return_value = ["System Manager"]
+        # Not optional. frappe is a MagicMock, so without this
+        # frappe.form_dict.get("confirm") returns a truthy MagicMock and the
+        # confirm gate opens on its own — every unconfirmed-path test would
+        # then pass for the wrong reason, or wipe in a test that meant not to.
+        # Same line the existing clear_* suites carry (test_clear_employee_
+        # schedule.py:22).
+        frappe.form_dict = {}
+
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=7)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_without_confirm_it_previews_and_changes_nothing(self, get_all, _count):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}, {"name": "DI-2"}]
+
+        with patch(
+            "dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date"
+        ) as delete_flags:
+            result = regenerate_flags_for_range_api(
+                start_date="2026-05-01", end_date="2026-05-03"
+            )
+
+        self.assertTrue(result["needs_confirm"])
+        self.assertEqual(result["preview"]["employees"], 2)
+        self.assertEqual(result["preview"]["days"], 3)
+        self.assertEqual(result["preview"]["auto_flags_in_range"], 7)
+        delete_flags.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_confirmed_it_wipes_and_rebuilds_every_employee_day(
+        self, get_all, _count, delete_flags, refresh_intraday, generate_closeout
+    ):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}, {"name": "DI-2"}]
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-02", confirm=True
+        )
+
+        # 2 employees x 2 days
+        self.assertEqual(delete_flags.call_count, 4)
+        self.assertEqual(refresh_intraday.call_count, 4)
+        self.assertEqual(generate_closeout.call_count, 4)
+        self.assertEqual(result["employees_processed"], 2)
+        self.assertEqual(result["days_processed"], 4)
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_the_wipe_is_not_scoped_to_the_intraday_codes(
+        self, get_all, _count, delete_flags, _refresh_intraday, _generate_closeout
+    ):
+        # refresh_intraday deletes only its own provisional rows, scoped to
+        # INTRADAY_FLAG_CODES. A rebuild that inherited that scope would leave
+        # stale finals behind and the queue would still show two shapes.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-01", confirm=True
+        )
+
+        kwargs = delete_flags.call_args.kwargs
+        self.assertIsNone(kwargs.get("flag_codes"))
+        self.assertIsNone(kwargs.get("day_closed"))
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_mode_intraday_skips_closeout(
+        self, get_all, _count, _delete_flags, refresh_intraday, generate_closeout
+    ):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        regenerate_flags_for_range_api(
+            start_date="2026-05-01",
+            end_date="2026-05-01",
+            confirm=True,
+            mode="intraday",
+        )
+
+        refresh_intraday.assert_called_once()
+        generate_closeout.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_a_non_system_manager_is_refused_before_anything_is_read(
+        self, get_all, delete_flags
+    ):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        frappe.get_roles.return_value = ["HR User"]
+
+        with self.assertRaises(Exception):
+            regenerate_flags_for_range_api(
+                start_date="2026-05-01", end_date="2026-05-02", confirm=True
+            )
+
+        # The gate runs before employees are enumerated, so a refused call
+        # cannot even read, let alone delete.
+        get_all.assert_not_called()
+        delete_flags.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    def test_an_over_long_range_is_refused(self, delete_flags):
+        from dewey_time.attendance_engine.dev_tools import (
+            MAX_BULK_RANGE_DAYS,
+            regenerate_flags_for_range_api,
+        )
+
+        with self.assertRaises(Exception):
+            regenerate_flags_for_range_api(
+                start_date="2026-01-01",
+                end_date=str(date(2026, 1, 1) + timedelta(days=MAX_BULK_RANGE_DAYS)),
+                confirm=True,
+            )
+        delete_flags.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    def test_an_unknown_mode_is_refused(self, delete_flags):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        with self.assertRaises(Exception):
+            regenerate_flags_for_range_api(
+                start_date="2026-05-01",
+                end_date="2026-05-01",
+                confirm=True,
+                mode="sideways",
+            )
+        delete_flags.assert_not_called()

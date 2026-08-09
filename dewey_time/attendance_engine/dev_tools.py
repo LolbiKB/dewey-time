@@ -5,7 +5,10 @@ from collections import defaultdict
 import frappe
 from frappe.utils import add_days, getdate
 
-from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+from dewey_time.attendance_engine.closeout import (
+    _delete_auto_flags_for_employee_date,
+    _generate_for_employee_date,
+)
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 from dewey_time.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
 from dewey_time.attendance_engine.schedule_resolver import (
@@ -22,6 +25,12 @@ from dewey_time.attendance_engine.schedule_resolver import (
 
 VALID_MODES = frozenset({"intraday", "closeout", "both"})
 MAX_RANGE_DAYS = 31
+
+# The per-employee tool is capped at 31 days because it is a spot-check. The bulk
+# rebuild is a deliberate re-shaping of everything anyone is looking at, so it needs
+# a wider range and a harder stop: a quarter is enough for that, and short enough
+# that an all-time run cannot be a typo.
+MAX_BULK_RANGE_DAYS = 92
 
 
 @frappe.whitelist(methods=["POST"])
@@ -287,3 +296,118 @@ def clear_site_patterns_step_api(confirm_phrase=None, clear_employee_data=None):
     except Exception:
         frappe.db.rollback()
         raise
+
+
+def _validate_bulk_range(start_date, end_date):
+    if not start_date or not end_date:
+        frappe.throw("start_date and end_date are required")
+
+    start = getdate(start_date)
+    end = getdate(end_date)
+    if end < start:
+        frappe.throw("end_date must be on or after start_date")
+
+    day_count = (end - start).days + 1
+    if day_count > MAX_BULK_RANGE_DAYS:
+        frappe.throw(f"Date range cannot exceed {MAX_BULK_RANGE_DAYS} days")
+    return start, end
+
+
+def _active_employee_names() -> list[str]:
+    return [
+        row["name"]
+        for row in frappe.get_all(
+            "Employee", filters={"status": "Active"}, fields=["name"], order_by="name"
+        )
+    ]
+
+
+@frappe.whitelist()
+def preview_regenerate_flags_for_range_api(start_date=None, end_date=None):
+    """Dev-only: what a bulk flag rebuild would touch, before it touches it."""
+    _require_system_manager_for_clear()
+    start, end = _validate_bulk_range(
+        start_date or frappe.form_dict.get("start_date"),
+        end_date or frappe.form_dict.get("end_date"),
+    )
+    return {
+        "start_date": str(start),
+        "end_date": str(end),
+        "days": (end - start).days + 1,
+        "employees": len(_active_employee_names()),
+        "auto_flags_in_range": frappe.db.count(
+            "Attendance Flag",
+            {"source": "AUTO", "attendance_date": ["between", [start, end]]},
+        ),
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def regenerate_flags_for_range_api(
+    start_date=None, end_date=None, confirm=None, mode="both"
+):
+    """Dev-only: wipe and rebuild AUTO flags for every active employee in a range.
+
+    Exists because a change to what the engine emits only reaches days that are
+    re-processed. Without this the queue shows the old and the new shape at once,
+    and the data being used to judge the change becomes an artifact that looks
+    like a result.
+
+    Destructive, so it follows the same contract as the clear_* tools: System
+    Manager only, and no confirm means a preview and nothing else. The permission
+    check and the confirm gate both run BEFORE any employee is enumerated, so a
+    refused call cannot even read, let alone delete.
+    """
+    _require_system_manager_for_clear()
+    start, end = _validate_bulk_range(
+        start_date or frappe.form_dict.get("start_date"),
+        end_date or frappe.form_dict.get("end_date"),
+    )
+
+    mode = (mode or "both").strip().lower()
+    if mode not in VALID_MODES:
+        frappe.throw(f"mode must be one of: {', '.join(sorted(VALID_MODES))}")
+
+    confirm_value = confirm
+    if confirm_value is None:
+        confirm_value = frappe.form_dict.get("confirm")
+    if not _parse_confirm(confirm_value):
+        return {
+            "needs_confirm": True,
+            "preview": preview_regenerate_flags_for_range_api(
+                start_date=str(start), end_date=str(end)
+            ),
+        }
+
+    employees = _active_employee_names()
+    days_processed = 0
+    for employee in employees:
+        current = start
+        while current <= end:
+            # Explicit, because mode="intraday" alone would otherwise leave stale
+            # finals behind: refresh_intraday only deletes its own provisional
+            # rows, scoped to INTRADAY_FLAG_CODES.
+            _delete_auto_flags_for_employee_date(
+                employee=employee, attendance_date=current
+            )
+            if mode in ("intraday", "both"):
+                refresh_intraday_flags_for_employee_date(employee, current)
+            if mode in ("closeout", "both"):
+                _generate_for_employee_date(
+                    employee=employee,
+                    attendance_date=current,
+                    include_unnotified_absence=True,
+                )
+            days_processed += 1
+            current = add_days(current, 1)
+        # Per employee, not once at the end: a bulk run over a quarter should not
+        # be a single transaction held open for its whole duration.
+        frappe.db.commit()
+
+    return {
+        "start_date": str(start),
+        "end_date": str(end),
+        "mode": mode,
+        "employees_processed": len(employees),
+        "days_processed": days_processed,
+    }
