@@ -1252,16 +1252,63 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           // narrower than the list beside it, and the decision form does not fit
           // that. useIsMobile.ts:9 already puts the data table's break at lg.
           //
-          // 24–30rem rather than a flat 22rem cap. The row's fixed chrome (avatar,
-          // gaps, +N badge, 117px strip) is ~240px, so 22rem left 112px for two
-          // lines of text and the name — the row's identity — was the only
-          // shrinkable thing in it, collapsing to "B…" beside a shrink-0 badge.
-          // The panel gives up width it measurably was not using: its longest
-          // line of prose ends ~277px short of the old edge.
+          // Three numbers, each load-bearing, and none of them interchangeable.
+          //
+          // The 24rem FLOOR is measured. The row's fixed chrome (avatar, gaps,
+          // +N badge, 117px strip) is ~240px, so a 22rem track left 112px for
+          // two lines of text, and the name — the row's identity — was the only
+          // shrinkable thing in it: it collapsed to "B…" beside a shrink-0
+          // badge.
+          //
+          // The 30rem CEILING holds below 1374px, and must not be widened
+          // there. `minmax(24rem,40rem)` looks like the obvious simplification
+          // and is a regression: CSS grid fills a non-flexible track to its
+          // ceiling BEFORE the 1fr track expands, so the list takes 40rem the
+          // moment it fits and the panel gets whatever is left. Measured, not
+          // reasoned: at 1024 that is a 640px list and a 308px panel — narrower
+          // than the 340px this very file rejects nineteen lines up as too
+          // small for the decision form. At 1152 it is 436px, and at 1280 it is
+          // 564px, which also puts the panel under the 62ch cap below and makes
+          // that cap inert at the width the e2e suite measures at.
+          //
+          // 1374px is where the wider ceiling becomes free, and it is derived,
+          // not chosen: 640 (the 40rem list) + 12 (gap-3) + 658 (the panel's own
+          // 62ch cap, measured below) + 64 (sm:px-8). At exactly that width the
+          // panel track lands on its cap to the pixel, so from there up the list
+          // can take 40rem without the panel giving up anything at all — it was
+          // going to leave that space blank regardless. Below 1374 nothing
+          // changes; above it, the width `max-w-none` reclaimed finally reaches
+          // the list, which is what Decision 4 promised and what a 30rem ceiling
+          // alone quietly turned into whitespace (298px of it at 1512).
+          //
+          // `min-[1024px]:` and NOT `lg:` for the narrow ceiling, even though
+          // 1024 IS `lg`. The two grid-cols declarations are the only classes
+          // here that collide, so their order in the stylesheet decides the
+          // winner at >= 1374 — and Tailwind v4 emits every arbitrary
+          // min-width variant BEFORE the named breakpoints, not interleaved by
+          // width. Written as `lg:` + `min-[1374px]:`, the built CSS put the
+          // 40rem rule at byte 126508 and the 30rem rule at 130661, so `lg:`
+          // won at every width and the wider ceiling was dead code: measured
+          // in-browser, the list stayed 480px at 1512 and at 1920. Expressed as
+          // two arbitrary variants they sort by value and the later one wins as
+          // intended. Verified, not reasoned, both times — in the emitted CSS
+          // and again with getBoundingClientRect.
+          //
+          // `lg:grid` and `lg:overflow-visible` stay named: nothing collides
+          // with them, so their order cannot matter. The 1024 literal is the
+          // same number `useIsMobile.ts`'s LG_BREAKPOINT already hard-codes to
+          // decide whether this branch renders at all, so the two cannot drift
+          // apart silently.
+          //
+          // twMerge keeps both grid-cols classes — different variant prefixes
+          // are different keys — which is also verified rather than assumed:
+          // `max-w-none` beating `max-w-7xl` through this same `cn` is how the
+          // width above was reclaimed in the first place.
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain",
-              "lg:grid lg:overflow-visible lg:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
+              "lg:grid lg:overflow-visible min-[1024px]:grid-cols-[minmax(24rem,30rem)_minmax(0,1fr)]",
+              "min-[1374px]:grid-cols-[minmax(24rem,40rem)_minmax(0,1fr)]",
             )}
           >
             {/* polite, not assertive: these confirm what the user just did, so
