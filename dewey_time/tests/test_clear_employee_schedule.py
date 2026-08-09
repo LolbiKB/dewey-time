@@ -424,6 +424,18 @@ class TestClearAllEmployeeSchedulesApi(unittest.TestCase):
 class TestClearSiteSchedulePatterns(unittest.TestCase):
     def setUp(self):
         frappe.db.table_exists = MagicMock(return_value=True)
+        # Put frappe.get_all back the way we found it. `frappe` here is the
+        # shared module-level mock every test file imports, so a side_effect
+        # installed below outlives this class and goes on answering get_all for
+        # whatever module the runner reaches next. Three tests here install one.
+        #
+        # It cost a red CI to find: bench run-tests ordered test_absence_flags
+        # after this file, TestOffShiftGate inherited ["FT-1"] as the answer to
+        # every get_all, and closeout's has_delivery_or_record_failure_today
+        # crashed calling .get on a string. Locally the alphabetical order runs
+        # absence first, so the local lane stayed green the whole time.
+        previous_get_all = frappe.get_all
+        self.addCleanup(setattr, frappe, "get_all", previous_get_all)
         frappe.get_all = MagicMock(return_value=[])
         frappe.delete_doc = MagicMock()
         frappe.get_doc = MagicMock()

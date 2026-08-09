@@ -66,13 +66,21 @@ class TestAbsenceIntervals(unittest.TestCase):
 
 
 class TestOffShiftGate(unittest.TestCase):
+    # should_skip_absence_flags is stubbed because 4edfbdda hoisted it to the
+    # top of _generate_for_employee_date -- above the deletes, so its answer
+    # cannot be read from evidence those deletes have already destroyed. It now
+    # runs on every path including this one, where it was previously
+    # unreachable behind the on-shift branch, and it reads two Attendance Flag
+    # queries this test has no opinion about. The read-before-delete ordering
+    # it exists for is pinned in test_closeout.py, not here.
+    @patch("dewey_time.attendance_engine.closeout.should_skip_absence_flags", return_value=False)
     @patch("dewey_time.attendance_engine.closeout._insert_flag")
     @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
     @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
     @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
     @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
     def test_off_shift_only_off_shift_punch(
-        self, get_cached_doc, get_shift, get_checkins, _delete, insert_flag
+        self, get_cached_doc, get_shift, get_checkins, _delete, insert_flag, _skip_absence
     ):
         from dewey_time.attendance_engine.closeout import _generate_for_employee_date
 
@@ -338,3 +346,138 @@ class TestAutoFlagIdentity(unittest.TestCase):
         final = self._name_for(1)
         self.assertFalse(final.endswith("-prov"), "finalized rows must keep their existing names")
         self.assertEqual(self._name_for(0), f"{final}-prov")
+
+
+class TestUnattendedLunchBridging(unittest.TestCase):
+    """A lunch nobody was there to take must not split one absence into two.
+
+    Shift times are dt_time, never datetime: shift_time_to_minutes parses a
+    datetime by falling through to string splitting and returns None, after
+    which every case yields zero intervals and these tests pass vacuously.
+    """
+
+    SHIFT = {
+        "start_time": dt_time(8, 0),
+        "end_time": dt_time(17, 0),
+        "custom_grace_minutes": 0,
+        "custom_lunch_start": dt_time(12, 0),
+        "custom_lunch_end": dt_time(13, 0),
+    }
+    DAY = date(2026, 5, 28)
+
+    def _intervals(self, checkins):
+        from dewey_time.attendance_engine.absence_intervals import (
+            compute_missing_time_intervals,
+        )
+
+        return compute_missing_time_intervals(
+            checkins=checkins, shift_meta=self.SHIFT, attendance_date=self.DAY
+        )
+
+    def _punch(self, hour, minute):
+        return {
+            "name": f"P-{hour:02d}{minute:02d}",
+            "time": datetime(2026, 5, 28, hour, minute),
+            "custom_device_branch": "BRANCH-A",
+        }
+
+    def test_stray_punch_day_is_one_absence_not_two(self):
+        # Badged in and straight out again at 08:05, then nothing. Before this
+        # change: 08:05-12:00 and 13:00-17:00, two findings for one absence.
+        intervals = self._intervals([self._punch(8, 0), self._punch(8, 5)])
+
+        self.assertEqual(len(intervals), 1, f"expected one absence, got {intervals}")
+        self.assertEqual(intervals[0]["startMin"], 8 * 60 + 5)
+        self.assertEqual(intervals[0]["endMin"], 17 * 60)
+
+    def test_bridged_minutes_exclude_the_unpaid_lunch(self):
+        # 235 + 240, NOT the 535-minute span. The lunch hour is not owed.
+        intervals = self._intervals([self._punch(8, 0), self._punch(8, 5)])
+
+        self.assertEqual(intervals[0]["minutes"], 475)
+        self.assertNotEqual(
+            intervals[0]["minutes"],
+            intervals[0]["endMin"] - intervals[0]["startMin"],
+            "minutes must be the sum of the parts, not the span",
+        )
+
+    def test_zero_punch_day_is_one_absence(self):
+        intervals = self._intervals([])
+
+        self.assertEqual(len(intervals), 1, f"expected one absence, got {intervals}")
+        self.assertEqual(intervals[0]["startMin"], 8 * 60)
+        self.assertEqual(intervals[0]["endMin"], 17 * 60)
+        self.assertEqual(intervals[0]["minutes"], 480)
+
+    def test_worked_the_morning_only_is_unchanged(self):
+        # The regression guard for the rule that was rejected. This person
+        # stopped exactly at lunch; billing them for the lunch hour would be
+        # wrong, and a naive "don't carve the lunch when nobody is there
+        # after it" rule does exactly that.
+        intervals = self._intervals([self._punch(8, 0), self._punch(12, 0)])
+
+        self.assertEqual(len(intervals), 1)
+        self.assertEqual(intervals[0]["startMin"], 13 * 60)
+        self.assertEqual(intervals[0]["endMin"], 17 * 60)
+        self.assertEqual(intervals[0]["minutes"], 240)
+
+    def test_a_gap_that_merely_contains_the_lunch_is_not_bridged(self):
+        # Only an EXACT abutment on both sides is a lunch split. Two intervals
+        # that happen to sit either side of midday without touching it are two
+        # real findings and must stay two.
+        from dewey_time.attendance_engine.absence_intervals import (
+            _bridge_scheduled_lunch,
+        )
+
+        intervals = [
+            {"startMin": 480, "endMin": 700, "minutes": 220, "kind": "leading"},
+            {"startMin": 800, "endMin": 1020, "minutes": 220, "kind": "leading"},
+        ]
+        out = _bridge_scheduled_lunch(intervals, lunch_start=720, lunch_end=780)
+
+        self.assertEqual(len(out), 2)
+
+    def test_no_scheduled_lunch_configured_is_a_no_op(self):
+        from dewey_time.attendance_engine.absence_intervals import (
+            _bridge_scheduled_lunch,
+        )
+
+        intervals = [
+            {"startMin": 480, "endMin": 720, "minutes": 240, "kind": "leading"},
+            {"startMin": 780, "endMin": 1020, "minutes": 240, "kind": "leading"},
+        ]
+        out = _bridge_scheduled_lunch(intervals, lunch_start=None, lunch_end=None)
+
+        self.assertEqual(len(out), 2)
+
+    def test_a_real_zero_punch_day_yields_a_flag_above_the_threshold(self):
+        # intraday.py gates the no-show on this list being non-empty. Every
+        # test on both sides of that gate mocks this function, so without this
+        # an early `if not checkins: return []` added here would silence the
+        # no-show forever with both suites still green.
+        from dewey_time.attendance_engine.absence_flags import (
+            evaluate_missing_time_flags,
+        )
+
+        flags = evaluate_missing_time_flags(
+            checkins=[], shift_meta=self.SHIFT, attendance_date=self.DAY
+        )
+
+        self.assertEqual([code for code, _ in flags], ["MISSING_TIME"])
+        self.assertEqual(flags[0][1]["minutes"], 480)
+
+    def test_a_real_zero_punch_day_below_the_threshold_yields_nothing(self):
+        # The other half of the gate: 29 minutes in, no row -- which is why the
+        # no-show cannot appear earlier than the MISSING_TIME it replaces.
+        from dewey_time.attendance_engine.absence_flags import (
+            evaluate_missing_time_flags,
+        )
+
+        flags = evaluate_missing_time_flags(
+            checkins=[],
+            shift_meta=self.SHIFT,
+            attendance_date=self.DAY,
+            max_end_min=8 * 60 + 29,
+        )
+
+        self.assertEqual(flags, [])

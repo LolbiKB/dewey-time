@@ -70,8 +70,30 @@ def _minutes(evidence) -> int | None:
     return None
 
 
+def _missing_time_band(minutes: int | None) -> int:
+    """The MISSING_TIME banding, shared with the provisional no-show.
+
+    Two bands: >=120 min scales up through act (130-139); everything else --
+    0-119, and a missing or unparseable value -- collapses to the single
+    review band at 60.
+    """
+    if minutes is not None and minutes >= 120:
+        return 130 + min(minutes // 60, 9)
+    return 60
+
+
 def triage_rank(flag_code: str, evidence) -> int:
     """Additive rank, computed on read. Never stored. Unknown code -> 5."""
+    # Before the _FIXED_RANKS lookup: a no-show the day has not confirmed is
+    # not the 150 a closed-out one is. It stands in for MISSING_TIME rows that
+    # ranked 60 until two hours had elapsed, and promoting it to the top of act
+    # at 31 minutes would put someone who walks in at 08:45 above every real
+    # ATTENDANCE_ISSUE until they badge.
+    if flag_code == "UNNOTIFIED_ABSENCE" and isinstance(evidence, dict) and evidence.get(
+        "provisional"
+    ):
+        return _missing_time_band(_minutes(evidence))
+
     if flag_code in _FIXED_RANKS:
         return _FIXED_RANKS[flag_code]
 
@@ -83,9 +105,7 @@ def triage_rank(flag_code: str, evidence) -> int:
         # missing/unparseable `minutes` — collapses into the single Review band
         # (60). 60 already *is* "the lowest band for this code": there is no
         # separate below-30 band to fall to, so 29 min lands here too.
-        if minutes is not None and minutes >= 120:
-            return 130 + min(minutes // 60, 9)
-        return 60
+        return _missing_time_band(minutes)
 
     if flag_code == "LEFT_EARLY":
         return 70 if minutes is not None and minutes >= 60 else 25

@@ -470,16 +470,38 @@ def _generate_for_employee_date(
     undelivered_items=None,
 ):
     attendance_date = getdate(attendance_date)
+
+    employee_doc = frappe.get_cached_doc("Employee", employee)
+    employee_branch = getattr(employee_doc, "branch", None)
+    employee_company = getattr(employee_doc, "company", None)
+
+    # BEFORE the deletes below, and that ordering is the whole point.
+    #
+    # should_skip_absence_flags answers "were this employee's punches known not
+    # to have arrived?", and it answers it by reading Attendance Flag rows --
+    # the DELIVERY_FAILED row, and the ATTENDANCE_ISSUE variant carrying
+    # delivery_failed evidence. Both are source=AUTO, so both are inside the
+    # blast radius of the two deletes that follow. Asked afterwards, it reads
+    # its own evidence as absent and reports "no failure", and the day earns an
+    # UNNOTIFIED_ABSENCE it was deliberately spared -- a no-show recorded
+    # against someone whose device simply never delivered.
+    #
+    # Harmless in the webhook path, which passes undelivered_items and rebuilds
+    # the marker it just deleted. Reachable from any caller that does not: the
+    # two dev tools, and anything added later. Captured here so the answer
+    # cannot depend on which caller asked.
+    skip_absence = should_skip_absence_flags(
+        employee=employee,
+        employee_branch=employee_branch,
+        attendance_date=attendance_date,
+    )
+
     _delete_auto_flags_for_employee_date(
         employee=employee, attendance_date=attendance_date, day_closed=0
     )
     _delete_auto_flags_for_employee_date(
         employee=employee, attendance_date=attendance_date, day_closed=1
     )
-
-    employee_doc = frappe.get_cached_doc("Employee", employee)
-    employee_branch = getattr(employee_doc, "branch", None)
-    employee_company = getattr(employee_doc, "company", None)
 
     holiday = None
     if employee_company:
@@ -574,15 +596,10 @@ def _generate_for_employee_date(
                 undelivered_items=undelivered_items,
             )
         )
-        if (
-            include_unnotified_absence
-            and not undelivered_items
-            and not should_skip_absence_flags(
-                employee=employee,
-                employee_branch=employee_branch,
-                attendance_date=attendance_date,
-            )
-        ):
+        # `skip_absence`, captured above the deletes -- not a fresh call. See
+        # the comment at the top of this function for why re-asking here reads
+        # evidence this function has already destroyed.
+        if include_unnotified_absence and not undelivered_items and not skip_absence:
             flags_to_create.insert(
                 0, ("UNNOTIFIED_ABSENCE", {"reason": "on_shift_no_checkins"})
             )

@@ -161,6 +161,56 @@ class TestTriageRankOrderings(unittest.TestCase):
         self.assertGreater(off_shift, modest_late_start)
 
 
+class TestProvisionalNoShowRank(unittest.TestCase):
+    """A no-show the day has not confirmed must not outrank everything.
+
+    UNNOTIFIED_ABSENCE is a fixed 150 -- top of act, above ATTENDANCE_ISSUE.
+    That is right for a confirmed no-show at closeout and wrong for a
+    provisional one raised 31 minutes into a shift, which replaces a
+    MISSING_TIME that ranked 60. Ranking the provisional row on the same
+    banding keeps queue ordering identical to before the no-show existed.
+    """
+
+    def test_a_confirmed_no_show_still_tops_the_queue(self):
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        self.assertEqual(triage_rank("UNNOTIFIED_ABSENCE", {}), 150)
+        self.assertEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"reason": "on_shift_no_checkins"}), 150
+        )
+
+    def test_a_provisional_no_show_ranks_like_the_missing_time_it_replaces(self):
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        # 31 minutes in: the MISSING_TIME this replaces ranked 60.
+        self.assertEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"provisional": True, "minutes": 31}),
+            triage_rank("MISSING_TIME", {"minutes": 31}),
+        )
+        # Six hours in: the same act-tier band, not a jump to 150.
+        self.assertEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"provisional": True, "minutes": 360}),
+            triage_rank("MISSING_TIME", {"minutes": 360}),
+        )
+        self.assertNotEqual(
+            triage_rank("UNNOTIFIED_ABSENCE", {"provisional": True, "minutes": 360}), 150
+        )
+
+    def test_a_provisional_no_show_with_unreadable_minutes_takes_the_lowest_band(self):
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        # _minutes is total by design: a value it cannot read is not evidence
+        # of urgency, and must never promote a row to a top band.
+        for bad in ({"provisional": True}, {"provisional": True, "minutes": "nonsense"}):
+            self.assertEqual(triage_rank("UNNOTIFIED_ABSENCE", bad), 60, bad)
+
+    def test_the_provisional_flag_is_what_switches_it_not_the_minutes(self):
+        # minutes present but not provisional -> still the confirmed 150.
+        from dewey_time.attendance_engine.flag_triage import triage_rank
+
+        self.assertEqual(triage_rank("UNNOTIFIED_ABSENCE", {"minutes": 31}), 150)
+
+
 class TestTierForRank(unittest.TestCase):
     def test_boundary_at_100_is_act(self):
         self.assertEqual(tier_for_rank(100), TIER_ACT)

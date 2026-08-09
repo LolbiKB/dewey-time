@@ -225,6 +225,45 @@ def _merge_intervals(intervals: list[dict]) -> list[dict]:
     return merged
 
 
+def _bridge_scheduled_lunch(
+    intervals: list[dict], *, lunch_start: int | None, lunch_end: int | None
+) -> list[dict]:
+    """Join two missing intervals that abut the scheduled lunch exactly.
+
+    `derive_missing_expected_intervals` carves the scheduled lunch out of the
+    expected window unconditionally. That is right for someone who took a
+    lunch and wrong for someone who was not there to take one: a day with a
+    stray punch and nothing else came out as 08:05-12:00 and 13:00-17:00 --
+    two findings for one absence, and the shape that made a no-show
+    unreadable in the queue.
+
+    Exact abutment on BOTH sides is the whole test. It can only happen when
+    the employee was absent across the entire lunch window, so a gap that
+    merely straddles midday is left as the two separate findings it is.
+
+    `minutes` is the SUM of the parts, never the span: the unpaid hour is
+    still not owed. A bridged row therefore has
+    `minutes != endMin - startMin`, deliberately, and the copy that renders
+    it has to say so.
+    """
+    if lunch_start is None or lunch_end is None or lunch_end <= lunch_start:
+        return intervals
+
+    out: list[dict] = []
+    for interval in intervals:
+        previous = out[-1] if out else None
+        if (
+            previous is not None
+            and previous["endMin"] == lunch_start
+            and interval["startMin"] == lunch_end
+        ):
+            previous["endMin"] = interval["endMin"]
+            previous["minutes"] = previous["minutes"] + interval["minutes"]
+            continue
+        out.append(dict(interval))
+    return out
+
+
 def derive_presence_intervals(
     checkins: list[dict], attendance_date, *, session_end_min: int | None
 ) -> list[dict]:
@@ -329,6 +368,13 @@ def compute_missing_time_intervals(
     )
 
     combined = _merge_intervals(missing_expected + away_intervals)
+    # After merging, not before: _merge_intervals sorts, and bridging compares
+    # each interval against the one before it.
+    combined = _bridge_scheduled_lunch(
+        combined,
+        lunch_start=_parse_shift_time_to_minutes(shift_meta.get("custom_lunch_start")),
+        lunch_end=_parse_shift_time_to_minutes(shift_meta.get("custom_lunch_end")),
+    )
     for interval in combined:
         interval["kind"] = _classify_interval_kind(interval, segments)
     return combined

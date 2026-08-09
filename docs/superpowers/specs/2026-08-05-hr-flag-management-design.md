@@ -275,7 +275,7 @@ queue API and never stored.
 
 | Tier | Rank | Members |
 |---|---|---|
-| **Act** | 150 | `UNNOTIFIED_ABSENCE` |
+| **Act** | 150 | `UNNOTIFIED_ABSENCE` — *confirmed only; see note below* |
 | | 140 | `ATTENDANCE_ISSUE`, `MISSING_IN_OR_OUT` |
 | | `130 + min(minutes // 60, 9)` | `MISSING_TIME` where `minutes >= 120` |
 | **Review** | 70 | `LEFT_EARLY` where `minutes >= 60` |
@@ -288,6 +288,13 @@ queue API and never stored.
 | | 15 | `LATE_FROM_LUNCH` where `minutes < 30` |
 | | 10 | `NON_PRIMARY_SITE_PUNCH` |
 | | 5 | `MISSING_LUNCH` |
+
+**Amended 2026-08-09** (`2026-08-09-no-show-flag-design.md`): 150 applies to a **confirmed**
+`UNNOTIFIED_ABSENCE` only. The intraday pass now raises the code provisionally while a day
+is still running, in place of the `MISSING_TIME` rows it would otherwise emit; such a row
+ranks on `MISSING_TIME`'s own banding above and reaches 150 only once closeout confirms it.
+Without that, a person 31 minutes late would have entered at the top of Act, above every
+confirmed finding, until they badged in. No published rank in this table changes.
 
 Missing or unparseable `minutes` falls to the lowest band for that code. A person's rank is
 the maximum rank among their **undecided** flags; their tier is that rank's tier.

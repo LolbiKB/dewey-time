@@ -905,6 +905,79 @@ test("MISSING_TIME flips the relationship when the gap overlaps the scheduled lu
   assert.deepEqual(narrative.timeline?.lunch, { startMin: 720, endMin: 750 });
 });
 
+test("MISSING_TIME names the lunch it excluded, so the gap reconciles with its own endpoints", () => {
+  // The bridged row from _bridge_scheduled_lunch: one interval spanning a day
+  // nobody punched for, carrying the SUM of its two halves rather than its
+  // span, because the unpaid hour between them is not owed time. 17:00 − 08:05
+  // is 8h 55m; the flag says 7h 55m. Without naming the excluded hour the row
+  // reads as an arithmetic bug — which is precisely the mitigation the spec's
+  // Risks table promised and the implementation had not yet delivered.
+  const flag: Flag = {
+    name: "AUTO-mt-bridged",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T08:05:00",
+      interval_end: "2026-08-06T17:00:00",
+      minutes: 475,
+      kind: "away",
+      threshold_minutes: 30,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: {
+      shift_assigned: true,
+      start_time: "08:00",
+      end_time: "17:00",
+      lunch_start: "12:00",
+      lunch_end: "13:00",
+    },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Gone from 8:05 AM to 5:00 PM — 7h 55m unaccounted, excluding the 1h scheduled lunch."
+  );
+  assert.equal(narrative.facts.find((f) => f.label === "Gap")?.value, "7h 55m");
+  assert.equal(narrative.facts.find((f) => f.label === "Lunch excluded")?.value, "1h");
+});
+
+test("MISSING_TIME leaves out the exclusion line when the gap spans exactly what it claims", () => {
+  // The unbridged overlapping row: minutes already equals end − start, so a
+  // "Lunch excluded" fact would assert a subtraction that never happened.
+  const flag: Flag = {
+    name: "AUTO-mt-unbridged",
+    flag_code: "MISSING_TIME",
+    evidence: {
+      interval_start: "2026-08-06T12:00:00",
+      interval_end: "2026-08-06T13:15:00",
+      minutes: 75,
+      kind: "away",
+      threshold_minutes: 30,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [{ time: "2026-08-06 08:00:00" }],
+    shift: {
+      shift_assigned: true,
+      start_time: "08:00",
+      end_time: "17:00",
+      lunch_start: "12:00",
+      lunch_end: "12:30",
+    },
+  };
+
+  const narrative = flagNarrative(flag, day, "2026-08-06");
+
+  assert.match(narrative.headline, /overlapping the scheduled lunch window/);
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Lunch excluded"),
+    undefined
+  );
+});
+
 test("MISSING_TIME degrades to 'wasn't lunch' when the day has no scheduled lunch window", () => {
   const flag: Flag = {
     name: "AUTO-mt-3",
@@ -2189,4 +2262,38 @@ test("an entirely unrecognised flag code falls back to formatFlagLabel's own lab
   );
   assert.deepEqual(narrative.facts, []);
   assert.equal(narrative.timeline, null);
+});
+
+test("UNNOTIFIED_ABSENCE raised intraday does not tell HR a running day is confirmed", () => {
+  // intraday.py raises this while the day is still going, in place of the
+  // MISSING_TIME rows it suppresses. Every other reason in
+  // UNNOTIFIED_ABSENCE_CAUGHT_BY is a confirmation, and so is the fallback, so
+  // an unmapped reason renders "Confirmed automatically" — on a day that is
+  // not over and a row that is withdrawn the moment the person badges in.
+  const flag: Flag = {
+    name: "AUTO-ua-3",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00003",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins_intraday",
+      checkins_count: 0,
+      provisional: true,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: true, shift_type: "Evening", start_time: "14:00", end_time: "22:00" },
+  };
+
+  const caughtBy = flagNarrative(flag, day, "2026-08-06").facts.find(
+    (f) => f.label === "Caught by",
+  )?.value;
+
+  assert.equal(caughtBy, "No punches yet today — not yet confirmed");
+  assert.ok(
+    !/confirmed at|confirmed by|confirmed automatically/i.test(caughtBy ?? ""),
+    `a provisional row must not read as settled: ${caughtBy}`,
+  );
 });
