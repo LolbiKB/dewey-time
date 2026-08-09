@@ -2240,88 +2240,183 @@ git commit -m "test(e2e): the band excuses by branch, and the keyboard model sur
 
 **Files:**
 - Modify: `src/ui/FlagDecisionPanel.tsx`
+- Modify: `src/lib/flagQueueLabels.ts`
+- Modify: `src/ui/FlagQueuePage.tsx`
 - Modify: `src/ui/flagQueuePage.test.tsx`
+- Modify: `e2e/flags.spec.ts`
 
 **Interfaces:**
-- Consumes: `remainingIdentities`, `flagIdentities` from `@/lib/flagDecisionState`.
-- Produces: `PersonDecision` renders one `FlagCard` plus a `FlagOneLiner` list. New local component `FlagOneLiner`. `FlagDecisionPanelProps` gains `expandedIdentity: string | null` and `onExpandFlag: (identity: string | null) => void`, both owned by `FlagQueuePage` alongside `activeIdentity`.
+- Consumes: `remainingIdentities`, `flagIdentities` from `@/lib/flagDecisionState`; `formatFlagLabel`, `parseFlagEvidence` from `@/lib/flagLabels`; `flagDayLabel`, `decisionStateLabel`, `DECIDE_ONE_LABEL` from `@/lib/flagQueueLabels` — all five already imported by this file.
+- Produces: `PersonDecision` renders one `FlagCard` plus a `FlagOneLiner` list. New local component `FlagOneLiner`. `FlagDecisionPanelProps` gains `expandedIdentity: string | null` and `onExpandFlag: (identity: string | null) => void`, both owned by `FlagQueuePage` alongside `activeIdentity`. Two new markup hooks, both consumed by Task 9 and by e2e: `data-slot="flag-card"` on `FlagCard`'s `<section>`, `data-slot="flag-one-liner"` on each compressed row's `<button>`, and `data-slot="flag-rest"` on the section that wraps them. New label export `restHeading(rest: FlagOut[])`.
+
+**Controller notes — read these before Step 1.** Three things about this task were wrong in the plan's first draft and are corrected below; they are recorded so the corrections are not "improved" back:
+
+1. **The full card goes to the worst flag still awaiting a decision, not `flags[0]`.** With the "Decided" toggle on, a person's matched flags come back in the same array, and `flags[0]` can be one of them. `makePerson` in the test file already models this rule for the headline date (`unresolved[0] ?? flags[0]`) — the card follows the same rule for the same reason.
+2. **`person.flags` must not be assumed non-empty.** The code being replaced is `person.flags.map(...)`, which is total. Destructuring a `worst` out of it is not.
+3. **The `expandedIdentity` reset is hygiene, and no test can prove it.** Flag identities are unique across the whole payload, so a stale `expandedIdentity` belonging to the previous person can never match a flag on the next one — the leak is unobservable through the UI. Reset it anyway, at both of `activeIdentity`'s existing sites, so the two behave alike. **Do not write a test claiming to cover it**: an assertion that cannot fail is not a test, and this plan has already shipped two of those (see the ledger's "Carry forward" note).
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/ui/flagQueuePage.test.tsx`:
+Append to `src/ui/flagQueuePage.test.tsx`. Note `makePerson`, `makeFlag`, `missingTimePerson`, `panelProps`, `PersonEntry` and `DATE` all already exist in that file — build the fixture through `makePerson` rather than hand-writing the person literal, so `entry_key`, `dates`, `attendance_date` and `undecided_count` stay derived the way the backend derives them.
 
 ```tsx
+/** Fourteen mornings on one person — the shape the spec measured at 5,069px. */
 function fourteenFlagPerson(): PersonEntry {
-  const flags = Array.from({ length: 14 }, (_, index) =>
-    makeFlag({
-      identity: `f-${index}`,
-      code: "MISSING_TIME",
-      rank: 134,
-      tier: "act",
-      date: `2026-08-${String(index + 1).padStart(2, "0")}`,
-      evidence: { minutes: 240 - index * 5 },
-    }),
-  );
   return {
     kind: "person",
-    entry_key: "p:DI-9",
-    employee: "DI-9",
-    employee_name: "Sreylak Min",
-    employee_branch: "Toul Kork",
-    employee_image: null,
-    attendance_date: "2026-08-01",
-    dates: flags.map((f) => f.attendance_date),
-    rank: 134,
-    tier: "act",
-    flags,
-    undecided_count: 14,
-    also_count: 0,
-    also_outlier_count: 0,
+    ...makePerson({
+      employee: "HR-EMP-00019",
+      name: "Sreylak Min",
+      rank: 134,
+      tier: "act",
+      flags: Array.from({ length: 14 }, (_, index) =>
+        makeFlag({
+          identity: `f-${index}`,
+          code: "MISSING_TIME",
+          rank: 134,
+          tier: "act",
+          date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+          evidence: { minutes: 240 - index * 5 },
+        }),
+      ),
+    }),
   };
+}
+
+/** A substring of flagSummary("MISSING_TIME") (lib/flagDetails.ts). It is the
+ *  per-CODE explainer: identical on all fourteen cards, so its render count is
+ *  the render count of the repetition this task removes. */
+const MISSING_TIME_EXPLAINER = "on-shift gap of at least 30 minutes";
+
+function countOf(html: string, needle: string): number {
+  return html.split(needle).length - 1;
 }
 
 test("a fourteen-flag person renders ONE full card, not fourteen", () => {
   const html = renderToStaticMarkup(
     <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
   );
-  // The generic per-code explainer is the tell: it belongs to the code, not the
-  // flag, and rendering it fourteen times is most of the 5,069px.
-  const explainers = html.split("on-shift gap of at least 30 minutes").length - 1;
-  assert.equal(explainers, 1, `the explainer rendered ${explainers} times`);
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  assert.equal(countOf(html, MISSING_TIME_EXPLAINER), 1);
 });
 
 test("the other thirteen are still individually reachable", () => {
   const html = renderToStaticMarkup(
     <FlagDecisionPanel {...panelProps({ entry: fourteenFlagPerson() })} />,
   );
-  assert.equal(html.split(">decide<").length - 1, 13);
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 13);
 });
 
-test("expanding a one-liner promotes it to the full card", () => {
+test("expanding a one-liner promotes it and leaves the rest compressed", () => {
   const html = renderToStaticMarkup(
     <FlagDecisionPanel
       {...panelProps({ entry: fourteenFlagPerson() })}
       expandedIdentity="f-5"
     />,
   );
-  const explainers = html.split("on-shift gap of at least 30 minutes").length - 1;
-  assert.equal(explainers, 2, "the worst one, plus the one asked for");
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 2, "the worst one, plus the one asked for");
+  assert.equal(countOf(html, MISSING_TIME_EXPLAINER), 2);
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 12);
 });
 
-test("a person with a single flag renders no one-liner list", () => {
+test("a person with a single flag renders no compressed list at all", () => {
   const html = renderToStaticMarkup(
     <FlagDecisionPanel {...panelProps({ entry: missingTimePerson() })} />,
   );
-  assert.ok(!/>decide</.test(html));
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  // Both assertions, deliberately: the one-liner count alone still passes if the
+  // section and its heading render around an empty list.
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 0);
+  assert.equal(countOf(html, 'data-slot="flag-rest"'), 0);
+});
+
+test("the full card goes to the worst flag STILL AWAITING a decision", () => {
+  // With "Decided" on, a person's matched flags come back in the same array.
+  // Spending the one full card on a decision already made would compress the
+  // only thing HR opened this person to do.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00020",
+      name: "Bopha Chea",
+      rank: 130,
+      tier: "act",
+      flags: [
+        makeFlag({
+          identity: "f-done",
+          code: "MISSING_TIME",
+          rank: 130,
+          tier: "act",
+          state: "matched",
+          decision: {
+            name: "AFD-done",
+            outcome: "EXCUSED",
+            reason: "APPROVED_LEAVE",
+            note: "",
+            decided_by: "hr@example.com",
+            decided_at: "2026-08-07 09:00:00",
+          },
+        }),
+        makeFlag({ identity: "f-open", code: "MISSING_TIME", rank: 129, tier: "act" }),
+      ],
+    }),
+  };
+
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 1);
+  // A decided card's button reads DECIDE_AGAIN_LABEL, an undecided one "Decide".
+  // That is how we tell WHICH flag got the card. The compressed row's own
+  // affordance is lowercase "decide", so it cannot satisfy either match.
+  assert.match(html, />Decide</);
+  assert.doesNotMatch(html, />Decide again</);
+});
+
+test("a person carrying no flags renders instead of throwing", () => {
+  // The code being replaced is `person.flags.map(...)`, which is total.
+  // Destructuring a worst flag out of the array is not.
+  const entry: PersonEntry = {
+    kind: "person",
+    ...makePerson({ employee: "HR-EMP-00021", name: "Nobody Here", rank: 1, tier: "routine", flags: [] }),
+  };
+  const html = renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry })} />);
+  assert.match(html, /Nobody Here/);
+  assert.equal(countOf(html, 'data-slot="flag-card"'), 0);
 });
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npx tsx --test src/ui/flagQueuePage.test.tsx`
-Expected: FAIL — 14 explainers, 0 `decide` links.
+Expected: FAIL — 14 explainers, and every `data-slot` count 0 (`tsx` strips types rather than checking them, so the not-yet-declared `expandedIdentity` prop does not stop the run).
 
 - [ ] **Step 3: Implement**
+
+First give `FlagCard`'s root `<section>` the markup hook the tests and Task 9 both read — nothing else about `FlagCard` changes in this task:
+
+```tsx
+    <section
+      data-slot="flag-card"
+      className="space-y-2.5 rounded-xl border border-border/60 bg-card px-3 py-3"
+    >
+```
+
+Then, above `PersonDecision`'s `return`, alongside the existing `const remaining = remainingIdentities(person);`:
+
+```tsx
+  // The one card that stays open is the worst flag STILL AWAITING a decision.
+  // build_queue hands the array over worst-first, so the first unresolved flag is
+  // the worst unresolved one — the same rule _person() uses to choose the row's
+  // headline date. When every flag is already decided (the "Decided" toggle is
+  // on) nothing is awaiting, and the worst flag overall takes the card.
+  const worstIndex = person.flags.findIndex((flag) => flag.decision_state !== "matched");
+  const worst = person.flags[worstIndex === -1 ? 0 : worstIndex];
+  // Identity comparison, not index arithmetic: each FlagOut is a distinct object,
+  // and this keeps build_queue's order for everything that is not the card.
+  const rest = person.flags.filter((flag) => flag !== worst);
+```
+
+`worst` is `undefined` for a person carrying no flags. The block below is guarded on it — the code being replaced is `person.flags.map(...)`, which is total, and a destructured `worst` would turn an empty array into a crash inside `FlagCard`.
 
 In `PersonDecision`, replace the `person.flags.map(...)` block with:
 
@@ -2333,61 +2428,63 @@ In `PersonDecision`, replace the `person.flags.map(...)` block with:
           full cards rendered the same per-code explainer fourteen times and
           restated each flag's own numbers twice (prose, then a facts table), for
           5,069px in a 345px pane. Nothing is removed here except repetition:
-          every flag is still individually decidable through its one-liner. */}
-      <FlagCard
-        key={worst.flag_identity}
-        flag={worst}
-        dateKey={worst.attendance_date}
-        open={props.activeIdentity === worst.flag_identity}
-        draft={props.draft}
-        onDraftChange={props.onDraftChange}
-        onOpen={() => props.onOpenFlag(worst.flag_identity)}
-        onClose={() => props.onOpenFlag(null)}
-        lastDecision={props.lastDecision}
-        onSubmit={props.onSubmit}
-        submitting={props.submitting}
-      />
+          every flag is still individually decidable through its one-liner.
 
-      {rest.length > 0 ? (
-        <section className="space-y-1.5">
-          <div className="text-xs font-medium text-muted-foreground">
-            {restHeading(rest)}
-          </div>
-          <ul className="divide-y divide-border/60 rounded-lg border border-border/60">
-            {rest.map((flag) =>
-              props.expandedIdentity === flag.flag_identity ? (
-                <li key={flag.flag_identity} className="p-1.5">
-                  <FlagCard
-                    flag={flag}
-                    dateKey={flag.attendance_date}
-                    open={props.activeIdentity === flag.flag_identity}
-                    draft={props.draft}
-                    onDraftChange={props.onDraftChange}
-                    onOpen={() => props.onOpenFlag(flag.flag_identity)}
-                    onClose={() => props.onOpenFlag(null)}
-                    lastDecision={props.lastDecision}
-                    onSubmit={props.onSubmit}
-                    submitting={props.submitting}
-                  />
-                </li>
-              ) : (
-                <li key={flag.flag_identity}>
-                  <FlagOneLiner
-                    flag={flag}
-                    onExpand={() => props.onExpandFlag(flag.flag_identity)}
-                  />
-                </li>
-              ),
-            )}
-          </ul>
-        </section>
+          Guarded on `worst` rather than on a length check so the type narrows for
+          FlagCard, and a fragment rather than a wrapper div so the parent's
+          `space-y-4` keeps applying between the card and the list. */}
+      {worst ? (
+        <>
+          <FlagCard
+            key={worst.flag_identity}
+            flag={worst}
+            dateKey={worst.attendance_date}
+            open={props.activeIdentity === worst.flag_identity}
+            draft={props.draft}
+            onDraftChange={props.onDraftChange}
+            onOpen={() => props.onOpenFlag(worst.flag_identity)}
+            onClose={() => props.onOpenFlag(null)}
+            lastDecision={props.lastDecision}
+            onSubmit={props.onSubmit}
+            submitting={props.submitting}
+          />
+
+          {rest.length > 0 ? (
+            <section data-slot="flag-rest" className="space-y-1.5">
+              <div className="text-xs font-medium text-muted-foreground">
+                {restHeading(rest)}
+              </div>
+              <ul className="divide-y divide-border/60 rounded-lg border border-border/60">
+                {rest.map((flag) =>
+                  props.expandedIdentity === flag.flag_identity ? (
+                    <li key={flag.flag_identity} className="p-1.5">
+                      <FlagCard
+                        flag={flag}
+                        dateKey={flag.attendance_date}
+                        open={props.activeIdentity === flag.flag_identity}
+                        draft={props.draft}
+                        onDraftChange={props.onDraftChange}
+                        onOpen={() => props.onOpenFlag(flag.flag_identity)}
+                        onClose={() => props.onOpenFlag(null)}
+                        lastDecision={props.lastDecision}
+                        onSubmit={props.onSubmit}
+                        submitting={props.submitting}
+                      />
+                    </li>
+                  ) : (
+                    <li key={flag.flag_identity}>
+                      <FlagOneLiner
+                        flag={flag}
+                        onExpand={() => props.onExpandFlag(flag.flag_identity)}
+                      />
+                    </li>
+                  ),
+                )}
+              </ul>
+            </section>
+          ) : null}
+        </>
       ) : null}
-```
-
-with, above the `return`:
-
-```tsx
-  const [worst, ...rest] = person.flags;
 ```
 
 and a new local component plus heading helper:
@@ -2400,6 +2497,7 @@ function FlagOneLiner(props: { flag: FlagOut; onExpand: () => void }) {
   return (
     <button
       type="button"
+      data-slot="flag-one-liner"
       onClick={props.onExpand}
       className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-muted/40"
     >
@@ -2420,19 +2518,30 @@ function FlagOneLiner(props: { flag: FlagOut; onExpand: () => void }) {
 }
 ```
 
-Add `restHeading` to `flagQueueLabels.ts`:
+Add `restHeading` to `flagQueueLabels.ts` (Global Constraint 2 — the heading is copy, and `FlagDecisionPanel.tsx` holds none of its own). **There is no `flagSummaryNoun` in this codebase**; the vocabulary to reuse is `formatFlagLabel`, which `flagQueueLabels.ts` already imports from `@/lib/flagLabels`. Add `FlagOut` to that module's existing `import type { … } from "@/types/flags"` list — it is not there yet.
 
 ```ts
-/** "The other 13 — all missing time", or "— mixed findings" when they differ. */
+/** When the compressed flags differ in kind, no one label is honest about the
+ *  set, and naming only the first would be a lie about the other twelve. */
+const MIXED_FINDINGS_LABEL = "Mixed findings";
+
+/**
+ * Names the compressed set: "The other 13 — Missing time", or "One more —
+ * Mixed findings". Called with a non-empty `rest`, so `codes` is never empty.
+ *
+ * `formatFlagLabel(code, null)` and not `(code, evidence)`: this heading is
+ * about the whole set, and an evidence-derived label ("Missing 3h 20m") is one
+ * member's number presented as all of theirs.
+ */
 export function restHeading(rest: FlagOut[]): string {
   const codes = new Set(rest.map((flag) => flag.flag_code));
-  const count = `The other ${rest.length}`;
-  if (codes.size !== 1) return `${count} — mixed findings`;
-  return `${count} — all ${flagSummaryNoun([...codes][0])}`;
+  // "The other 1" is not English, and this heading sits above the single most
+  // common multi-flag case — a person with exactly two flags.
+  const count = rest.length === 1 ? "One more" : `The other ${rest.length}`;
+  const label = codes.size === 1 ? formatFlagLabel([...codes][0], null) : MIXED_FINDINGS_LABEL;
+  return `${count} — ${label}`;
 }
 ```
-
-Reuse whatever noun helper `flagSummary` already provides rather than adding a second vocabulary; if none fits, return `${count} — all ${formatFlagLabel([...codes][0], {})}`.
 
 - [ ] **Step 4: Thread the new props**
 
@@ -2444,41 +2553,103 @@ Add to `FlagDecisionPanelProps`:
   onExpandFlag: (identity: string | null) => void;
 ```
 
-In `FlagQueuePage`, add `const [expandedIdentity, setExpandedIdentity] = useState<string | null>(null);`, pass both, and **reset it in `resetRowState`** alongside `activeIdentity` — a promoted flag belonging to the previous person must not survive a selection change. Also reset it in the focus-restore effect, next to `setActiveIdentity(null)`.
+In `FlagQueuePage`, add `const [expandedIdentity, setExpandedIdentity] = useState<string | null>(null);` beside `activeIdentity`, pass both down to `FlagDecisionPanel` (`expandedIdentity={expandedIdentity} onExpandFlag={setExpandedIdentity}`), and clear it at **both** of the places `setActiveIdentity(null)` already appears: inside `resetRowState`, and inside the focus-restore effect (`FlagQueuePage.tsx:573`, in the block whose comment begins "Landing on a row is a selection change").
+
+Read the controller note above before writing a test for this. The reset is hygiene — it keeps the two identity states behaving alike — but it is **not observable**, because a flag identity is unique across the whole payload and a stale one can never match a flag on the next person. Write no test for it. Leave this comment at the `resetRowState` site so the next reader does not go looking for the missing coverage:
+
+```tsx
+    // Unobservable today and deliberately untested: a flag identity is unique
+    // across the payload, so a stale one cannot match anything on the next
+    // person. Cleared anyway, so this behaves like `activeIdentity` beside it
+    // rather than becoming the one piece of per-row state that persists.
+    setExpandedIdentity(null);
+```
 
 - [ ] **Step 5: Run tests**
 
 Run: `npm run test:web && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 6: Prove the reset in e2e, where the state machine is reachable**
+- [ ] **Step 6: Prove the compression in a browser, where the click path exists**
 
-`resetRowState` cannot be reached from `renderToStaticMarkup`, so this belongs in Playwright. Extend the **existing** test `"the next row's form is empty after a decide, not pre-filled with the last one's"` in `e2e/flags.spec.ts`: before deciding, promote one of the person's compressed flags, then after the decide lands assert the next person's panel shows no promoted card.
+`renderToStaticMarkup` can set `expandedIdentity` but cannot *click* a one-liner, so the page wiring — `onExpandFlag` → `setExpandedIdentity` → re-render — is unproven by the unit suite. That is the whole of what this e2e adds.
 
-Add to that test, after the row is selected and before the decide is submitted:
-
-```ts
-  // Promote a compressed flag, so the reset has something to clear.
-  await page.getByRole("button", { name: /decide$/ }).first().click();
-  await expect(page.getByRole("group", { name: "Outcome" })).toHaveCount(2);
-```
-
-and after the refetch has landed:
+The existing fixtures cannot carry it: `a11yPerson` (`e2e/flags.spec.ts:968`) gives every person **exactly one flag**, so no compressed row exists to click. Add a self-contained test with its own four-flag person, following the inline-route idiom already used at `e2e/flags.spec.ts:1185`:
 
 ```ts
-  // One Outcome group again: the promoted flag belonged to the person who just
-  // left the queue, and must not arrive open on the next person's panel.
-  await expect(page.getByRole("group", { name: "Outcome" })).toHaveCount(1);
+/** One person, four mornings — a compressed list small enough to count by eye. */
+const MANY_FLAG_PERSON = {
+  entry_key: "p:HR-EMP-00041",
+  employee: "HR-EMP-00041",
+  employee_name: "Sopheak Chan",
+  employee_branch: "Siem Reap Depot",
+  employee_image: null,
+  attendance_date: "2026-08-10",
+  dates: ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"],
+  rank: 134,
+  tier: "act",
+  flags: ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"].map((date, index) => ({
+    flag_identity: `MANY-${index}`,
+    flag_code: "MISSING_TIME",
+    attendance_date: date,
+    severity: "WARNING",
+    day_closed: 1,
+    evidence: { minutes: 240 - index * 10 },
+    rank: 134,
+    tier: "act",
+    decision_state: "undecided",
+    decision: null,
+  })) satisfies FlagOut[],
+  undecided_count: 4,
+  also_count: 0,
+  also_outlier_count: 0,
+} satisfies QueuePerson;
+
+test("a many-flag person shows one card and the rest compressed, and any of them opens", async ({
+  page,
+}) => {
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  const cards = page.locator('[data-slot="flag-card"]');
+  const compressed = page.locator('[data-slot="flag-one-liner"]');
+  await expect(cards).toHaveCount(1);
+  await expect(compressed).toHaveCount(3);
+
+  // The click path the unit suite cannot reach: the middle one, so neither
+  // "always the first" nor "always the last" would satisfy this.
+  await compressed.nth(1).click();
+  await expect(cards).toHaveCount(2);
+  await expect(compressed).toHaveCount(2);
+});
 ```
 
-- [ ] **Step 7: Mutation-test the reset**
+Global Constraint 10 applies to all three literals above — `satisfies QueuePerson`, `satisfies FlagOut[]`, `satisfies QueueEntry[]`.
 
-Temporarily remove `setExpandedIdentity(null)` from `resetRowState`.
+- [ ] **Step 7: Mutation-test the wiring**
 
-Run: `npx playwright test e2e/flags.spec.ts -g "not pre-filled" --project=desktop`
-Expected: FAIL on the final `toHaveCount(1)`.
+Temporarily replace `onExpandFlag={setExpandedIdentity}` in `FlagQueuePage` with `onExpandFlag={() => {}}`.
 
-Restore the line, re-run, and confirm it passes. Then `grep -n "setExpandedIdentity(null)" src/ui/FlagQueuePage.tsx` — expect **two** hits, `resetRowState` and the focus-restore effect.
+Run: `npx playwright test e2e/flags.spec.ts -g "a many-flag person" --project=desktop`
+Expected: FAIL — the counts stay at 1 card / 3 compressed after the click.
+
+Restore, re-run, confirm it passes. Then run the same mutation against the unit suite and confirm it does **not** fail (`npm run test:web`) — that is the proof this e2e is covering something the unit tests cannot, rather than restating them.
 
 - [ ] **Step 8: Commit**
 
