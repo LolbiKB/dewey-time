@@ -177,10 +177,6 @@ class TestRunEngineForEmployee(unittest.TestCase):
         self.assertIn("Not permitted", str(ctx.exception))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestRegenerateFlagsForRange(unittest.TestCase):
     """Bulk wipe-and-rebuild, so the queue speaks one language after a change.
 
@@ -416,3 +412,7 @@ class TestRegenerateFlagsForRange(unittest.TestCase):
         )
 
         self.assertEqual(order, ["check", "delete"])
+
+
+if __name__ == "__main__":
+    unittest.main()

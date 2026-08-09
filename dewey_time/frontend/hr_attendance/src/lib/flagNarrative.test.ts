@@ -2190,3 +2190,37 @@ test("an entirely unrecognised flag code falls back to formatFlagLabel's own lab
   assert.deepEqual(narrative.facts, []);
   assert.equal(narrative.timeline, null);
 });
+
+test("UNNOTIFIED_ABSENCE raised intraday does not tell HR a running day is confirmed", () => {
+  // intraday.py raises this while the day is still going, in place of the
+  // MISSING_TIME rows it suppresses. Every other reason in
+  // UNNOTIFIED_ABSENCE_CAUGHT_BY is a confirmation, and so is the fallback, so
+  // an unmapped reason renders "Confirmed automatically" — on a day that is
+  // not over and a row that is withdrawn the moment the person badges in.
+  const flag: Flag = {
+    name: "AUTO-ua-3",
+    flag_code: "UNNOTIFIED_ABSENCE",
+    evidence: {
+      employee: "HR-EMP-00003",
+      date: "2026-08-06",
+      on_shift: true,
+      reason: "on_shift_no_checkins_intraday",
+      checkins_count: 0,
+      provisional: true,
+    },
+  };
+  const day: NarrativeDay = {
+    checkins: [],
+    shift: { shift_assigned: true, shift_type: "Evening", start_time: "14:00", end_time: "22:00" },
+  };
+
+  const caughtBy = flagNarrative(flag, day, "2026-08-06").facts.find(
+    (f) => f.label === "Caught by",
+  )?.value;
+
+  assert.equal(caughtBy, "No punches yet today — not yet confirmed");
+  assert.ok(
+    !/confirmed at|confirmed by|confirmed automatically/i.test(caughtBy ?? ""),
+    `a provisional row must not read as settled: ${caughtBy}`,
+  );
+});

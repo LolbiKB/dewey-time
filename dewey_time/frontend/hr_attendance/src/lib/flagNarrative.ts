@@ -852,6 +852,13 @@ type UnnotifiedAbsenceEvidence = FlagEvidence & { checkins_count?: number };
 const UNNOTIFIED_ABSENCE_CAUGHT_BY: Record<string, string> = {
   on_shift_no_checkins: "Confirmed at end-of-day device closeout",
   company_fallback_no_checkins: "Confirmed by the overnight company-wide check",
+  // The intraday pass raises this one while the day is still running, so it is
+  // the one reason here that is NOT a confirmation. Every other entry, and the
+  // fallback below, says "Confirmed"; letting this fall through to that told HR
+  // a day still in progress had been settled — on the row this whole change
+  // exists to make readable. The wording has to survive the person walking in
+  // ten minutes later, at which point the row is withdrawn.
+  on_shift_no_checkins_intraday: "No punches yet today — not yet confirmed",
 };
 
 function unnotifiedAbsenceCaughtBy(reason: string | undefined): string {

@@ -408,6 +408,14 @@ class TestIntradayNoShow(unittest.TestCase):
         # The frontend's "Punches: 0" fact reads this, and the zero IS the
         # finding (flagNarrative.test.ts:1198).
         self.assertEqual(kwargs["evidence"]["checkins_count"], 0)
+        # The seam between this writer and flag_triage's reader. triage_rank
+        # bands a provisional no-show only when evidence["provisional"] is
+        # truthy (flag_triage.py, the branch above _FIXED_RANKS); drop or rename
+        # this key in any evidence cleanup and every suite still passes while
+        # every provisional no-show silently ranks 150 — top of act, above
+        # ATTENDANCE_ISSUE — which is the exact defect that branch exists to
+        # prevent. Nothing else asserts it on a real insert.
+        self.assertIs(kwargs["evidence"]["provisional"], True)
 
     def test_below_the_threshold_nothing_is_raised_at_all(self):
         # No interval cleared absence_threshold_minutes, so today no
