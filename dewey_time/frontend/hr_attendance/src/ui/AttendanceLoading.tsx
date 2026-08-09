@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { PAGE_INSET_X } from "@lolbikb/dewey-ui";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -99,7 +100,11 @@ export function WeekViewSkeleton() {
 export function AttendancePageSkeleton(props: { label?: string }) {
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="mx-auto flex h-full w-full max-w-7xl flex-col gap-3 px-5 py-5 sm:px-8 sm:py-6">
+      {/* Stands in for a <Page>, so it takes its gutters from the same constant
+          the real one does — otherwise the skeleton's content sits at a
+          different left edge than what replaces it, and the swap reads as a
+          jump. */}
+      <div className={cn("mx-auto flex h-full w-full flex-col gap-3 py-5 sm:py-6", PAGE_INSET_X)}>
         <AttendanceHeaderSkeleton />
         <div className="flex min-h-0 flex-1 flex-col">
           <WeekViewSkeleton />
@@ -188,7 +193,7 @@ export function WeeklyScheduleEditorSkeleton() {
 export function WeeklySchedulePageSkeleton(props: { label?: string }) {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
-      <div className="mx-auto flex h-full w-full max-w-7xl flex-col px-5 py-4 sm:px-8 sm:py-5">
+      <div className={cn("mx-auto flex h-full w-full flex-col py-4 sm:py-5", PAGE_INSET_X)}>
         <WeeklyScheduleHeaderSkeleton />
         <div className="flex min-h-0 flex-1 flex-col">
           <WeeklyScheduleEditorSkeleton />

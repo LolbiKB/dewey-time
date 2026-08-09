@@ -913,12 +913,16 @@ export function FlagQueueView(props: FlagQueueViewProps) {
   const outagePeople = queuePeopleCount(props.outages);
 
   return (
-    // max-w-none: dewey-ui's Page caps at max-w-7xl so "pages across both apps
-    // share the same content width", which is right for a form and wrong here.
-    // At 1512 the cap plus padding threw away 296px; at 1920, 704px — 36.7% of
-    // the monitor — on the one page where width converts directly into rows
-    // that stop truncating. cn() is twMerge, so this beats the default.
-    <Page className="max-w-none">
+    // No `max-w-none` here any more. This page carried one, because dewey-ui's
+    // Page used to cap at max-w-7xl and at 1512 the cap plus padding threw away
+    // 296px — 704px at 1920 — on the one page where width converts directly
+    // into rows that stop truncating. The override won the width back and left
+    // the page misaligned with the chrome above it: the shell's header kept its
+    // own cap, so the logo and tabs sat 108px right of this page's title at
+    // 1512 and 312px right of it at 1920. dewey-ui 2.0.0 drops the cap from
+    // Page and the header together, both taking their gutters from one
+    // PAGE_INSET_X, so full-bleed is the default and the two edges agree.
+    <Page>
       <PageHeader
         title="Flags"
         description={

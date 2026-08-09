@@ -1806,7 +1806,17 @@ test("a confirmed re-issue is the same call plus confirm — including its sourc
 
 test("the page gives up the reading-width cap — it is a list, not prose", () => {
   const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} counts={null} />);
-  assert.match(html, /max-w-none/, "1216px of 1512 was 296px thrown away");
+  // Reads the class the real dewey-ui <Page> resolved to, not a literal in this
+  // file: the cap used to live in the package's default and be beaten back here
+  // with `max-w-none`, and now it is simply absent upstream. Either way the
+  // property that matters to this page is the same one — nothing caps it —
+  // so assert that rather than whichever spelling currently achieves it.
+  const pageClass = /<div data-slot="page" class="([^"]*)"/.exec(html)?.[1];
+  assert.ok(pageClass, "expected a dewey-ui <Page> at the root of the queue");
+  const caps = pageClass
+    .split(/\s+/)
+    .filter((token) => token.startsWith("max-w-") && token !== "max-w-none");
+  assert.deepEqual(caps, [], `1216px of 1512 was 296px thrown away; found ${caps.join(" ")}`);
 });
 
 test("the two permanently-zero counts are gone from the toolbar", () => {
