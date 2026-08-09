@@ -1,3 +1,9 @@
+# `str | None` below is PEP 604 syntax, evaluated at def time on Python 3.9 and
+# a TypeError there. hooks.py imports this module first, so the failure took
+# test_flag_queue_api, test_hooks_launcher_tiles and test_hr_flags_route_wiring
+# out of every local run -- silently, as three collection errors nobody read.
+from __future__ import annotations
+
 import os
 import shutil
 
