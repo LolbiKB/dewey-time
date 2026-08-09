@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time
 from unittest.mock import MagicMock, patch
 
 from dewey_time.tests.test_closeout import _install_frappe_mock
@@ -14,12 +14,21 @@ class TestIntradayRefresh(unittest.TestCase):
     @patch("dewey_time.attendance_engine.intraday.has_delivery_or_record_failure_today", return_value=False)
     @patch("dewey_time.attendance_engine.intraday.has_open_device_closeout_alert", return_value=False)
     @patch("dewey_time.attendance_engine.intraday.missing_time_max_end_min_for_date", return_value=660)
-    @patch("dewey_time.attendance_engine.intraday._get_checkins_for_day", return_value=[])
+    @patch(
+        "dewey_time.attendance_engine.intraday._get_checkins_for_day",
+        return_value=[
+            {
+                "name": "IN-1",
+                "time": datetime(2026, 5, 28, 8, 0),
+                "custom_device_branch": "BRANCH-A",
+            }
+        ],
+    )
     @patch("dewey_time.attendance_engine.intraday._get_shift_meta")
     @patch("dewey_time.attendance_engine.intraday._get_shift_assignment")
     @patch("dewey_time.attendance_engine.intraday._delete_auto_flags_for_employee_date")
     @patch("dewey_time.attendance_engine.intraday.frappe.get_cached_doc")
-    def test_missing_time_when_zero_checkins(
+    def test_missing_time_is_written_provisionally(
         self,
         get_cached_doc,
         delete_flags,
@@ -290,3 +299,145 @@ class TestCheckinEditRegeneration(unittest.TestCase):
 
         enqueue.assert_not_called()
         delete_flags.assert_not_called()
+
+
+class TestIntradayNoShow(unittest.TestCase):
+    """Zero punches reads as 'Did not show up', not as missing-time fragments.
+
+    Closeout already says this (closeout.py:568) and skips MISSING_TIME the
+    same way. Intraday could not, because it withholds UNNOTIFIED_ABSENCE for
+    a day that is not over -- so it said nothing, and MISSING_TIME filled the
+    silence in the least legible available shape.
+    """
+
+    def _shift_meta(self):
+        from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
+
+        return enrich_shift_meta(
+            {
+                "start_time": dt_time(8, 0),
+                "end_time": dt_time(17, 0),
+                "custom_lunch_start": dt_time(12, 0),
+                "custom_lunch_end": dt_time(13, 0),
+                "custom_grace_minutes": 5,
+                "late_entry_grace_period": 0,
+                "early_exit_grace_period": 0,
+            }
+        )
+
+    def _employee(self):
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        return employee
+
+    MISSING = [
+        (
+            "MISSING_TIME",
+            {
+                "interval_start": "2026-05-28T08:00:00",
+                "interval_end": "2026-05-28T17:00:00",
+                "minutes": 480,
+                "kind": "leading",
+                "threshold_minutes": 30,
+            },
+        )
+    ]
+
+    @patch("dewey_time.attendance_engine.intraday.evaluate_missing_time_flags")
+    @patch("dewey_time.attendance_engine.intraday._insert_flag")
+    @patch("dewey_time.attendance_engine.intraday.has_delivery_or_record_failure_today", return_value=False)
+    @patch("dewey_time.attendance_engine.intraday.has_open_device_closeout_alert", return_value=False)
+    @patch("dewey_time.attendance_engine.intraday.missing_time_max_end_min_for_date", return_value=900)
+    @patch("dewey_time.attendance_engine.intraday._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.intraday._get_shift_meta")
+    @patch("dewey_time.attendance_engine.intraday._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.intraday._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.intraday.frappe.get_cached_doc")
+    def _run(
+        self,
+        get_cached_doc,
+        delete_flags,
+        get_shift,
+        get_shift_meta,
+        _checkins,
+        _max_end,
+        _open_alert,
+        _delivery_failed,
+        insert_flag,
+        evaluate_missing,
+        *,
+        missing=None,
+        checkins=None,
+        open_alert=False,
+        delivery_failed=False,
+    ):
+        """Drive one intraday refresh and hand back the mocks worth asserting."""
+        from dewey_time.attendance_engine.intraday import (
+            refresh_intraday_flags_for_employee_date,
+        )
+
+        get_cached_doc.return_value = self._employee()
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._shift_meta()
+        evaluate_missing.return_value = self.MISSING if missing is None else missing
+        _checkins.return_value = checkins or []
+        _open_alert.return_value = open_alert
+        _delivery_failed.return_value = delivery_failed
+
+        refresh_intraday_flags_for_employee_date("DI-1138", date(2026, 5, 28))
+        return insert_flag, delete_flags
+
+    @staticmethod
+    def _codes(insert_flag):
+        return [c.kwargs["flag_code"] for c in insert_flag.call_args_list]
+
+    def test_zero_punches_raises_one_no_show_and_no_missing_time(self):
+        insert_flag, _ = self._run()
+
+        self.assertEqual(self._codes(insert_flag), ["UNNOTIFIED_ABSENCE"])
+
+    def test_the_no_show_is_provisional_and_names_its_origin(self):
+        insert_flag, _ = self._run()
+
+        kwargs = insert_flag.call_args_list[0].kwargs
+        self.assertEqual(kwargs["day_closed"], 0)
+        self.assertEqual(
+            kwargs["evidence"]["reason"], "on_shift_no_checkins_intraday"
+        )
+        # The frontend's "Punches: 0" fact reads this, and the zero IS the
+        # finding (flagNarrative.test.ts:1198).
+        self.assertEqual(kwargs["evidence"]["checkins_count"], 0)
+
+    def test_below_the_threshold_nothing_is_raised_at_all(self):
+        # No interval cleared absence_threshold_minutes, so today no
+        # MISSING_TIME row would exist either. The no-show must not appear
+        # earlier than the row it replaces.
+        insert_flag, _ = self._run(missing=[])
+
+        self.assertEqual(self._codes(insert_flag), [])
+
+    def test_an_open_device_alert_suppresses_the_no_show(self):
+        # A dead device must not produce a branch-wide wave of no-shows.
+        insert_flag, _ = self._run(open_alert=True)
+
+        self.assertEqual(self._codes(insert_flag), [])
+
+    def test_a_delivery_failure_suppresses_the_no_show(self):
+        insert_flag, _ = self._run(delivery_failed=True)
+
+        self.assertEqual(self._codes(insert_flag), [])
+
+    def test_the_provisional_no_show_is_cleaned_up_on_the_next_pass(self):
+        # The self-healing guarantee. Intraday deletes its own previous
+        # provisional rows scoped to INTRADAY_FLAG_CODES; if UNNOTIFIED_ABSENCE
+        # is missing from that list the no-show survives the employee actually
+        # turning up, and they are recorded absent for a day they worked.
+        from dewey_time.attendance_engine.intraday import INTRADAY_FLAG_CODES
+
+        self.assertIn("UNNOTIFIED_ABSENCE", INTRADAY_FLAG_CODES)
+
+        _, delete_flags = self._run()
+        self.assertIn(
+            "UNNOTIFIED_ABSENCE", delete_flags.call_args.kwargs["flag_codes"]
+        )

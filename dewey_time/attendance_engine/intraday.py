@@ -22,9 +22,13 @@ from dewey_time.attendance_engine.closeout import (
     has_open_device_closeout_alert,
 )
 
+# Everything intraday writes MUST be listed here. This is the delete list at
+# the top of every refresh, so a code intraday emits but does not list is
+# never cleaned up: the provisional row survives the punch that disproves it.
 INTRADAY_FLAG_CODES = [
     "MISSING_TIME",
     "NON_PRIMARY_SITE_PUNCH",
+    "UNNOTIFIED_ABSENCE",
 ]
 
 
@@ -144,20 +148,49 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
 
     if not skip_absence:
         max_end_min = missing_time_max_end_min_for_date(attendance_date)
-        for flag_code, extra in evaluate_missing_time_flags(
-            checkins=checkins,
-            shift_meta=shift_meta,
-            attendance_date=attendance_date,
-            max_end_min=max_end_min,
-        ):
+        missing = list(
+            evaluate_missing_time_flags(
+                checkins=checkins,
+                shift_meta=shift_meta,
+                attendance_date=attendance_date,
+                max_end_min=max_end_min,
+            )
+        )
+
+        if checkins_count == 0 and missing:
+            # Nobody turned up. Closeout says exactly this and skips
+            # MISSING_TIME the same way (closeout.py:568); intraday could not,
+            # because it withholds UNNOTIFIED_ABSENCE for a day that is not
+            # over yet. So it says it PROVISIONALLY, and withdraws it the
+            # moment a punch lands -- this function re-runs on every checkin
+            # edit and deletes its own previous rows first, which is why
+            # UNNOTIFIED_ABSENCE has to be in INTRADAY_FLAG_CODES.
+            #
+            # Gated on `missing` rather than on a threshold of its own: the
+            # row must appear when the first MISSING_TIME would have, not
+            # sooner. Below absence_threshold_minutes there is no interval to
+            # report and this list is empty, so the timing is identical to
+            # what shipped before by construction rather than by arithmetic
+            # repeated in two places. Both codes are CRITICAL, so nothing
+            # gets louder either.
             _insert_flag(
                 employee=employee,
                 company=employee_company,
                 attendance_date=attendance_date,
-                flag_code=flag_code,
-                evidence={**evidence, **extra},
+                flag_code="UNNOTIFIED_ABSENCE",
+                evidence={**evidence, "reason": "on_shift_no_checkins_intraday"},
                 day_closed=0,
             )
+        else:
+            for flag_code, extra in missing:
+                _insert_flag(
+                    employee=employee,
+                    company=employee_company,
+                    attendance_date=attendance_date,
+                    flag_code=flag_code,
+                    evidence={**evidence, **extra},
+                    day_closed=0,
+                )
 
 
 def enqueue_intraday_refresh(employee: str, attendance_date):
