@@ -887,3 +887,113 @@ class TestFlagInsertIsolation(unittest.TestCase):
             "the raise escaped the loop instead of being contained to its own row",
         )
         self.assertGreaterEqual(calls["n"], 3, "the loop stopped early")
+
+
+class TestSuppressionSurvivesTheWipe(unittest.TestCase):
+    """A day whose punches never arrived must not earn a no-show.
+
+    _generate_for_employee_date opens by deleting every AUTO flag for the day,
+    and should_skip_absence_flags answers by READING AUTO flags -- the
+    DELIVERY_FAILED row and the ATTENDANCE_ISSUE/delivery_failed variant.
+    Asked after the delete it reads its own evidence as absent, reports "no
+    failure", and the rebuild records an UNNOTIFIED_ABSENCE against someone
+    whose device simply never delivered.
+    """
+
+    @patch("dewey_time.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout.should_skip_absence_flags")
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_meta")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_a_delivery_failure_still_suppresses_after_the_wipe(
+        self,
+        get_cached_doc,
+        get_shift,
+        _get_checkins,
+        get_shift_meta,
+        delete_flags,
+        skip_absence,
+        insert_flag,
+        _record,
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._meta()
+
+        # The marker exists until the wipe runs, and not after -- which is
+        # exactly what the real rows do.
+        wiped = {"yet": False}
+        delete_flags.side_effect = lambda **_kw: wiped.__setitem__("yet", True)
+        skip_absence.side_effect = lambda **_kw: not wiped["yet"]
+
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=True,
+        )
+
+        codes = [c.kwargs["flag_code"] for c in insert_flag.call_args_list]
+        self.assertNotIn("UNNOTIFIED_ABSENCE", codes)
+
+    @patch("dewey_time.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout.should_skip_absence_flags", return_value=False)
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_meta")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_the_suppression_is_read_before_the_wipe_not_after(
+        self,
+        get_cached_doc,
+        get_shift,
+        _get_checkins,
+        get_shift_meta,
+        delete_flags,
+        skip_absence,
+        _insert_flag,
+        _record,
+    ):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._meta()
+
+        order = []
+        skip_absence.side_effect = lambda **_kw: order.append("check") or False
+        delete_flags.side_effect = lambda **_kw: order.append("delete")
+
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=True,
+        )
+
+        self.assertEqual(order[0], "check", f"read after the wipe: {order}")
+        self.assertEqual(order.count("check"), 1, "asked more than once")
+
+    @staticmethod
+    def _meta():
+        from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
+
+        return enrich_shift_meta(
+            {
+                "start_time": dt_time(8, 0),
+                "end_time": dt_time(17, 0),
+                "custom_grace_minutes": 5,
+                "late_entry_grace_period": 0,
+                "early_exit_grace_period": 0,
+            }
+        )
