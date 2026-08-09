@@ -2,33 +2,41 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
 import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
-import { CloudOffIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, CloudOffIcon, TriangleAlertIcon } from "lucide-react";
 import { Navigate, useOutletContext, useSearchParams } from "react-router-dom";
 
 import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Button } from "@/components/ui/button";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
+  CAPPED_EXPLAINER,
   DECIDE_FAILED_MESSAGE,
   DECIDED_TOGGLE_LABEL,
   DEVICE_ALERT_EXPLAINER,
+  NOTHING_WAITING_TITLE,
+  QUEUE_LOADING_LABEL,
   RANGE_FROM_LABEL,
   RANGE_TO_LABEL,
   REASON_OPTIONS,
   SHOWING_DECIDED_MESSAGE,
   TIER_FILTER_ALL_LABEL,
   TIER_FILTER_LABEL,
+  cappedHeadline,
   deviceAlertHeadline,
+  narrowRangeLabel,
+  nothingWaitingDetail,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   partialFailureMessage,
   queueSplitDescription,
+  showDecidedLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
 import {
@@ -234,6 +242,19 @@ export function FlagQueuePage() {
       );
     },
     [setSearchParams],
+  );
+
+  // Trims from the START, matching clampRange: the recent end is the work that
+  // matters, so a narrower window gives up its oldest days, never today's.
+  const handleNarrowRange = useCallback(
+    (days: number) => {
+      const end = parseISO(requestedRange.endDate);
+      setRange({
+        startDate: format(subDays(end, days - 1), "yyyy-MM-dd"),
+        endDate: requestedRange.endDate,
+      });
+    },
+    [requestedRange.endDate, setRange],
   );
 
   const setTier = useCallback(
@@ -649,6 +670,7 @@ export function FlagQueuePage() {
         announcement={announcement}
         range={requestedRange}
         onRangeChange={setRange}
+        onNarrowRange={handleNarrowRange}
         tier={tier}
         onTierChange={setTier}
         truncated={truncated}
@@ -748,6 +770,9 @@ export type FlagQueueViewProps = {
   /** The range the controls edit — the request, not the payload's answer. */
   range: { startDate: string; endDate: string };
   onRangeChange: (next: { startDate: string; endDate: string }) => void;
+  /** The capped notice's two levers — narrows `range` to the last N days,
+   *  trimmed from the start (same rule as `clampRange`). */
+  onNarrowRange: (days: number) => void;
   tier: Tier | null;
   onTierChange: (next: Tier | null) => void;
   truncated?: boolean;
@@ -913,6 +938,35 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </div>
         }
       >
+        {/* Only when capping is actually reachable by the user. The levers are
+            buttons now: the old copy told HR to narrow a range while the strip
+            offered no way to do it. Capping is structural on a queue at
+            production volume — it never clears — so this stays a control
+            rather than the permanent lecture the old strip was. */}
+        {props.truncated && counts ? (
+          <AttentionStrip
+            tone="amber"
+            icon={<TriangleAlertIcon className="size-4 text-amber-600" aria-hidden="true" />}
+          >
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="font-medium">{cappedHeadline(counts.open)}</span>{" "}
+                <span className="text-muted-foreground">{CAPPED_EXPLAINER}</span>
+              </span>
+              {[7, 3].map((days) => (
+                <Button
+                  key={days}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => props.onNarrowRange(days)}
+                >
+                  {narrowRangeLabel(days)}
+                </Button>
+              ))}
+            </span>
+          </AttentionStrip>
+        ) : null}
+
         {/* Without this the extra rows read as a bug: entries with no action
             left on them, in a queue that promises everything in it is waiting
             on you. */}
@@ -1015,7 +1069,21 @@ export function FlagQueueView(props: FlagQueueViewProps) {
 
       <Section grow>
         {props.isLoading ? (
-          <EmptyState icon={Spinner} title="Loading flags…" />
+          // Skeleton rows at the row's real height, not a centred spinner: the
+          // spinner sits in the middle of an empty pane and every row jumps into
+          // place when data lands. These hold the layout still.
+          <div className="space-y-1" aria-busy="true" aria-label={QUEUE_LOADING_LABEL}>
+            {Array.from({ length: 8 }, (_, index) => (
+              <div key={index} className="flex items-center gap-2 px-2.5 py-2">
+                <Skeleton className="size-10 shrink-0 rounded-full" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <Skeleton className="h-3.5 w-1/3" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+                <Skeleton className="h-[17px] w-[117px] shrink-0" />
+              </div>
+            ))}
+          </div>
         ) : props.error ? (
           // Replaces the region the queue would occupy rather than sitting above
           // it — a page showing both a banner and a replaced region reports one
@@ -1027,6 +1095,24 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             cause="Try again, or refresh the page."
             onRetry={props.onRetry}
             className="min-h-0"
+          />
+        ) : props.queuePeople === 0 && props.outages.length === 0 ? (
+          // The richer "nothing waiting" state, rendered here and ONLY here:
+          // `props.list` (FlagQueueList) is not mounted on this path, so its own
+          // "Nothing to triage in this range." early return never fires
+          // alongside this one — an empty queue must not report itself twice.
+          <EmptyState
+            icon={CheckIcon}
+            title={NOTHING_WAITING_TITLE}
+            description={nothingWaitingDetail(props.range.startDate, props.range.endDate)}
+            className="border-none"
+            action={
+              counts?.decided ? (
+                <Button size="sm" variant="outline" onClick={props.onToggleDecided}>
+                  {showDecidedLabel(counts.decided)}
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           // Below lg this is ONE scroll surface, not two stacked ones. As a grid

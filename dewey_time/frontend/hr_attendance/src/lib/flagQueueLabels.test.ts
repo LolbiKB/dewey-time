@@ -5,6 +5,8 @@ import { formatFlagLabel, formatMissingDuration } from "@/lib/flagLabels";
 import {
   appliedDecisionLabel,
   branchNoDeviceDataHeader,
+  CAPPED_EXPLAINER,
+  cappedHeadline,
   crossReferenceLabel,
   DECIDE_ONE_LABEL,
   DECIDED_TOGGLE_LABEL,
@@ -18,6 +20,8 @@ import {
   groupSubline,
   hiddenMemberLabel,
   narrowRangeLabel,
+  NOTHING_WAITING_TITLE,
+  nothingWaitingDetail,
   openCountAria,
   openCountLabel,
   orphanedEvidenceChangedSummary,
@@ -44,10 +48,12 @@ import {
   priorDecisionLabel,
   queueHeaderDescription,
   queueSplitDescription,
+  QUEUE_LOADING_LABEL,
   REASON_LABELS,
   REASON_OPTIONS,
   reasonLabel,
   routineCodeHeader,
+  showDecidedLabel,
   stripAriaLabel,
   TIER_FILTER_ALL_LABEL,
   tierLabel,
@@ -903,6 +909,34 @@ test("the narrow-range levers name the window they set", () => {
   assert.equal(narrowRangeLabel(1), "Last 1 day");
 });
 
+// The capped notice as a control, not the old strip's lecture: it states what
+// is shown and lets the four-figure count read like `openCountLabel`'s own
+// grouping, rather than a bare "5000" that reads as a measured total.
+test("the capped headline reads as a floor, grouped the same way as elsewhere", () => {
+  assert.equal(cappedHeadline(5000), "Showing the newest 5,000 flags");
+  assert.equal(cappedHeadline(42), "Showing the newest 42 flags");
+});
+
+test("the capped explainer names no lever the notice does not itself offer", () => {
+  assert.equal(
+    CAPPED_EXPLAINER,
+    "Older days in this range aren't loaded. Narrow the dates to reach them.",
+  );
+});
+
+test("the empty-queue state names the range it found nothing in", () => {
+  assert.equal(NOTHING_WAITING_TITLE, "Nothing waiting");
+  assert.equal(
+    nothingWaitingDetail("2026-07-21", "2026-08-03"),
+    "Every flag between Tue, Jul 21, 2026 and Mon, Aug 3, 2026 has a decision.",
+  );
+});
+
+test("the decided-count affordance states what pressing it reveals", () => {
+  assert.equal(showDecidedLabel(88), "Show the 88 decided");
+  assert.equal(showDecidedLabel(1), "Show the 1 decided");
+});
+
 test("control labels live here, not inline in the components", () => {
   // Global Constraint 2. These are the ones that leak, because they read as
   // markup rather than as copy.
@@ -911,6 +945,7 @@ test("control labels live here, not inline in the components", () => {
   assert.equal(DECIDE_ONE_LABEL, "decide");
   assert.equal(DECIDING_PREFIX, "Deciding");
   assert.equal(DEVICE_HEALTH_LABEL, "Device health");
+  assert.equal(QUEUE_LOADING_LABEL, "Loading flags");
 });
 
 test("every branch-row string is pinned, not just the ones a component happens to use", () => {

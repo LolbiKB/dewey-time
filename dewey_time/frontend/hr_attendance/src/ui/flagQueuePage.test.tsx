@@ -288,6 +288,7 @@ function viewProps(): Omit<FlagQueueViewProps, "counts"> {
   return {
     range: { startDate: "2026-07-21", endDate: "2026-08-03" },
     onRangeChange: () => {},
+    onNarrowRange: () => {},
     tier: null,
     onTierChange: () => {},
     isLoading: false,
@@ -838,6 +839,11 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
     <FlagQueueView
       {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
+      // Non-zero: the queue itself must render below the strip, and a queue
+      // with nothing in it now renders the "Nothing waiting" empty state
+      // instead of `list`/`panel` — the exact swap this test's sentinels
+      // exist to catch.
+      queuePeople={1}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -1044,6 +1050,10 @@ test("a decide that fails outright is reported, politely, without hiding the que
     <FlagQueueView
       {...viewProps()}
       counts={{ open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 }}
+      // Non-zero for the same reason as the bulk-failure test above: an empty
+      // queue now renders the "Nothing waiting" state instead of these
+      // sentinels.
+      queuePeople={1}
       isLoading={false}
       error={null}
       onRetry={() => {}}
@@ -1820,4 +1830,36 @@ test("the date controls carry accessible names without spending a row on labels"
   // attribute value is never emitted, passing whether or not a visible label
   // rendered. Asserted on the element itself instead.
   assert.ok(!/<label[^>]*>From</.test(html), "no visible label row");
+});
+
+// The old strip named two levers ("narrow the dates, or filter by consequence")
+// and offered neither. This one has to actually offer them.
+test("the capped notice offers narrower ranges instead of naming levers", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      truncated
+      counts={{ open: 5000, needs_re_review: 0, decided: 0, people: 389, rows: 147, open_capped: true }}
+    />,
+  );
+  assert.match(html, /Showing the newest 5,000 flags/);
+  assert.match(html, /Last 7 days/);
+  assert.match(html, /Last 3 days/);
+});
+
+test("an uncapped queue shows no capped notice at all", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      truncated={false}
+      counts={{ open: 12, needs_re_review: 0, decided: 0, people: 4, rows: 4, open_capped: false }}
+    />,
+  );
+  assert.ok(!/Showing the newest/.test(html));
+});
+
+test("loading renders skeleton rows, so the layout does not jump when data lands", () => {
+  const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} isLoading counts={null} />);
+  assert.match(html, /animate-pulse/);
+  assert.ok(!/Loading flags…/.test(html), "a centred spinner reflows the whole pane");
 });

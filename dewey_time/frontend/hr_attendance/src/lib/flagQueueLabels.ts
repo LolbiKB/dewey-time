@@ -21,6 +21,7 @@
 import { format } from "date-fns";
 
 import { formatBranchLabel, parseDateKey } from "@/lib/attendanceTime";
+import { formatFlagContextDate } from "@/lib/flagDetails";
 import { formatFlagLabel, formatMissingDuration, parseFlagEvidence } from "@/lib/flagLabels";
 import type { Strip } from "@/lib/flagStrip";
 import type {
@@ -434,6 +435,35 @@ export const DECIDING_PREFIX = "Deciding";
 export function narrowRangeLabel(days: number): string {
   return `Last ${plural(days, "day", "days")}`;
 }
+
+/**
+ * The capped notice, as a control rather than a lecture.
+ *
+ * The old copy named two levers ("narrow the dates, or filter by consequence")
+ * and offered neither, in the loudest colour on the page, on a queue where
+ * capping is structural and therefore never clears. A permanent unactionable
+ * warning teaches people to skip that colour.
+ */
+export function cappedHeadline(open: number): string {
+  return `Showing the newest ${open.toLocaleString("en-US")} flags`;
+}
+
+export const CAPPED_EXPLAINER =
+  "Older days in this range aren't loaded. Narrow the dates to reach them.";
+
+export const NOTHING_WAITING_TITLE = "Nothing waiting";
+
+export function nothingWaitingDetail(startDate: string, endDate: string): string {
+  return `Every flag between ${formatFlagContextDate(startDate)} and ${formatFlagContextDate(endDate)} has a decision.`;
+}
+
+export function showDecidedLabel(count: number): string {
+  return `Show the ${count} decided`;
+}
+
+/** The skeleton rows' accessible name while the queue is loading — Global
+ *  Constraint 2 reaches `aria-label` text too, not just visible copy. */
+export const QUEUE_LOADING_LABEL = "Loading flags";
 
 /**
  * Orphan-state summaries for the two counts `get_flag_queue` returns under

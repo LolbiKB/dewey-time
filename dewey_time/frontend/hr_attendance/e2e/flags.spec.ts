@@ -775,7 +775,11 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
   });
 
   await page.goto("/hr-flags");
-  await expect(page.getByText("Nothing to triage in this range.")).toBeVisible();
+  // "Nothing to triage in this range." is FlagQueueList's own fallback, and it
+  // never mounts here: an empty judgment queue with no outages renders the
+  // richer "Nothing waiting" state in FlagQueueView instead (flag-queue-layout
+  // Task 6), so this is the text actually on screen.
+  await expect(page.getByText("Nothing waiting")).toBeVisible();
   await expect(page.getByText("Noor Aziz")).toHaveCount(0);
 
   // The Decided count is the control: it already answers "how many", so it also
