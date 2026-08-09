@@ -200,6 +200,18 @@ class TestRegenerateFlagsForRange(unittest.TestCase):
         # Same line the existing clear_* suites carry (test_clear_employee_
         # schedule.py:22).
         frappe.form_dict = {}
+        # Default the delivery-failure guard OFF. The shared mock's
+        # frappe.db.exists returns True, so the REAL
+        # has_delivery_or_record_failure_today reports a failure for every day
+        # and the regenerator correctly skips the whole range — which would
+        # make every wipe assertion in this class read zero calls. The two
+        # tests that care about the guard patch it themselves.
+        guard = patch(
+            "dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today",
+            return_value=False,
+        )
+        self.addCleanup(guard.stop)
+        guard.start()
 
     @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=7)
     @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
@@ -347,3 +359,60 @@ class TestRegenerateFlagsForRange(unittest.TestCase):
                 mode="sideways",
             )
         delete_flags.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_a_day_whose_punches_never_arrived_is_left_alone(
+        self, get_all, _count, delete_flags, refresh_intraday, generate_closeout, failed
+    ):
+        # DELIVERY_FAILED is source=AUTO but comes only from the device-closeout
+        # webhook -- nothing here can recompute it. Wiping it makes
+        # has_delivery_or_record_failure_today read "no failure", and the rebuild
+        # then raises UNNOTIFIED_ABSENCE against someone whose device simply
+        # never delivered. The tool must not manufacture that accusation.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+        failed.side_effect = lambda _employee, day: day == date(2026, 5, 2)
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-03", confirm=True
+        )
+
+        wiped = [c.kwargs["attendance_date"] for c in delete_flags.call_args_list]
+        self.assertEqual(wiped, [date(2026, 5, 1), date(2026, 5, 3)])
+        self.assertNotIn(date(2026, 5, 2), wiped)
+        self.assertEqual(result["days_processed"], 2)
+        self.assertEqual(result["days_protected_by_delivery_failure"], 1)
+
+    @patch("dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_the_protection_check_runs_before_the_wipe_not_after(
+        self, get_all, _count, delete_flags, _refresh, _generate, failed
+    ):
+        # Order is the whole point: checked after the delete, the marker is
+        # already gone and the check always reports "no failure".
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+        order = []
+        failed.side_effect = lambda _e, _d: order.append("check") or False
+        delete_flags.side_effect = lambda **_kw: order.append("delete")
+
+        regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-01", confirm=True
+        )
+
+        self.assertEqual(order, ["check", "delete"])

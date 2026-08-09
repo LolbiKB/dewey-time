@@ -8,6 +8,7 @@ from frappe.utils import add_days, getdate
 from dewey_time.attendance_engine.closeout import (
     _delete_auto_flags_for_employee_date,
     _generate_for_employee_date,
+    has_delivery_or_record_failure_today,
 )
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 from dewey_time.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
@@ -381,9 +382,29 @@ def regenerate_flags_for_range_api(
 
     employees = _active_employee_names()
     days_processed = 0
+    days_protected = 0
     for employee in employees:
         current = start
         while current <= end:
+            # A day whose punches are known not to have arrived is left exactly
+            # as it is. The wipe below is unscoped, and DELIVERY_FAILED is
+            # source=AUTO but comes only from the device-closeout webhook's
+            # undelivered_items -- nothing here can recompute it. Deleting it
+            # would be self-defeating in the worst direction: the rebuild calls
+            # has_delivery_or_record_failure_today, which reads exactly those
+            # rows, so a wiped marker reads as "no failure" and the day earns an
+            # UNNOTIFIED_ABSENCE it had been deliberately suppressed from
+            # getting. This tool would then manufacture a no-show accusation
+            # against someone whose device simply never delivered.
+            #
+            # One call covers both suppression sources -- the DELIVERY_FAILED
+            # row and the ATTENDANCE_ISSUE variant carrying delivery_failed
+            # evidence -- and it must run BEFORE the delete, not after.
+            if has_delivery_or_record_failure_today(employee, current):
+                days_protected += 1
+                current = add_days(current, 1)
+                continue
+
             # Explicit, because mode="intraday" alone would otherwise leave stale
             # finals behind: refresh_intraday only deletes its own provisional
             # rows, scoped to INTRADAY_FLAG_CODES.
@@ -410,4 +431,8 @@ def regenerate_flags_for_range_api(
         "mode": mode,
         "employees_processed": len(employees),
         "days_processed": days_processed,
+        # Reported, not silent: these employee-days keep whatever they already
+        # had, so a caller comparing before/after knows why some of the range
+        # did not move.
+        "days_protected_by_delivery_failure": days_protected,
     }
