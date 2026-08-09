@@ -66,13 +66,21 @@ class TestAbsenceIntervals(unittest.TestCase):
 
 
 class TestOffShiftGate(unittest.TestCase):
+    # should_skip_absence_flags is stubbed because 4edfbdda hoisted it to the
+    # top of _generate_for_employee_date -- above the deletes, so its answer
+    # cannot be read from evidence those deletes have already destroyed. It now
+    # runs on every path including this one, where it was previously
+    # unreachable behind the on-shift branch, and it reads two Attendance Flag
+    # queries this test has no opinion about. The read-before-delete ordering
+    # it exists for is pinned in test_closeout.py, not here.
+    @patch("dewey_time.attendance_engine.closeout.should_skip_absence_flags", return_value=False)
     @patch("dewey_time.attendance_engine.closeout._insert_flag")
     @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
     @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day")
     @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
     @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
     def test_off_shift_only_off_shift_punch(
-        self, get_cached_doc, get_shift, get_checkins, _delete, insert_flag
+        self, get_cached_doc, get_shift, get_checkins, _delete, insert_flag, _skip_absence
     ):
         from dewey_time.attendance_engine.closeout import _generate_for_employee_date
 
