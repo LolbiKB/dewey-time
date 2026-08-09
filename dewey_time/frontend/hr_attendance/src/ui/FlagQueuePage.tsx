@@ -12,6 +12,7 @@ import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
+import { useIsBelowLg } from "@/hooks/useIsMobile";
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
@@ -29,6 +30,7 @@ import {
   TIER_FILTER_ALL_LABEL,
   TIER_FILTER_LABEL,
   cappedHeadline,
+  decisionSurfaceTitle,
   deviceAlertHeadline,
   narrowRangeLabel,
   nothingWaitingDetail,
@@ -192,6 +194,11 @@ export function decideEffect(result: DecideResponse, args: DecideArgs): DecideEf
 export function confirmArgs(args: DecideArgs): DecideArgs {
   return { ...args, confirm: true };
 }
+
+/** Stable identity so an un-wired view does not hand ResponsiveModal a new
+ *  callback on every render. `belowLg` is only ever set by FlagQueuePage, which
+ *  always passes the real handler alongside it. */
+const noop = () => {};
 
 /** A fresh draft for a newly selected row. REASON_OPTIONS[0] only seeds the
  *  <select>'s value; nothing is written until HR clicks, and decisionIsComplete
@@ -635,6 +642,25 @@ export function FlagQueuePage() {
     cancelRestore();
   }, [selectedEntry, cancelRestore]);
 
+  // Owned by the page, not the view: the view is the piece that renders under
+  // renderToStaticMarkup, and a hook reading window width during render would
+  // make every existing view test depend on a jsdom-less global.
+  const belowLg = useIsBelowLg();
+  const panelOpen = belowLg && selectedEntry != null;
+
+  const handlePanelOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) return;
+      // Dismissing the sheet is a deselection, so it owes the same per-row reset
+      // every other deselection does — otherwise a half-typed note follows the
+      // next tap onto somebody else's form.
+      setSelectedKey(null);
+      resetRowState();
+      cancelRestore();
+    },
+    [resetRowState, cancelRestore],
+  );
+
   const handleCollapseGroup = useCallback(() => {
     if (!expandedGroupKey) return;
     // `queue` for the same reason as everywhere else: this looks up a row the
@@ -704,6 +730,10 @@ export function FlagQueuePage() {
         // nothing of the sort. This still closes the hazard the flag is for: a
         // second click on the band while the band's own write is in flight.
         excusing={decide.isPending && decide.variables?.source === "band"}
+        belowLg={belowLg}
+        panelOpen={panelOpen}
+        onPanelOpenChange={handlePanelOpenChange}
+        panelTitle={selectedEntry == null ? null : decisionSurfaceTitle(selectedEntry)}
         list={
           <FlagQueueList
             entries={queue}
@@ -821,6 +851,20 @@ export type FlagQueueViewProps = {
   /** A band excuse is in flight — NOT any write. Disables the band's button and
    *  is the only thing that may make it say "Excusing…". */
   excusing?: boolean;
+  /**
+   * Narrower than the `lg:grid` split — so the panel is a modal, not a second
+   * column. Read by the PAGE and handed down, never read here: this component
+   * renders under renderToStaticMarkup with no `window`, and a width-reading
+   * hook inside it would take every one of those tests with it.
+   */
+  belowLg?: boolean;
+  /** Whether the modal is showing. Only ever true below `lg`. */
+  panelOpen?: boolean;
+  /** Dismissal, which is a deselection and resets the row's draft with it. */
+  onPanelOpenChange?: (open: boolean) => void;
+  /** What the modal is deciding. The split needs no visible title — the row is
+   *  still on screen beside it — but a sheet covers the row it came from. */
+  panelTitle?: ReactNode;
   list: ReactNode;
   panel: ReactNode;
 };
@@ -1127,13 +1171,63 @@ export function FlagQueueView(props: FlagQueueViewProps) {
               ) : undefined
             }
           />
+        ) : props.belowLg ? (
+          // Below lg the panel is a modal, not the bottom of a stack.
+          //
+          // As a sibling after the list it sat below every row — 9,146px below
+          // the tap on the real queue — so making a decision meant scrolling
+          // past the whole backlog and then back up to carry on. The list stays
+          // mounted and scrolled where it was, so dismissing returns you exactly
+          // where you were: the property the desktop split has and the stack
+          // lost.
+          //
+          // `useIsBelowLg`, not `useIsMobile`. The grid splits at 1024 and the
+          // nav shell at 768, so wiring this to the shell's breakpoint would
+          // leave 768–1023px with neither — no split and no modal, which is a
+          // decision form nothing can open. What ResponsiveModal opens in that
+          // band is its Dialog leg rather than the bottom Sheet, because it
+          // picks its own surface with useIsMobile; both are a decision that
+          // comes to you, which is the whole claim.
+          <div className="flex min-h-0 flex-1 flex-col">
+            {/* Both branches carry it, and only one branch renders at a time,
+                so the queue still has exactly one live region. */}
+            <p className="sr-only" role="status" aria-live="polite">
+              {props.announcement}
+            </p>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{props.list}</div>
+            <ResponsiveModal
+              open={props.panelOpen ?? false}
+              onOpenChange={props.onPanelOpenChange ?? noop}
+              title={props.panelTitle}
+              size="lg"
+              // The panel owns its own scrolling since the pinned footer landed:
+              // its body scrolls and its footer does not. ResponsiveModal's
+              // default body is `min-h-0 flex-1 overflow-y-auto`, which would
+              // wrap that in a SECOND scroller and let the pinned footer scroll
+              // away — the exact failure this branch exists to fix, on the
+              // surface where it matters most. `overflow-hidden` wins over the
+              // default through twMerge; `flex flex-col` gives the panel's
+              // `h-full` a parent whose height is actually resolved.
+              bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
+            >
+              {/* The same named region the split gives it. Redundant beside the
+                  dialog's own name, and kept anyway: the panel is one thing on
+                  both surfaces, and a screen-reader user who has learnt to jump
+                  to "Selected flag" should not lose it by turning a phone. */}
+              <div role="region" aria-label="Selected flag" className="flex min-h-0 flex-1 flex-col">
+                {props.panel}
+              </div>
+            </ResponsiveModal>
+          </div>
         ) : (
-          // Below lg this is ONE scroll surface, not two stacked ones. As a grid
-          // it was two implicit auto rows in a definite-height container, and
+          // At lg and up, two columns — and, for a render handed no `belowLg`
+          // at all, the one-scroll-surface stack that keeps a narrow window
+          // usable rather than a half-height grid. As a grid below lg it was
+          // two implicit auto rows in a definite-height container, and
           // `min-h-0` on both children drops their min-content contribution to
-          // zero — so the tracks split the height evenly and a phone got a ~133px
-          // window onto 252 rows, shearing the third row through its sub-line
-          // while an unasked-for empty panel took the other half.
+          // zero — so the tracks split the height evenly and a phone got a
+          // ~133px window onto 252 rows, shearing the third row through its
+          // sub-line while an unasked-for empty panel took the other half.
           //
           // The split starts at lg, not md: at 768px the panel would be 340px,
           // narrower than the list beside it, and the decision form does not fit

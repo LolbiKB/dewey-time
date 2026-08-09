@@ -1258,6 +1258,15 @@ const A11Y_OUTAGE = {
 // later slot shifts. Both are reachable by an ordinary sequence: select a row,
 // notice the amber band, click Excuse.
 test("a band excuse leaves the selected person's row and form alone", async ({ page }) => {
+  // Explicitly ≥ lg, the same way the pin test below is explicitly short: the
+  // sequence this describes — select a row, start typing, notice the band,
+  // click Excuse — needs the panel and the band reachable AT ONCE, and that is
+  // the split's property. Below lg the panel is a modal that covers the band
+  // and puts it behind `aria-hidden`, so the band's button cannot be clicked
+  // without dismissing the form first. What is being tested (a band write is
+  // scoped to the band) is layout-independent; only this way of reaching it is
+  // not. Set here rather than at project level so it runs identically in both.
+  await page.setViewportSize({ width: 1280, height: 900 });
   let excused = false;
   await page.route("**/api/method/**", (route) => {
     const url = new URL(route.request().url());
@@ -1335,6 +1344,10 @@ test("a band excuse leaves the selected person's row and form alone", async ({ p
 // `decide.isPending` would put "Excusing…" on the band every time somebody
 // decided a single person, announcing a mass excuse they never asked for.
 test("the band's button reports the band's own write, and no other", async ({ page }) => {
+  // ≥ lg for the reason the band test above states: this reads the band WHILE
+  // the panel's own write is in flight, so both have to be on screen together,
+  // which below lg they no longer are.
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/api/method/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.includes("decide_flags")) {
@@ -2036,4 +2049,112 @@ test("a short window cannot strand the submit button — group", async ({ page }
   const covers = page.getByText("Who this covers");
   await covers.scrollIntoViewIfNeeded();
   await expect(covers).toBeInViewport();
+});
+
+// ---------------------------------------------------------------------------
+// Below lg the panel is a modal, not a column below the list.
+//
+// The viewport is set inside each test rather than left to the project, for the
+// same reason the pin test above states: `desktop` is 1280 wide, so without it
+// these two would pass in `mobile` and fail in `desktop`. A phone width also
+// pins WHICH surface opens — ResponsiveModal picks its own with useIsMobile()
+// at 768, so under 768 it is the bottom Sheet these two are named for. The
+// 768–1023px band gets the Dialog leg instead, which no project covers.
+// ---------------------------------------------------------------------------
+const PHONE_VIEWPORT = { width: 412, height: 915 };
+
+/** The same phone on a shorter screen, so the sheet's own cap actually bites.
+ *  The pin above it needed the same treatment for the same reason: the
+ *  four-flag fixture does not overflow a tall window, and a pin proves nothing
+ *  in a container that never scrolled. */
+const SHORT_PHONE_VIEWPORT = { width: 412, height: 480 };
+
+/**
+ * The sheet slides up over ~200ms, and it is entirely below the fold for the
+ * first frame of that. A box read mid-slide measures the animation, not the
+ * layout — measured here, the "pinned" footer appeared to move 97px purely
+ * because the two reads landed on different frames.
+ */
+async function sheetHasFinishedOpening(page: import("@playwright/test").Page) {
+  await page
+    .getByRole("dialog")
+    .evaluate((el) =>
+      Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)),
+    );
+}
+
+test("on a phone the decision comes to you, and the list keeps its place", async ({ page }) => {
+  await page.setViewportSize(PHONE_VIEWPORT);
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ message: A11Y_PAYLOAD }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+
+  const list = page.getByRole("list", { name: "Flag queue" });
+  await list.getByRole("button").first().click();
+
+  // The decision is on screen without scrolling — today the panel is a sibling
+  // AFTER the full list, so on the real queue it sits 9,146px below the tap.
+  // The pinned footer is what has to be reachable: the Outcome group does not
+  // exist until the form is opened, which is Task 9's deliberate un-arming.
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator('[data-slot="decision-footer"]')).toBeInViewport();
+
+  await sheet.getByRole("button", { name: "Decide", exact: true }).click();
+  await expect(sheet.getByRole("group", { name: "Outcome" })).toBeInViewport();
+
+  await page.keyboard.press("Escape");
+  await expect(list.getByRole("button").first()).toBeVisible();
+});
+
+test("the footer stays pinned inside the sheet, not just inside the split", async ({ page }) => {
+  // Task 9 proved the pin against the desktop panel column. The sheet is a
+  // different container — `max-h-[min(85dvh,42rem)]` with its own scroller —
+  // and `h-full` resolving against a flex-sized parent is exactly where a pin
+  // silently degrades into "the whole thing scrolls as one".
+  await page.setViewportSize(SHORT_PHONE_VIEWPORT);
+  await page.route("**/api/method/**", (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes("get_flag_queue")) return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        message: {
+          ...A11Y_PAYLOAD,
+          entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
+          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 } satisfies QueuePayload["counts"],
+        },
+      }),
+    });
+  });
+
+  await page.goto("/hr-flags");
+  await page.locator('button[aria-label*="Sopheak Chan"]').click();
+
+  await sheetHasFinishedOpening(page);
+  const footer = page.getByRole("dialog").locator('[data-slot="decision-footer"]');
+  const before = await footer.boundingBox();
+
+  const body = page.getByRole("dialog").locator('[data-slot="decision-body"]');
+  // Asserted, not assumed, exactly as the desktop pin test asserts it: if the
+  // fixture ever fits inside the sheet, nothing below scrolls and both
+  // assertions pass while proving nothing about a pin.
+  const overflow = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, "the sheet's body must hold more than fits, or this proves nothing").toBeGreaterThan(40);
+  await body.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+
+  // Byte-identical, and something that was below the fold is now above it —
+  // the second half is what distinguishes a pinned footer from a static one
+  // in a container that never scrolled at all.
+  expect(await footer.boundingBox()).toEqual(before);
+  await expect(page.locator('[data-slot="flag-one-liner"]').last()).toBeInViewport();
 });

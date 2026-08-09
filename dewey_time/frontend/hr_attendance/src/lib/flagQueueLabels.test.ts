@@ -14,6 +14,7 @@ import {
   decidingLabel,
   DECISION_STATE_LABELS,
   decisionStateLabel,
+  decisionSurfaceTitle,
   DEVICE_HEALTH_LABEL,
   deviceAlertHeadline,
   earlierMarkerLabel,
@@ -585,6 +586,22 @@ test("groupHeadline dispatches on group_type", () => {
   // Swapping the two would describe a branch-wide outage as "2 late starts" —
   // exactly the wrong story, and the one a mis-dispatch would tell.
   assert.notEqual(groupHeadline(routine), groupHeadline(outage));
+});
+
+// Below lg the panel is a modal, and its title is the only thing naming what
+// is being decided — the row it came from is covered by the surface itself.
+test("the decision surface is titled by the row it was opened from", () => {
+  const person = routinePerson("HR-EMP-1", "LATE_START", 6);
+  assert.equal(
+    decisionSurfaceTitle({ kind: "person", ...person }),
+    person.employee_name,
+    "a person's modal is titled with their name, not their finding",
+  );
+
+  const group = routineGroup("LATE_START", [9, 20]);
+  // Deferring to groupHeadline rather than composing a second sentence: a
+  // group's row and the modal it opens must not describe it differently.
+  assert.equal(decisionSurfaceTitle(group), groupHeadline(group));
 });
 
 test("a repeat pattern is headlined by what it is, not by a count", () => {

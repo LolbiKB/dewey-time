@@ -607,6 +607,18 @@ export function groupHeadline(entry: Extract<QueueEntry, { kind: "group" }>): st
 }
 
 /**
+ * What the decision surface is called when it is a modal rather than a column.
+ *
+ * The split's panel is titled by its `aria-label` alone ("Selected flag") and
+ * needs nothing visible — the row it belongs to is still on screen beside it.
+ * A sheet covers that row, so it has to name the thing being decided. Same
+ * text as the list row's own headline, so the tap and what it opened agree.
+ */
+export function decisionSurfaceTitle(entry: QueueEntry): string {
+  return entry.kind === "group" ? groupHeadline(entry) : entry.employee_name;
+}
+
+/**
  * The one line that stands for a person in the list.
  *
  * `flags` arrives worst-first from `build_queue`, so the first non-`matched`
