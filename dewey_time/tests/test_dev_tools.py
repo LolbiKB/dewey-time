@@ -623,6 +623,53 @@ class TestRegeneratorsRefuseToConfirmAnUnfinishedDay(unittest.TestCase):
         # Today only loses the provisional rows the intraday pass will replace.
         self.assertEqual(scoping[date(2026, 5, 2)], 0)
 
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_intraday_mode_leaves_finals_it_cannot_rebuild(
+        self, get_all, _count, delete_flags, _refresh, generate_closeout
+    ):
+        # Same rule on a past day for a different reason: mode="intraday"
+        # rebuilds no finals on any date, so wiping them is loss with no
+        # recovery. The whole-branch review raised this as its finding 7 --
+        # the wipe deleted LATE_START, LEFT_EARLY and ATTENDANCE_ISSUE and the
+        # preview gave the operator no signal they would not come back.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-01", confirm=True, mode="intraday"
+        )
+
+        generate_closeout.assert_not_called()
+        self.assertEqual(delete_flags.call_args_list[0].kwargs["day_closed"], 0)
+
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=3)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_the_preview_admits_the_range_was_trimmed(self, get_all, _count):
+        # The preview is computed from already-clamped dates, so it cannot see
+        # the trim on its own. A three-day window flatly denying it trimmed
+        # anything is worse than one that says nothing.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-09"
+        )
+
+        self.assertTrue(result["needs_confirm"])
+        self.assertEqual(result["preview"]["end_date"], "2026-05-02")
+        self.assertEqual(result["preview"]["days"], 2)
+        self.assertTrue(result["preview"]["end_date_clamped_to_today"])
+
     @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
     @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
     @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")

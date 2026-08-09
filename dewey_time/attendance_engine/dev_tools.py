@@ -463,12 +463,16 @@ def regenerate_flags_for_range_api(
     if confirm_value is None:
         confirm_value = frappe.form_dict.get("confirm")
     if not _parse_confirm(confirm_value):
-        return {
-            "needs_confirm": True,
-            "preview": preview_regenerate_flags_for_range_api(
-                start_date=str(start), end_date=str(end)
-            ),
-        }
+        preview = preview_regenerate_flags_for_range_api(
+            start_date=str(start), end_date=str(end)
+        )
+        # start and end are already clamped by the time they get here, so the
+        # nested call sees a range that needs no trimming and reports none.
+        # Only out here is the range the operator actually asked for still
+        # known, and a preview that shows three days while flatly denying it
+        # trimmed anything is worse than one that says nothing.
+        preview["end_date_clamped_to_today"] = end_was_clamped
+        return {"needs_confirm": True, "preview": preview}
 
     employees = _active_employee_names()
     days_processed = 0
@@ -510,18 +514,22 @@ def regenerate_flags_for_range_api(
                 continue
 
             try:
-                # Explicit, because mode="intraday" alone would otherwise leave stale
-                # finals behind: refresh_intraday only deletes its own provisional
-                # rows, scoped to INTRADAY_FLAG_CODES.
+                # Wipe exactly as wide as the rebuild that follows it.
                 #
-                # But only where a closeout pass is going to put the finals back.
-                # A branch device can close out at 18:00 and write today's
-                # day_closed=1 rows; withholding the closeout half (above) while
-                # still wiping unscoped would delete those with nothing left to
-                # rebuild them -- permanently, since the fallback covers only
-                # yesterday and the webhook fires once per device-date. This is
-                # the same hole intraday.py's own delete is scoped to avoid, and
-                # for the same reason.
+                # A closeout pass rewrites the finals, so where one is running
+                # the delete is unscoped -- refresh_intraday only clears its own
+                # provisional rows (scoped to INTRADAY_FLAG_CODES), and without
+                # this an old final nothing recomputes would sit there forever.
+                #
+                # Where no closeout pass is running, nothing will put a final
+                # back, so deleting one is pure loss. Two ways to get there:
+                # today, whose closeout half is withheld above and whose
+                # day_closed=1 rows a branch device closing out at 18:00 may
+                # already have written; and mode="intraday", which never
+                # rebuilds finals on any date. The fallback covers only
+                # yesterday and the webhook fires once per device-date, so in
+                # both cases the rows are gone for good. intraday.py's own
+                # delete is scoped for this exact reason and says so.
                 _delete_auto_flags_for_employee_date(
                     employee=employee,
                     attendance_date=current,
