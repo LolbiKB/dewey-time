@@ -782,9 +782,32 @@ function narrateMissingTime(flag: Flag, day: NarrativeDay, dateKey: string): Fla
   const overlapsLunch =
     hasLunchWindow && gapStartMin < lunchEndMin! && gapEndMin > lunchStartMin!;
 
-  const lunchRelationship = overlapsLunch
-    ? "overlapping the scheduled lunch window"
-    : "and it wasn't lunch";
+  // A bridged row deliberately carries less than its own span.
+  // _bridge_scheduled_lunch (absence_intervals.py) joins the two halves of a
+  // day nobody punched for into one interval and SUMS their minutes rather
+  // than spanning them, because the unpaid lunch sitting between them is not
+  // owed time. So 08:05→17:00 arrives carrying 475 minutes, not 535.
+  //
+  // Left unsaid, that reads as an arithmetic bug — and this codebase has
+  // already paid for numbers HR could not reconcile: derive_presence_intervals'
+  // own docstring records absence being billed twice as the thing that made
+  // them distrust the figures. Name the excluded hour and the subtraction
+  // becomes visible instead of suspicious.
+  //
+  // Guarded on evidence.minutes being present, since the fallback above
+  // derives minutes FROM the span and would otherwise always find no gap.
+  const spanMinutes = Math.max(0, gapEndMin - gapStartMin);
+  const excludedMinutes =
+    overlapsLunch && evidence.minutes != null
+      ? Math.max(0, spanMinutes - evidence.minutes)
+      : 0;
+  const excludesLunch = excludedMinutes >= 1;
+
+  const lunchRelationship = excludesLunch
+    ? `excluding the ${formatDurationMinutes(excludedMinutes)} scheduled lunch`
+    : overlapsLunch
+      ? "overlapping the scheduled lunch window"
+      : "and it wasn't lunch";
 
   // Feed the axis from the day's real checkin list (rule 11), then widen it
   // to guarantee the gap itself is never clipped — a "trailing" gap (left
@@ -799,6 +822,10 @@ function narrateMissingTime(flag: Flag, day: NarrativeDay, dateKey: string): Fla
   // rendering a dash.
   const facts = buildFacts([
     fact("Gap", formatDurationMinutes(minutes)),
+    // Sits directly under Gap, because Gap is the number Left and Back
+    // appear to contradict. Dropped entirely on an unbridged row, where
+    // Back − Left already equals Gap and the line would only add noise.
+    fact("Lunch excluded", excludesLunch ? formatDurationMinutes(excludedMinutes) : null),
     fact("Left", evidenceTimeText(evidence.interval_start)),
     fact("Back", evidenceTimeText(evidence.interval_end)),
     fact(
