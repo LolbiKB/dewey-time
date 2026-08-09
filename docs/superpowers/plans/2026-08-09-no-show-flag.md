@@ -627,7 +627,13 @@ Expected: all pass. **The count must be 8 + 6 = 14** — six new tests, and the 
 
 Remove `"UNNOTIFIED_ABSENCE"` from `INTRADAY_FLAG_CODES`. Re-run. Expected: `test_the_provisional_no_show_is_cleaned_up_on_the_next_pass` fails on both assertions. Restore.
 
-Then change `if checkins_count == 0 and missing:` to `if checkins_count == 0:`. Re-run. Expected: `test_below_the_threshold_nothing_is_raised_at_all` fails — the no-show appears when no MISSING_TIME would have, which is the "no new noise" claim breaking. Restore, re-run, confirm 15 pass.
+Then change `if checkins_count == 0 and missing:` to `if checkins_count == 0:`. Re-run. Expected: `test_below_the_threshold_nothing_is_raised_at_all` fails — the no-show appears when no MISSING_TIME would have, which is the "no new noise" claim breaking. Restore, re-run, confirm 14 pass.
+
+Note on Mutation A: `test_the_provisional_no_show_is_cleaned_up_on_the_next_pass` asserts
+against `INTRADAY_FLAG_CODES` before it asserts against the actual delete call, and
+unittest stops at the first failure — so the mutation kill is attributed to the constant
+check, and the runtime check never runs. Verify the second assertion independently
+(re-run with the first commented out) rather than assuming the mutation exercised it.
 
 Record both results in the report.
 
