@@ -11,7 +11,16 @@ import sys  # noqa: E402
 import frappe  # noqa: E402
 
 
-def _getdate(value):
+# A settable "today". frappe's getdate() with no argument means today, and the
+# regenerators now ask it whether a day is over. Pinning it keeps every fixture
+# date below unambiguously in the past no matter when the suite runs; the tests
+# that exercise the today boundary move it deliberately.
+_TODAY = [date(2026, 6, 1)]
+
+
+def _getdate(value=None):
+    if value is None:
+        return _TODAY[0]
     if isinstance(value, date):
         return value
     if isinstance(value, str):
@@ -39,12 +48,45 @@ for mod_name in list(sys.modules):
         del sys.modules[mod_name]
 
 
+def _pin_dev_tools_clock(test_case):
+    """Pin dev_tools' date helpers per test, not once at module scope.
+
+    dev_tools binds getdate/add_days at import, and that import happens lazily
+    inside each test below — by which time another module in a full-suite run
+    has replaced frappe.utils.getdate with its own single-argument stub
+    (test_flag_decision_api.py:18 and test_api.py:50 both do). That went
+    unnoticed while nothing here needed today: every call passed a value, so
+    any stub would do. It stopped being harmless the moment dev_tools started
+    calling getdate() with no argument to ask what day it is — in the module's
+    own lane the tests passed, and in the full suite fifteen of them errored.
+    """
+    import dewey_time.attendance_engine.dev_tools as dev_tools
+
+    for name, replacement in (("getdate", _getdate), ("add_days", _add_days)):
+        pinned = patch.object(dev_tools, name, replacement)
+        test_case.addCleanup(pinned.stop)
+        pinned.start()
+
+
 class TestRunEngineForEmployee(unittest.TestCase):
     def setUp(self):
+        _pin_dev_tools_clock(self)
         frappe.db.commit.reset_mock()
         frappe.session.user = "hr@example.com"
         frappe.get_roles.return_value = ["HR User"]
         frappe.db.exists.return_value = True
+        # Default the delivery-failure guard OFF, exactly as the bulk suite
+        # does. frappe.db.exists must stay True for the Employee lookup above,
+        # which makes the REAL has_delivery_or_record_failure_today report a
+        # failure for every day -- the tool would then correctly skip the whole
+        # range and every assertion below would read zero calls. The tests that
+        # care about the guard patch it themselves.
+        guard = patch(
+            "dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today",
+            return_value=False,
+        )
+        self.addCleanup(guard.stop)
+        guard.start()
 
     @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
     @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
@@ -186,6 +228,7 @@ class TestRegenerateFlagsForRange(unittest.TestCase):
     """
 
     def setUp(self):
+        _pin_dev_tools_clock(self)
         frappe.db.commit.reset_mock()
         frappe.session.user = "hr@example.com"
         frappe.get_roles.return_value = ["System Manager"]
@@ -412,6 +455,295 @@ class TestRegenerateFlagsForRange(unittest.TestCase):
         )
 
         self.assertEqual(order, ["check", "delete"])
+
+
+class TestRegeneratorsRefuseToConfirmAnUnfinishedDay(unittest.TestCase):
+    """A day that has not ended has nothing for closeout to confirm.
+
+    Closeout writes day_closed=1 UNNOTIFIED_ABSENCE at rank 150, copy reading
+    "Confirmed at end-of-day device closeout". Run it over today and everyone
+    who has not badged yet is accused at the top of the queue -- and because
+    the provisional and confirmed rows share a flag identity, the read path's
+    dedup prefers the confirmed one, so the correcting row cannot win. It
+    stands until that evening's real closeout rebuilds the day.
+
+    "Regenerate everything up to now" is the tool's most natural invocation,
+    which is what makes this worth pinning rather than documenting.
+    """
+
+    def setUp(self):
+        _pin_dev_tools_clock(self)
+        frappe.db.commit.reset_mock()
+        frappe.session.user = "hr@example.com"
+        frappe.get_roles.return_value = ["System Manager"]
+        frappe.form_dict = {}
+        # See TestRegenerateFlagsForRange.setUp: the shared mock's
+        # frappe.db.exists is truthy, so the real guard would skip every day.
+        guard = patch(
+            "dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today",
+            return_value=False,
+        )
+        self.addCleanup(guard.stop)
+        guard.start()
+        # 2026-05-02 is "today" for this class; 05-01 is over, 05-02 is not.
+        previous = _TODAY[0]
+        _TODAY[0] = date(2026, 5, 2)
+        self.addCleanup(lambda: _TODAY.__setitem__(0, previous))
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_bulk_closes_out_yesterday_but_not_today(
+        self, get_all, _count, _delete, refresh_intraday, generate_closeout
+    ):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-02", confirm=True, mode="both"
+        )
+
+        closed_out = [c.kwargs["attendance_date"] for c in generate_closeout.call_args_list]
+        self.assertEqual(closed_out, [date(2026, 5, 1)])
+        self.assertNotIn(date(2026, 5, 2), closed_out)
+        # Today still gets its intraday pass -- the provisional row is exactly
+        # what should be speaking for an unfinished day.
+        self.assertEqual(
+            [c.args[1] for c in refresh_intraday.call_args_list],
+            [date(2026, 5, 1), date(2026, 5, 2)],
+        )
+        self.assertEqual(result["closeout_days_deferred_until_the_day_ends"], 1)
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_closeout_mode_over_today_does_not_wipe_what_it_will_not_rebuild(
+        self, get_all, _count, delete_flags, _refresh, generate_closeout
+    ):
+        # The delete is unscoped. Withholding only the rebuild would leave the
+        # day stripped of every flag with nothing to put them back -- strictly
+        # worse than doing nothing.
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-02", end_date="2026-05-02", confirm=True, mode="closeout"
+        )
+
+        delete_flags.assert_not_called()
+        generate_closeout.assert_not_called()
+        self.assertEqual(result["days_processed"], 0)
+        self.assertEqual(result["closeout_days_deferred_until_the_day_ends"], 1)
+
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_a_range_running_past_today_is_refused(
+        self, get_all, _count, _refresh, generate_closeout
+    ):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}]
+
+        with self.assertRaises(Exception):
+            regenerate_flags_for_range_api(
+                start_date="2026-05-01", end_date="2026-05-09", confirm=True
+            )
+        generate_closeout.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    def test_the_per_employee_tool_defers_today_too(
+        self, refresh_intraday, generate_closeout, get_all
+    ):
+        # It shares the exposure and predates the bulk tool; the reviewer found
+        # it hardened on one side only.
+        from dewey_time.attendance_engine.dev_tools import run_engine_for_employee
+
+        frappe.get_roles.return_value = ["HR User"]
+        get_all.return_value = []
+
+        result = run_engine_for_employee(
+            employee="DI-1138",
+            start_date="2026-05-01",
+            end_date="2026-05-02",
+            mode="both",
+        )
+
+        self.assertEqual(
+            [c.kwargs["attendance_date"] for c in generate_closeout.call_args_list],
+            [date(2026, 5, 1)],
+        )
+        self.assertEqual(result["closeout_days_deferred_until_the_day_ends"], 1)
+
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    def test_the_per_employee_tool_refuses_a_range_past_today(
+        self, _refresh, generate_closeout, get_all
+    ):
+        from dewey_time.attendance_engine.dev_tools import run_engine_for_employee
+
+        frappe.get_roles.return_value = ["HR User"]
+        get_all.return_value = []
+
+        with self.assertRaises(Exception):
+            run_engine_for_employee(
+                employee="DI-1138",
+                start_date="2026-05-01",
+                end_date="2026-05-09",
+                mode="both",
+            )
+        generate_closeout.assert_not_called()
+
+
+class TestPerEmployeeToolProtectsUndeliveredDays(unittest.TestCase):
+    """The guard 8995bfec put on the bulk tool, on the tool 250 lines above it.
+
+    _generate_for_employee_date's deletes are unscoped, and DELIVERY_FAILED can
+    only be rebuilt from the device-closeout webhook's undelivered_items. One
+    run erases the marker; a second reads "no failure" and manufactures the
+    no-show the marker existed to prevent. Spot-checks get re-run.
+    """
+
+    def setUp(self):
+        _pin_dev_tools_clock(self)
+        frappe.db.commit.reset_mock()
+        frappe.session.user = "hr@example.com"
+        frappe.get_roles.return_value = ["HR User"]
+        frappe.db.exists.return_value = True
+
+    @patch("dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    def test_a_marker_day_is_skipped_entirely(
+        self, refresh_intraday, generate_closeout, get_all, failed
+    ):
+        from dewey_time.attendance_engine.dev_tools import run_engine_for_employee
+
+        get_all.return_value = []
+        failed.side_effect = lambda _employee, day: day == date(2026, 5, 2)
+
+        result = run_engine_for_employee(
+            employee="DI-1138",
+            start_date="2026-05-01",
+            end_date="2026-05-03",
+            mode="both",
+        )
+
+        touched = [c.kwargs["attendance_date"] for c in generate_closeout.call_args_list]
+        self.assertEqual(touched, [date(2026, 5, 1), date(2026, 5, 3)])
+        self.assertNotIn(date(2026, 5, 2), touched)
+        self.assertEqual(
+            [c.args[1] for c in refresh_intraday.call_args_list],
+            [date(2026, 5, 1), date(2026, 5, 3)],
+        )
+        self.assertEqual(result["days_processed"], 2)
+        self.assertEqual(result["days_protected_by_delivery_failure"], 1)
+
+    @patch("dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    def test_the_check_runs_before_the_engine_not_after(
+        self, _refresh, generate_closeout, get_all, failed
+    ):
+        # Checked after, the marker is already gone and the answer is always
+        # "no failure" -- the check would pass and protect nothing.
+        from dewey_time.attendance_engine.dev_tools import run_engine_for_employee
+
+        get_all.return_value = []
+        order = []
+        failed.side_effect = lambda _e, _d: order.append("check") or False
+        generate_closeout.side_effect = lambda **_kw: order.append("generate")
+
+        run_engine_for_employee(
+            employee="DI-1138",
+            start_date="2026-05-01",
+            end_date="2026-05-01",
+            mode="closeout",
+        )
+
+        self.assertEqual(order, ["check", "generate"])
+
+
+class TestBulkSweepSurvivesOneBadEmployeeDay(unittest.TestCase):
+    """One employee's data must never abort the sweep.
+
+    _generate_for_employee_date_isolated exists because an overnight interval
+    running past minute 1440 raised inside evaluate_missing_time_flags and
+    starved every employee sorted after the night worker. A quarter of every
+    active employee is the likeliest place to meet such data again, and a
+    half-finished sweep leaves precisely the two-shapes artifact this tool
+    exists to remove.
+    """
+
+    def setUp(self):
+        _pin_dev_tools_clock(self)
+        frappe.db.commit.reset_mock()
+        frappe.session.user = "hr@example.com"
+        frappe.get_roles.return_value = ["System Manager"]
+        frappe.form_dict = {}
+        guard = patch(
+            "dewey_time.attendance_engine.dev_tools.has_delivery_or_record_failure_today",
+            return_value=False,
+        )
+        self.addCleanup(guard.stop)
+        guard.start()
+
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.log_error")
+    @patch("dewey_time.attendance_engine.dev_tools._generate_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.refresh_intraday_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.db.count", return_value=0)
+    @patch("dewey_time.attendance_engine.dev_tools.frappe.get_all")
+    def test_a_raise_on_one_day_does_not_stop_the_rest(
+        self, get_all, _count, _delete, _refresh, generate_closeout, log_error
+    ):
+        from dewey_time.attendance_engine.dev_tools import (
+            regenerate_flags_for_range_api,
+        )
+
+        get_all.return_value = [{"name": "DI-1"}, {"name": "DI-2"}]
+
+        def blow_up_on_one_day(**kwargs):
+            if kwargs["employee"] == "DI-1" and kwargs["attendance_date"] == date(2026, 5, 2):
+                raise ValueError("interval ends past minute 1440")
+
+        generate_closeout.side_effect = blow_up_on_one_day
+
+        result = regenerate_flags_for_range_api(
+            start_date="2026-05-01", end_date="2026-05-03", confirm=True
+        )
+
+        # 2 employees x 3 days = 6; one raised.
+        self.assertEqual(result["days_processed"], 5)
+        self.assertEqual(result["days_failed"], 1)
+        # DI-2's whole range still ran -- the point of the isolation.
+        self.assertEqual(
+            [
+                c.kwargs["attendance_date"]
+                for c in generate_closeout.call_args_list
+                if c.kwargs["employee"] == "DI-2"
+            ],
+            [date(2026, 5, 1), date(2026, 5, 2), date(2026, 5, 3)],
+        )
+        log_error.assert_called_once()
 
 
 if __name__ == "__main__":

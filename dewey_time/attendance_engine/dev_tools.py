@@ -34,6 +34,36 @@ MAX_RANGE_DAYS = 31
 MAX_BULK_RANGE_DAYS = 92
 
 
+def _day_is_over(attendance_date) -> bool:
+    """Whether closeout has anything to confirm about this day yet.
+
+    Closeout writes finals. For a zero-punch day that means an
+    UNNOTIFIED_ABSENCE with day_closed=1, triage rank 150, and copy reading
+    "Confirmed at end-of-day device closeout". Today has earned none of that:
+    someone who has not badged by 09:00 may walk in at 09:05.
+
+    Run closeout over today and every employee not yet at their desk is
+    accused, at the top of the action queue -- and because the two rows share
+    a flag identity, the read path's dedup prefers the confirmed row over the
+    provisional one that would have corrected it. The accusation then stands
+    until that evening's real closeout rebuilds the day.
+    """
+    return getdate(attendance_date) < getdate()
+
+
+def _reject_future_end(end):
+    """A regeneration range must not run past today.
+
+    Regenerating a day that has not happened is never what anyone meant, and
+    for a future date `_day_is_over` would withhold the closeout half anyway --
+    so the range would silently do less than it said. Refuse it at the edge
+    instead, where the operator can see why.
+    """
+    today = getdate()
+    if end > today:
+        frappe.throw(f"end_date cannot be after today ({today})")
+
+
 @frappe.whitelist(methods=["POST"])
 def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode: str = "both"):
     """Dev-only: recompute AUTO Attendance Flag rows for one employee over a date range."""
@@ -56,6 +86,7 @@ def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode:
     day_count = (end - start).days + 1
     if day_count > MAX_RANGE_DAYS:
         frappe.throw(f"Date range cannot exceed {MAX_RANGE_DAYS} days")
+    _reject_future_end(end)
 
     mode = (mode or "both").strip().lower()
     if mode not in VALID_MODES:
@@ -63,16 +94,39 @@ def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode:
 
     current = start
     days_processed = 0
+    days_protected = 0
+    days_deferred = 0
     while current <= end:
+        # The same protection the bulk regenerator carries, for the same
+        # reason. _generate_for_employee_date's deletes are unscoped;
+        # DELIVERY_FAILED is source=AUTO but arrives only from the device
+        # closeout webhook's undelivered_items, so nothing here can put it
+        # back. Worse, the rebuild consults exactly those rows to decide
+        # whether to suppress absence flagging: one run erases the marker, and
+        # a second reads "no failure" and manufactures the very no-show the
+        # marker existed to prevent. A spot-check is the kind of thing people
+        # re-run, so the second run is not hypothetical.
+        if has_delivery_or_record_failure_today(employee, current):
+            days_protected += 1
+            current = add_days(current, 1)
+            continue
+
+        ran_something = False
         if mode in ("intraday", "both"):
             refresh_intraday_flags_for_employee_date(employee, current)
+            ran_something = True
         if mode in ("closeout", "both"):
-            _generate_for_employee_date(
-                employee=employee,
-                attendance_date=current,
-                include_unnotified_absence=True,
-            )
-        days_processed += 1
+            if _day_is_over(current):
+                _generate_for_employee_date(
+                    employee=employee,
+                    attendance_date=current,
+                    include_unnotified_absence=True,
+                )
+                ran_something = True
+            else:
+                days_deferred += 1
+        if ran_something:
+            days_processed += 1
         current = add_days(current, 1)
 
     frappe.db.commit()
@@ -83,10 +137,14 @@ def run_engine_for_employee(employee: str, start_date: str, end_date: str, mode:
         end_date=str(end),
         mode=mode,
         days_processed=days_processed,
+        days_protected=days_protected,
+        days_deferred=days_deferred,
     )
 
 
-def _build_response(*, employee, start_date, end_date, mode, days_processed):
+def _build_response(
+    *, employee, start_date, end_date, mode, days_processed, days_protected=0, days_deferred=0
+):
     flags = (
         frappe.get_all(
             "Attendance Flag",
@@ -117,6 +175,10 @@ def _build_response(*, employee, start_date, end_date, mode, days_processed):
         "end_date": end_date,
         "mode": mode,
         "days_processed": days_processed,
+        # Reported, not silent: a caller comparing before/after needs to know
+        # why part of the range did not move.
+        "days_protected_by_delivery_failure": days_protected,
+        "closeout_days_deferred_until_the_day_ends": days_deferred,
         "flags_after": len(flags),
         "days": days,
     }
@@ -311,6 +373,7 @@ def _validate_bulk_range(start_date, end_date):
     day_count = (end - start).days + 1
     if day_count > MAX_BULK_RANGE_DAYS:
         frappe.throw(f"Date range cannot exceed {MAX_BULK_RANGE_DAYS} days")
+    _reject_future_end(end)
     return start, end
 
 
@@ -383,6 +446,8 @@ def regenerate_flags_for_range_api(
     employees = _active_employee_names()
     days_processed = 0
     days_protected = 0
+    days_deferred = 0
+    days_failed = 0
     for employee in employees:
         current = start
         while current <= end:
@@ -405,21 +470,56 @@ def regenerate_flags_for_range_api(
                 current = add_days(current, 1)
                 continue
 
-            # Explicit, because mode="intraday" alone would otherwise leave stale
-            # finals behind: refresh_intraday only deletes its own provisional
-            # rows, scoped to INTRADAY_FLAG_CODES.
-            _delete_auto_flags_for_employee_date(
-                employee=employee, attendance_date=current
-            )
-            if mode in ("intraday", "both"):
-                refresh_intraday_flags_for_employee_date(employee, current)
-            if mode in ("closeout", "both"):
-                _generate_for_employee_date(
-                    employee=employee,
-                    attendance_date=current,
-                    include_unnotified_absence=True,
+            # Decided BEFORE the delete, and that order is the point: the
+            # delete below is unscoped, so a day we are not going to rebuild
+            # must not be wiped either. mode="closeout" over today would
+            # otherwise destroy the day's flags and put nothing back.
+            run_intraday = mode in ("intraday", "both")
+            run_closeout = mode in ("closeout", "both") and _day_is_over(current)
+            if mode in ("closeout", "both") and not run_closeout:
+                days_deferred += 1
+            if not (run_intraday or run_closeout):
+                current = add_days(current, 1)
+                continue
+
+            try:
+                # Explicit, because mode="intraday" alone would otherwise leave stale
+                # finals behind: refresh_intraday only deletes its own provisional
+                # rows, scoped to INTRADAY_FLAG_CODES.
+                _delete_auto_flags_for_employee_date(
+                    employee=employee, attendance_date=current
                 )
-            days_processed += 1
+                if run_intraday:
+                    refresh_intraday_flags_for_employee_date(employee, current)
+                if run_closeout:
+                    _generate_for_employee_date(
+                        employee=employee,
+                        attendance_date=current,
+                        include_unnotified_absence=True,
+                    )
+                days_processed += 1
+            except Exception:
+                # One employee-day must never abort the sweep. The engine has a
+                # documented raise on an overnight interval running past minute
+                # 1440 -- see _generate_for_employee_date_isolated, which exists
+                # because that raise once silently starved every employee sorted
+                # after a night worker. A quarter of every active employee is the
+                # likeliest place to meet such data again, and aborting halfway
+                # leaves exactly the two-shapes artifact this tool exists to
+                # remove.
+                #
+                # The failing day may be left wiped with nothing rebuilt: the
+                # delete and the rebuild are in the same try. That is why the
+                # count comes back in the response rather than only to the Error
+                # Log -- the tool is idempotent, so a re-run repairs it, but only
+                # if the operator knows to re-run.
+                days_failed += 1
+                frappe.log_error(
+                    title="Bulk flag regeneration failed for one employee-day",
+                    message="employee={0} date={1}\n{2}".format(
+                        employee, current, frappe.get_traceback()
+                    ),
+                )
             current = add_days(current, 1)
         # Per employee, not once at the end: a bulk run over a quarter should not
         # be a single transaction held open for its whole duration.
@@ -435,4 +535,8 @@ def regenerate_flags_for_range_api(
         # had, so a caller comparing before/after knows why some of the range
         # did not move.
         "days_protected_by_delivery_failure": days_protected,
+        "closeout_days_deferred_until_the_day_ends": days_deferred,
+        # Logged to Error Log with the employee and date; surfaced here so a
+        # re-run is an informed choice rather than a hope.
+        "days_failed": days_failed,
     }
