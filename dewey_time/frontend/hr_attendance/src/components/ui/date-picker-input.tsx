@@ -82,7 +82,14 @@ export function DatePickerInput(props: DatePickerInputProps) {
               !props.value && "text-muted-foreground"
             )}
           >
-            {props.label ? null : <span className="sr-only">{props.ariaLabel}</span>}
+            {/* Gated on ariaLabel too, not just the absence of a visible label:
+                the two callers that pass neither prop (WeeklySchedulePage's
+                generate-through picker, GroupEffectiveDates' per-group override)
+                would otherwise render an always-empty sr-only span. Harmless to
+                the accessible name, but it is a node that did not exist before. */}
+            {!props.label && props.ariaLabel ? (
+              <span className="sr-only">{props.ariaLabel}</span>
+            ) : null}
             <CalendarDaysIcon className="mr-2 size-4 shrink-0 opacity-60" />
             {props.value
               ? format(selected!, "MMM d, yyyy")
