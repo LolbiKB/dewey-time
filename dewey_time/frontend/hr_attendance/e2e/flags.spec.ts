@@ -300,14 +300,18 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // Toolbar counts (design doc, UI section: "Toolbar counts: Open · Explained
   // · Needs re-review · Decided". "Explained" is Spec 2 scope and is not a
   // key on this endpoint's `counts` dict, so it is not asserted here).
-  // CountChip (FlagQueuePage.tsx) renders `{label}<span>{value}</span>` with no
-  // whitespace between the JSX expression and the following element, so the
-  // chip's real DOM text content is "Open6" / "Decided2" — a trailing `\b`
-  // fails between a letter and a digit. Anchor at the start instead; a
-  // trailing `\b` is unnecessary once the match is anchored to the chip's own
-  // label prefix.
-  await expect(page.getByText(/^Open/)).toBeVisible();
-  await expect(page.getByText(/needs re-review/i)).toBeVisible();
+  // Open and Needs re-review were permanent chips beside Decided; both are
+  // gone from the toolbar now (Open moved into the header's description line
+  // via queueSplitDescription, and Needs re-review read 0 on every day the
+  // queue has ever seen — flag-queue-layout task 5). Decided is the one
+  // survivor and the toolbar's only remaining count. The toggle button
+  // renders `{label}<span>{value}</span>` with no whitespace between the JSX
+  // expression and the following element, so its real DOM text content is
+  // "Decided2" — a trailing `\b` fails between a letter and a digit. Anchor
+  // at the start instead; a trailing `\b` is unnecessary once the match is
+  // anchored to the button's own label prefix.
+  await expect(page.getByText(/^Open/)).toHaveCount(0);
+  await expect(page.getByText(/needs re-review/i)).toHaveCount(0);
   await expect(page.getByText(/^Decided/)).toBeVisible();
 });
 
@@ -1411,7 +1415,7 @@ test("a branch unchecked for one outage is not still unchecked for the next", as
 
   // A different consequence filter is a different question, and the answer to
   // the old one must not be carried into it.
-  await page.locator("#flag-tier").selectOption("routine");
+  await page.getByLabel("Consequence").selectOption("routine");
   await expect(bandExcuse).toHaveText(/^Excuse /);
 });
 

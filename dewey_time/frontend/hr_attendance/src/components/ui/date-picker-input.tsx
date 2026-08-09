@@ -11,6 +11,14 @@ import { cn } from "@/lib/utils";
 export type DatePickerInputProps = {
   id?: string;
   label?: string;
+  /**
+   * Accessible name when there is no visible <Label>. The flag queue's toolbar
+   * puts three of these on one row and cannot spend 22px of label above each;
+   * the name moves onto the control, which is where a screen reader reads it
+   * from in either case. Ignored when `label` is set — a visible label already
+   * names the control, and two names is worse than one.
+   */
+  ariaLabel?: string;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
@@ -64,6 +72,7 @@ export function DatePickerInput(props: DatePickerInputProps) {
             type="button"
             variant="outline"
             disabled={props.disabled}
+            aria-label={props.label ? undefined : props.ariaLabel}
             className={cn(
               "h-10 w-full justify-start px-3 font-normal",
               !props.value && "text-muted-foreground"

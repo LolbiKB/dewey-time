@@ -862,7 +862,11 @@ test("a partial bulk failure is reported politely, with the failures disclosed",
   assert.ok(html.includes("LIST-SENTINEL"));
 });
 
-test("the toolbar reports open, needs re-review and decided counts", () => {
+// Open and Needs re-review used to be permanent chips beside Decided; both are
+// gone now (Open moved into the header's description line via
+// queueSplitDescription, and Needs re-review read 0 on every day the queue has
+// ever seen). Decided is the one survivor, and it is the toolbar's only count.
+test("the toolbar reports the decided count, and nothing else", () => {
   const html = renderToStaticMarkup(
     <FlagQueueView
       {...viewProps()}
@@ -876,12 +880,10 @@ test("the toolbar reports open, needs re-review and decided counts", () => {
     />
   );
 
-  assert.ok(html.includes("Open"));
-  assert.ok(html.includes("Needs re-review"));
   assert.ok(html.includes("Decided"));
-  assert.ok(html.includes(">12<"));
-  assert.ok(html.includes(">5<"));
   assert.ok(html.includes(">88<"));
+  assert.ok(!/Needs re-review/.test(html));
+  assert.ok(!/>Open</.test(html));
 });
 
 // The alerts array is NOT derived from flags — it is read straight from Device
@@ -1764,4 +1766,39 @@ test("a confirmed re-issue is the same call plus confirm — including its sourc
   // The original is untouched: it stays in `pendingConfirm` while the modal is
   // open, and the user may yet cancel.
   assert.equal(band.confirm, undefined);
+});
+
+test("the page gives up the reading-width cap — it is a list, not prose", () => {
+  const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} counts={null} />);
+  assert.match(html, /max-w-none/, "1216px of 1512 was 296px thrown away");
+});
+
+test("the two permanently-zero counts are gone from the toolbar", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 0, decided: 0, people: 4, rows: 4, open_capped: false }}
+    />,
+  );
+  assert.ok(!/Needs re-review/.test(html), "it reads 0 on every day so far");
+  assert.ok(!/Queue counts/.test(html), "the chip group is gone");
+});
+
+test("Decided survives the chip cull — it is the only one that ever did anything", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueView
+      {...viewProps()}
+      counts={{ open: 12, needs_re_review: 0, decided: 7, people: 4, rows: 4, open_capped: false }}
+    />,
+  );
+  assert.match(html, /Decided/);
+  assert.match(html, /aria-pressed="false"/);
+});
+
+test("the date controls carry accessible names without spending a row on labels", () => {
+  const html = renderToStaticMarkup(<FlagQueueView {...viewProps()} counts={null} />);
+  assert.match(html, /aria-label="From"/);
+  assert.match(html, /aria-label="To"/);
+  assert.match(html, /aria-label="Consequence"/);
+  assert.ok(!/class="text-xs"[^>]*>From</.test(html), "no visible label row");
 });

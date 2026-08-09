@@ -8,7 +8,6 @@ import { Navigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { ResponsiveModal } from "@/components/ResponsiveModal";
 import { Button } from "@/components/ui/button";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
-import { Label } from "@/components/ui/label";
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
@@ -17,15 +16,15 @@ import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
   DECIDE_FAILED_MESSAGE,
+  DECIDED_TOGGLE_LABEL,
   DEVICE_ALERT_EXPLAINER,
   REASON_OPTIONS,
   SHOWING_DECIDED_MESSAGE,
+  TIER_FILTER_ALL_LABEL,
   deviceAlertHeadline,
   orphanedEvidenceChangedSummary,
   orphanedFlagGoneSummary,
   partialFailureMessage,
-  openCountAria,
-  openCountLabel,
   queueSplitDescription,
   tierLabel,
 } from "@/lib/flagQueueLabels";
@@ -815,7 +814,12 @@ export function FlagQueueView(props: FlagQueueViewProps) {
   const outagePeople = queuePeopleCount(props.outages);
 
   return (
-    <Page>
+    // max-w-none: dewey-ui's Page caps at max-w-7xl so "pages across both apps
+    // share the same content width", which is right for a form and wrong here.
+    // At 1512 the cap plus padding threw away 296px; at 1920, 704px — 36.7% of
+    // the monitor — on the one page where width converts directly into rows
+    // that stop truncating. cn() is twMerge, so this beats the default.
+    <Page className="max-w-none">
       <PageHeader
         title="Flags"
         description={
@@ -823,50 +827,87 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             ? queueSplitDescription(props.queuePeople, props.queueRows, outagePeople)
             : "Loading…"
         }
-      >
-        {/* The range and tier controls. Until these existed the banner below
-            instructed HR to narrow a range the page gave them no way to change,
-            which is worse than saying nothing: an unactionable warning in the
-            most urgent colour on the page teaches people to skip that colour. */}
-        <div className="flex flex-wrap items-end gap-3">
-          <DatePickerInput
-            label="From"
-            value={props.range.startDate}
-            max={parseISO(props.range.endDate)}
-            onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
-            className="w-40"
-          />
-          <DatePickerInput
-            label="To"
-            value={props.range.endDate}
-            min={parseISO(props.range.startDate)}
-            onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
-            className="w-40"
-          />
-          <div className="space-y-1.5">
-            <Label htmlFor="flag-tier" className="text-xs">
-              Consequence
-            </Label>
+        actions={
+          // One row, inline, no stacked labels. The three controls previously
+          // cost 62px because each carried a <Label> above it; the accessible
+          // name moves onto the control itself, which is where a screen reader
+          // reads it from anyway.
+          //
+          // `max-w-[56vw]`, not the plain `flex-wrap` the width alone would
+          // suggest: `actions` renders inside dewey-ui's own `shrink-0` sibling
+          // of the title (page.tsx), which never gets asked to shrink and has
+          // no responsive stacking of its own — so on a phone this row's
+          // unwrapped intrinsic width (~575px measured at a 412px viewport)
+          // became this flex item's PREFERRED size regardless of `flex-wrap`
+          // on its own children, and `justify-between` took the entire deficit
+          // out of the title, down to 0 width. `max-w` is a hard clamp browsers
+          // honour over a flex item's preferred size even at `shrink-0`, and a
+          // `vw` unit resolves against the viewport rather than this flex
+          // item's own (circular) auto-sizing — so it forces the real wrap
+          // `flex-wrap` was already meant to do, without moving this off the
+          // title's row at the desktop widths this page is measured at, where
+          // 56vw is always wider than the toolbar's own content and the clamp
+          // never binds.
+          <div className="flex max-w-[56vw] flex-wrap items-center gap-2">
+            <DatePickerInput
+              ariaLabel="From"
+              value={props.range.startDate}
+              max={parseISO(props.range.endDate)}
+              onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
+              className="w-36 space-y-0"
+            />
+            <span className="text-muted-foreground" aria-hidden="true">
+              –
+            </span>
+            <DatePickerInput
+              ariaLabel="To"
+              value={props.range.endDate}
+              min={parseISO(props.range.startDate)}
+              onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
+              className="w-36 space-y-0"
+            />
             <select
-              id="flag-tier"
+              aria-label="Consequence"
               value={props.tier ?? ""}
               onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
-              className="h-9 rounded-md border bg-background px-2 text-sm"
+              className="h-10 rounded-md border bg-background px-2 text-sm"
             >
-              <option value="">All</option>
+              <option value="">{TIER_FILTER_ALL_LABEL}</option>
               {TIER_VALUES.map((value) => (
                 <option key={value} value={value}>
                   {tierLabel(value)}
                 </option>
               ))}
             </select>
+            {/* The one count that was ever a control. Open and Needs re-review
+                reported the size of the job and could not be pressed; Open has
+                moved into the description line and Needs re-review has read 0
+                on every day of this queue's life. */}
+            <button
+              type="button"
+              aria-pressed={props.includeDecided ?? false}
+              onClick={props.onToggleDecided}
+              className={cn(
+                "flex h-10 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors",
+                props.includeDecided
+                  ? "border-primary/30 bg-primary/5 text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {DECIDED_TOGGLE_LABEL}
+              <span className="tabular-nums text-foreground">{counts?.decided ?? 0}</span>
+            </button>
           </div>
-        </div>
-
+        }
+      >
         {/* An AttentionStrip like every other notice on this page, rather than a
             bare coloured <p> with no icon, no container and no role — the one
             message that says "your list is incomplete" was the only one skipping
-            the pattern. The copy now names levers that exist. */}
+            the pattern. The copy now names levers that exist.
+            Kept here rather than dropped with the rest of the header: it is
+            conditional (only rendered while a range is over the server's row
+            cap) and does not cost height on an ordinary day, so it is outside
+            the 297px -> ~120px chrome this task is measuring. */}
         {props.truncated ? (
           <AttentionStrip
             tone="accent"
@@ -877,30 +918,6 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </AttentionStrip>
         ) : null}
 
-        {/* Open and Needs re-review are counts, not filters — they report the
-            size of the job, and letting them hide rows is how a queue starts
-            hiding work. Decided is the one exception, and it only ever ADDS:
-            pressed, the settled people it counts come back into the list so a
-            decision can be replaced. Nothing here can subtract from the queue. */}
-        <div
-          role="group"
-          aria-label="Queue counts"
-          className="flex w-full gap-1 rounded-lg bg-muted/40 p-1 sm:w-fit"
-        >
-          <CountChip
-            label="Open"
-            value={counts ? openCountLabel(counts) : "0"}
-            valueAria={counts ? openCountAria(counts) : undefined}
-          />
-          <CountChip label="Needs re-review" value={`${counts?.needs_re_review ?? 0}`} />
-          <CountChip
-            label="Decided"
-            value={`${counts?.decided ?? 0}`}
-            pressed={props.includeDecided}
-            onToggle={props.onToggleDecided}
-          />
-        </div>
-
         {/* Without this the extra rows read as a bug: entries with no action
             left on them, in a queue that promises everything in it is waiting
             on you. */}
@@ -908,10 +925,6 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           <p className="text-xs text-muted-foreground">{SHOWING_DECIDED_MESSAGE}</p>
         ) : null}
 
-        {/* Deliberately prose, not a CountChip: a chip sits in a group whose
-            every member is either a size-of-the-job count or a filter, and
-            these are neither — there is nothing to open and nothing to press.
-            Rendered only when non-zero, so a healthy queue stays quiet. */}
         {orphanLines.length > 0 ? (
           <div className="space-y-0.5">
             {orphanLines.map((line) => (
@@ -1062,52 +1075,5 @@ export function FlagQueueView(props: FlagQueueViewProps) {
         )}
       </Section>
     </Page>
-  );
-}
-
-function CountChip(props: {
-  label: string;
-  /** Pre-formatted: a capped count carries a trailing "+" (see openCountLabel). */
-  value: string;
-  /** Spoken form for a value whose printed shape under-states it, e.g. "5000+". */
-  valueAria?: string;
-  /** Present only on a chip that also toggles what the list shows. */
-  pressed?: boolean;
-  onToggle?: () => void;
-}) {
-  const body = (
-    <>
-      {props.label}
-      <span
-        className="tabular-nums text-foreground"
-        aria-label={props.valueAria}
-        // A bare "+" is the only thing distinguishing a floor from a total, and
-        // it is exactly the character a screen reader is likeliest to swallow.
-        role={props.valueAria ? "text" : undefined}
-      >
-        {props.value}
-      </span>
-    </>
-  );
-  const shape =
-    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium sm:flex-none";
-
-  if (!props.onToggle) {
-    return <span className={cn(shape, "text-muted-foreground")}>{body}</span>;
-  }
-
-  return (
-    <button
-      type="button"
-      aria-pressed={props.pressed}
-      onClick={props.onToggle}
-      className={cn(
-        shape,
-        "transition-colors hover:text-foreground",
-        props.pressed ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-      )}
-    >
-      {body}
-    </button>
   );
 }
