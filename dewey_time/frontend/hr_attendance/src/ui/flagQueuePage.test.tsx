@@ -1976,6 +1976,9 @@ test("the full card goes to the worst flag STILL AWAITING a decision", () => {
   // affordance is lowercase "decide", so it cannot satisfy either match.
   assert.match(html, />Decide</);
   assert.doesNotMatch(html, />Decide again</);
+  // The matched flag is compressed, not dropped: a decision already made is
+  // still a decision HR can revisit, and this is the only route to it.
+  assert.equal(countOf(html, 'data-slot="flag-one-liner"'), 1);
 });
 
 test("a person carrying no flags renders instead of throwing", () => {

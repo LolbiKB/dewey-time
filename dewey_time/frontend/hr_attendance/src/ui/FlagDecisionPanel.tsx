@@ -175,9 +175,13 @@ function PersonDecision(props: FlagDecisionPanelProps & { person: QueuePerson })
           5,069px in a 345px pane. Nothing is removed here except repetition:
           every flag is still individually decidable through its one-liner.
 
-          Guarded on `worst` rather than on a length check so the type narrows for
-          FlagCard, and a fragment rather than a wrapper div so the parent's
-          `space-y-4` keeps applying between the card and the list. */}
+          The `worst` guard is load-bearing at RUNTIME and nowhere else: this
+          tsconfig leaves `noUncheckedIndexedAccess` unset, so `person.flags[0]`
+          types as FlagOut even when the array is empty and the compiler would
+          accept this guard's deletion. Delete it and a person carrying no flags
+          throws inside FlagCard on `flag.attendance_date`. A fragment rather than
+          a wrapper div, so the parent's `space-y-4` keeps applying between the
+          card and the list. */}
       {worst ? (
         <>
           <FlagCard

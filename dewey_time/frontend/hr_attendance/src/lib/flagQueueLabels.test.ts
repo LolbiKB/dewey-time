@@ -52,6 +52,7 @@ import {
   REASON_LABELS,
   REASON_OPTIONS,
   reasonLabel,
+  restHeading,
   routineCodeHeader,
   showDecidedLabel,
   stripAriaLabel,
@@ -946,6 +947,25 @@ test("control labels live here, not inline in the components", () => {
   assert.equal(DECIDING_PREFIX, "Deciding");
   assert.equal(DEVICE_HEALTH_LABEL, "Device health");
   assert.equal(QUEUE_LOADING_LABEL, "Loading flags");
+});
+
+test("restHeading names the compressed set by its shared finding", () => {
+  assert.equal(
+    restHeading([missingTime(60), missingTime(90), missingTime(120)]),
+    "The other 3 — Missing time",
+  );
+});
+
+test("restHeading does not say 'The other 1'", () => {
+  assert.equal(restHeading([missingTime(60)]), "One more — Missing time");
+});
+
+test("restHeading refuses to name one code as all of them", () => {
+  // Naming only the first would be a lie about the rest, so a mixed set gets no
+  // finding name at all.
+  const heading = restHeading([missingTime(60), lateStart(12)]);
+  assert.equal(heading, "The other 2 — Mixed findings");
+  assert.doesNotMatch(heading, /Missing time|Late start/);
 });
 
 test("every branch-row string is pinned, not just the ones a component happens to use", () => {

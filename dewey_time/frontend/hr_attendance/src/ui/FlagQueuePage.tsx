@@ -392,8 +392,12 @@ export function FlagQueuePage() {
     setActiveIdentity(null);
     // Unobservable today and deliberately untested: a flag identity is unique
     // across the payload, so a stale one cannot match anything on the next
-    // person. Cleared anyway, so this behaves like `activeIdentity` beside it
-    // rather than becoming the one piece of per-row state that persists.
+    // person. Cleared anyway, so it matches `activeIdentity` at both of the
+    // ROW-RESET sites rather than becoming the one piece of per-row state that
+    // persists. Both, and only those two: `activeIdentity` is cleared at a third
+    // site — the mutation's onSuccess, closing the form after a panel write —
+    // which `expandedIdentity` deliberately does not mirror, so a promoted card
+    // stays promoted and shows HR the outcome they just recorded on it.
     setExpandedIdentity(null);
     setLastDecision(null);
     setExcluded(new Set<string>());

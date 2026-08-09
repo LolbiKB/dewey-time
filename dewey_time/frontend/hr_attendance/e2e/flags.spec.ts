@@ -1776,7 +1776,12 @@ test("a many-flag person shows one card and the rest compressed, and any of them
         message: {
           ...A11Y_PAYLOAD,
           entries: [{ kind: "person", ...MANY_FLAG_PERSON }] satisfies QueueEntry[],
-          counts: { ...A11Y_PAYLOAD.counts, open: 4, people: 1, rows: 1 },
+          counts: {
+            ...A11Y_PAYLOAD.counts,
+            open: 4,
+            people: 1,
+            rows: 1,
+          } satisfies QueuePayload["counts"],
         },
       }),
     });
