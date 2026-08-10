@@ -91,7 +91,13 @@ def _ensure(doctype, name, payload):
 
 @unittest.skipUnless(
     _HAS_REAL_BENCH,
-    "requires a real Frappe bench — run via: frappe-sandbox test --backend --module test_integration_pilot_matrix",
+    # The command a developer actually sees, so it has to be the one that works.
+    # NOT `frappe-sandbox test --backend --module ...`: the module docstring
+    # above records that it builds the `--app dewey_time --module ...` form,
+    # which loads every test_*.py in the app, installs a MagicMock over
+    # sys.modules["frappe"], and skips straight back to here — `Ran 0 tests`.
+    "requires a real Frappe bench — run via: "
+    "bench --site test_site run-tests --module dewey_time.tests.test_integration_pilot_matrix",
 )
 class TestPilotMatrix(_Base):
     """Each test is one employee-day scenario → asserted flag set."""
@@ -345,6 +351,25 @@ class TestPilotMatrix(_Base):
     def test_holiday_punch_is_off_shift_only(self):
         day = HOLIDAY_DATE
         # make this employee's company resolve the holiday via default_holiday_list
+        #
+        # Restored explicitly. This write used to be undone by the class
+        # rollback, but the rollout tests commit (purge_testing_flags does it
+        # inside the endpoint under test, _rollout_dates does it so the restore
+        # is durable) and a commit ends the transaction the whole class is
+        # rolled back in. Left alone it now persists to the bench and hands
+        # every other suite on this site a company with a holiday list it never
+        # asked for.
+        previous_holiday_list = frappe.db.get_value(
+            "Company", self.company, "default_holiday_list"
+        )
+        self.addCleanup(frappe.db.commit)
+        self.addCleanup(
+            frappe.db.set_value,
+            "Company",
+            self.company,
+            "default_holiday_list",
+            previous_holiday_list,
+        )
         frappe.db.set_value("Company", self.company, "default_holiday_list", HOLIDAY_LIST)
         self._checkin(day, "10:00:00", "IN")
         self._checkin(day, "14:00:00", "OUT")
@@ -587,10 +612,21 @@ class TestPilotMatrix(_Base):
             self._checkin(day, "11:30:00", "IN")
             self._checkin(day, "17:00:00", "OUT")
 
+        days = [getdate(pilot_day), getdate(live_day)]
+
         def _count(phase):
+            # Scoped to this test's own two days. Unscoped, assertGreater(
+            # _count("TESTING"), 0) was satisfied by the TESTING rows
+            # test_a_pilot_day_is_stamped_testing commits on 03-19, so the test
+            # passed whether or not its own setup produced anything at all.
             return frappe.db.count(
                 "Attendance Flag",
-                {"employee": self.employee, "source": "AUTO", "rollout_phase": phase},
+                {
+                    "employee": self.employee,
+                    "source": "AUTO",
+                    "rollout_phase": phase,
+                    "attendance_date": ["in", days],
+                },
             )
 
         with self._rollout_dates(pilot_day, live_day):
