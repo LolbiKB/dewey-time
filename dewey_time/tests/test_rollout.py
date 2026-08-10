@@ -273,6 +273,47 @@ class TestSettingsValidation(unittest.TestCase):
     def test_a_branch_row_with_a_blank_go_live_passes(self):
         self._doc(rows=[_row("BR-A", date(2026, 8, 15))]).validate()
 
+    def test_equal_dates_pass_at_both_scopes(self):
+        # A branch that should skip the pilot sets testing_start == go_live. This
+        # rests entirely on the `>` in _throw_if_reversed: flipping it to `>=`
+        # would make the escape hatch unsavable while every other test here stays
+        # green. Mirrors TestPhaseFor.test_equal_dates_mean_no_pilot_window, which
+        # pins the same boundary on the read side.
+        self._doc(date(2026, 8, 15), date(2026, 8, 15)).validate()
+        self._doc(
+            rows=[_row("BR-A", date(2026, 8, 15), date(2026, 8, 15))]
+        ).validate()
+
+    def test_a_reversed_pair_is_rejected_with_string_dates(self):
+        # The mock's getdate is identity, and every other test here passes
+        # datetime.date objects -- so deleting the getdate() calls in
+        # _throw_if_reversed would leave every other test green. On a real bench
+        # a Single's values come back from tabSingles as strings, and
+        # "2026-09-01" > "2026-08-15" happening to sort correctly as raw strings
+        # is luck, not design: an unpadded day breaks that luck (raw string
+        # "2026-08-10" < "2026-08-9", but the real dates are reversed), so this
+        # only passes if getdate() actually runs.
+        from dewey_time.dewey_time.doctype.dewey_time_settings import (
+            dewey_time_settings as settings_module,
+        )
+
+        with patch.object(settings_module, "getdate", side_effect=_real_getdate):
+            with self.assertRaises(Exception) as caught:
+                self._doc("2026-08-10", "2026-08-9").validate()
+        self.assertIn("global", str(caught.exception))
+
+    def test_two_blank_branch_rows_do_not_raise_duplicate(self):
+        # Frappe runs validate() before the reqd mandatory check, so a blank
+        # branch reaching the duplicate check would surface a confusing "Branch
+        # None appears twice" instead of letting reqd report "Branch is
+        # required".
+        self._doc(
+            rows=[
+                _row(None, date(2026, 8, 15)),
+                _row(None, date(2026, 9, 1)),
+            ]
+        ).validate()
+
 
 def _real_getdate(value):
     """The mock's getdate is identity, which cannot turn "2026-08-15" into a date,

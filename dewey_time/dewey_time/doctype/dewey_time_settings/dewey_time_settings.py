@@ -31,6 +31,8 @@ class DeweyTimeSettings(Document):
 
         seen = set()
         for row in self.branch_rollout or []:
+            if not row.branch:
+                continue
             if row.branch in seen:
                 frappe.throw(f"Branch {row.branch} appears twice in the rollout table.")
             seen.add(row.branch)
