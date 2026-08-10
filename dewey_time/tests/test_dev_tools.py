@@ -868,12 +868,29 @@ class TestParseDryRun(unittest.TestCase):
         self.assertFalse(_parse_dry_run("0"))
         self.assertTrue(_parse_dry_run("1"))
         self.assertFalse(_parse_dry_run(0))
+        self.assertTrue(_parse_dry_run(1))
         self.assertTrue(_parse_dry_run(True))
+        self.assertFalse(_parse_dry_run(False))
+        # The named off-switches, spelled out: these three are the whole set that
+        # may arm a real delete.
+        self.assertFalse(_parse_dry_run("false"))
+        self.assertFalse(_parse_dry_run("no"))
 
     def test_absent_defaults_to_a_dry_run(self):
         from dewey_time.attendance_engine.dev_tools import _parse_dry_run
 
         self.assertTrue(_parse_dry_run(None))
+
+    def test_a_value_it_cannot_read_stays_a_dry_run(self):
+        from dewey_time.attendance_engine.dev_tools import _parse_dry_run
+
+        # Only an explicit "no" disarms it. An empty form field, the "on" an HTML
+        # checkbox posts, and a plain typo all reach here as strings -- and under
+        # a truthy whitelist (_parse_confirm's) every one of them would read as
+        # "not a dry run" and arm a real delete against the flag table.
+        self.assertTrue(_parse_dry_run(""))
+        self.assertTrue(_parse_dry_run("on"))
+        self.assertTrue(_parse_dry_run("banana"))
 
 
 class TestPurgeTestingFlags(unittest.TestCase):
@@ -936,6 +953,11 @@ class TestPurgeTestingFlags(unittest.TestCase):
         ):
             self.dev_tools.purge_testing_flags(dry_run=1)
         self.assertEqual(get_all.call_args.kwargs["filters"]["source"], "AUTO")
+        # And only the pilot window. Without this, dropping the phase filter turns
+        # the purge into "delete every AUTO flag on the site", live rows included,
+        # while every other test here stays green -- they stub get_all to return
+        # the same two rows whatever filters arrive.
+        self.assertEqual(get_all.call_args.kwargs["filters"]["rollout_phase"], "TESTING")
 
 
 class TestReconcileRolloutFlags(unittest.TestCase):
@@ -1029,6 +1051,19 @@ class TestReconcileRolloutFlags(unittest.TestCase):
         ):
             self.dev_tools.reconcile_rollout_flags(dry_run=0)
         self.assertEqual(phase_for.call_args.kwargs["branch"], "BR-MOVED")
+
+    def test_it_refuses_without_system_manager(self):
+        # The mirror of the purge test. Every other reconcile test patches the
+        # permission gate out as a no-op, so without this one, deleting the call
+        # kills nothing -- and reconcile deletes across the whole table rather
+        # than one phase.
+        with patch.object(
+            self.dev_tools,
+            "_require_system_manager_for_clear",
+            side_effect=Exception("nope"),
+        ):
+            with self.assertRaises(Exception):
+                self.dev_tools.reconcile_rollout_flags(dry_run=0)
 
 
 if __name__ == "__main__":

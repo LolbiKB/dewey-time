@@ -594,14 +594,21 @@ def regenerate_flags_for_range_api(
 
 
 def _parse_dry_run(value) -> bool:
-    """dry_run arrives as a STRING over HTTP, where "0" is truthy.
+    """Whether to report without deleting. Defaults to True, and stays True for
+    anything it cannot read as an explicit "no".
 
-    Absent means True. The safe reading of a missing or unparseable value on a
-    destructive endpoint is "do not delete anything".
+    Deliberately NOT _parse_confirm's truthy whitelist. That one answers "did
+    someone opt in?", where an unrecognised value must mean no. This answers
+    "may I delete?", where an unrecognised value must mean no as well -- and
+    those are opposite defaults. dry_run arrives as a string over HTTP, so ""
+    and "on" and a typo all reach here, and under a truthy whitelist every one
+    of them would have armed a real delete.
     """
     if value is None:
         return True
-    return _parse_confirm(value)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ("0", "false", "no")
 
 
 def _scoped_auto_flags(*, fields, extra_filters=None, branch=None):
