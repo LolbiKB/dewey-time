@@ -456,3 +456,33 @@ class TestIntradayNoShow(unittest.TestCase):
         insert_flag, _ = self._run()
 
         self.assertEqual(insert_flag.call_args_list[0].kwargs["evidence"]["minutes"], 480)
+
+
+class TestIntradayPrelaunchGuard(unittest.TestCase):
+    def _run(self, phase):
+        from dewey_time.attendance_engine import intraday
+
+        employee_doc = MagicMock()
+        employee_doc.branch = "BR-A"
+        employee_doc.company = None
+        with patch.object(intraday.frappe, "get_cached_doc", return_value=employee_doc), patch.object(
+            intraday.rollout, "phase_for", return_value=phase
+        ), patch.object(
+            intraday, "_delete_auto_flags_for_employee_date"
+        ) as delete, patch.object(
+            intraday, "_get_shift_assignment", return_value=None
+        ):
+            intraday.refresh_intraday_flags_for_employee_date("EMP-1", date(2026, 8, 1))
+        return delete
+
+    def test_prelaunch_does_not_reach_the_delete(self):
+        # The delete used to be the first statement in this function. If the guard is
+        # placed after it, this test fails -- which is the whole point of it.
+        from dewey_time.attendance_engine import rollout
+
+        self.assertFalse(self._run(rollout.PRELAUNCH).called)
+
+    def test_a_live_day_still_deletes(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.assertTrue(self._run(rollout.LIVE).called)

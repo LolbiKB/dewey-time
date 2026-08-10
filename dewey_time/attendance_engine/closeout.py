@@ -27,6 +27,7 @@ from dewey_time.attendance_engine.holidays import holiday_by_date_for_company
 # Shared with hr_calendar + intraday: range-aware Shift Assignment lookup (not start_date == D only).
 from dewey_time.attendance_engine.shift_assignment import get_shift_assignment as _get_shift_assignment
 from dewey_time.attendance_engine.employment_type import is_clock_based
+from dewey_time.attendance_engine import rollout
 
 
 CLOSEOUT_STATUSES = frozenset({"closed", "deferred_offline", "closure_failed"})
@@ -269,6 +270,13 @@ def _generate_company_fallback_for_date(*, company: str, attendance_date):
     for employee in employees:
         employee_doc = frappe.get_cached_doc("Employee", employee)
         employee_branch = getattr(employee_doc, "branch", None)
+        # continue, not return: this is a per-employee loop over one company, and
+        # branches inside it can be in different phases.
+        if (
+            rollout.phase_for(branch=employee_branch, attendance_date=attendance_date)
+            == rollout.PRELAUNCH
+        ):
+            continue
         if employee_branch and has_open_device_closeout_alert(branch=employee_branch, local_date=attendance_date):
             continue
 
@@ -496,6 +504,22 @@ def _generate_for_employee_date(
     employee_doc = frappe.get_cached_doc("Employee", employee)
     employee_branch = getattr(employee_doc, "branch", None)
     employee_company = getattr(employee_doc, "company", None)
+
+    # PRELAUNCH means the system was not watching this day, so there is nothing to
+    # say about it and nothing to take back.
+    #
+    # Returning BEFORE the deletes below is the deliberate part.
+    # _delete_auto_flags_for_employee_date carries the delivery-marker protection
+    # added in #148, and running it on a day the engine has no opinion about would
+    # re-open exactly the question that fix closed -- whether an ops record saying
+    # "this device never delivered" survives a wipe -- in a context where the
+    # answer is genuinely unclear. Removal of pre-cutoff rows has one owner
+    # instead: dev_tools.reconcile_rollout_flags.
+    if (
+        rollout.phase_for(branch=employee_branch, attendance_date=attendance_date)
+        == rollout.PRELAUNCH
+    ):
+        return
 
     # BEFORE the deletes below, and that ordering is the whole point.
     #

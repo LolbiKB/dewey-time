@@ -1188,3 +1188,79 @@ class TestDeleteExcludesProtectedNames(unittest.TestCase):
         )
 
         self.assertNotIn("name", self.frappe.db.delete.call_args.args[1])
+
+
+class TestPrelaunchGuard(unittest.TestCase):
+    """A day before the branch's cutoff earns no flags and loses none."""
+
+    def _run_closeout(self, phase):
+        from dewey_time.attendance_engine import closeout
+
+        employee_doc = MagicMock()
+        employee_doc.branch = "BR-A"
+        # None, not a real company: a truthy company sends the LIVE control path
+        # through holiday_by_date_for_company, which is not what this test is about.
+        employee_doc.company = None
+        with patch.object(closeout.frappe, "get_cached_doc", return_value=employee_doc), patch.object(
+            closeout.rollout, "phase_for", return_value=phase
+        ), patch.object(
+            closeout, "_delete_auto_flags_for_employee_date"
+        ) as delete, patch.object(
+            closeout, "_insert_flags"
+        ) as insert, patch.object(
+            closeout, "should_skip_absence_flags", return_value=False
+        ), patch.object(
+            closeout, "_get_shift_assignment", return_value=None
+        ):
+            closeout._generate_for_employee_date(
+                employee="EMP-1", attendance_date=date(2026, 8, 1)
+            )
+        return delete, insert
+
+    def test_prelaunch_writes_nothing_and_deletes_nothing(self):
+        from dewey_time.attendance_engine import rollout
+
+        delete, insert = self._run_closeout(rollout.PRELAUNCH)
+        delete.assert_not_called()
+        insert.assert_not_called()
+
+    def test_a_live_day_still_reaches_the_delete(self):
+        # The control. Without it, a guard that always returned early would pass
+        # the test above and this suite would be asserting nothing.
+        from dewey_time.attendance_engine import rollout
+
+        delete, _insert = self._run_closeout(rollout.LIVE)
+        self.assertTrue(delete.called)
+
+
+class TestCompanyFallbackPrelaunchGuard(unittest.TestCase):
+    def _run_fallback(self, phase):
+        from dewey_time.attendance_engine import closeout
+
+        employee_doc = MagicMock()
+        employee_doc.branch = "BR-A"
+        with patch.object(closeout.frappe, "get_all", return_value=["EMP-1"]), patch.object(
+            closeout.frappe, "get_cached_doc", return_value=employee_doc
+        ), patch.object(
+            closeout.rollout, "phase_for", return_value=phase
+        ), patch.object(
+            closeout, "has_open_device_closeout_alert", return_value=False
+        ), patch.object(
+            closeout, "_get_shift_assignment", return_value={"shift_type": "S1"}
+        ) as shift:
+            closeout._generate_company_fallback_for_date(
+                company="CO-A", attendance_date=date(2026, 8, 1)
+            )
+        return shift
+
+    def test_prelaunch_skips_the_employee_before_any_work(self):
+        from dewey_time.attendance_engine import rollout
+
+        shift = self._run_fallback(rollout.PRELAUNCH)
+        shift.assert_not_called()
+
+    def test_a_live_day_still_reads_the_shift(self):
+        from dewey_time.attendance_engine import rollout
+
+        shift = self._run_fallback(rollout.LIVE)
+        self.assertTrue(shift.called)
