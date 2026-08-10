@@ -15,7 +15,11 @@
     "vapid_subject",
     "vapid_public_key",
     "vapid_private_key",
-    "landing_workspace_snapshot"
+    "landing_workspace_snapshot",
+    "rollout_section",
+    "rollout_testing_start",
+    "rollout_go_live",
+    "branch_rollout"
   ],
   "fields": [
     {
@@ -49,12 +53,36 @@
       "label": "Landing Workspace Snapshot",
       "hidden": 1,
       "description": "JSON {user: original default_workspace} saved when role-based landing is enabled; used to restore on disable. Managed by attendance_engine.landing."
+    },
+    {
+      "fieldname": "rollout_section",
+      "fieldtype": "Section Break",
+      "label": "Attendance Rollout"
+    },
+    {
+      "fieldname": "rollout_testing_start",
+      "fieldtype": "Date",
+      "label": "Testing Start",
+      "description": "The cutoff. Before this date the engine writes no AUTO flags. Blank means no cutoff — every day is treated as live, exactly as before this feature existed."
+    },
+    {
+      "fieldname": "rollout_go_live",
+      "fieldtype": "Date",
+      "label": "Go Live",
+      "description": "Flags dated on or after this day are the official record. Blank with a testing start set means the pilot is still open."
+    },
+    {
+      "fieldname": "branch_rollout",
+      "fieldtype": "Table",
+      "label": "Branch Rollout",
+      "options": "Dewey Time Branch Rollout",
+      "description": "Branches that roll out on their own timetable. A row is used whole and does not inherit the global dates field-by-field."
     }
   ],
   "index_web_pages_for_search": 0,
   "issingle": 1,
   "links": [],
-  "modified": "2026-06-21 00:00:00.000000",
+  "modified": "2026-08-10 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Dewey Time Settings",

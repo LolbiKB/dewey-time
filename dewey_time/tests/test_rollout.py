@@ -223,6 +223,57 @@ class TestPhasesConfigured(unittest.TestCase):
         )
 
 
+class TestSettingsValidation(unittest.TestCase):
+    """The controller is directly testable because frappe.model.document.Document is a
+    REAL class in this suite's mock (test_closeout.py:78-88), whose __init__ copies
+    kwargs onto __dict__. Construct with every field the validator reads."""
+
+    def _doc(self, testing_start=None, go_live=None, rows=()):
+        from dewey_time.dewey_time.doctype.dewey_time_settings.dewey_time_settings import (
+            DeweyTimeSettings,
+        )
+
+        return DeweyTimeSettings(
+            rollout_testing_start=testing_start,
+            rollout_go_live=go_live,
+            branch_rollout=list(rows),
+        )
+
+    def test_a_valid_config_passes(self):
+        self._doc(date(2026, 8, 15), date(2026, 9, 1)).validate()
+
+    def test_an_empty_config_passes(self):
+        self._doc().validate()
+
+    def test_a_go_live_without_a_testing_start_is_rejected(self):
+        with self.assertRaises(Exception) as caught:
+            self._doc(None, date(2026, 9, 1)).validate()
+        self.assertIn("testing start date", str(caught.exception))
+
+    def test_a_reversed_global_pair_is_rejected(self):
+        with self.assertRaises(Exception) as caught:
+            self._doc(date(2026, 9, 1), date(2026, 8, 15)).validate()
+        self.assertIn("global", str(caught.exception))
+
+    def test_a_reversed_branch_pair_is_rejected(self):
+        with self.assertRaises(Exception) as caught:
+            self._doc(rows=[_row("BR-A", date(2026, 9, 1), date(2026, 8, 15))]).validate()
+        self.assertIn("BR-A", str(caught.exception))
+
+    def test_a_duplicate_branch_row_is_rejected(self):
+        with self.assertRaises(Exception) as caught:
+            self._doc(
+                rows=[
+                    _row("BR-A", date(2026, 8, 15)),
+                    _row("BR-A", date(2026, 9, 1)),
+                ]
+            ).validate()
+        self.assertIn("twice", str(caught.exception))
+
+    def test_a_branch_row_with_a_blank_go_live_passes(self):
+        self._doc(rows=[_row("BR-A", date(2026, 8, 15))]).validate()
+
+
 def _real_getdate(value):
     """The mock's getdate is identity, which cannot turn "2026-08-15" into a date,
     nor turn a falsy value into today. Real frappe.utils.getdate does both; this
