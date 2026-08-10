@@ -156,9 +156,9 @@ class TestFlagIdentity(unittest.TestCase):
 
     def test_missing_evidence_keys_fall_back_to_scrub_flag_code(self):
         # MISSING_TIME with no interval_start: _missing_time_suffix returns
-        # None, so flag_identity() falls back to scrub(flag_code) -- same
-        # fallback attendance_flag.py's before_insert uses when its own
-        # _missing_time_key() returns None.
+        # None, so flag_identity() falls back to scrub(flag_code). The
+        # controller's before_insert had the same fallback until T3-11 deleted
+        # its naming; this is now the only place the rule lives.
         missing_time = flag_identity(
             employee="HR-EMP-00042",
             attendance_date=date(2026, 8, 3),
