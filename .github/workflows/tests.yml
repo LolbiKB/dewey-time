@@ -109,3 +109,71 @@ jobs:
       - name: Run dewey_time tests
         working-directory: frappe-bench
         run: bench --site test_site run-tests --app dewey_time
+
+      # The step above runs the WHOLE app, and under that form
+      # test_integration_pilot_matrix self-skips: the other test modules inject a
+      # MagicMock as `frappe` at import time, the module detects it is not on a
+      # real bench, and skips rather than erroring. So everything it proves --
+      # DocType fields actually migrating, a Select round-tripping, the flag
+      # engine's behaviour against real Frappe -- was verified by hand once and
+      # then guarded by nothing (punch list T3-12).
+      #
+      # Running it alone, by module, is the only form that executes it. That only
+      # became possible in #149: the module used to inherit FrappeTestCase, whose
+      # preparation walks the app and imports every test_*.py, re-creating the
+      # same MagicMock pollution from inside the isolated run. It inherits
+      # IntegrationTestCase now.
+      - name: Bootstrap the site for real-DB tests
+        working-directory: frappe-bench
+        # `bench new-site` + `install-app` never runs ERPNext's setup wizard, so
+        # the site has no Company -- and TestPilotMatrix.setUpClass opens with
+        # `frappe.db.get_value("Company", {}, "name")` and links every fixture
+        # Employee to the result. Fiscal Years matter too: HRMS's before_tests
+        # calls get_fiscal_year(nowdate()) and aborts the whole runner without
+        # them. This is the same idempotent entrypoint the frappe-sandbox harness
+        # calls via its bootstrap_method hook.
+        #
+        # Deliberately AFTER the full-app run above, not before: a Company
+        # appearing mid-suite could change what those tests exercise, and this
+        # step should add a gate, not quietly alter an existing one.
+        run: bench --site test_site execute dewey_time.utils.sandbox_bootstrap.run
+
+      - name: Run real-bench integration tests
+        working-directory: frappe-bench
+        # No continue-on-error. A gate that cannot fail the build is not a gate,
+        # and this repo has already been burned by exactly that: the Frontend
+        # job's `npm install` was continue-on-error, so a failed install left the
+        # job green with zero tests run.
+        run: |
+          set -o pipefail
+          bench --site test_site run-tests \
+            --module dewey_time.tests.test_integration_pilot_matrix 2>&1 | tee bench-module.log
+
+          # A genuine test failure never reaches the checks below: pipefail plus
+          # the runner's default `bash -e` aborts on bench's exit code. What
+          # follows is only for the cases that exit 0 while proving nothing --
+          # both of which render as a green check:
+          #
+          #   Ran 0 tests   ... OK                 -> nothing was collected
+          #   Ran 17 tests  ... OK (skipped=17)    -> the module self-skipped
+          #
+          # Note the second one still prints a plausible test count, so counting
+          # is not enough; what distinguishes a real run is that fewer tests
+          # skipped than ran.
+          # awk, not sed: awk's ERE is the same on the GNU sed CI runs and the BSD
+          # sed a macOS developer runs, so this block can be exercised by hand
+          # before it is trusted. A guard against hollow greens that is itself
+          # only testable in CI would be the same mistake one level up.
+          ran=$(awk '/^Ran [0-9]+ test/ {print $2}' bench-module.log | tail -1)
+          skipped=$(awk -F'skipped=' '/OK \(skipped=/ {split($2, a, ")"); print a[1]}' bench-module.log | tail -1)
+          : "${ran:=0}" "${skipped:=0}"
+
+          if [ "$ran" -eq 0 ]; then
+            echo "::error::the integration module collected no tests — it was not found, or it errored before running"
+            exit 1
+          fi
+          if [ "$skipped" -ge "$ran" ]; then
+            echo "::error::all $ran tests skipped — the module did not detect a real bench (_HAS_REAL_BENCH false)"
+            exit 1
+          fi
+          echo "integration module executed for real: $ran ran, $skipped skipped"

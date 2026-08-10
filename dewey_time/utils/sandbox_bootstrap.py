@@ -2,9 +2,9 @@
 
 Run via: bench --site <site> execute dewey_time.utils.sandbox_bootstrap.run
 
-Two responsibilities, both idempotent and sandbox-only (invoked by the
-frappe-sandbox harness after install-app on the test site and after seed --prod —
-never by Frappe's prod hooks):
+Four responsibilities, all idempotent and sandbox-only (invoked by the
+frappe-sandbox harness after install-app on the test site and after seed --prod,
+and by CI after creating its throwaway site — never by Frappe's prod hooks):
 
 1. dewey_time's custom fields (reuses the app's canonical setup,
    dewey_time.setup.custom_fields), so a schema-light restore gets the same fields a
@@ -26,6 +26,11 @@ never by Frappe's prod hooks):
    default warehouses and dies on ``Could not find Warehouse Type: Transit``,
    because ``seed --clean`` never runs ERPNext's setup wizard. One missing row
    is what stood between that branch and its own integration test.
+4. Frappe's default Gender rows, for the same reason — `gender` is mandatory on
+   Employee, so without them every Employee fixture dies on
+   ``Could not find Gender: Male``. The prod-seeded sandbox already has these
+   (hence item 3's note that Gender was present there); a site built by
+   ``bench new-site`` does not.
 """
 from __future__ import annotations
 
@@ -102,8 +107,47 @@ def _ensure_company() -> str:
     return f"created:{doc.name}"
 
 
+# Frappe's own defaults, from update_genders() in
+# frappe/desk/page/setup_wizard/install_fixtures.py (v16). Spelled out rather
+# than calling that function, which wraps each label in _() — on a site whose
+# language is not English it would create translated names, and the Employee
+# fixtures ask for the literal "Male".
+DEFAULT_GENDERS = (
+    "Male",
+    "Female",
+    "Other",
+    "Transgender",
+    "Genderqueer",
+    "Non-Conforming",
+    "Prefer not to say",
+)
+
+
+def _ensure_genders() -> int:
+    """Idempotently create Frappe's default Gender rows.
+
+    `gender` is mandatory on Employee, and the rows only exist on a site that
+    completed the setup wizard. Never touches an existing row.
+    """
+    created = 0
+    for gender in DEFAULT_GENDERS:
+        if frappe.db.exists("Gender", gender):
+            continue
+        frappe.get_doc({"doctype": "Gender", "gender": gender}).insert(
+            ignore_permissions=True, ignore_if_duplicate=True
+        )
+        created += 1
+    if created:
+        frappe.db.commit()
+    return created
+
+
 def run() -> str:
     make_custom_fields()
     fy = _ensure_fiscal_years()
+    genders = _ensure_genders()
     company = _ensure_company()
-    return f"BOOTSTRAP_OK fiscal_years_created={fy} company={company}"
+    return (
+        f"BOOTSTRAP_OK fiscal_years_created={fy} "
+        f"genders_created={genders} company={company}"
+    )
