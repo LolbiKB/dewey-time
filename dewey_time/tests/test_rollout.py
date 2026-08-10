@@ -132,6 +132,74 @@ class TestPhaseFor(unittest.TestCase):
                     self.rollout.TESTING,
                 )
 
+    def test_a_missing_attendance_date_raises(self):
+        # A missing attendance_date is a caller bug with no correct answer.
+        # getdate(None) resolves to today on a real bench, so silently accepting it
+        # would derive the phase from "now" -- the exact failure this module exists
+        # to prevent. Returning LIVE would be a guess that hides the bug instead.
+        settings = _settings(testing_start=date(2026, 8, 15), go_live=date(2026, 9, 1))
+        with patch.object(self.rollout.frappe, "get_cached_doc", return_value=settings):
+            with self.assertRaises(ValueError):
+                self.rollout.phase_for(branch=None, attendance_date=None)
+
+    def test_unset_dates_are_live_with_frappe_faithful_getdate(self):
+        # test_no_dates_anywhere_is_live above passes even with the isinstance guard
+        # in _as_date deleted, because the mock's getdate is identity and None stays
+        # None. This test uses a Frappe-faithful getdate instead, where a falsy
+        # value resolves to today: without the guard, an unset rollout_testing_start
+        # would read as "testing starts today" -- the exact inverse of LIVE.
+        with patch.object(self.rollout.frappe, "get_cached_doc", return_value=_settings()):
+            with patch.object(self.rollout, "getdate", side_effect=_real_getdate):
+                self.assertEqual(
+                    self.rollout.phase_for(branch=None, attendance_date=date(2020, 1, 1)),
+                    self.rollout.LIVE,
+                )
+
+
+class TestBranchForEmployee(unittest.TestCase):
+    def setUp(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.rollout = rollout
+
+    def test_branch_for_employee_reads_the_employee_branch_field(self):
+        with patch.object(
+            self.rollout.frappe, "get_cached_value", return_value="BR-A"
+        ) as mock_get_cached_value:
+            result = self.rollout.branch_for_employee("EMP-0001")
+        mock_get_cached_value.assert_called_once_with("Employee", "EMP-0001", "branch")
+        self.assertEqual(result, "BR-A")
+
+    def test_phase_for_employee_routes_the_employees_branch_into_the_lookup(self):
+        # A stamp path and a refusal path that read the employee's branch through two
+        # different code paths could disagree. Proving phase_for_employee actually
+        # uses what branch_for_employee returns -- not the global pair regardless --
+        # is what keeps them from being able to.
+        settings = _settings(
+            testing_start=date(2026, 8, 15),
+            go_live=date(2026, 9, 1),
+            rows=[_row("BR-LATE", date(2026, 10, 1), date(2026, 11, 1))],
+        )
+        with patch.object(self.rollout.frappe, "get_cached_doc", return_value=settings):
+            with patch.object(
+                self.rollout.frappe, "get_cached_value", return_value="BR-LATE"
+            ):
+                self.assertEqual(
+                    self.rollout.phase_for_employee(
+                        employee="EMP-0002", attendance_date=date(2026, 9, 15)
+                    ),
+                    self.rollout.PRELAUNCH,
+                )
+            with patch.object(
+                self.rollout.frappe, "get_cached_value", return_value=None
+            ):
+                self.assertEqual(
+                    self.rollout.phase_for_employee(
+                        employee="EMP-0002", attendance_date=date(2026, 9, 15)
+                    ),
+                    self.rollout.LIVE,
+                )
+
 
 class TestPhasesConfigured(unittest.TestCase):
     def setUp(self):
@@ -156,10 +224,14 @@ class TestPhasesConfigured(unittest.TestCase):
 
 
 def _real_getdate(value):
-    """The mock's getdate is identity, which cannot turn "2026-08-15" into a date.
-    This is the real behaviour, needed only by the string-dates test."""
+    """The mock's getdate is identity, which cannot turn "2026-08-15" into a date,
+    nor turn a falsy value into today. Real frappe.utils.getdate does both; this
+    stand-in is needed by the string-dates test and by the production-semantics
+    test for an unset rollout date."""
     from datetime import datetime
 
+    if not value:
+        return date.today()
     if isinstance(value, date):
         return value
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()

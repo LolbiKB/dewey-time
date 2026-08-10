@@ -28,16 +28,21 @@ SETTINGS = "Dewey Time Settings"
 def _as_date(value):
     """getdate(), but None for anything that is not date-shaped.
 
-    The isinstance check is load-bearing, not defensive padding. Every test in this
-    suite runs against a MagicMock installed as `frappe`, so an unconfigured
-    `frappe.get_cached_doc(SETTINGS)` returns a MagicMock whose every attribute is
-    truthy AND whose `__lt__` returns a truthy MagicMock. Without this guard such a
-    mock reads as "a cutoff is set, and every date falls before it" -- every day
-    PRELAUNCH, and the whole engine suite red for a reason unrelated to the code.
+    The isinstance check is load-bearing, not defensive padding. On a real bench,
+    `frappe.utils.getdate(falsy)` returns TODAY, not None. Without this guard, an
+    unset `rollout_testing_start` (None) would read as "testing starts today":
+    every historical day PRELAUNCH, every future day TESTING -- the exact inverse
+    of the intended "no dates set" = LIVE default.
 
-    With it, an unconfigured mock reads as "no dates set" = LIVE = the behaviour
-    those tests already assert. It is also simply correct in production: a value
-    that is neither a date nor a date string cannot have come from a Date field.
+    The same gap also breaks every test in this suite, which runs against a
+    MagicMock installed as `frappe`: an unconfigured `frappe.get_cached_doc(SETTINGS)`
+    returns a MagicMock whose every attribute is truthy AND whose `__lt__` returns a
+    truthy MagicMock, so without this guard such a mock reads as "a cutoff is set,
+    and every date falls before it" -- every day PRELAUNCH, and the whole engine
+    suite red for a reason unrelated to the code.
+
+    With the guard, both an unset production date and an unconfigured mock read as
+    "no dates set" = LIVE -- the behaviour this module, and its tests, both require.
 
     datetime is a subclass of date, so the two-member tuple covers it.
     """
@@ -90,7 +95,12 @@ def phase_for(*, branch: str | None, attendance_date) -> str:
     testing_start, go_live = rollout_dates_for_branch(branch)
     if testing_start is None:
         return LIVE
-    day = getdate(attendance_date)
+    day = _as_date(attendance_date)
+    if day is None:
+        raise ValueError(
+            "phase_for requires an attendance_date; "
+            "a falsy one would resolve to today"
+        )
     if day < testing_start:
         return PRELAUNCH
     if go_live is None or day < go_live:
