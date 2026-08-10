@@ -756,7 +756,9 @@ class TestPrelaunchGuard(unittest.TestCase):
 
         employee_doc = MagicMock()
         employee_doc.branch = "BR-A"
-        employee_doc.company = "CO-A"
+        # None, not a real company: a truthy company sends the LIVE control path
+        # through holiday_by_date_for_company, which is not what this test is about.
+        employee_doc.company = None
         with patch.object(closeout.frappe, "get_cached_doc", return_value=employee_doc), patch.object(
             closeout.rollout, "phase_for", return_value=phase
         ), patch.object(
