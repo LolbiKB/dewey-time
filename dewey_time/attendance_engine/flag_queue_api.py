@@ -19,6 +19,7 @@ from __future__ import annotations
 import frappe
 from frappe.utils import getdate
 
+from dewey_time.attendance_engine import rollout
 from dewey_time.attendance_engine.flag_grouping import build_queue, recount
 from dewey_time.attendance_engine.flag_identity import date_key, flag_identity, parse_evidence
 from dewey_time.attendance_engine.flag_triage import TIER_ACT, TIER_REVIEW, TIER_ROUTINE
@@ -51,7 +52,9 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # gained outage_dates.
 # v3: counts gained open_capped; branch-outage groups span dates, so their
 # attendance_date is now null, and every group carries `dates` / `day_count`.
-_QUEUE_CACHE_PREFIX = "flag_queue:v3"
+# v4: the payload gained a `rollout` block (phase of the visible range, pilot
+# flag counts, and the pilot windows of the branches actually present).
+_QUEUE_CACHE_PREFIX = "flag_queue:v4"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
 # below is best-effort only: the engine deletes flags with raw frappe.db.delete()
@@ -150,7 +153,15 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
         frappe.get_all(
             "Attendance Flag",
             filters={"attendance_date": ["between", [start, end]], "source": "AUTO"},
-            fields=["employee", "attendance_date", "flag_code", "severity", "day_closed", "evidence"],
+            fields=[
+                "employee",
+                "attendance_date",
+                "flag_code",
+                "severity",
+                "day_closed",
+                "evidence",
+                "rollout_phase",
+            ],
             # Deterministic so truncation at the cap always drops the same tail, and
             # NEWEST-FIRST so the tail it drops is the oldest work rather than today's.
             # This read ordered ascending until the queue saturated its cap in
@@ -197,6 +208,10 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
             "severity": row.get("severity"),
             "day_closed": row.get("day_closed"),
             "evidence": evidence,
+            # Carried through so _rollout_block can read it without a sixth query:
+            # fetching the column above and dropping it here would leave every real
+            # row reading as blank (LIVE) regardless of what is actually stored.
+            "rollout_phase": row.get("rollout_phase"),
         }
         previous = by_identity.get(identity)
         if previous is None or (flag.get("day_closed") or 0) >= (previous.get("day_closed") or 0):
@@ -370,6 +385,55 @@ def _outage_branch_dates(*, flags, employees_by_id, alert_rows, sync_pairs) -> s
     return outage
 
 
+def _rollout_block(*, flags, employees_by_id) -> dict:
+    """What rollout phase the visible flags belong to, so the queue can say so.
+
+    Computed entirely from rows already in hand. The docstring at
+    _build_queue_payload makes the five-query budget a spec rule rather than a
+    preference, and this must not become the sixth.
+
+    A blank stored phase reads as LIVE: every row written before rollout phases
+    existed has one, and that is consistent with unset dates meaning LIVE.
+    """
+    phases = [(flag.get("rollout_phase") or rollout.LIVE) for flag in flags]
+    total = len(phases)
+    testing = sum(1 for phase in phases if phase == rollout.TESTING)
+
+    if testing == 0:
+        range_phase = rollout.LIVE
+    elif testing == total:
+        range_phase = rollout.TESTING
+    else:
+        range_phase = "MIXED"
+
+    pilot_branches = sorted(
+        {
+            (employees_by_id.get(flag.get("employee")) or {}).get("branch")
+            for flag in flags
+            if (flag.get("rollout_phase") or rollout.LIVE) == rollout.TESTING
+        }
+        - {None}
+    )
+    windows = []
+    for pilot_branch in pilot_branches:
+        testing_start, go_live = rollout.rollout_dates_for_branch(pilot_branch)
+        windows.append(
+            {
+                "branch": pilot_branch,
+                "testing_start": str(testing_start) if testing_start else None,
+                "go_live": str(go_live) if go_live else None,
+            }
+        )
+
+    return {
+        "phases_configured": rollout.phases_configured(),
+        "range_phase": range_phase,
+        "testing_flag_count": testing,
+        "total_flag_count": total,
+        "windows": windows,
+    }
+
+
 def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool = False) -> dict:
     """Five queries, always: flags, decisions, employees, alerts, sync rows. Adding a
     sixth that varies with employee or day count is a spec violation, not a slow path.
@@ -444,6 +508,9 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
         "outage_dates": [
             {"branch": branch, "date": day} for branch, day in sorted(outage_branch_dates)
         ],
+        # Phase of the visible range, so the queue can tell HR whether it is looking
+        # at the official record or at calibration data. Rendered in Phase B.
+        "rollout": _rollout_block(flags=flags, employees_by_id=employees_by_id),
     }
 
 
