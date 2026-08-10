@@ -1,3 +1,5 @@
+import json
+import os
 import unittest
 from datetime import date
 from types import SimpleNamespace
@@ -7,6 +9,19 @@ from dewey_time.tests.test_closeout import _install_frappe_mock
 
 
 _install_frappe_mock()
+
+
+# Resolved from __file__, never the CWD — bench run-tests runs from the bench
+# directory, not this repo, so a repo-relative path silently fails to open
+# there. Same idiom as test_flag_decision_doctype.py:91-106.
+_DOCTYPE_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dewey_time", "doctype")
+)
+
+
+def _load_doctype_json(doctype_folder, filename):
+    with open(os.path.join(_DOCTYPE_DIR, doctype_folder, filename)) as fh:
+        return json.load(fh)
 
 
 def _settings(testing_start=None, go_live=None, rows=()):
@@ -313,6 +328,46 @@ class TestSettingsValidation(unittest.TestCase):
                 _row(None, date(2026, 9, 1)),
             ]
         ).validate()
+
+
+class TestAttendanceFlagRolloutPhaseField(unittest.TestCase):
+    """The Select options and this module's constants have to be the same two
+    strings, and nothing else in the app checks.
+
+    If they drift, Frappe's Select validation rejects EVERY AUTO flag insert on
+    a real bench, closeout._insert_flags' bare `except Exception` logs it and
+    moves on, and the engine goes silently flag-free. CI cannot catch it: CI
+    runs `run-tests --app dewey_time`, under which the one module that touches a
+    real bench (test_integration_pilot_matrix) self-skips by design. Two
+    assertions against the JSON on disk are the whole defence.
+    """
+
+    def setUp(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.rollout = rollout
+        self.doctype_json = _load_doctype_json("attendance_flag", "attendance_flag.json")
+
+    def test_rollout_phase_is_in_field_order(self):
+        # A field absent from field_order is not imported onto the DocType at
+        # all, so the column never appears and every insert naming it fails.
+        self.assertIn("rollout_phase", self.doctype_json["field_order"])
+
+    def test_the_select_options_are_exactly_the_two_phases_a_flag_can_carry(self):
+        # The leading "" is the blank option, and it is required rather than
+        # incidental: every row written before this feature has a blank
+        # rollout_phase, read as LIVE. PRELAUNCH is deliberately absent -- the
+        # engine's guards refuse to write one, and offering the value would
+        # invite a row that contradicts them.
+        options = {
+            field["options"]
+            for field in self.doctype_json["fields"]
+            if field["fieldname"] == "rollout_phase"
+        }.pop()
+        self.assertEqual(
+            set(options.split("\n")),
+            {"", self.rollout.TESTING, self.rollout.LIVE},
+        )
 
 
 def _real_getdate(value):
