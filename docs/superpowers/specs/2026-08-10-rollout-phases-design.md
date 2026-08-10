@@ -22,6 +22,42 @@ Two things follow from it:
    real on real punches, but every flag it writes is marked as calibration data
    and can be removed wholesale later.
 
+## Delivery: two phases, two plans
+
+This design ships in two passes, each with its own implementation plan.
+
+**Phase A — backend.** The rollout module, the three DocType changes, the engine
+guard and stamp, the two purge endpoints, **and both API payload additions** (the
+`rollout` block on `get_flag_queue`, `rollout_phase` on each calendar day). Every
+backend test. No frontend files, no rebuilt bundle.
+
+**Phase B — surfaces.** The queue banner and the calendar chip that render what
+Phase A already returns, their frontend tests, and the rebuilt bundle.
+
+The payload deliberately lands in Phase A rather than with the components that
+consume it. That makes **Phase B touch no Python at all** — no second DocType
+migration, no second `bench migrate`, and the `flag_queue:v3` → `v4` cache-prefix
+bump happens exactly once, in the pass that changes the payload shape. Splitting
+it the other way would mean coordinating a cache bump with a frontend deploy,
+which is the shape of the bug that comment at `flag_queue_api.py:40-53` was
+written to prevent.
+
+### What Phase A alone leaves open
+
+Between the two passes, the phase is real in the data and invisible on screen.
+Two consequences, stated so they are chosen rather than discovered:
+
+- During a pilot, the flag queue gives HR no on-screen signal that they are
+  looking at calibration data. Whoever is running the pilot knows; someone
+  brought in mid-way does not.
+- Once a cutoff is set and `reconcile_rollout_flags` has run, pre-cutoff days
+  show zero flags with no explanation. An unevaluated day is pixel-identical to a
+  clean day, and unlike the banner gap this one does not end when the pilot does.
+
+Neither blocks Phase A from shipping or from a pilot running on it. Both are the
+reason Phase B exists, and the second is the stronger argument for not leaving a
+long gap between them.
+
 ## The model
 
 Every employee-day resolves to exactly one phase, computed from the day's **own
@@ -294,13 +330,16 @@ so was the flag.
 
 ## What HR sees
 
-Two frontend changes. Both are included because they prevent a **misreading**,
-not to decorate. Both live in the single `hr_attendance` Vite app, which serves
+Two surfaces. Both are included because they prevent a **misreading**, not to
+decorate. Both live in the single `hr_attendance` Vite app, which serves
 `/hr-attendance`, `/hr-schedule` and `/hr-flags` — one rebuild covers both.
+
+Each is split across the two passes: the payload is **Phase A**, the rendering is
+**Phase B**.
 
 ### 1. Phase banner on the flag queue
 
-`get_flag_queue` gains a `rollout` block:
+**Phase A.** `get_flag_queue` gains a `rollout` block:
 
 ```json
 "rollout": {
@@ -320,7 +359,7 @@ the branches appearing in that result set, so the banner can name them without
 dumping the whole config. `phases_configured` is false when no dates are set
 anywhere.
 
-`FlagQueuePage.tsx` renders a banner above the queue:
+**Phase B.** `FlagQueuePage.tsx` renders a banner above the queue:
 
 | State | Banner |
 |---|---|
@@ -341,12 +380,14 @@ render for every HR user in the first minute after release.
 
 ### 2. Pre-cutoff marker on calendar days
 
-`hr_calendar.get_week` already resolves `employee_branch` once for the whole week
-(`hr_calendar.py:549`). Each entry in `days` gains `"rollout_phase": <phase>`,
-computed per day from that single branch value plus one cached settings read.
+**Phase A.** `hr_calendar.get_week` already resolves `employee_branch` once for
+the whole week (`hr_calendar.py:549`). Each entry in `days` gains
+`"rollout_phase": <phase>`, computed per day from that single branch value plus
+one cached settings read.
 
-`DayChips` renders a muted "Before go-live" chip on a `PRELAUNCH` day instead of
-an empty flag area. This is the one place the cutoff can actively mislead: an
+**Phase B.** `DayChips` renders a muted "Before go-live" chip on a `PRELAUNCH`
+day instead of an empty flag area. This is the one place the cutoff can
+actively mislead: an
 unevaluated day is otherwise pixel-identical to a clean day, and an HR user
 reviewing a week has no way to tell the difference.
 
@@ -375,7 +416,7 @@ row already carries person, cause, tier and counts.
 
 ## Testing
 
-### Unit (mocked frappe, the `test_closeout.py` pattern)
+### Unit — Phase A (mocked frappe, the `test_closeout.py` pattern)
 
 - `phase_for` truth table: global set / unset × branch row present / absent ×
   `go_live` set / blank, plus both boundary days (`date == testing_start` →
@@ -396,8 +437,14 @@ row already carries person, cause, tier and counts.
 - `reconcile_rollout_flags` re-stamps by the employee's **current** branch — a
   test pins the transfer case so the behaviour is a recorded choice rather than a
   discovered surprise.
+- `get_flag_queue` returns a `rollout` block whose `range_phase` is `TESTING`,
+  `LIVE` and `MIXED` for the three corresponding result sets, and whose `windows`
+  lists only branches present in that result set. Phase B has no backend to lean
+  on if this is wrong, so it is pinned here, not there.
+- Each calendar day carries its `rollout_phase`, including a week straddling a
+  cutoff where the same payload holds both `PRELAUNCH` and `TESTING` days.
 
-### Real bench (`test_integration_pilot_matrix.py`)
+### Real bench — Phase A (`test_integration_pilot_matrix.py`)
 
 This module actually runs now, after #147 fixed the Company bootstrap. Four cases
 against real Frappe:
@@ -409,7 +456,7 @@ against real Frappe:
 - `purge_testing_flags` removes exactly the pilot rows and leaves the live ones,
   verified by count before and after.
 
-### Frontend
+### Frontend — Phase B
 
 - `flagQueuePage.test.tsx`: all-live and `phases_configured: false` render no
   banner; single-window pilot names the branch and its dates; multi-window pilot
@@ -419,17 +466,26 @@ against real Frappe:
 
 ## Global constraints
 
+**Phase A:**
+
 - **Bump `modified` on every DocType JSON touched** (`Attendance Flag`,
   `Dewey Time Settings`, and the new `Dewey Time Branch Rollout`). On this repo
   `bench migrate` skips the schema reimport otherwise, and the new fields simply
   never appear.
-- **Commit the rebuilt SPA bundle** (`dewey_time/public/hr_attendance/**` and the
-  `dewey_time/www/*.html` entry). Frappe Cloud never builds these SPAs, because of
-  the private `@lolbikb/dewey-ui` dependency — the committed bundle *is* the
-  deployed artifact.
-- **Bump the flag-queue cache prefix to `flag_queue:v4`** when `rollout` is added
-  to the payload.
+- **Bump the flag-queue cache prefix to `flag_queue:v4`** in the same pass that
+  adds `rollout` to the payload.
 - Both purge endpoints must be gated by `_require_system_manager_for_clear()` and
   must default to `dry_run=1`.
 - No behaviour changes when no dates are configured. A test must pin this
   directly.
+- No frontend files change, and no bundle is rebuilt.
+
+**Phase B:**
+
+- **Commit the rebuilt SPA bundle** (`dewey_time/public/hr_attendance/**` and the
+  `dewey_time/www/*.html` entry). Frappe Cloud never builds these SPAs, because of
+  the private `@lolbikb/dewey-ui` dependency — the committed bundle *is* the
+  deployed artifact.
+- No Python changes, and no DocType JSON changes. If Phase B finds it needs
+  either, that is a signal Phase A's payload was wrong and the fix belongs in a
+  correction to Phase A, not smuggled into the frontend pass.
