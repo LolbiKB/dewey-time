@@ -1901,6 +1901,29 @@ Add `from contextlib import contextmanager` to the module's imports, then add to
             self.assertEqual(_count("TESTING"), 0)
             self.assertEqual(_count("LIVE"), live_before)
 
+    def test_the_settings_validator_actually_fires_on_a_real_bench(self):
+        """Task 2's rejections are unit-tested against a hand-built controller. This
+        proves Frappe reaches that controller at all.
+
+        Both DocTypes carry "custom": 1, and Frappe's import_controller can
+        short-circuit custom DocTypes to the base Document class. Five other custom
+        DocTypes in this app do run their hooks in production, so the pattern works
+        here -- but "works for attendance_flag" is not evidence about this one.
+        """
+        settings = frappe.get_single("Dewey Time Settings")
+        saved = (settings.rollout_testing_start, settings.rollout_go_live)
+        try:
+            settings.rollout_testing_start = "2026-03-20"
+            settings.rollout_go_live = "2026-03-19"  # reversed
+            with self.assertRaises(frappe.ValidationError):
+                settings.save(ignore_permissions=True)
+        finally:
+            frappe.db.rollback()
+            settings = frappe.get_single("Dewey Time Settings")
+            settings.rollout_testing_start, settings.rollout_go_live = saved
+            settings.save(ignore_permissions=True)
+            frappe.db.commit()
+
     def test_the_calendar_payload_carries_a_phase_for_every_day(self):
         """The payload half of this task: the phase reaches every day, including
         both boundaries, on an endpoint running for real."""
@@ -1959,15 +1982,15 @@ Expected: `Dewey Time Branch Rollout` created and the two modified DocTypes reim
 
 Run: `cd dev/sandbox && ./frappe-sandbox test --backend --module test_integration_pilot_matrix`
 
-Expected: **16 tests, all passing** (11 existing + 5 new).
+Expected: **17 tests, all passing** (11 existing + 6 new).
 
-`bench run-tests --module` imports every sibling test module, and those inject a MagicMock as `frappe` — which is why this module self-skips outside a real bench. If you see `ModuleNotFoundError: No module named 'frappe.boot'`, or the tests report as **skipped**, you are not on a real bench and the run proves nothing. Confirm `_HAS_REAL_BENCH` is true and that the count is 16 before trusting a green result — a green run of zero tests is the failure mode this repo has hit before.
+`bench run-tests --module` imports every sibling test module, and those inject a MagicMock as `frappe` — which is why this module self-skips outside a real bench. If you see `ModuleNotFoundError: No module named 'frappe.boot'`, or the tests report as **skipped**, you are not on a real bench and the run proves nothing. Confirm `_HAS_REAL_BENCH` is true and that the count is 17 before trusting a green result — a green run of zero tests is the failure mode this repo has hit before.
 
 - [ ] **Step 5: Confirm the guard is what produces the empty day**
 
 `test_a_pre_cutoff_day_with_punches_earns_no_flags` already carries its own control: it asserts the *same day with the same punches* flags when no cutoff is configured, then asserts it does not once the cutoff is set. Only the configuration differs between the two assertions, so the test cannot pass with the guard absent.
 
-Confirm that claim once rather than assuming it. Comment out the `PRELAUNCH` guard in `closeout._generate_for_employee_date`, re-run the module, and record the result. Expected: that test **FAILS** on its second assertion. Restore the guard and confirm 16/16 again. Put both outcomes in the task report.
+Confirm that claim once rather than assuming it. Comment out the `PRELAUNCH` guard in `closeout._generate_for_employee_date`, re-run the module, and record the result. Expected: that test **FAILS** on its second assertion. Restore the guard and confirm 17/17 again. Put both outcomes in the task report.
 
 - [ ] **Step 6: Run the whole local lane one more time**
 
@@ -2010,7 +2033,7 @@ EOF
 ## Done when
 
 - The local lane is **704 pass, 11 skipped, 0 errors**.
-- The pilot matrix is **16/16 on a real bench**, with the pre-cutoff case demonstrated failing when its guard is removed.
+- The pilot matrix is **17/17 on a real bench**, with the pre-cutoff case demonstrated failing when its guard is removed.
 - `git diff --stat main...HEAD` shows **no file** under `dewey_time/frontend/`, `dewey_time/public/`, or `dewey_time/www/`.
 - Every mutation listed in Tasks 1, 3 and 5 was applied, observed to fail, and reverted.
 
