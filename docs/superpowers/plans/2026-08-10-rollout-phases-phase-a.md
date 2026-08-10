@@ -23,7 +23,7 @@
   Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01U57KAfPhiYScJgmrzYjK9A
   ```
-- **The local unit lane is** `python3 -m unittest discover -s dewey_time/tests -t .` from the repo root. Baseline before this plan: **656 pass, 11 skipped, 0 errors**. A task is not done until the whole lane is green, not just its own module — a green module lane is not a green suite.
+- **The local unit lane is** `python3 -m unittest discover -s dewey_time/tests -t .` from the repo root. It prints a TOTAL, not a pass count: `Ran 656 tests ... OK (skipped=11)` means 656 total, 645 passing, 11 skipped. The 11 are `test_integration_pilot_matrix` self-skipping off a real bench. Quote totals, and state each task's result as a **delta** from where that task started — fix rounds add tests, so any absolute written here drifts the moment one runs. A task is not done until the whole lane is green, not just its own module — a green module lane is not a green suite.
 - **`git add` exact named paths only.** Never `git add -A` or `git add .`.
 
 ---
@@ -416,7 +416,7 @@ Expected: PASS, 14 tests.
 - [ ] **Step 5: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **670 pass, 11 skipped, 0 errors** (656 baseline + 14 new).
+Expected: **+14 tests** over the starting total, 11 skipped, 0 errors. (Actual when run: 656 → 670.)
 
 - [ ] **Step 6: Mutation-check the isinstance guard**
 
@@ -698,7 +698,7 @@ Expected: PASS, 21 tests.
 - [ ] **Step 7: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **677 pass, 11 skipped, 0 errors**.
+Expected: **+7 tests** over the starting total, 11 skipped, 0 errors. (Actual when run: 674 → 681, the start being higher than this plan first guessed because Task 1's fix round added 4.)
 
 - [ ] **Step 8: Commit**
 
@@ -951,7 +951,7 @@ Expected: PASS.
 - [ ] **Step 6: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **683 pass, 11 skipped, 0 errors**.
+Expected: **+6 tests** over the starting total, 11 skipped, 0 errors. (Actual when run: 684 → 690.)
 
 If anything outside the new classes fails, the likely cause is a test whose `frappe.get_cached_doc` mock now also answers the settings read. Check `_as_date` is rejecting MagicMocks before assuming the guard is wrong.
 
@@ -1118,7 +1118,7 @@ Expected: PASS.
 - [ ] **Step 6: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **686 pass, 11 skipped, 0 errors**.
+Expected: **+3 tests** over the starting total, plus the extra argument-pinning test the controller adds in dispatch, 11 skipped, 0 errors. (Actual when run: 690 → 694.)
 
 - [ ] **Step 7: Commit**
 
@@ -1502,7 +1502,7 @@ Expected: PASS.
 - [ ] **Step 5: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **697 pass, 11 skipped, 0 errors** (686 + 11 new).
+Expected: **+11 tests** over the starting total, 11 skipped, 0 errors.
 
 - [ ] **Step 6: Mutation-check the safety rails**
 
@@ -1738,7 +1738,7 @@ Expected: PASS.
 - [ ] **Step 5: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **704 pass, 11 skipped, 0 errors** (697 + 7 new).
+Expected: **+7 tests** over the starting total, 11 skipped, 0 errors.
 
 - [ ] **Step 6: Confirm no frontend file changed**
 
@@ -1995,7 +1995,7 @@ Confirm that claim once rather than assuming it. Comment out the `PRELAUNCH` gua
 - [ ] **Step 6: Run the whole local lane one more time**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
-Expected: **704 pass, 11 skipped, 0 errors** — the bench module self-skips here, so the count is unchanged from Task 6.
+Expected: **+6 tests, all of them skipped** — this module self-skips off a real bench, so the total rises by 6 and `skipped` goes 11 → 17. Zero errors.
 
 - [ ] **Step 7: Commit**
 
@@ -2032,7 +2032,7 @@ EOF
 
 ## Done when
 
-- The local lane is **704 pass, 11 skipped, 0 errors**.
+- The local lane is green with 0 errors, and `skipped` has gone 11 → 17 (the six new bench tests self-skipping).
 - The pilot matrix is **17/17 on a real bench**, with the pre-cutoff case demonstrated failing when its guard is removed.
 - `git diff --stat main...HEAD` shows **no file** under `dewey_time/frontend/`, `dewey_time/public/`, or `dewey_time/www/`.
 - Every mutation listed in Tasks 1, 3 and 5 was applied, observed to fail, and reverted.
