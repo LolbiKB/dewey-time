@@ -240,7 +240,20 @@ class TestPilotMatrix(_Base):
         employee = employee or self.employee
         # The id has to carry the employee too, now that two of them can punch
         # on the same day at the same minute — custom_supabase_log_id is unique.
-        sid = sid or f"pm-{employee}-{day}-{hhmmss}-{log_type}"
+        #
+        # And it has to carry the BRANCH, which is not decoration: the id doubles
+        # as the idempotence key just below, so every field this helper can vary
+        # must appear in it or two different punches collapse into one. Branch is
+        # the field that would otherwise be lost, and it is the field
+        # test_non_primary_site_punch and test_intraday_provisional_non_primary_site
+        # exist to assert. Leave it out and a later test reusing an existing
+        # employee/date/time/log_type at a DIFFERENT branch silently keeps the old
+        # row and asserts against a stale branch — a false green on a bench that
+        # has run before. With it in, that punch gets its own id, the insert is
+        # attempted, and hrms's Employee Checkin.validate_duplicate_log refuses it
+        # loudly on the timestamp, which is the behaviour that existed before this
+        # helper became idempotent.
+        sid = sid or f"pm-{employee}-{day}-{hhmmss}-{log_type}-{branch}"
         # An idempotent existence check, like the _ensure fixtures above, and now
         # required rather than tidy. The rollout tests commit — purge_testing_flags
         # does it inside the endpoint under test, and _rollout_dates does it so the
