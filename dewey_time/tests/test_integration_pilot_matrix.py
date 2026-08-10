@@ -107,14 +107,19 @@ class TestPilotMatrix(_Base):
         )
 
         # Employee — capture the auto-generated name.
-        existing = frappe.db.get_value("Employee", {"employee_name": "Pilot Matrix One"}, "name")
+        #
+        # Looked up by the name ERPNext DERIVES ("first middle last"), not by
+        # the employee_name passed in: Employee.validate overwrites that field,
+        # so a lookup for the value we supplied never matched and every bench
+        # run inserted another employee and another Shift Assignment instead of
+        # reusing them.
+        existing = frappe.db.get_value("Employee", {"employee_name": "Pilot Matrix"}, "name")
         if existing:
             cls.employee = existing
         else:
             emp = frappe.get_doc(
                 {
                     "doctype": "Employee",
-                    "employee_name": "Pilot Matrix One",
                     "first_name": "Pilot",
                     "last_name": "Matrix",
                     "company": cls.company,
@@ -173,12 +178,12 @@ class TestPilotMatrix(_Base):
             },
         )
 
-        employee = frappe.db.get_value("Employee", {"employee_name": "Pilot Matrix Two"}, "name")
+        # Same derived-name rule as above; "Pilot Lunch" is what ERPNext stores.
+        employee = frappe.db.get_value("Employee", {"employee_name": "Pilot Lunch"}, "name")
         if not employee:
             emp = frappe.get_doc(
                 {
                     "doctype": "Employee",
-                    "employee_name": "Pilot Matrix Two",
                     "first_name": "Pilot",
                     "last_name": "Lunch",
                     "company": cls.company,
