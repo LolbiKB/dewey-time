@@ -803,22 +803,15 @@ class TestNonPrimarySiteSeverity(unittest.TestCase):
 
         self.assertEqual(FLAG_SEVERITY["NON_PRIMARY_SITE_PUNCH"], "INFO")
 
-    def test_severity_is_info_in_doctype(self):
-        from dewey_time.dewey_time.doctype.attendance_flag.attendance_flag import (
-            FLAG_SEVERITY as DOCTYPE_SEVERITY,
-        )
-
-        self.assertEqual(DOCTYPE_SEVERITY["NON_PRIMARY_SITE_PUNCH"], "INFO")
-
-    def test_the_two_severity_maps_agree(self):
-        """They are duplicated, so they can drift. Pin them together: a future
-        edit to one is then a failing test rather than a silent inconsistency."""
-        from dewey_time.attendance_engine.closeout import FLAG_SEVERITY
-        from dewey_time.dewey_time.doctype.attendance_flag.attendance_flag import (
-            FLAG_SEVERITY as DOCTYPE_SEVERITY,
-        )
-
-        self.assertEqual(FLAG_SEVERITY, DOCTYPE_SEVERITY)
+    # test_severity_is_info_in_doctype and test_the_two_severity_maps_agree
+    # lived here. They pinned a second copy of FLAG_SEVERITY in
+    # attendance_flag.py against this one so the pair could not drift.
+    #
+    # T3-11 deleted that copy: its only reader was a severity default that
+    # frappe made unreachable by pre-filling the Select with its first option.
+    # With one map left there is nothing to drift from, so a test asserting it
+    # agrees with itself would assert nothing. Deleted with the duplication,
+    # not because they failed.
 
 
 class TestFlagInsertIsolation(unittest.TestCase):

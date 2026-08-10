@@ -17,19 +17,24 @@ shape as `shift_grace.py`, whose pure helpers are tested in
 assuming every backend test needs `_install_frappe_mock()`).
 
 Deliberate differences from `attendance_flag.py`'s `before_insert` /
-`_*_key` helpers, which this module mirrors in spirit but does not call:
+`_*_key` helpers, which this module mirrored in spirit but never called.
+
+Those helpers are gone as of T3-11 (2026-08-11), and this module is now the
+only key scheme in the app. It kept three deliberate differences from them,
+recorded because each is a decision rather than an accident:
 
 - `day_closed` is excluded from the key entirely (no `-prov` marker). A
   provisional flag and the final flag that replaces it at closeout therefore
   share one identity -- that is the whole point of this module existing.
 - The `DELIVERY_FAILED` suffix is capped at `[:80]` like its `MISSING_TIME`
   and `ATTENDANCE_ISSUE` siblings. The controller's `_delivery_failed_key`
-  leaves it uncapped (`attendance_flag.py:90-103`), which is a
-  truncation-collision window on long `custom_supabase_log_id` values; this
-  module closes it instead of reproducing it.
-- There is no `[:140]` truncation. `attendance_flag.name` is capped because
-  it is a Frappe docname; `flag_identity` is an ordinary `Data` column on
-  `Attendance Flag Decision`, not a name, so nothing caps it.
+  left it uncapped, a truncation-collision window on long
+  `custom_supabase_log_id` values; this module closed it rather than
+  reproducing it. That uncapped version being the one that would have come
+  back to life is part of why the naming was deleted instead of revived.
+- There is no `[:140]` truncation. A Frappe docname is capped;
+  `flag_identity` is an ordinary `Data` column on `Attendance Flag Decision`,
+  not a name, so nothing caps it.
 """
 
 from __future__ import annotations
