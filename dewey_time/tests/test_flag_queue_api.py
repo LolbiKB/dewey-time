@@ -1326,9 +1326,9 @@ class TestRolloutBlockReachesThePayload(unittest.TestCase):
 class TestFlagGroupingAgreesWithRolloutOnLive(unittest.TestCase):
     """flag_grouping._flag_out normalises a blank stored phase with a bare
     "LIVE" literal rather than rollout.LIVE, because that module is frappe-free
-    by design and rollout.py imports frappe (the reasoning is at
-    flag_grouping.py:202-207). That constraint stays; what was missing was
-    anything holding the two values equal. Rename rollout.LIVE and
+    by design and rollout.py imports frappe (the reasoning is spelled out on
+    _flag_out's own rollout_phase key). That constraint stays; what was missing
+    was anything holding the two values equal. Rename rollout.LIVE and
     flag_grouping keeps stamping the old string into every FlagOut while
     _rollout_block's TESTING comparison goes on working -- the payload splits
     silently instead of the suite going red.

@@ -441,13 +441,13 @@ def _rollout_block(*, flags, entries, employees_by_id) -> dict:
     `windows` names the pilot branches present in the result set AND, when any
     pilot flag belongs to an employee with no branch, one entry with
     `"branch": None` carrying the global pair. That last one is the primary
-    path rather than an edge case: rollout.py:68-70 records that a great many
-    employees have no branch set, so the likeliest real rollout is global dates
-    over a branchless roster, and without it that rollout reports range_phase
-    TESTING with an empty `windows` -- a pilot banner in Phase B with no dates
-    to put in it. It is APPENDED after the sorted branch names, because None
-    has no place in a sort of branch names and Phase B needs its position to be
-    a decision rather than an accident.
+    path rather than an edge case: rollout.rollout_dates_for_branch's docstring
+    records that a great many employees have no branch set, so the likeliest
+    real rollout is global dates over a branchless roster, and without it that
+    rollout reports range_phase TESTING with an empty `windows` -- a pilot
+    banner in Phase B with no dates to put in it. It is APPENDED after the
+    sorted branch names, because None has no place in a sort of branch names
+    and Phase B needs its position to be a decision rather than an accident.
     """
     phases = [(flag.get("rollout_phase") or rollout.LIVE) for flag in flags]
     total_in_range = len(phases)
