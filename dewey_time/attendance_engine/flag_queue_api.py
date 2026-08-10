@@ -20,7 +20,7 @@ import frappe
 from frappe.utils import getdate
 
 from dewey_time.attendance_engine import rollout
-from dewey_time.attendance_engine.flag_grouping import build_queue, recount
+from dewey_time.attendance_engine.flag_grouping import build_queue, iter_people, recount
 from dewey_time.attendance_engine.flag_identity import date_key, flag_identity, parse_evidence
 from dewey_time.attendance_engine.flag_triage import TIER_ACT, TIER_REVIEW, TIER_ROUTINE
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
@@ -52,8 +52,10 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # gained outage_dates.
 # v3: counts gained open_capped; branch-outage groups span dates, so their
 # attendance_date is now null, and every group carries `dates` / `day_count`.
-# v4: the payload gained a `rollout` block (phase of the visible range, pilot
-# flag counts, and the pilot windows of the branches actually present).
+# v4: the payload gained a `rollout` block (phase of the visible date range and
+# its pilot windows, plus pilot flag counts over the VISIBLE list -- the two
+# scopes are deliberately different, see _rollout_block); FlagOut (inside every
+# entry) gained rollout_phase.
 _QUEUE_CACHE_PREFIX = "flag_queue:v4"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
@@ -385,23 +387,45 @@ def _outage_branch_dates(*, flags, employees_by_id, alert_rows, sync_pairs) -> s
     return outage
 
 
-def _rollout_block(*, flags, employees_by_id) -> dict:
-    """What rollout phase the visible flags belong to, so the queue can say so.
+def _rollout_block(*, flags, entries, employees_by_id) -> dict:
+    """What rollout phase this response is about, and how much of what HR can
+    actually see is pilot data. Two different scopes, deliberately:
 
-    Computed entirely from rows already in hand. The docstring at
-    _build_queue_payload makes the five-query budget a spec rule rather than a
-    preference, and this must not become the sixth.
+    - `range_phase` and `windows` describe the DATES the caller asked for, not
+      what happens to be on screen. Computed over `flags` -- every deduped AUTO
+      flag in the whole range, whole, regardless of what a tier filter or
+      include_decided=0 hid from `entries`. A tier filter must not make the
+      pilot banner vanish: the pilot period a branch is in did not change just
+      because HR is looking at one tier of it.
+    - `testing_flag_count` / `total_flag_count` describe the VISIBLE LIST
+      instead. Counted over `entries` (the tier-filtered, include_decided-
+      applied set already built by the time this is called), walked with
+      `iter_people` so group members are counted the same way `recount` counts
+      them. A whole-range count here would repeat exactly the header-versus-
+      list contradiction commits 38fbea19, b95868bf and e6cb3ae6 were spent
+      removing from `counts` -- "2 of 2 pilot flags" printed above a list that,
+      post-filter, shows none of them. "0 of 1 flags here are from the pilot
+      period" is a legal, correct answer when the only pilot flag in range was
+      filtered out of view.
+
+    Must be called AFTER any tier filter has been applied to `entries`, and
+    entirely from rows already in hand -- flags, entries, employees_by_id --
+    so this stays outside the five-query budget _build_queue_payload's
+    docstring makes a spec rule.
 
     A blank stored phase reads as LIVE: every row written before rollout phases
     existed has one, and that is consistent with unset dates meaning LIVE.
+    `flags` is normalised here; `entries` carries FlagOut dicts that were
+    already normalised once, upstream, in flag_grouping._flag_out -- one
+    normalisation per input, not a second copy of the same fallback.
     """
     phases = [(flag.get("rollout_phase") or rollout.LIVE) for flag in flags]
-    total = len(phases)
-    testing = sum(1 for phase in phases if phase == rollout.TESTING)
+    total_in_range = len(phases)
+    testing_in_range = sum(1 for phase in phases if phase == rollout.TESTING)
 
-    if testing == 0:
+    if testing_in_range == 0:
         range_phase = rollout.LIVE
-    elif testing == total:
+    elif testing_in_range == total_in_range:
         range_phase = rollout.TESTING
     else:
         range_phase = "MIXED"
@@ -425,11 +449,18 @@ def _rollout_block(*, flags, employees_by_id) -> dict:
             }
         )
 
+    visible_phases = [
+        flag_out.get("rollout_phase") or rollout.LIVE
+        for person in iter_people(entries)
+        for flag_out in (person.get("flags") or [])
+    ]
+    testing_visible = sum(1 for phase in visible_phases if phase == rollout.TESTING)
+
     return {
         "phases_configured": rollout.phases_configured(),
         "range_phase": range_phase,
-        "testing_flag_count": testing,
-        "total_flag_count": total,
+        "testing_flag_count": testing_visible,
+        "total_flag_count": len(visible_phases),
         "windows": windows,
     }
 
@@ -509,8 +540,11 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
             {"branch": branch, "date": day} for branch, day in sorted(outage_branch_dates)
         ],
         # Phase of the visible range, so the queue can tell HR whether it is looking
-        # at the official record or at calibration data. Rendered in Phase B.
-        "rollout": _rollout_block(flags=flags, employees_by_id=employees_by_id),
+        # at the official record or at calibration data. Rendered in Phase B. Called
+        # here, after the tier filter above, so `entries` is the same list `people`/
+        # `rows` were just recounted from -- see _rollout_block for why range_phase
+        # and the counts read two different scopes.
+        "rollout": _rollout_block(flags=flags, entries=entries, employees_by_id=employees_by_id),
     }
 
 

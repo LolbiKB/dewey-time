@@ -1138,10 +1138,27 @@ class TestRolloutBlock(unittest.TestCase):
 
         self.api = flag_queue_api
 
-    def _block(self, phases, branches=("BR-A",), configured=True):
+    def _block(self, phases, branches=("BR-A",), configured=True, visible_phases=None):
+        """`flags` describe the whole date range; `entries` describe the VISIBLE
+        list `_rollout_block` now counts pilot flags over (IMPORTANT-3). Every
+        test below that is not specifically about the range-vs-list split wants
+        the two to agree, so `visible_phases` defaults to mirroring `phases` --
+        nothing filtered out of view.
+
+        `entries` is built minimal: `_rollout_block` only ever reads
+        person.get("flags") -> flag_out.get("rollout_phase") through
+        iter_people, so a bare {"kind": "person", "flags": [...]} is the whole
+        shape it needs.
+        """
+        if visible_phases is None:
+            visible_phases = phases
         flags = [
             {"employee": f"EMP-{i}", "rollout_phase": phase}
             for i, phase in enumerate(phases)
+        ]
+        entries = [
+            {"kind": "person", "flags": [{"rollout_phase": phase}]}
+            for phase in visible_phases
         ]
         employees_by_id = {
             f"EMP-{i}": {"branch": branches[i % len(branches)]}
@@ -1155,7 +1172,7 @@ class TestRolloutBlock(unittest.TestCase):
             return_value=(date(2026, 8, 15), date(2026, 9, 1)),
         ):
             return self.api._rollout_block(
-                flags=flags, employees_by_id=employees_by_id
+                flags=flags, entries=entries, employees_by_id=employees_by_id
             )
 
     def test_an_all_live_range_reports_live(self):
@@ -1192,6 +1209,42 @@ class TestRolloutBlock(unittest.TestCase):
     def test_multiple_pilot_branches_each_get_a_window(self):
         block = self._block(["TESTING", "TESTING"], branches=("BR-A", "BR-B"))
         self.assertEqual([w["branch"] for w in block["windows"]], ["BR-A", "BR-B"])
+
+    def test_a_tier_filtered_out_pilot_flag_still_moves_the_range_phase_but_not_the_count(self):
+        # The ruling this pins: range_phase/windows are a property of the DATES
+        # the caller asked for, computed over the whole `flags` range regardless
+        # of what a tier filter hid from `entries`; testing_flag_count/
+        # total_flag_count describe only the VISIBLE list. A pilot flag that
+        # exists in the range but was filtered out of entries must still show up
+        # in range_phase (the pilot period did not change) while contributing
+        # zero to testing_flag_count (HR cannot see it on this page). "0 of 1
+        # flags here are from the pilot period" is the intended, correct output.
+        block = self._block(["TESTING", "LIVE"], visible_phases=["LIVE"])
+        self.assertEqual(block["range_phase"], "MIXED")
+        self.assertEqual(block["testing_flag_count"], 0)
+        self.assertEqual(block["total_flag_count"], 1)
+
+
+class TestRolloutBlockReachesThePayload(unittest.TestCase):
+    """TestRolloutBlock above calls _rollout_block directly, so it stays green on
+    a payload that never carries the block at all, and on a scan that selects
+    rollout_phase but drops it before _flag_rows hands the row on. Both mutations
+    survive the whole suite otherwise; this end-to-end test through
+    get_flag_queue is what catches them."""
+
+    def test_the_rollout_block_is_on_the_payload_and_reflects_the_stored_phase(self):
+        rows = _roster(1)
+        rows["Attendance Flag"] = [_flag_row("HR-EMP-00000", rollout_phase="TESTING")]
+        with _harness(rows), patch.object(
+            flag_queue_api.rollout, "phases_configured", return_value=True
+        ), patch.object(
+            flag_queue_api.rollout,
+            "rollout_dates_for_branch",
+            return_value=(date(2026, 8, 15), date(2026, 9, 1)),
+        ):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["rollout"]["range_phase"], "TESTING")
+        self.assertEqual(payload["rollout"]["windows"][0]["branch"], "BR-A")
 
 
 class TestQueueCachePrefix(unittest.TestCase):

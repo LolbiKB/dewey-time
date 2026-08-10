@@ -193,6 +193,19 @@ def _flag_out(flag: dict, decisions_by_identity: dict[str, dict]) -> dict:
         "severity": flag.get("severity"),
         "day_closed": int(flag.get("day_closed") or 0),
         "evidence": evidence,
+        # Carried so the queue payload can count pilot flags over the VISIBLE list
+        # (flag_queue_api._rollout_block) rather than the whole range. Normalised
+        # here, at the single point a raw flag row becomes a FlagOut, rather than
+        # at the read site: a blank stored value means the flag predates rollout
+        # phases, and that reads as LIVE everywhere in this feature.
+        #
+        # A literal "LIVE" rather than rollout.LIVE: this module is frappe-free by
+        # design (module docstring above; test_flag_grouping.py runs with no
+        # frappe mock installed, on purpose, and asserts exactly that for this
+        # module and the two it imports). rollout.py does `import frappe`, so
+        # importing it here would break every caller — including this module's
+        # own test file — that imports flag_grouping without a bench.
+        "rollout_phase": flag.get("rollout_phase") or "LIVE",
         "rank": rank,
         "tier": tier_for_rank(rank),
         "decision_state": state,
