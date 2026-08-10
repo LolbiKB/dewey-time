@@ -1203,7 +1203,7 @@ class TestPrelaunchGuard(unittest.TestCase):
         employee_doc.company = None
         with patch.object(closeout.frappe, "get_cached_doc", return_value=employee_doc), patch.object(
             closeout.rollout, "phase_for", return_value=phase
-        ), patch.object(
+        ) as phase_for, patch.object(
             closeout, "_delete_auto_flags_for_employee_date"
         ) as delete, patch.object(
             closeout, "_insert_flags"
@@ -1215,12 +1215,12 @@ class TestPrelaunchGuard(unittest.TestCase):
             closeout._generate_for_employee_date(
                 employee="EMP-1", attendance_date=date(2026, 8, 1)
             )
-        return delete, insert
+        return delete, insert, phase_for
 
     def test_prelaunch_writes_nothing_and_deletes_nothing(self):
         from dewey_time.attendance_engine import rollout
 
-        delete, insert = self._run_closeout(rollout.PRELAUNCH)
+        delete, insert, _phase_for = self._run_closeout(rollout.PRELAUNCH)
         delete.assert_not_called()
         insert.assert_not_called()
 
@@ -1229,8 +1229,24 @@ class TestPrelaunchGuard(unittest.TestCase):
         # the test above and this suite would be asserting nothing.
         from dewey_time.attendance_engine import rollout
 
-        delete, _insert = self._run_closeout(rollout.LIVE)
+        delete, _insert, _phase_for = self._run_closeout(rollout.LIVE)
         self.assertTrue(delete.called)
+
+    def test_the_guard_asks_about_this_employees_branch_and_this_day(self):
+        # WHICH question the guard asks, not just that it obeys the answer. Both
+        # tests above patch phase_for with a fixed return, so a guard written as
+        # phase_for(branch=employee_company, ...) -- or with branch hardcoded to
+        # None -- passes them, and the bench matrix cannot tell the difference
+        # either because it only ever configures the GLOBAL dates. Per-branch
+        # cutoffs are the point of the feature, so this is the line that has to
+        # be pinned. employee_doc.company is None here, which is exactly what
+        # makes the employee_company mutation visible.
+        from dewey_time.attendance_engine import rollout
+
+        _delete, _insert, phase_for = self._run_closeout(rollout.PRELAUNCH)
+        phase_for.assert_called_once_with(
+            branch="BR-A", attendance_date=date(2026, 8, 1)
+        )
 
 
 class TestCompanyFallbackPrelaunchGuard(unittest.TestCase):
@@ -1243,7 +1259,7 @@ class TestCompanyFallbackPrelaunchGuard(unittest.TestCase):
             closeout.frappe, "get_cached_doc", return_value=employee_doc
         ), patch.object(
             closeout.rollout, "phase_for", return_value=phase
-        ), patch.object(
+        ) as phase_for, patch.object(
             closeout, "has_open_device_closeout_alert", return_value=False
         ), patch.object(
             closeout, "_get_shift_assignment", return_value={"shift_type": "S1"}
@@ -1251,19 +1267,31 @@ class TestCompanyFallbackPrelaunchGuard(unittest.TestCase):
             closeout._generate_company_fallback_for_date(
                 company="CO-A", attendance_date=date(2026, 8, 1)
             )
-        return shift
+        return shift, phase_for
 
     def test_prelaunch_skips_the_employee_before_any_work(self):
         from dewey_time.attendance_engine import rollout
 
-        shift = self._run_fallback(rollout.PRELAUNCH)
+        shift, _phase_for = self._run_fallback(rollout.PRELAUNCH)
         shift.assert_not_called()
 
     def test_a_live_day_still_reads_the_shift(self):
         from dewey_time.attendance_engine import rollout
 
-        shift = self._run_fallback(rollout.LIVE)
+        shift, _phase_for = self._run_fallback(rollout.LIVE)
         self.assertTrue(shift.called)
+
+    def test_the_guard_asks_about_each_employees_branch_and_this_day(self):
+        # This loop runs over one company whose branches can be in different
+        # phases, so asking about the company -- or about nothing at all --
+        # would skip or keep the wrong people while every other test here
+        # stayed green. See the matching pin in TestPrelaunchGuard.
+        from dewey_time.attendance_engine import rollout
+
+        _shift, phase_for = self._run_fallback(rollout.PRELAUNCH)
+        phase_for.assert_called_once_with(
+            branch="BR-A", attendance_date=date(2026, 8, 1)
+        )
 
 
 class TestInsertFlagStampsPhase(unittest.TestCase):

@@ -467,22 +467,37 @@ class TestIntradayPrelaunchGuard(unittest.TestCase):
         employee_doc.company = None
         with patch.object(intraday.frappe, "get_cached_doc", return_value=employee_doc), patch.object(
             intraday.rollout, "phase_for", return_value=phase
-        ), patch.object(
+        ) as phase_for, patch.object(
             intraday, "_delete_auto_flags_for_employee_date"
         ) as delete, patch.object(
             intraday, "_get_shift_assignment", return_value=None
         ):
             intraday.refresh_intraday_flags_for_employee_date("EMP-1", date(2026, 8, 1))
-        return delete
+        return delete, phase_for
 
     def test_prelaunch_does_not_reach_the_delete(self):
         # The delete used to be the first statement in this function. If the guard is
         # placed after it, this test fails -- which is the whole point of it.
         from dewey_time.attendance_engine import rollout
 
-        self.assertFalse(self._run(rollout.PRELAUNCH).called)
+        delete, _phase_for = self._run(rollout.PRELAUNCH)
+        self.assertFalse(delete.called)
 
     def test_a_live_day_still_deletes(self):
         from dewey_time.attendance_engine import rollout
 
-        self.assertTrue(self._run(rollout.LIVE).called)
+        delete, _phase_for = self._run(rollout.LIVE)
+        self.assertTrue(delete.called)
+
+    def test_the_guard_asks_about_this_employees_branch_and_this_day(self):
+        # Both tests above patch phase_for with a fixed return, so a guard that
+        # asked about the company, or about no branch at all, would pass them --
+        # and the bench matrix only ever configures the global dates, so it
+        # cannot separate the two either. employee_doc.company is None here,
+        # which is what makes an employee_company mutation visible.
+        from dewey_time.attendance_engine import rollout
+
+        _delete, phase_for = self._run(rollout.PRELAUNCH)
+        phase_for.assert_called_once_with(
+            branch="BR-A", attendance_date=date(2026, 8, 1)
+        )
