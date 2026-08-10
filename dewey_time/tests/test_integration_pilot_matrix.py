@@ -11,8 +11,13 @@ matrix the MVP sign-off calls for (FLAG_ENGINE_MVP.md).
 Because the rest of the suite globally monkeypatches ``frappe`` at import, this
 module MUST be run in isolation against a real bench:
 
-    frappe-sandbox test --backend --module test_integration_pilot_matrix
-    # = bench --site <site> run-tests --module dewey_time.tests.test_integration_pilot_matrix
+    bench --site test_site run-tests --module dewey_time.tests.test_integration_pilot_matrix
+
+``--module`` ALONE, with no ``--app``. ``frappe-sandbox test --backend --module``
+does not work: it builds ``run-tests --app dewey_time --module ...``, and the
+``--app`` form makes frappe's loader import every ``test_*.py`` in the app, which
+installs a MagicMock over ``sys.modules["frappe"]`` and kills this module with
+``ModuleNotFoundError: No module named 'frappe.boot'`` before it reaches the DB.
 
 In the no-Docker fast lane (``unittest discover``) and in a full
 ``run-tests --app dewey_time`` run, ``frappe`` is either absent or a MagicMock (the
@@ -22,6 +27,7 @@ than erroring. See the readiness report for the global-mock-leak follow-up.
 
 import json
 import unittest
+from contextlib import contextmanager
 from unittest.mock import MagicMock as _MagicMock
 
 try:
@@ -33,7 +39,17 @@ except ImportError:  # no frappe on PYTHONPATH (fast lane)
     _HAS_REAL_BENCH = False
 
 if _HAS_REAL_BENCH:
-    from frappe.tests.utils import FrappeTestCase
+    # IntegrationTestCase, NOT the deprecated FrappeTestCase, and the choice is
+    # load-bearing rather than tidiness. Frappe categorises a suite by its base
+    # class, and a FrappeTestCase lands in "old-frappe-test-class-category" whose
+    # preparation step (deprecation_dumpster.get_compat_frappe_test_case_preparation)
+    # walks the WHOLE app and imports every test_*.py it finds. Thirty-three of this
+    # app's test modules install a MagicMock over sys.modules["frappe"] at import
+    # time, so that walk replaced the real frappe underneath this module and every
+    # test here died on `ModuleNotFoundError: No module named 'frappe.boot'` before
+    # touching the database. IntegrationTestCase is categorised "integration", whose
+    # preparation imports nothing outside the module under test.
+    from frappe.tests import IntegrationTestCase
     from frappe.utils import getdate
 
     from dewey_time.attendance_engine.closeout import _generate_for_employee_date
@@ -46,7 +62,7 @@ if _HAS_REAL_BENCH:
         provisional_after_closeout,
     )
 
-    _Base = FrappeTestCase
+    _Base = IntegrationTestCase
 else:  # pragma: no cover - skipped when no real bench is available
     _Base = unittest.TestCase
 
@@ -225,6 +241,16 @@ class TestPilotMatrix(_Base):
         # The id has to carry the employee too, now that two of them can punch
         # on the same day at the same minute — custom_supabase_log_id is unique.
         sid = sid or f"pm-{employee}-{day}-{hhmmss}-{log_type}"
+        # An idempotent existence check, like the _ensure fixtures above, and now
+        # required rather than tidy. The rollout tests commit — purge_testing_flags
+        # does it inside the endpoint under test, and _rollout_dates does it so the
+        # restore is durable — and a commit ends the single transaction this whole
+        # class is rolled back in at cleanup. Every punch inserted before that
+        # commit therefore outlives the run, so a plain insert makes the SECOND run
+        # of this module die on hrms's Employee Checkin.validate_duplicate_log
+        # instead of on anything the module is testing.
+        if frappe.db.exists("Employee Checkin", {"custom_supabase_log_id": sid}):
+            return
         frappe.get_doc(
             {
                 "doctype": "Employee Checkin",
@@ -410,3 +436,176 @@ class TestPilotMatrix(_Base):
         evidence = absence["evidence"]
         self.assertIs(evidence.get("provisional"), True, f"must be provisional: {evidence}")
         self.assertEqual(evidence.get("reason"), "on_shift_no_checkins_intraday", evidence)
+
+    # --- rollout phases ------------------------------------------------------
+
+    @contextmanager
+    def _rollout_dates(self, testing_start, go_live):
+        """Set the global rollout dates for one test, then put them back.
+
+        Restored rather than left set: this module's fixtures deliberately persist
+        across runs (they are idempotent existence checks, not transactional), so a
+        leaked cutoff would silently disable the engine for every later test on this
+        bench and the failures would look like anything but a leaked setting.
+
+        .save() rather than frappe.db.set_value(): the engine reads the settings
+        through frappe.get_cached_doc, which will not see a raw db write.
+        """
+        settings = frappe.get_single("Dewey Time Settings")
+        saved = (settings.rollout_testing_start, settings.rollout_go_live)
+        settings.rollout_testing_start = testing_start
+        settings.rollout_go_live = go_live
+        settings.save(ignore_permissions=True)
+        frappe.db.commit()
+        try:
+            yield
+        finally:
+            settings = frappe.get_single("Dewey Time Settings")
+            settings.rollout_testing_start, settings.rollout_go_live = saved
+            settings.save(ignore_permissions=True)
+            frappe.db.commit()
+
+    def _phases(self, day):
+        """The distinct rollout_phase values stored for one employee-day."""
+        return set(
+            frappe.get_all(
+                "Attendance Flag",
+                filters={
+                    "employee": self.employee,
+                    "attendance_date": getdate(day),
+                    "source": "AUTO",
+                },
+                pluck="rollout_phase",
+            )
+        )
+
+    def test_a_pre_cutoff_day_with_punches_earns_no_flags(self):
+        """A pre-cutoff day earns nothing even when it plainly would otherwise.
+
+        11:30 against an 09:00 shift is well past any grace, so the first assertion
+        establishes that this day flags with no cutoff configured and the second
+        that it stops once one is set. True and worth asserting -- but NOT on its own
+        evidence that the guard is what stops it; see the test below, which is.
+        """
+        day = "2026-03-18"
+        self._checkin(day, "11:30:00", "IN")
+        self._checkin(day, "17:00:00", "OUT")
+
+        self.assertNotEqual(self._flags(day), set())
+
+        with self._rollout_dates("2026-03-19", "2026-03-20"):
+            self.assertEqual(self._flags(day), set())
+
+    def test_a_pre_cutoff_day_leaves_an_existing_flag_untouched(self):
+        """The decisive control: on a pre-cutoff day the engine must not even
+        reach its delete.
+
+        "No flags are written" is NOT decisive on its own. With the guard removed
+        the engine still computes the flags and still tries to insert them; each
+        insert dies on the rollout_phase Select rejecting PRELAUNCH, and
+        _insert_flags' bare `except` swallows it. Both paths therefore end with
+        zero new flags. The delete is the one observable that separates them --
+        and it is also the specific thing the guard was placed before, so that
+        #148's delivery-marker protection is never asked about a day the engine
+        has no opinion on.
+
+        _generate_for_employee_date directly, NOT _flags(): _flags deletes the
+        employee-day's flags before running the engine, which would destroy the
+        seeded row this test is watching. The day needs no punches and no shift --
+        the delete precedes the shift lookup, so the guard is the only thing that
+        can spare the seed either way.
+        """
+        day = "2026-03-25"
+        d = getdate(day)
+        frappe.db.delete("Attendance Flag", {"employee": self.employee, "attendance_date": d})
+        seed = frappe.get_doc(
+            {
+                "doctype": "Attendance Flag",
+                "employee": self.employee,
+                "company": self.company,
+                "attendance_date": d,
+                "flag_code": "LATE_START",
+                "severity": "WARNING",
+                "source": "AUTO",
+                "status": "OPEN",
+                "day_closed": 1,
+                "rule_version": "v0",
+                "rollout_phase": "LIVE",
+                "evidence": "{}",
+            }
+        )
+        seed.insert(ignore_permissions=True)
+
+        with self._rollout_dates("2026-03-26", "2026-03-27"):
+            _generate_for_employee_date(
+                employee=self.employee, attendance_date=d, include_unnotified_absence=True
+            )
+
+        self.assertTrue(
+            frappe.db.exists("Attendance Flag", seed.name),
+            f"the engine deleted a flag on {day}, a day it was never watching",
+        )
+
+    def test_a_pilot_day_is_stamped_testing(self):
+        day = "2026-03-19"
+        self._checkin(day, "11:30:00", "IN")
+        self._checkin(day, "17:00:00", "OUT")
+        with self._rollout_dates("2026-03-19", "2026-03-20"):
+            self.assertNotEqual(self._flags(day), set())
+            self.assertEqual(self._phases(day), {"TESTING"})
+
+    def test_the_go_live_day_itself_is_stamped_live(self):
+        day = "2026-03-20"
+        self._checkin(day, "11:30:00", "IN")
+        self._checkin(day, "17:00:00", "OUT")
+        with self._rollout_dates("2026-03-19", "2026-03-20"):
+            self.assertNotEqual(self._flags(day), set())
+            self.assertEqual(self._phases(day), {"LIVE"})
+
+    def test_the_purge_takes_the_pilot_rows_and_spares_the_live_ones(self):
+        from dewey_time.attendance_engine.dev_tools import purge_testing_flags
+
+        # Its own pair of days (Mon/Tue), not the 03-19/03-20 the two tests above
+        # use. _rollout_dates commits, so those tests' checkins survive their own
+        # rollback, and re-punching the same employee at the same timestamp is what
+        # hrms's Employee Checkin.validate_duplicate_log exists to refuse.
+        pilot_day, live_day = "2026-03-23", "2026-03-24"
+        for day in (pilot_day, live_day):
+            self._checkin(day, "11:30:00", "IN")
+            self._checkin(day, "17:00:00", "OUT")
+
+        def _count(phase):
+            return frappe.db.count(
+                "Attendance Flag",
+                {"employee": self.employee, "source": "AUTO", "rollout_phase": phase},
+            )
+
+        with self._rollout_dates(pilot_day, live_day):
+            self._flags(pilot_day)
+            self._flags(live_day)
+
+            self.assertGreater(_count("TESTING"), 0)
+            live_before = _count("LIVE")
+            self.assertGreater(live_before, 0)
+
+            frappe.set_user("Administrator")
+            purge_testing_flags(dry_run=0)
+
+            self.assertEqual(_count("TESTING"), 0)
+            self.assertEqual(_count("LIVE"), live_before)
+
+    def test_the_calendar_payload_carries_a_phase_for_every_day(self):
+        """The payload half of this task: the phase reaches every day, including
+        both boundaries, on an endpoint running for real."""
+        from dewey_time.attendance_engine.hr_calendar import get_employee_calendar
+
+        frappe.set_user("Administrator")
+        with self._rollout_dates("2026-03-19", "2026-03-20"):
+            payload = get_employee_calendar(
+                employee=self.employee, start_date="2026-03-18", end_date="2026-03-20"
+            )
+
+        self.assertEqual(
+            [day["rollout_phase"] for day in payload["days"]],
+            ["PRELAUNCH", "TESTING", "LIVE"],
+        )
