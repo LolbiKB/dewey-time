@@ -860,5 +860,176 @@ class TestBulkSweepSurvivesOneBadEmployeeDay(unittest.TestCase):
         log_error.assert_called_once()
 
 
+class TestParseDryRun(unittest.TestCase):
+    def test_string_forms_behave_as_the_booleans_they_name(self):
+        from dewey_time.attendance_engine.dev_tools import _parse_dry_run
+
+        # dry_run arrives as a STRING over HTTP, where "0" is truthy.
+        self.assertFalse(_parse_dry_run("0"))
+        self.assertTrue(_parse_dry_run("1"))
+        self.assertFalse(_parse_dry_run(0))
+        self.assertTrue(_parse_dry_run(True))
+
+    def test_absent_defaults_to_a_dry_run(self):
+        from dewey_time.attendance_engine.dev_tools import _parse_dry_run
+
+        self.assertTrue(_parse_dry_run(None))
+
+
+class TestPurgeTestingFlags(unittest.TestCase):
+    def setUp(self):
+        from dewey_time.attendance_engine import dev_tools
+
+        self.dev_tools = dev_tools
+        self.rows = [
+            {"name": "F1", "employee": "EMP-1"},
+            {"name": "F2", "employee": "EMP-2"},
+        ]
+        self.branches = {"EMP-1": "BR-A", "EMP-2": "BR-B"}
+
+    def _run(self, **kwargs):
+        with patch.object(self.dev_tools, "_require_system_manager_for_clear"), patch.object(
+            self.dev_tools.frappe, "get_all", return_value=list(self.rows)
+        ), patch.object(
+            self.dev_tools, "_branch_by_employee", return_value=self.branches
+        ), patch.object(
+            self.dev_tools.frappe.db, "delete"
+        ) as delete, patch.object(
+            self.dev_tools.frappe.db, "commit"
+        ):
+            result = self.dev_tools.purge_testing_flags(**kwargs)
+        return result, delete
+
+    def test_a_dry_run_reports_but_deletes_nothing(self):
+        result, delete = self._run(dry_run=1)
+        self.assertEqual(result["scanned"], 2)
+        self.assertEqual(result["deleted"], 0)
+        self.assertTrue(result["dry_run"])
+        delete.assert_not_called()
+
+    def test_a_wet_run_deletes_what_it_scanned(self):
+        result, delete = self._run(dry_run=0)
+        self.assertEqual(result["deleted"], 2)
+        self.assertTrue(delete.called)
+
+    def test_a_branch_scope_narrows_the_set(self):
+        result, _delete = self._run(branch="BR-A", dry_run=1)
+        self.assertEqual(result["scanned"], 1)
+        self.assertEqual(result["by_branch"], {"BR-A": 1})
+
+    def test_it_refuses_without_system_manager(self):
+        with patch.object(
+            self.dev_tools,
+            "_require_system_manager_for_clear",
+            side_effect=Exception("nope"),
+        ):
+            with self.assertRaises(Exception):
+                self.dev_tools.purge_testing_flags(dry_run=0)
+
+    def test_it_only_ever_scans_auto_flags(self):
+        # An HR-created flag on a pre-cutoff day is a deliberate human act. Without
+        # this assertion, dropping the source filter is a mutation no test catches.
+        with patch.object(self.dev_tools, "_require_system_manager_for_clear"), patch.object(
+            self.dev_tools.frappe, "get_all", return_value=[]
+        ) as get_all, patch.object(
+            self.dev_tools, "_branch_by_employee", return_value={}
+        ):
+            self.dev_tools.purge_testing_flags(dry_run=1)
+        self.assertEqual(get_all.call_args.kwargs["filters"]["source"], "AUTO")
+
+
+class TestReconcileRolloutFlags(unittest.TestCase):
+    def setUp(self):
+        from dewey_time.attendance_engine import dev_tools, rollout
+
+        self.dev_tools = dev_tools
+        self.rollout = rollout
+        self.rows = [
+            # Before the cutoff -> must be deleted.
+            {
+                "name": "F-OLD",
+                "employee": "EMP-1",
+                "attendance_date": date(2026, 1, 1),
+                "rollout_phase": "LIVE",
+            },
+            # Inside the pilot, stamped blank by pre-feature code -> must be restamped.
+            {
+                "name": "F-PILOT",
+                "employee": "EMP-1",
+                "attendance_date": date(2026, 8, 20),
+                "rollout_phase": None,
+            },
+            # Already correct -> must be left alone.
+            {
+                "name": "F-OK",
+                "employee": "EMP-1",
+                "attendance_date": date(2026, 9, 10),
+                "rollout_phase": "LIVE",
+            },
+        ]
+
+    def _phase(self, *, branch, attendance_date):
+        if attendance_date < date(2026, 8, 15):
+            return self.rollout.PRELAUNCH
+        if attendance_date < date(2026, 9, 1):
+            return self.rollout.TESTING
+        return self.rollout.LIVE
+
+    def _run(self, **kwargs):
+        with patch.object(self.dev_tools, "_require_system_manager_for_clear"), patch.object(
+            self.dev_tools.frappe, "get_all", return_value=list(self.rows)
+        ), patch.object(
+            self.dev_tools, "_branch_by_employee", return_value={"EMP-1": "BR-A"}
+        ), patch.object(
+            self.dev_tools.rollout, "phase_for", side_effect=self._phase
+        ), patch.object(
+            self.dev_tools.frappe.db, "delete"
+        ) as delete, patch.object(
+            self.dev_tools.frappe.db, "set_value"
+        ) as set_value, patch.object(
+            self.dev_tools.frappe.db, "commit"
+        ):
+            result = self.dev_tools.reconcile_rollout_flags(**kwargs)
+        return result, delete, set_value
+
+    def test_a_dry_run_counts_both_actions_and_performs_neither(self):
+        result, delete, set_value = self._run(dry_run=1)
+        self.assertEqual(result["scanned"], 3)
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(result["restamped"], 1)
+        delete.assert_not_called()
+        set_value.assert_not_called()
+
+    def test_a_wet_run_drops_pre_cutoff_rows_and_restamps_the_rest(self):
+        result, delete, set_value = self._run(dry_run=0)
+        self.assertEqual(delete.call_args[0][1], {"name": ["in", ["F-OLD"]]})
+        self.assertEqual(set_value.call_count, 1)
+        self.assertEqual(set_value.call_args[0][1], "F-PILOT")
+        self.assertEqual(set_value.call_args[0][3], "TESTING")
+        self.assertEqual(result["restamped"], 1)
+
+    def test_an_already_correct_row_is_left_alone(self):
+        _result, _delete, set_value = self._run(dry_run=0)
+        restamped = [call[0][1] for call in set_value.call_args_list]
+        self.assertNotIn("F-OK", restamped)
+
+    def test_a_transferred_employee_is_judged_by_their_current_branch(self):
+        # Stated behaviour, not an accident: a flag does not store the branch it was
+        # written under, so reconcile can only read Employee.branch as it stands now.
+        with patch.object(self.dev_tools, "_require_system_manager_for_clear"), patch.object(
+            self.dev_tools.frappe, "get_all", return_value=[self.rows[1]]
+        ), patch.object(
+            self.dev_tools, "_branch_by_employee", return_value={"EMP-1": "BR-MOVED"}
+        ), patch.object(
+            self.dev_tools.rollout, "phase_for", side_effect=self._phase
+        ) as phase_for, patch.object(
+            self.dev_tools.frappe.db, "set_value"
+        ), patch.object(
+            self.dev_tools.frappe.db, "commit"
+        ):
+            self.dev_tools.reconcile_rollout_flags(dry_run=0)
+        self.assertEqual(phase_for.call_args.kwargs["branch"], "BR-MOVED")
+
+
 if __name__ == "__main__":
     unittest.main()

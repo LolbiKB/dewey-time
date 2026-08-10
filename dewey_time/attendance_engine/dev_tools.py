@@ -5,11 +5,13 @@ from collections import defaultdict
 import frappe
 from frappe.utils import add_days, getdate
 
+from dewey_time.attendance_engine import rollout
 from dewey_time.attendance_engine.closeout import (
     _delete_auto_flags_for_employee_date,
     _generate_for_employee_date,
     has_delivery_or_record_failure_today,
 )
+from dewey_time.attendance_engine.flag_decision_api import _branch_by_employee
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 from dewey_time.attendance_engine.intraday import refresh_intraday_flags_for_employee_date
 from dewey_time.attendance_engine.schedule_resolver import (
@@ -588,4 +590,142 @@ def regenerate_flags_for_range_api(
         # Logged to Error Log with the employee and date; surfaced here so a
         # re-run is an informed choice rather than a hope.
         "days_failed": days_failed,
+    }
+
+
+def _parse_dry_run(value) -> bool:
+    """dry_run arrives as a STRING over HTTP, where "0" is truthy.
+
+    Absent means True. The safe reading of a missing or unparseable value on a
+    destructive endpoint is "do not delete anything".
+    """
+    if value is None:
+        return True
+    return _parse_confirm(value)
+
+
+def _scoped_auto_flags(*, fields, extra_filters=None, branch=None):
+    """AUTO flags plus their employees' branches, optionally narrowed to one branch.
+
+    source == "AUTO" throughout: an HR-created flag on a pre-cutoff day is a
+    deliberate human act and is never auto-deleted, never stamped, never counted.
+    """
+    filters = {"source": "AUTO"}
+    if extra_filters:
+        filters.update(extra_filters)
+    rows = (
+        frappe.get_all(
+            "Attendance Flag",
+            filters=filters,
+            fields=fields,
+            limit_page_length=0,
+        )
+        or []
+    )
+    branch_by_employee = _branch_by_employee({row["employee"] for row in rows})
+    if branch:
+        rows = [
+            row for row in rows if branch_by_employee.get(row["employee"]) == branch
+        ]
+    return rows, branch_by_employee
+
+
+@frappe.whitelist()
+def purge_testing_flags(branch=None, dry_run=1):
+    """Delete every AUTO flag written inside a pilot window.
+
+    The "remove the trial data" operation: run it once a branch is confidently live
+    and its calibration flags have served their purpose.
+
+    Backend-only on purpose. No button, no dialog -- punch-list item T1-5 was a
+    finding about destructive controls being too visible in the SPA.
+
+    Purged flags leave their Attendance Flag Decision rows pointing at nothing.
+    That is already a state the queue reports (flag_grouping._orphans), and it is
+    the honest outcome: the decision was practice, and so was the flag.
+    """
+    _require_system_manager_for_clear()
+    dry_run = _parse_dry_run(dry_run)
+
+    rows, branch_by_employee = _scoped_auto_flags(
+        fields=["name", "employee"],
+        extra_filters={"rollout_phase": rollout.TESTING},
+        branch=branch,
+    )
+
+    by_branch = defaultdict(int)
+    for row in rows:
+        by_branch[branch_by_employee.get(row["employee"]) or ""] += 1
+
+    if not dry_run and rows:
+        frappe.db.delete("Attendance Flag", {"name": ["in", [r["name"] for r in rows]]})
+        frappe.db.commit()
+
+    return {
+        "scanned": len(rows),
+        "deleted": 0 if dry_run else len(rows),
+        "by_branch": dict(by_branch),
+        "dry_run": dry_run,
+    }
+
+
+@frappe.whitelist()
+def reconcile_rollout_flags(branch=None, dry_run=1):
+    """Make the flag table agree with the current rollout configuration.
+
+    Two actions, per AUTO flag, computed from its own (employee's branch,
+    attendance_date): a PRELAUNCH row is deleted, and any other row whose stored
+    rollout_phase disagrees is restamped.
+
+    This is the single owner of pre-cutoff removal. The engine's guards return
+    before their deletes precisely so that policy lives in one place, which means
+    running this is a step of setting or moving a date, not optional cleanup.
+
+    An employee who has changed branch is judged by their CURRENT one -- a flag
+    does not store the branch it was written under. Denormalising branch onto every
+    flag to fix that would cost a column and a backfill to correct a case that
+    arises only when someone transfers during a rollout window.
+    """
+    _require_system_manager_for_clear()
+    dry_run = _parse_dry_run(dry_run)
+
+    rows, branch_by_employee = _scoped_auto_flags(
+        fields=["name", "employee", "attendance_date", "rollout_phase"],
+        branch=branch,
+    )
+
+    to_delete = []
+    to_restamp = []
+    by_branch = defaultdict(lambda: {"deleted": 0, "restamped": 0})
+
+    for row in rows:
+        employee_branch = branch_by_employee.get(row["employee"])
+        phase = rollout.phase_for(
+            branch=employee_branch, attendance_date=row["attendance_date"]
+        )
+        key = employee_branch or ""
+        if phase == rollout.PRELAUNCH:
+            to_delete.append(row["name"])
+            by_branch[key]["deleted"] += 1
+        elif (row.get("rollout_phase") or None) != phase:
+            to_restamp.append((row["name"], phase))
+            by_branch[key]["restamped"] += 1
+
+    if not dry_run:
+        if to_delete:
+            frappe.db.delete("Attendance Flag", {"name": ["in", to_delete]})
+        for name, phase in to_restamp:
+            # update_modified=False: a bulk backfill should not churn every row's
+            # timestamp and make the whole table look freshly edited.
+            frappe.db.set_value(
+                "Attendance Flag", name, "rollout_phase", phase, update_modified=False
+            )
+        frappe.db.commit()
+
+    return {
+        "scanned": len(rows),
+        "deleted": len(to_delete),
+        "restamped": len(to_restamp),
+        "by_branch": {key: dict(value) for key, value in by_branch.items()},
+        "dry_run": dry_run,
     }
