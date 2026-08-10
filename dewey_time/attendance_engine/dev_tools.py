@@ -630,7 +630,7 @@ def _scoped_auto_flags(*, fields, extra_filters=None, branch=None):
     return rows, branch_by_employee
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def purge_testing_flags(branch=None, dry_run=1):
     """Delete every AUTO flag written inside a pilot window.
 
@@ -669,7 +669,7 @@ def purge_testing_flags(branch=None, dry_run=1):
     }
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def reconcile_rollout_flags(branch=None, dry_run=1):
     """Make the flag table agree with the current rollout configuration.
 
