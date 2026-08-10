@@ -685,3 +685,174 @@ class TestPilotMatrix(_Base):
             "these DocTypes still resolve to Frappe's base class, so their "
             "controllers are dead: " + "; ".join(base),
         )
+
+    # --- T3-11: each revived hook, asserted by a side effect only it produces --
+    #
+    # A loaded controller whose hook never fires looks identical from outside,
+    # so "the class loads" (above) is necessary and not sufficient. Every test
+    # below was verified to FAIL with its own DocType reverted to custom:1.
+
+    def _probe_flag(self, attendance_date, **overrides):
+        """An Attendance Flag written the way Desk would write one."""
+        payload = {
+            "doctype": "Attendance Flag",
+            "employee": self.employee,
+            "company": self.company,
+            "attendance_date": attendance_date,
+            "flag_code": "LATE_START",
+            "source": "AUTO",
+            "status": "OPEN",
+            "day_closed": 1,
+            "rollout_phase": "LIVE",
+        }
+        payload.update(overrides)
+        flag = frappe.get_doc(payload)
+        flag.insert(ignore_permissions=True)
+        self.addCleanup(
+            frappe.delete_doc, "Attendance Flag", flag.name, force=True, ignore_permissions=True
+        )
+        return flag
+
+    def test_a_status_change_stamps_who_and_when(self):
+        """AttendanceFlag.before_save. Nothing else writes these two fields."""
+        flag = self._probe_flag("2026-03-02")
+
+        # Blank on insert, and that is the is_new() gate doing its job rather
+        # than an accident. frappe runs before_save during insert() too, and
+        # has_value_changed() answers True for every field when there is no
+        # pre-save snapshot -- so without the gate this row would arrive
+        # already stamped, on every engine insert, all day.
+        self.assertFalse(flag.status_changed_by, "insert is not a status change")
+
+        # "CLOSED", not "RESOLVED": the Select options are
+        # OPEN/EXPLAINED/APPROVED/REJECTED/CLOSED.
+        flag.status = "CLOSED"
+        flag.save(ignore_permissions=True)
+
+        self.assertTrue(flag.status_changed_by)
+        self.assertTrue(flag.status_changed_at)
+
+    def test_saving_without_touching_status_does_not_restamp(self):
+        """The other half of the gate: only a status change stamps."""
+        flag = self._probe_flag("2026-03-03")
+        flag.status = "CLOSED"
+        flag.save(ignore_permissions=True)
+        first_stamp = flag.status_changed_at
+
+        flag.rule_version = "v1"  # any field except status
+        flag.save(ignore_permissions=True)
+
+        self.assertEqual(flag.status_changed_at, first_stamp)
+
+    def test_an_auto_flag_no_longer_gets_a_deterministic_name(self):
+        """The naming deleted alongside this fix, asserted where it takes effect.
+
+        Before T3-11 this could not be tested at all: the controller did not
+        load, so an AUTO flag got a hash name whether the code said so or not.
+        Now the code runs, and this pins that it does not name the row.
+        """
+        flag = self._probe_flag("2026-03-04")
+        self.assertNotIn("AUTO-", flag.name)
+
+    def test_an_incoherent_rollout_configuration_is_now_rejected(self):
+        """DeweyTimeSettings.validate -- the punch list's stated cost of T3-11.
+
+        Restores the original values in cleanup: Dewey Time Settings is a
+        Single, so a test value left behind would change what every later test
+        on this site sees.
+        """
+        settings = frappe.get_single("Dewey Time Settings")
+        before = (settings.rollout_testing_start, settings.rollout_go_live)
+
+        def _restore():
+            doc = frappe.get_single("Dewey Time Settings")
+            doc.rollout_testing_start, doc.rollout_go_live = before
+            doc.save(ignore_permissions=True)
+            frappe.db.commit()
+
+        self.addCleanup(_restore)
+
+        settings.rollout_testing_start = "2026-06-01"
+        settings.rollout_go_live = "2026-05-01"  # before the testing start
+        with self.assertRaises(frappe.ValidationError):
+            settings.save(ignore_permissions=True)
+
+    def test_a_recorded_decision_cannot_be_edited(self):
+        """AttendanceFlagDecision.validate, immutability half.
+
+        The API path is unaffected -- it inserts, and the is_new() gate means
+        the guard never sees an insert. This is the Desk-edit path, which HR
+        User and HR Manager both have write access to reach.
+        """
+        decision = frappe.get_doc(
+            {
+                "doctype": "Attendance Flag Decision",
+                "flag_identity": "pilot-matrix-immutability-probe",
+                "employee": self.employee,
+                "attendance_date": "2026-03-05",
+                "flag_code": "LATE_START",
+                "outcome": "EXCUSED",
+                "reason": "DEVICE_OR_DATA_FAULT",
+                "group_key": "pilot-matrix-probe",
+                "decided_by": "Administrator",
+                "decided_at": "2026-03-05 09:00:00",
+            }
+        )
+        decision.insert(ignore_permissions=True)
+        self.addCleanup(
+            frappe.delete_doc,
+            "Attendance Flag Decision",
+            decision.name,
+            force=True,
+            ignore_permissions=True,
+        )
+
+        # Edit `reason` between two values that need no note, rather than
+        # flipping `outcome` to UPHELD. Both raise ValidationError, so an
+        # outcome edit would pass whether the immutability guard ran or only
+        # the note-required rule did -- and the guard is what is under test.
+        decision.reason = "MANAGER_APPROVED"
+        with self.assertRaises(frappe.ValidationError):
+            decision.save(ignore_permissions=True)
+
+    def test_a_second_sync_row_for_one_device_day_is_rejected(self):
+        """DeviceSyncStatus.autoname + validate.
+
+        The dead autoname is why merge_device_sync_duplicates exists: without
+        it every write made another row. Both halves are asserted -- the
+        canonical name, and the refusal of a second row.
+        """
+        from dewey_time.attendance_engine.device_sync import device_sync_doc_name
+
+        first = frappe.get_doc(
+            {
+                "doctype": "Device Sync Status",
+                "device_sn": "PM-PROBE-01",
+                "local_date": "2026-03-06",
+            }
+        )
+        first.insert(ignore_permissions=True)
+        self.addCleanup(
+            frappe.delete_doc,
+            "Device Sync Status",
+            first.name,
+            force=True,
+            ignore_permissions=True,
+        )
+
+        self.assertEqual(first.name, device_sync_doc_name("PM-PROBE-01", "2026-03-06"))
+
+        # Exception, not a specific class: a second row with the same
+        # deterministic name can fail as ValidationError from validate() or as
+        # DuplicateEntryError from the unique-name constraint, depending on
+        # which fires first. Pinning one would make this brittle about a detail
+        # it is not testing.
+        duplicate = frappe.get_doc(
+            {
+                "doctype": "Device Sync Status",
+                "device_sn": "PM-PROBE-01",
+                "local_date": "2026-03-06",
+            }
+        )
+        with self.assertRaises(Exception):
+            duplicate.insert(ignore_permissions=True)
