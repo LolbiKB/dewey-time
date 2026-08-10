@@ -20,6 +20,7 @@ other modules inject one at import) — so these tests **self-skip** there rathe
 than erroring. See the readiness report for the global-mock-leak follow-up.
 """
 
+import json
 import unittest
 from unittest.mock import MagicMock as _MagicMock
 
@@ -54,6 +55,14 @@ ALT_BRANCH = "PM Alt Branch"
 SHIFT = "PM Day 0900-1700"
 HOLIDAY_LIST = "PM Holiday List 2026"
 HOLIDAY_DATE = "2026-03-06"  # a Friday inside the window, marked as a holiday
+
+# A second shift and a second employee, carrying the one thing SHIFT does not:
+# a scheduled lunch. Kept separate rather than adding lunch fields to SHIFT,
+# because every existing scenario above is calibrated against a lunch-free day
+# and a midday carve would quietly change what several of them assert.
+LUNCH_SHIFT = "PM Day 0900-1700 Lunch"
+LUNCH_START = "12:00:00"
+LUNCH_END = "13:00:00"
 
 
 def _ensure(doctype, name, payload):
@@ -139,16 +148,82 @@ class TestPilotMatrix(_Base):
             sa.insert(ignore_permissions=True)
             sa.submit()
 
+        cls.lunch_employee = cls._ensure_lunch_employee()
+
         frappe.db.commit()
+
+    @classmethod
+    def _ensure_lunch_employee(cls):
+        """A second employee on a shift that actually schedules a lunch.
+
+        custom_lunch_start / custom_lunch_end are dewey_time custom fields on
+        Shift Type (sandbox_bootstrap's make_custom_fields creates them), which
+        is why they are set through the doc dict rather than the Shift Type's
+        own schema.
+        """
+        _ensure(
+            "Shift Type",
+            LUNCH_SHIFT,
+            {
+                "name": LUNCH_SHIFT,
+                "start_time": "09:00:00",
+                "end_time": "17:00:00",
+                "custom_lunch_start": LUNCH_START,
+                "custom_lunch_end": LUNCH_END,
+            },
+        )
+
+        employee = frappe.db.get_value("Employee", {"employee_name": "Pilot Matrix Two"}, "name")
+        if not employee:
+            emp = frappe.get_doc(
+                {
+                    "doctype": "Employee",
+                    "employee_name": "Pilot Matrix Two",
+                    "first_name": "Pilot",
+                    "last_name": "Lunch",
+                    "company": cls.company,
+                    "status": "Active",
+                    "branch": PRIMARY_BRANCH,
+                    "gender": "Male",
+                    "date_of_birth": "1990-01-01",
+                    "date_of_joining": "2020-01-01",
+                    "holiday_list": HOLIDAY_LIST,
+                }
+            )
+            emp.insert(ignore_permissions=True)
+            employee = emp.name
+
+        if not frappe.get_all(
+            "Shift Assignment",
+            filters={"employee": employee, "shift_type": LUNCH_SHIFT, "docstatus": 1},
+            pluck="name",
+        ):
+            sa = frappe.get_doc(
+                {
+                    "doctype": "Shift Assignment",
+                    "employee": employee,
+                    "shift_type": LUNCH_SHIFT,
+                    "company": cls.company,
+                    "start_date": "2026-01-01",
+                    "status": "Active",
+                }
+            )
+            sa.insert(ignore_permissions=True)
+            sa.submit()
+
+        return employee
 
     # --- helpers -------------------------------------------------------------
 
-    def _checkin(self, day, hhmmss, log_type, branch=PRIMARY_BRANCH, sid=None):
-        sid = sid or f"pm-{day}-{hhmmss}-{log_type}"
+    def _checkin(self, day, hhmmss, log_type, branch=PRIMARY_BRANCH, sid=None, employee=None):
+        employee = employee or self.employee
+        # The id has to carry the employee too, now that two of them can punch
+        # on the same day at the same minute — custom_supabase_log_id is unique.
+        sid = sid or f"pm-{employee}-{day}-{hhmmss}-{log_type}"
         frappe.get_doc(
             {
                 "doctype": "Employee Checkin",
-                "employee": self.employee,
+                "employee": employee,
                 "time": f"{day} {hhmmss}",
                 "log_type": log_type,
                 "custom_supabase_log_id": sid,
@@ -156,16 +231,32 @@ class TestPilotMatrix(_Base):
             }
         ).insert(ignore_permissions=True)
 
-    def _flags(self, day):
+    def _rows(self, day, employee=None):
+        """Every Attendance Flag row for one employee-day, evidence parsed."""
+        employee = employee or self.employee
+        rows = frappe.get_all(
+            "Attendance Flag",
+            filters={"employee": employee, "attendance_date": getdate(day)},
+            fields=["flag_code", "day_closed", "evidence"],
+        )
+        for row in rows:
+            try:
+                row["evidence"] = json.loads(row["evidence"]) if row["evidence"] else {}
+            except (TypeError, ValueError):
+                row["evidence"] = {}
+        return rows
+
+    def _flags(self, day, employee=None):
         """Run the real closeout core for one day; return the set of flag_codes."""
+        employee = employee or self.employee
         d = getdate(day)
-        frappe.db.delete("Attendance Flag", {"employee": self.employee, "attendance_date": d})
+        frappe.db.delete("Attendance Flag", {"employee": employee, "attendance_date": d})
         _generate_for_employee_date(
-            employee=self.employee, attendance_date=d, include_unnotified_absence=True
+            employee=employee, attendance_date=d, include_unnotified_absence=True
         )
         rows = frappe.get_all(
             "Attendance Flag",
-            filters={"employee": self.employee, "attendance_date": d},
+            filters={"employee": employee, "attendance_date": d},
             fields=["employee", "attendance_date", "flag_code", "day_closed", "source"],
         )
         # Oracle cross-check: closed-day rows must never self-contradict.
@@ -246,3 +337,71 @@ class TestPilotMatrix(_Base):
         non_primary = [r for r in rows if r["flag_code"] == "NON_PRIMARY_SITE_PUNCH"]
         self.assertTrue(non_primary, f"expected provisional NON_PRIMARY_SITE_PUNCH, got {rows}")
         self.assertEqual(non_primary[0]["day_closed"], 0, "intraday flags must be provisional")
+
+    # --- the two cases the matrix was missing --------------------------------
+    #
+    # Added after the pilot matrix finally ran on a bench and controls showed
+    # what it does and does not reach: forcing _bridge_scheduled_lunch wide open
+    # left all nine green, and disabling the provisional intraday no-show left
+    # all nine green. Both of the branch's headline behaviours were invisible
+    # here. These two close that.
+
+    def test_an_untaken_lunch_does_not_split_one_absence_in_two(self):
+        """_bridge_scheduled_lunch, against a real Shift Type with a real lunch.
+
+        Present 09:00-11:00, then gone. The lunch carve leaves 11:00-12:00 and
+        13:00-17:00 -- two findings for one continuous absence, which is the
+        shape that made a no-show unreadable in the queue. Bridged, it is one
+        row of 11:00-17:00.
+
+        `minutes` is the sum of the parts (60 + 240 = 300), NOT the span (360):
+        the unpaid hour in the middle is still not owed. Asserting both numbers
+        is what makes this a bridge test rather than a count test -- a naive
+        merge that recomputed minutes from the span would pass on the count and
+        fail here.
+        """
+        day = "2026-03-16"
+        emp = self.lunch_employee
+        self._checkin(day, "09:00:00", "IN", employee=emp)
+        self._checkin(day, "11:00:00", "OUT", employee=emp)
+
+        self.assertIn("MISSING_TIME", self._flags(day, employee=emp))
+        missing = [r for r in self._rows(day, employee=emp) if r["flag_code"] == "MISSING_TIME"]
+
+        self.assertEqual(len(missing), 1, f"one absence, one row — got {missing}")
+        evidence = missing[0]["evidence"]
+        self.assertEqual(evidence.get("minutes"), 300, f"sum of the parts, not the span: {evidence}")
+        self.assertTrue(str(evidence.get("interval_start", "")).endswith("11:00:00"), evidence)
+        self.assertTrue(str(evidence.get("interval_end", "")).endswith("17:00:00"), evidence)
+
+    def test_a_no_show_says_so_intraday_instead_of_two_gaps_around_lunch(self):
+        """The branch's headline behaviour, end to end on a real bench.
+
+        Zero punches on a shift that schedules a lunch. Before, the intraday
+        pass produced two MISSING_TIME rows split by a lunch nobody took and
+        never said the person had not shown up; UNNOTIFIED_ABSENCE existed but
+        waited for end-of-day closeout. Now one provisional no-show says it
+        while the day is still running.
+
+        The assertion that carries the feature is `assertEqual(missing, [])`:
+        the no-show REPLACES the gap rows rather than joining them.
+        """
+        day = "2026-03-17"
+        emp = self.lunch_employee
+        d = getdate(day)
+        frappe.db.delete("Attendance Flag", {"employee": emp, "attendance_date": d})
+
+        refresh_intraday_flags_for_employee_date(emp, d)
+
+        rows = self._rows(day, employee=emp)
+        absences = [r for r in rows if r["flag_code"] == "UNNOTIFIED_ABSENCE"]
+        missing = [r for r in rows if r["flag_code"] == "MISSING_TIME"]
+
+        self.assertEqual(len(absences), 1, f"exactly one no-show, got {rows}")
+        self.assertEqual(missing, [], f"the no-show replaces the gap rows, got {missing}")
+
+        absence = absences[0]
+        self.assertEqual(absence["day_closed"], 0, "a running day is not closed")
+        evidence = absence["evidence"]
+        self.assertIs(evidence.get("provisional"), True, f"must be provisional: {evidence}")
+        self.assertEqual(evidence.get("reason"), "on_shift_no_checkins_intraday", evidence)
