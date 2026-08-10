@@ -2041,4 +2041,11 @@ EOF
 
 - The queue banner and the calendar chip. They are Phase B, with their own plan, and they consume the payloads Task 6 ships.
 - Any button, dialog or scheduled job for the two purge endpoints.
-- Setting real dates on the production site. That is an admin action after this merges, and the runbook is: set the dates in Desk, run `reconcile_rollout_flags` with `dry_run=1`, read the counts, then run it with `dry_run=0`.
+- Setting real dates on the production site. That is an admin action after this merges. The runbook, as the branch's reviews established it:
+
+  1. Set the dates in Desk. **Check them by eye** — `Dewey Time Settings.validate` is written and unit-tested but does not run, because every DocType in this app is `custom: 1` (filed as T3-11). An incoherent config saves silently until that is fixed.
+  2. Run `reconcile_rollout_flags` with `dry_run=1` and read the counts.
+  3. Run it with `dry_run=0`. **Reconcile before purge is a correctness ordering, not hygiene**: flags written between deploy and step 1 are stamped `LIVE`, not blank, so `purge_testing_flags` alone would both under-delete and mislabel.
+  4. Only then `purge_testing_flags`, once a branch is confidently live.
+
+  Two things to know while operating it. **Moving a cutoff later leaves already-written flags behind** until reconcile runs again — the engine's guards return before their deletes on purpose, so reconcile is the single owner of pre-cutoff removal. And **an employee who changed branch is judged by their current one**, since a flag does not store the branch it was written under.

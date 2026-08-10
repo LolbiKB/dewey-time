@@ -113,6 +113,10 @@ gap to close: overnight shifts (T2-3).
 
   **Not fixed on `feat/rollout-phases`, deliberately** (user ruling, 2026-08-10): flipping `custom` on DocTypes that already hold production data does not belong in a feature branch's last task, and reviving `before_insert`'s deterministic naming against a table already full of hash-named rows is an interaction that needs its own testing and probably a rename patch. _Proposed bucket: **Should fix** — real, app-wide, currently masked by the two mitigations above._ (found 2026-08-10; PR —)
 
+- [ ] **[T3-12]** **Nothing the real-bench integration module proves is enforced by CI.** `.github/workflows/tests.yml:111` runs `bench --site test_site run-tests --app dewey_time`. Under that full-app form `dewey_time/tests/test_integration_pilot_matrix.py` **self-skips by design** — the other test modules inject a MagicMock as `frappe` at import, so the module detects it is not on a real bench and skips rather than erroring. Only `run-tests --module dewey_time.tests.test_integration_pilot_matrix` actually executes it. — evidence: the module's own docstring states this; the local lane reports `skipped=17`, which is exactly that module's test count.
+
+  So every property proved on a bench during `feat/rollout-phases` — the PRELAUNCH refusal, the `rollout_phase` stamp round-tripping through a real Select, the purge, the calendar payload — is verified once by hand and then guarded by nothing. A regression in any of them ships green. _Proposed bucket: **Should fix** — add a CI job running the `--module` form. The `frappe-sandbox` skill already provisions the bench this needs._ (found 2026-08-10; PR —)
+
 ## Triage decisions log
 
 _(user decisions recorded here: entry id → bucket, date, rationale)_
