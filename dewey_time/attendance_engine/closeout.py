@@ -843,6 +843,14 @@ def _insert_flag(*, employee, company, attendance_date, flag_code, evidence, day
             "status": "OPEN",
             "day_closed": day_closed,
             "rule_version": "v0",
+            # Derived from THIS flag's attendance_date, never from today. AUTO flags
+            # are deleted and re-inserted on every checkin, so a phase read from the
+            # current date would re-label the entire pilot window the moment go-live
+            # passed. Only TESTING or LIVE can appear: the PRELAUNCH guards upstream
+            # mean this function never runs for a pre-cutoff day.
+            "rollout_phase": rollout.phase_for_employee(
+                employee=employee, attendance_date=attendance_date
+            ),
             "evidence": json.dumps(evidence, separators=(",", ":"), ensure_ascii=False),
         }
     )

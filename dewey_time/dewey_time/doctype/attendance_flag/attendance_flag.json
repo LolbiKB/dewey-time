@@ -29,6 +29,7 @@
     "details_section",
     "linked_checkin",
     "rule_version",
+    "rollout_phase",
     "evidence",
     "employee_section2",
     "employee_note",
@@ -132,6 +133,15 @@
       "label": "Rule Version"
     },
     {
+      "fieldname": "rollout_phase",
+      "fieldtype": "Select",
+      "label": "Rollout Phase",
+      "options": "\nTESTING\nLIVE",
+      "read_only": 1,
+      "search_index": 1,
+      "description": "TESTING means this flag was written inside a pilot window and is calibration data. Blank means it predates rollout phases and is read as LIVE."
+    },
+    {
       "fieldname": "evidence",
       "fieldtype": "Long Text",
       "label": "Evidence (JSON)"
@@ -198,7 +208,7 @@
   "issingle": 0,
   "istable": 0,
   "links": [],
-  "modified": "2026-08-05 12:00:00.000000",
+  "modified": "2026-08-10 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Attendance Flag",

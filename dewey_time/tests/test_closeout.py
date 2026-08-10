@@ -1264,3 +1264,78 @@ class TestCompanyFallbackPrelaunchGuard(unittest.TestCase):
 
         shift = self._run_fallback(rollout.LIVE)
         self.assertTrue(shift.called)
+
+
+class TestInsertFlagStampsPhase(unittest.TestCase):
+    """_insert_flag (closeout.py:809) is the sole insert for every AUTO flag in the
+    app -- _insert_flags routes to it, and so do closeout.py:301 and
+    intraday.py:136,176,194. Stamping here is what makes it impossible for a call
+    site added later to forget the field."""
+
+    def _inserted_doc(self, phase):
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe, "get_doc") as get_doc, patch.object(
+            closeout.rollout, "phase_for_employee", return_value=phase
+        ):
+            closeout._insert_flag(
+                employee="EMP-1",
+                company="CO-A",
+                attendance_date=date(2026, 8, 20),
+                flag_code="LATE_START",
+                evidence={},
+            )
+        return get_doc.call_args[0][0]
+
+    def test_a_pilot_window_flag_is_stamped_testing(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.assertEqual(
+            self._inserted_doc(rollout.TESTING)["rollout_phase"], "TESTING"
+        )
+
+    def test_a_post_launch_flag_is_stamped_live(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.assertEqual(self._inserted_doc(rollout.LIVE)["rollout_phase"], "LIVE")
+
+    def test_the_phase_comes_from_the_flags_own_date_not_from_today(self):
+        # The property that makes regeneration idempotent. intraday re-inserts AUTO
+        # flags on EVERY checkin, so a phase read from the current date would
+        # re-label the whole pilot window the moment go-live passed.
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe, "get_doc"), patch.object(
+            closeout.rollout, "phase_for_employee"
+        ) as phase_for_employee:
+            closeout._insert_flag(
+                employee="EMP-1",
+                company="CO-A",
+                attendance_date=date(2026, 8, 20),
+                flag_code="LATE_START",
+                evidence={},
+            )
+        self.assertEqual(
+            phase_for_employee.call_args.kwargs["attendance_date"], date(2026, 8, 20)
+        )
+
+    def test_phase_for_employee_is_called_with_this_flags_own_employee_and_date(self):
+        # The other three tests patch phase_for_employee's return value or only
+        # inspect one kwarg, so a stamp built from the wrong employee's branch
+        # (or from a stale/hardcoded date) would be invisible to them. This test
+        # pins both arguments together.
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe, "get_doc"), patch.object(
+            closeout.rollout, "phase_for_employee"
+        ) as phase_for_employee:
+            closeout._insert_flag(
+                employee="EMP-1",
+                company="CO-A",
+                attendance_date=date(2026, 8, 20),
+                flag_code="LATE_START",
+                evidence={},
+            )
+        phase_for_employee.assert_called_once_with(
+            employee="EMP-1", attendance_date=date(2026, 8, 20)
+        )
