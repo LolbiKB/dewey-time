@@ -50,13 +50,12 @@
 | `dewey_time/attendance_engine/closeout.py` | Guard in `_generate_for_employee_date` and `_generate_company_fallback_for_date`; stamp in `_insert_flag`. |
 | `dewey_time/attendance_engine/intraday.py` | Hoist the branch read above the delete, then guard. |
 | `dewey_time/attendance_engine/dev_tools.py` | `_parse_dry_run`, `purge_testing_flags`, `reconcile_rollout_flags`. |
-| `dewey_time/attendance_engine/flag_queue_api.py` | `rollout_phase` in the scan, `_rollout_block`, `v4` prefix. |
-| `dewey_time/attendance_engine/hr_calendar.py` | `rollout_phase` on each day. |
+| `dewey_time/attendance_engine/flag_queue_api.py` | `rollout_phase` in the scan, `_rollout_block`, `v4` prefix (Task 6). |
+| `dewey_time/attendance_engine/hr_calendar.py` | `rollout_phase` on each day (Task 7, with its bench test). |
 | `dewey_time/tests/test_closeout.py` | Guard + stamp tests. |
 | `dewey_time/tests/test_intraday.py` | Guard test. |
 | `dewey_time/tests/test_dev_tools.py` | Purge endpoint tests. |
 | `dewey_time/tests/test_flag_queue_api.py` | `rollout` block tests. |
-| `dewey_time/tests/test_hr_calendar.py` | Per-day phase test. |
 | `dewey_time/tests/test_integration_pilot_matrix.py` | Real-bench verification. |
 
 ---
@@ -1544,16 +1543,17 @@ EOF
 
 ---
 
-## Task 6: The payloads Phase B will render
+## Task 6: The queue payload Phase B will render
 
 **Files:**
 - Modify: `dewey_time/attendance_engine/flag_queue_api.py` (`_QUEUE_CACHE_PREFIX` ~line 54, `_flag_rows:153`, `_build_queue_payload:373-447`)
-- Modify: `dewey_time/attendance_engine/hr_calendar.py` (the `days.append({...})` block, ~line 752)
-- Test: `dewey_time/tests/test_flag_queue_api.py` (append), `dewey_time/tests/test_hr_calendar.py` (append)
+- Test: `dewey_time/tests/test_flag_queue_api.py` (append)
+
+**Do not touch `hr_calendar.py` in this task.** The calendar's per-day `rollout_phase` ships in Task 7, alongside the only test that can cover it.
 
 **Interfaces:**
-- Consumes: `rollout.TESTING`, `rollout.LIVE`, `rollout.rollout_dates_for_branch`, `rollout.phases_configured`, `rollout.phase_for` from Task 1; the `rollout_phase` column from Task 4.
-- Produces: the `rollout` block on `get_flag_queue`'s payload and `rollout_phase` on each `get_week` day. **Phase B consumes these and adds no Python of its own** — if Phase B finds it needs a backend change, that is a correction to this task, not a smuggled frontend commit.
+- Consumes: `rollout.TESTING`, `rollout.LIVE`, `rollout.rollout_dates_for_branch`, `rollout.phases_configured` from Task 1; the `rollout_phase` column from Task 4.
+- Produces: the `rollout` block on `get_flag_queue`'s payload. **Phase B consumes it and adds no Python of its own** — if Phase B finds it needs a backend change, that is a correction to this task, not a smuggled frontend commit.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1632,13 +1632,11 @@ class TestQueueCachePrefix(unittest.TestCase):
         self.assertEqual(_QUEUE_CACHE_PREFIX, "flag_queue:v4")
 ```
 
-**No mocked test for the calendar day key, deliberately.** `test_hr_calendar.py` covers helpers and access control; it has **no scaffolding that invokes `get_week`**, and that function reads checkins, shifts, holidays, leave, device alerts and sync rows. Building a mock harness for all of it would take more code than the one line under test, and would mostly be testing the harness. The change is a call to `rollout.phase_for` — already covered by a 14-case truth table in Task 1 — inserted into a dict literal.
-
-What actually needs proving is that the key reaches the payload, and that is proven on a real bench in **Task 7**. Do not invent `get_week` scaffolding here.
+That is the whole test set for this task. The calendar change and its test both live in Task 7.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `python3 -m unittest dewey_time.tests.test_flag_queue_api dewey_time.tests.test_hr_calendar -v`
+Run: `python3 -m unittest dewey_time.tests.test_flag_queue_api -v`
 Expected: FAIL — `AttributeError: module ... has no attribute '_rollout_block'` and `'flag_queue:v3' != 'flag_queue:v4'`.
 
 - [ ] **Step 3: Add the queue block**
@@ -1732,56 +1730,32 @@ In `_build_queue_payload`'s returned dict, add after the `"outage_dates": [...]`
         "rollout": _rollout_block(flags=flags, employees_by_id=employees_by_id),
 ```
 
-- [ ] **Step 4: Add the calendar day phase**
+- [ ] **Step 4: Run the tests to verify they pass**
 
-In `dewey_time/attendance_engine/hr_calendar.py`, add to the imports:
-
-```python
-from dewey_time.attendance_engine import rollout
-```
-
-In the `days.append({...})` block, add after `"flags": flags_by_day.get(key, []),`:
-
-```python
-                # PRELAUNCH here means the engine never evaluated this day. Without
-                # it a pre-cutoff day is pixel-identical to a clean one, which is the
-                # single place the cutoff can actively mislead. Rendered in Phase B.
-                "rollout_phase": rollout.phase_for(
-                    branch=employee_branch, attendance_date=cur
-                ),
-```
-
-`employee_branch` is already resolved once for the whole week at `hr_calendar.py:549`, so this adds no query — only one cached settings read per day.
-
-- [ ] **Step 5: Run the tests to verify they pass**
-
-Run: `python3 -m unittest dewey_time.tests.test_flag_queue_api dewey_time.tests.test_hr_calendar -v`
+Run: `python3 -m unittest dewey_time.tests.test_flag_queue_api -v`
 Expected: PASS.
 
-- [ ] **Step 6: Run the whole lane**
+- [ ] **Step 5: Run the whole lane**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
 Expected: **704 pass, 11 skipped, 0 errors** (697 + 7 new).
 
-- [ ] **Step 7: Confirm no frontend file changed**
+- [ ] **Step 6: Confirm no frontend file changed**
 
 Run: `git status --short`
-Expected: only files under `dewey_time/attendance_engine/` and `dewey_time/tests/`. **Nothing** under `dewey_time/frontend/`, `dewey_time/public/`, or `dewey_time/www/`. If anything else appears, stop and escalate — Phase A rebuilds no bundle.
+Expected: only `dewey_time/attendance_engine/flag_queue_api.py` and `dewey_time/tests/test_flag_queue_api.py`. **Nothing** under `dewey_time/frontend/`, `dewey_time/public/`, or `dewey_time/www/`, and nothing in `hr_calendar.py` — that is Task 7's.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add dewey_time/attendance_engine/flag_queue_api.py \
-        dewey_time/attendance_engine/hr_calendar.py \
-        dewey_time/tests/test_flag_queue_api.py \
-        dewey_time/tests/test_hr_calendar.py
+        dewey_time/tests/test_flag_queue_api.py
 git commit -m "$(cat <<'EOF'
-feat(rollout): the payloads carry the phase, a pass ahead of anything drawing it
+feat(rollout): the queue payload carries the phase, ahead of anything drawing it
 
-The queue gains a rollout block -- phase of the visible range, pilot counts, and
-the windows of the branches actually present -- built from rows already in hand
-so the five-query budget holds. Each calendar day carries its own phase, from
-the branch get_week already resolved once for the week.
+A rollout block -- phase of the visible range, pilot counts, and the windows of
+the branches actually present -- built from rows already in hand so the
+five-query budget holds.
 
 Landing this before the components that render it is what keeps the frontend
 pass free of Python: the flag_queue v3 -> v4 bump happens here, alone, rather
@@ -1797,14 +1771,17 @@ EOF
 
 ---
 
-## Task 7: Proof on a real bench
+## Task 7: The calendar payload, and proof on a real bench
 
 **Files:**
+- Modify: `dewey_time/attendance_engine/hr_calendar.py` (the `days.append({...})` block, ~line 752)
 - Modify: `dewey_time/tests/test_integration_pilot_matrix.py`
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–6.
-- Produces: nothing other tasks read. This is the last gate.
+- Produces: `rollout_phase` on each day of `get_employee_calendar`'s payload, which Phase B renders. Nothing else in Phase A reads it.
+
+The calendar's one-line change lives here rather than in Task 6 because this is where the only test that can cover it lives. `test_hr_calendar.py` has no scaffolding that invokes `get_employee_calendar`, and that function reads checkins, shifts, holidays, leave, device alerts and sync rows — a mock harness for all of it would be more code than the line under test, and would mostly test the harness. On a real bench the endpoint just runs.
 
 Mocked unit tests cannot prove this feature. The whole point is behaviour against a real `Dewey Time Settings` Single, a real `Attendance Flag` table with a real `rollout_phase` column, and the real cached-document machinery. This module already runs against a real bench after #147.
 
@@ -1925,8 +1902,8 @@ Add `from contextlib import contextmanager` to the module's imports, then add to
             self.assertEqual(_count("LIVE"), live_before)
 
     def test_the_calendar_payload_carries_a_phase_for_every_day(self):
-        """The calendar half of Task 6, proven here because test_hr_calendar.py has
-        no scaffolding that invokes the week endpoint at all."""
+        """The payload half of this task: the phase reaches every day, including
+        both boundaries, on an endpoint running for real."""
         from dewey_time.attendance_engine.hr_calendar import get_employee_calendar
 
         frappe.set_user("Administrator")
@@ -1943,7 +1920,28 @@ Add `from contextlib import contextmanager` to the module's imports, then add to
 
 The endpoint is `get_employee_calendar(employee, start_date, end_date)` at `hr_calendar.py:518` — there is no `get_week`, whatever the spec's prose calls it.
 
-- [ ] **Step 2: Bring up the sandbox bench and migrate the new schema**
+- [ ] **Step 2: Add the calendar day phase**
+
+In `dewey_time/attendance_engine/hr_calendar.py`, add to the imports:
+
+```python
+from dewey_time.attendance_engine import rollout
+```
+
+In the `days.append({...})` block, add after `"flags": flags_by_day.get(key, []),`:
+
+```python
+                # PRELAUNCH here means the engine never evaluated this day. Without
+                # it a pre-cutoff day is pixel-identical to a clean one, which is the
+                # single place the cutoff can actively mislead. Rendered in Phase B.
+                "rollout_phase": rollout.phase_for(
+                    branch=employee_branch, attendance_date=cur
+                ),
+```
+
+`employee_branch` is already resolved once for the whole week at `hr_calendar.py:549`, so this adds no query — only one cached settings read per day.
+
+- [ ] **Step 3: Bring up the sandbox bench and migrate the new schema**
 
 ```bash
 cd dev/sandbox && ./frappe-sandbox up && ./frappe-sandbox bootstrap --test-site
@@ -1957,7 +1955,7 @@ cd dev/sandbox && ./frappe-sandbox exec "bench --site test_site migrate"
 
 Expected: `Dewey Time Branch Rollout` created and the two modified DocTypes reimported. If the new fields do not appear, the `modified` bump was missed — that is the failure mode the Global Constraints call out.
 
-- [ ] **Step 3: Run the pilot matrix on the bench**
+- [ ] **Step 4: Run the pilot matrix on the bench**
 
 Run: `cd dev/sandbox && ./frappe-sandbox test --backend --module test_integration_pilot_matrix`
 
@@ -1965,27 +1963,36 @@ Expected: **16 tests, all passing** (11 existing + 5 new).
 
 `bench run-tests --module` imports every sibling test module, and those inject a MagicMock as `frappe` — which is why this module self-skips outside a real bench. If you see `ModuleNotFoundError: No module named 'frappe.boot'`, or the tests report as **skipped**, you are not on a real bench and the run proves nothing. Confirm `_HAS_REAL_BENCH` is true and that the count is 16 before trusting a green result — a green run of zero tests is the failure mode this repo has hit before.
 
-- [ ] **Step 4: Confirm the guard is what produces the empty day**
+- [ ] **Step 5: Confirm the guard is what produces the empty day**
 
 `test_a_pre_cutoff_day_with_punches_earns_no_flags` already carries its own control: it asserts the *same day with the same punches* flags when no cutoff is configured, then asserts it does not once the cutoff is set. Only the configuration differs between the two assertions, so the test cannot pass with the guard absent.
 
 Confirm that claim once rather than assuming it. Comment out the `PRELAUNCH` guard in `closeout._generate_for_employee_date`, re-run the module, and record the result. Expected: that test **FAILS** on its second assertion. Restore the guard and confirm 16/16 again. Put both outcomes in the task report.
 
-- [ ] **Step 5: Run the whole local lane one more time**
+- [ ] **Step 6: Run the whole local lane one more time**
 
 Run: `python3 -m unittest discover -s dewey_time/tests -t .`
 Expected: **704 pass, 11 skipped, 0 errors** — the bench module self-skips here, so the count is unchanged from Task 6.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add dewey_time/tests/test_integration_pilot_matrix.py
+git add dewey_time/attendance_engine/hr_calendar.py \
+        dewey_time/tests/test_integration_pilot_matrix.py
 git commit -m "$(cat <<'EOF'
-test(rollout): the guard proved on a real bench, and proved both ways
+feat(rollout): the calendar says which days it never judged, proved on a bench
 
-Four cases against a real Settings Single and a real flag table: a pre-cutoff
-day WITH punches earns nothing, a pilot day is stamped TESTING, a post-launch
-day LIVE, and the purge takes exactly the pilot rows.
+Each day of the calendar payload carries its phase, from the branch the endpoint
+already resolves once for the week. It ships here rather than with the queue
+payload because this is where the only test that can cover it lives:
+test_hr_calendar.py has no scaffolding that invokes get_employee_calendar, and
+mocking checkins, shifts, holidays, leave, alerts and sync rows would be more
+harness than line.
+
+Five cases against a real Settings Single and a real flag table: a pre-cutoff
+day WITH punches earns nothing, a pilot day is stamped TESTING, the go-live day
+itself LIVE, the purge takes exactly the pilot rows, and a three-day payload
+straddling both boundaries reads PRELAUNCH / TESTING / LIVE.
 
 The pre-cutoff case is the one that needed proving twice. 09:47 against an 09:00
 shift is a LATE_START on any live day, and with the guard commented out this
