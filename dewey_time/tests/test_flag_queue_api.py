@@ -35,6 +35,7 @@ from dewey_time.attendance_engine import (  # noqa: E402
     flag_grouping,
     flag_identity,
     flag_queue_api,
+    rollout,
 )
 
 INVALIDATOR = "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache"
@@ -1138,7 +1139,14 @@ class TestRolloutBlock(unittest.TestCase):
 
         self.api = flag_queue_api
 
-    def _block(self, phases, branches=("BR-A",), configured=True, visible_phases=None):
+    def _block(
+        self,
+        phases,
+        branches=("BR-A",),
+        configured=True,
+        visible_phases=None,
+        dates_by_branch=None,
+    ):
         """`flags` describe the whole date range; `entries` describe the VISIBLE
         list `_rollout_block` now counts pilot flags over (IMPORTANT-3). Every
         test below that is not specifically about the range-vs-list split wants
@@ -1149,6 +1157,12 @@ class TestRolloutBlock(unittest.TestCase):
         person.get("flags") -> flag_out.get("rollout_phase") through
         iter_people, so a bare {"kind": "person", "flags": [...]} is the whole
         shape it needs.
+
+        `dates_by_branch` maps a branch (None included) to the pair
+        rollout_dates_for_branch would return for it. Left None, every branch
+        gets the same pair -- which is all a test about counts or ordering
+        needs. Given, it is what lets a test prove WHICH branch each window's
+        dates were read for.
         """
         if visible_phases is None:
             visible_phases = phases
@@ -1164,12 +1178,18 @@ class TestRolloutBlock(unittest.TestCase):
             f"EMP-{i}": {"branch": branches[i % len(branches)]}
             for i in range(len(phases))
         }
+
+        def _dates_for(branch):
+            if dates_by_branch is None:
+                return (date(2026, 8, 15), date(2026, 9, 1))
+            return dates_by_branch[branch]
+
         with patch.object(
             self.api.rollout, "phases_configured", return_value=configured
         ), patch.object(
             self.api.rollout,
             "rollout_dates_for_branch",
-            return_value=(date(2026, 8, 15), date(2026, 9, 1)),
+            side_effect=_dates_for,
         ):
             return self.api._rollout_block(
                 flags=flags, entries=entries, employees_by_id=employees_by_id
@@ -1224,6 +1244,62 @@ class TestRolloutBlock(unittest.TestCase):
         self.assertEqual(block["testing_flag_count"], 0)
         self.assertEqual(block["total_flag_count"], 1)
 
+    def test_a_branchless_pilot_roster_still_gets_a_window(self):
+        # The likeliest real rollout, not an edge case: the design calls the
+        # global pair "the primary path, not the fallback" because a great many
+        # employees have no branch set. Built from the branches present in the
+        # result set alone, this case reports range_phase TESTING with
+        # windows: [] -- a pilot banner in Phase B with no dates to put in it.
+        block = self._block(["TESTING"], branches=(None,))
+        self.assertEqual(block["range_phase"], "TESTING")
+        self.assertEqual(
+            block["windows"],
+            [{"branch": None, "testing_start": "2026-08-15", "go_live": "2026-09-01"}],
+        )
+
+    def test_a_mixed_roster_puts_the_branchless_window_last(self):
+        # Two things at once, because they only mean something together: the
+        # branchless window is APPENDED after the sorted branch names (None has
+        # no place in a sort of branch names, so its position has to be chosen
+        # and pinned for Phase B to rely on), and it carries the GLOBAL pair
+        # rather than any named branch's.
+        block = self._block(
+            ["TESTING", "TESTING"],
+            branches=("BR-A", None),
+            dates_by_branch={
+                "BR-A": (date(2026, 8, 15), date(2026, 9, 1)),
+                None: (date(2026, 7, 1), date(2026, 7, 20)),
+            },
+        )
+        self.assertEqual(
+            block["windows"],
+            [
+                {"branch": "BR-A", "testing_start": "2026-08-15", "go_live": "2026-09-01"},
+                {"branch": None, "testing_start": "2026-07-01", "go_live": "2026-07-20"},
+            ],
+        )
+
+    def test_an_empty_range_reports_live(self):
+        # `testing == 0` is evaluated before `testing == total`, so an empty
+        # queue reports LIVE -- correct, because there is no pilot data to warn
+        # about. Swapping those two branches would make an empty range report
+        # TESTING (0 == 0) and nothing else in this suite would notice.
+        block = self._block([])
+        self.assertEqual(block["range_phase"], "LIVE")
+        self.assertEqual(block["windows"], [])
+
+    def test_a_pilot_branch_with_no_configured_dates_yields_a_window_of_nulls(self):
+        # Reachable: a branch can be mid-pilot by way of the global dates while
+        # rollout_dates_for_branch answers with the (None, None) of a settings
+        # doc whose dates were cleared between the flags being written and the
+        # queue being read. Phase B receives nulls, so the shape is pinned here
+        # rather than discovered there.
+        block = self._block(["TESTING"], dates_by_branch={"BR-A": (None, None)})
+        self.assertEqual(
+            block["windows"],
+            [{"branch": "BR-A", "testing_start": None, "go_live": None}],
+        )
+
 
 class TestRolloutBlockReachesThePayload(unittest.TestCase):
     """TestRolloutBlock above calls _rollout_block directly, so it stays green on
@@ -1245,6 +1321,26 @@ class TestRolloutBlockReachesThePayload(unittest.TestCase):
             payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
         self.assertEqual(payload["rollout"]["range_phase"], "TESTING")
         self.assertEqual(payload["rollout"]["windows"][0]["branch"], "BR-A")
+
+
+class TestFlagGroupingAgreesWithRolloutOnLive(unittest.TestCase):
+    """flag_grouping._flag_out normalises a blank stored phase with a bare
+    "LIVE" literal rather than rollout.LIVE, because that module is frappe-free
+    by design and rollout.py imports frappe (the reasoning is at
+    flag_grouping.py:202-207). That constraint stays; what was missing was
+    anything holding the two values equal. Rename rollout.LIVE and
+    flag_grouping keeps stamping the old string into every FlagOut while
+    _rollout_block's TESTING comparison goes on working -- the payload splits
+    silently instead of the suite going red.
+
+    Here rather than in test_flag_grouping.py because this file imports both
+    sides: test_flag_grouping.py runs with no frappe mock installed, on
+    purpose, and so cannot import rollout at all.
+    """
+
+    def test_the_blank_phase_flag_grouping_emits_is_rollout_dot_live(self):
+        flag_out = flag_grouping._flag_out(_flag_row("HR-EMP-00000"), {})
+        self.assertEqual(flag_out["rollout_phase"], rollout.LIVE)
 
 
 class TestQueueCachePrefix(unittest.TestCase):

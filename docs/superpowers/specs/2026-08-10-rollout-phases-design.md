@@ -359,18 +359,41 @@ the branches appearing in that result set, so the banner can name them without
 dumping the whole config. `phases_configured` is false when no dates are set
 anywhere.
 
+**A window can have `"branch": null`.** That is the global pair, and it appears
+whenever any pilot flag in the result set belongs to an employee with no branch
+set — which, per *"the global pair is the primary path, not the fallback"*
+above, is the likeliest rollout of all rather than an edge case. Without it the
+common case would report `range_phase: "TESTING"` with an empty `windows`, and
+the banner would have nothing to name. The null-branch window is **appended
+after** the branch-named ones, which are sorted by name; `null` has no place in
+that sort, so its position is fixed here rather than left to fall out.
+
+Both dates in a window can also be `null` — a branch whose flags are pilot flags
+but whose configured dates were cleared between the writing and the reading.
+Phase B gets the nulls rather than a fabricated range.
+
 **Phase B.** `FlagQueuePage.tsx` renders a banner above the queue:
 
 | State | Banner |
 |---|---|
 | `phases_configured: false`, or `range_phase: "LIVE"` | none — there is nothing to say |
-| `"TESTING"`, one window | *"Aug 15 – Sep 1 is the pilot period for Northgate — calibration data, not the official record."* |
+| `"TESTING"`, one window, `branch` set | *"Aug 15 – Sep 1 is the pilot period for Northgate — calibration data, not the official record."* |
+| `"TESTING"`, one window, `branch: null` | *"Aug 15 – Sep 1 is the pilot period — calibration data, not the official record."* |
 | `"TESTING"`, more than one window | *"This range falls in the pilot period for 3 branches — calibration data, not the official record."* |
 | `"MIXED"` | *"This range spans go-live. 34 of 91 flags are from the pilot period."* |
 
 The one-window and many-window split matters because branches roll out on
 different timetables by design; naming four date ranges in a banner would be
 worse than naming none.
+
+The `branch: null` row is the same sentence with the "for Northgate" clause
+dropped — there is no branch to name, so naming none is the honest form, and the
+dates are the part HR needs either way. It is a distinct row rather than a
+rendering detail because it is the case a global rollout over a branchless
+roster produces, i.e. the one most likely to be on screen first. When a null
+window appears *alongside* named ones the many-window row applies as written;
+its count includes the null window, which is correct — those are people in the
+pilot on the global timetable.
 
 The queue's cache prefix goes `flag_queue:v3` → `flag_queue:v4`. This is
 mandatory, not hygiene: the comment at `flag_queue_api.py:40-53` records that a

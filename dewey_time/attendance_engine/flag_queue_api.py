@@ -387,6 +387,25 @@ def _outage_branch_dates(*, flags, employees_by_id, alert_rows, sync_pairs) -> s
     return outage
 
 
+def _rollout_window(pilot_branch) -> dict:
+    """One `windows` entry: the pair governing `pilot_branch`, as date strings.
+
+    `pilot_branch` None means the global pair, which is what
+    rollout_dates_for_branch already returns for a falsy branch. Reads the
+    settings doc frappe.get_cached_doc has in hand, so it costs no query.
+
+    Both dates can come back None -- a branch whose flags are pilot flags but
+    whose configured dates were cleared since they were written. Phase B is
+    handed the nulls rather than a fabricated range.
+    """
+    testing_start, go_live = rollout.rollout_dates_for_branch(pilot_branch)
+    return {
+        "branch": pilot_branch,
+        "testing_start": str(testing_start) if testing_start else None,
+        "go_live": str(go_live) if go_live else None,
+    }
+
+
 def _rollout_block(*, flags, entries, employees_by_id) -> dict:
     """What rollout phase this response is about, and how much of what HR can
     actually see is pilot data. Two different scopes, deliberately:
@@ -418,6 +437,17 @@ def _rollout_block(*, flags, entries, employees_by_id) -> dict:
     `flags` is normalised here; `entries` carries FlagOut dicts that were
     already normalised once, upstream, in flag_grouping._flag_out -- one
     normalisation per input, not a second copy of the same fallback.
+
+    `windows` names the pilot branches present in the result set AND, when any
+    pilot flag belongs to an employee with no branch, one entry with
+    `"branch": None` carrying the global pair. That last one is the primary
+    path rather than an edge case: rollout.py:68-70 records that a great many
+    employees have no branch set, so the likeliest real rollout is global dates
+    over a branchless roster, and without it that rollout reports range_phase
+    TESTING with an empty `windows` -- a pilot banner in Phase B with no dates
+    to put in it. It is APPENDED after the sorted branch names, because None
+    has no place in a sort of branch names and Phase B needs its position to be
+    a decision rather than an accident.
     """
     phases = [(flag.get("rollout_phase") or rollout.LIVE) for flag in flags]
     total_in_range = len(phases)
@@ -430,24 +460,14 @@ def _rollout_block(*, flags, entries, employees_by_id) -> dict:
     else:
         range_phase = "MIXED"
 
-    pilot_branches = sorted(
-        {
-            (employees_by_id.get(flag.get("employee")) or {}).get("branch")
-            for flag in flags
-            if (flag.get("rollout_phase") or rollout.LIVE) == rollout.TESTING
-        }
-        - {None}
-    )
-    windows = []
-    for pilot_branch in pilot_branches:
-        testing_start, go_live = rollout.rollout_dates_for_branch(pilot_branch)
-        windows.append(
-            {
-                "branch": pilot_branch,
-                "testing_start": str(testing_start) if testing_start else None,
-                "go_live": str(go_live) if go_live else None,
-            }
-        )
+    pilot_branches = {
+        (employees_by_id.get(flag.get("employee")) or {}).get("branch")
+        for flag in flags
+        if (flag.get("rollout_phase") or rollout.LIVE) == rollout.TESTING
+    }
+    windows = [_rollout_window(branch) for branch in sorted(b for b in pilot_branches if b)]
+    if any(not branch for branch in pilot_branches):
+        windows.append(_rollout_window(None))
 
     visible_phases = [
         flag_out.get("rollout_phase") or rollout.LIVE
