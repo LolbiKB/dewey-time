@@ -616,6 +616,13 @@ def _scoped_auto_flags(*, fields, extra_filters=None, branch=None):
 
     source == "AUTO" throughout: an HR-created flag on a pre-cutoff day is a
     deliberate human act and is never auto-deleted, never stamped, never counted.
+
+    Reads EVERY AUTO flag on the site (limit_page_length=0) and applies the
+    branch narrowing in Python, because a flag does not store a branch to filter
+    on in SQL. Acceptable for the two System-Manager rollout-day endpoints below,
+    which run by hand a handful of times per rollout; nobody should promote this
+    helper to a hot path or an HR-facing one without giving it a real scope
+    first.
     """
     filters = {"source": "AUTO"}
     if extra_filters:
@@ -643,6 +650,21 @@ def purge_testing_flags(branch=None, dry_run=1):
 
     The "remove the trial data" operation: run it once a branch is confidently live
     and its calibration flags have served their purpose.
+
+    RUN reconcile_rollout_flags FIRST. That ordering is correctness, not hygiene.
+    This endpoint filters on the STORED rollout_phase, and in the likeliest real
+    timeline the stored value is wrong for exactly the rows it is meant to take.
+    Flags written before this feature shipped carry a blank; flags written after
+    it shipped but before an admin set any dates were stamped LIVE, because unset
+    dates mean LIVE. Both are invisible to a TESTING filter, so purging on its own
+    under-deletes the pilot AND leaves what it missed labelled as the official
+    record. The reconcile restamps those rows from the dates now configured; only
+    after it has run does this endpoint see the pilot it is being asked to remove.
+
+    A `branch` scope judges by the employee's CURRENT branch -- the same rule
+    reconcile_rollout_flags carries, for the same reason: a flag does not store
+    the branch it was written under. Someone who transferred mid-rollout has all
+    of their flags purged under their new branch and none under their old one.
 
     Backend-only on purpose. No button, no dialog -- punch-list item T1-5 was a
     finding about destructive controls being too visible in the SPA.
@@ -692,6 +714,11 @@ def reconcile_rollout_flags(branch=None, dry_run=1):
     does not store the branch it was written under. Denormalising branch onto every
     flag to fix that would cost a column and a backfill to correct a case that
     arises only when someone transfers during a rollout window.
+
+    Deleting a PRELAUNCH row leaves any Attendance Flag Decision that referenced
+    it pointing at nothing, exactly as purge_testing_flags does. The queue
+    already reports that state (flag_grouping._orphans) rather than breaking on
+    it, so the decision surfaces as an orphan instead of corrupting anything.
     """
     _require_system_manager_for_clear()
     dry_run = _parse_dry_run(dry_run)
