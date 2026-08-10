@@ -97,6 +97,29 @@ def _groups(payload, group_type=None):
     ]
 
 
+class TestFlagOutRolloutPhase(unittest.TestCase):
+    """_flag_out is the single point a raw flag row's rollout_phase becomes part
+    of the FlagOut that flag_queue_api._rollout_block counts over for the
+    VISIBLE list. If the carry-through or the blank-to-LIVE normalisation broke
+    here, every real flag would silently count as LIVE downstream — the same
+    failure mode the fields-list pin in test_flag_queue_api.py exists to catch
+    one layer up, at the query itself.
+    """
+
+    def test_a_stored_phase_survives_into_the_flag_out(self):
+        flag = {**_flag("EMP-1", DATE, "LATE_START"), "rollout_phase": "TESTING"}
+        flag_out = _flag_out(flag, {})
+        self.assertEqual(flag_out["rollout_phase"], "TESTING")
+
+    def test_a_blank_stored_phase_normalises_to_live(self):
+        # Every flag written before rollout phases existed has a blank
+        # rollout_phase column; that must read as LIVE here, at the one place a
+        # raw row becomes a FlagOut, not sometimes here and sometimes downstream.
+        flag = _flag("EMP-1", DATE, "LATE_START")
+        flag_out = _flag_out(flag, {})
+        self.assertEqual(flag_out["rollout_phase"], "LIVE")
+
+
 class TestPersonDedup(unittest.TestCase):
     def test_act_flag_outranks_a_routine_group_and_person_appears_once(self):
         gap = _flag(

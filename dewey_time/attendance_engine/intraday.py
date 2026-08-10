@@ -11,6 +11,7 @@ from dewey_time.attendance_engine.absence_flags import (
     missing_time_max_end_min_for_date,
 )
 from dewey_time.attendance_engine.holidays import holiday_by_date_for_company
+from dewey_time.attendance_engine import rollout
 from dewey_time.attendance_engine.closeout import (
     _delete_auto_flags_for_employee_date,
     _get_checkins_for_day,
@@ -80,16 +81,30 @@ def refresh_intraday_flags_for_date(attendance_date):
 
 def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
     attendance_date = getdate(attendance_date)
+
+    # Hoisted above the delete, which used to be this function's first statement.
+    # The guard has to run before the delete, and the guard needs the branch. All
+    # three reads are side-effect free, so for any non-PRELAUNCH day the observable
+    # behaviour is unchanged.
+    employee_doc = frappe.get_cached_doc("Employee", employee)
+    employee_branch = getattr(employee_doc, "branch", None)
+    employee_company = getattr(employee_doc, "company", None)
+
+    # Before this branch's cutoff the engine has no opinion about the day. See the
+    # matching guard in closeout._generate_for_employee_date for why this returns
+    # before the delete rather than after it.
+    if (
+        rollout.phase_for(branch=employee_branch, attendance_date=attendance_date)
+        == rollout.PRELAUNCH
+    ):
+        return
+
     _delete_auto_flags_for_employee_date(
         employee=employee,
         attendance_date=attendance_date,
         day_closed=0,
         flag_codes=INTRADAY_FLAG_CODES,
     )
-
-    employee_doc = frappe.get_cached_doc("Employee", employee)
-    employee_branch = getattr(employee_doc, "branch", None)
-    employee_company = getattr(employee_doc, "company", None)
 
     if employee_company:
         holiday = holiday_by_date_for_company(

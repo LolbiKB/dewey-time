@@ -1188,3 +1188,182 @@ class TestDeleteExcludesProtectedNames(unittest.TestCase):
         )
 
         self.assertNotIn("name", self.frappe.db.delete.call_args.args[1])
+
+
+class TestPrelaunchGuard(unittest.TestCase):
+    """A day before the branch's cutoff earns no flags and loses none."""
+
+    def _run_closeout(self, phase):
+        from dewey_time.attendance_engine import closeout
+
+        employee_doc = MagicMock()
+        employee_doc.branch = "BR-A"
+        # None, not a real company: a truthy company sends the LIVE control path
+        # through holiday_by_date_for_company, which is not what this test is about.
+        employee_doc.company = None
+        with patch.object(closeout.frappe, "get_cached_doc", return_value=employee_doc), patch.object(
+            closeout.rollout, "phase_for", return_value=phase
+        ) as phase_for, patch.object(
+            closeout, "_delete_auto_flags_for_employee_date"
+        ) as delete, patch.object(
+            closeout, "_insert_flags"
+        ) as insert, patch.object(
+            closeout, "should_skip_absence_flags", return_value=False
+        ), patch.object(
+            closeout, "_get_shift_assignment", return_value=None
+        ):
+            closeout._generate_for_employee_date(
+                employee="EMP-1", attendance_date=date(2026, 8, 1)
+            )
+        return delete, insert, phase_for
+
+    def test_prelaunch_writes_nothing_and_deletes_nothing(self):
+        from dewey_time.attendance_engine import rollout
+
+        delete, insert, _phase_for = self._run_closeout(rollout.PRELAUNCH)
+        delete.assert_not_called()
+        insert.assert_not_called()
+
+    def test_a_live_day_still_reaches_the_delete(self):
+        # The control. Without it, a guard that always returned early would pass
+        # the test above and this suite would be asserting nothing.
+        from dewey_time.attendance_engine import rollout
+
+        delete, _insert, _phase_for = self._run_closeout(rollout.LIVE)
+        self.assertTrue(delete.called)
+
+    def test_the_guard_asks_about_this_employees_branch_and_this_day(self):
+        # WHICH question the guard asks, not just that it obeys the answer. Both
+        # tests above patch phase_for with a fixed return, so a guard written as
+        # phase_for(branch=employee_company, ...) -- or with branch hardcoded to
+        # None -- passes them, and the bench matrix cannot tell the difference
+        # either because it only ever configures the GLOBAL dates. Per-branch
+        # cutoffs are the point of the feature, so this is the line that has to
+        # be pinned. employee_doc.company is None here, which is exactly what
+        # makes the employee_company mutation visible.
+        from dewey_time.attendance_engine import rollout
+
+        _delete, _insert, phase_for = self._run_closeout(rollout.PRELAUNCH)
+        phase_for.assert_called_once_with(
+            branch="BR-A", attendance_date=date(2026, 8, 1)
+        )
+
+
+class TestCompanyFallbackPrelaunchGuard(unittest.TestCase):
+    def _run_fallback(self, phase):
+        from dewey_time.attendance_engine import closeout
+
+        employee_doc = MagicMock()
+        employee_doc.branch = "BR-A"
+        with patch.object(closeout.frappe, "get_all", return_value=["EMP-1"]), patch.object(
+            closeout.frappe, "get_cached_doc", return_value=employee_doc
+        ), patch.object(
+            closeout.rollout, "phase_for", return_value=phase
+        ) as phase_for, patch.object(
+            closeout, "has_open_device_closeout_alert", return_value=False
+        ), patch.object(
+            closeout, "_get_shift_assignment", return_value={"shift_type": "S1"}
+        ) as shift:
+            closeout._generate_company_fallback_for_date(
+                company="CO-A", attendance_date=date(2026, 8, 1)
+            )
+        return shift, phase_for
+
+    def test_prelaunch_skips_the_employee_before_any_work(self):
+        from dewey_time.attendance_engine import rollout
+
+        shift, _phase_for = self._run_fallback(rollout.PRELAUNCH)
+        shift.assert_not_called()
+
+    def test_a_live_day_still_reads_the_shift(self):
+        from dewey_time.attendance_engine import rollout
+
+        shift, _phase_for = self._run_fallback(rollout.LIVE)
+        self.assertTrue(shift.called)
+
+    def test_the_guard_asks_about_each_employees_branch_and_this_day(self):
+        # This loop runs over one company whose branches can be in different
+        # phases, so asking about the company -- or about nothing at all --
+        # would skip or keep the wrong people while every other test here
+        # stayed green. See the matching pin in TestPrelaunchGuard.
+        from dewey_time.attendance_engine import rollout
+
+        _shift, phase_for = self._run_fallback(rollout.PRELAUNCH)
+        phase_for.assert_called_once_with(
+            branch="BR-A", attendance_date=date(2026, 8, 1)
+        )
+
+
+class TestInsertFlagStampsPhase(unittest.TestCase):
+    """_insert_flag (closeout.py:809) is the sole insert for every AUTO flag in the
+    app -- _insert_flags routes to it, and so do closeout.py:301 and
+    intraday.py:136,176,194. Stamping here is what makes it impossible for a call
+    site added later to forget the field."""
+
+    def _inserted_doc(self, phase):
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe, "get_doc") as get_doc, patch.object(
+            closeout.rollout, "phase_for_employee", return_value=phase
+        ):
+            closeout._insert_flag(
+                employee="EMP-1",
+                company="CO-A",
+                attendance_date=date(2026, 8, 20),
+                flag_code="LATE_START",
+                evidence={},
+            )
+        return get_doc.call_args[0][0]
+
+    def test_a_pilot_window_flag_is_stamped_testing(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.assertEqual(
+            self._inserted_doc(rollout.TESTING)["rollout_phase"], "TESTING"
+        )
+
+    def test_a_post_launch_flag_is_stamped_live(self):
+        from dewey_time.attendance_engine import rollout
+
+        self.assertEqual(self._inserted_doc(rollout.LIVE)["rollout_phase"], "LIVE")
+
+    def test_the_phase_comes_from_the_flags_own_date_not_from_today(self):
+        # The property that makes regeneration idempotent. intraday re-inserts AUTO
+        # flags on EVERY checkin, so a phase read from the current date would
+        # re-label the whole pilot window the moment go-live passed.
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe, "get_doc"), patch.object(
+            closeout.rollout, "phase_for_employee"
+        ) as phase_for_employee:
+            closeout._insert_flag(
+                employee="EMP-1",
+                company="CO-A",
+                attendance_date=date(2026, 8, 20),
+                flag_code="LATE_START",
+                evidence={},
+            )
+        self.assertEqual(
+            phase_for_employee.call_args.kwargs["attendance_date"], date(2026, 8, 20)
+        )
+
+    def test_phase_for_employee_is_called_with_this_flags_own_employee_and_date(self):
+        # The other three tests patch phase_for_employee's return value or only
+        # inspect one kwarg, so a stamp built from the wrong employee's branch
+        # (or from a stale/hardcoded date) would be invisible to them. This test
+        # pins both arguments together.
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe, "get_doc"), patch.object(
+            closeout.rollout, "phase_for_employee"
+        ) as phase_for_employee:
+            closeout._insert_flag(
+                employee="EMP-1",
+                company="CO-A",
+                attendance_date=date(2026, 8, 20),
+                flag_code="LATE_START",
+                evidence={},
+            )
+        phase_for_employee.assert_called_once_with(
+            employee="EMP-1", attendance_date=date(2026, 8, 20)
+        )

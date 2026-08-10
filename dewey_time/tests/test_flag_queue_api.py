@@ -35,6 +35,7 @@ from dewey_time.attendance_engine import (  # noqa: E402
     flag_grouping,
     flag_identity,
     flag_queue_api,
+    rollout,
 )
 
 INVALIDATOR = "dewey_time.attendance_engine.flag_queue_api.invalidate_flag_queue_cache"
@@ -467,6 +468,17 @@ class TestQueueInputs(unittest.TestCase):
         self.assertEqual(filters["source"], "AUTO")
         self.assertEqual([f["flag_code"] for f in flags], ["LATE_START"])
 
+    def test_the_flag_scan_selects_rollout_phase(self):
+        # A field absent from the scan means every flag reads as blank, which reads
+        # as LIVE (_rollout_block), which silently disables the whole banner. Mutation
+        # testing found that deleting this from the fields list survives the rest of
+        # the suite unnoticed, because every other test here builds its own flag
+        # dicts rather than going through this query. This pins the query itself.
+        with _harness(_roster(1)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            fields = h.recorder.kwargs_for("Attendance Flag")[0]["fields"]
+        self.assertIn("rollout_phase", fields)
+
     def test_provisional_and_final_rows_collapse_to_the_final_flag(self):
         # flag_identity deliberately excludes day_closed, so during the closeout window
         # the same identity can arrive twice; the final row must win, once.
@@ -769,8 +781,8 @@ class TestIncludeDecided(unittest.TestCase):
             [key for key, _ttl in cache.set_calls],
             [
                 # The default key is unchanged — the suffix is only ever added.
-                "flag_queue:v3:2026-08-01:2026-08-07:all",
-                "flag_queue:v3:2026-08-01:2026-08-07:all:decided",
+                "flag_queue:v4:2026-08-01:2026-08-07:all",
+                "flag_queue:v4:2026-08-01:2026-08-07:all:decided",
             ],
         )
 
@@ -787,11 +799,11 @@ class TestQueueCache(unittest.TestCase):
     def test_cache_key_and_ttl_match_the_contract(self):
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-            self.assertEqual(h.cache.set_calls, [("flag_queue:v3:2026-08-01:2026-08-07:all", 60)])
+            self.assertEqual(h.cache.set_calls, [("flag_queue:v4:2026-08-01:2026-08-07:all", 60)])
 
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
-            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v3:2026-08-01:2026-08-07:act")
+            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v4:2026-08-01:2026-08-07:act")
 
     def test_a_different_range_is_a_different_cache_entry(self):
         cache = _FakeCache()
@@ -807,7 +819,7 @@ class TestQueueCache(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             self.assertEqual(len(cache.store), 1)
             flag_queue_api.invalidate_flag_queue_cache()
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v3"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v4"])
         self.assertEqual(cache.store, {})
 
     def test_invalidate_accepts_doc_event_args(self):
@@ -815,7 +827,7 @@ class TestQueueCache(unittest.TestCase):
         with _harness(cache=cache):
             # Frappe doc_events call handlers as (doc, method); must not raise.
             flag_queue_api.invalidate_flag_queue_cache(doc=object(), method="on_update")
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v3"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v4"])
 
 
 class TestDriverDateShapes(unittest.TestCase):
@@ -1119,6 +1131,226 @@ class TestHooksWiring(unittest.TestCase):
         # raw frappe.db.delete() and fire no hooks. Pinned so a well-meaning re-add fails
         # loudly instead of silently reintroducing the scan.
         self.assertNotIn("Attendance Flag", hooks.doc_events)
+
+
+class TestRolloutBlock(unittest.TestCase):
+    def setUp(self):
+        from dewey_time.attendance_engine import flag_queue_api
+
+        self.api = flag_queue_api
+
+    def _block(
+        self,
+        phases,
+        branches=("BR-A",),
+        configured=True,
+        visible_phases=None,
+        dates_by_branch=None,
+    ):
+        """`flags` describe the whole date range; `entries` describe the VISIBLE
+        list `_rollout_block` now counts pilot flags over (IMPORTANT-3). Every
+        test below that is not specifically about the range-vs-list split wants
+        the two to agree, so `visible_phases` defaults to mirroring `phases` --
+        nothing filtered out of view.
+
+        `entries` is built minimal: `_rollout_block` only ever reads
+        person.get("flags") -> flag_out.get("rollout_phase") through
+        iter_people, so a bare {"kind": "person", "flags": [...]} is the whole
+        shape it needs.
+
+        `dates_by_branch` maps a branch (None included) to the pair
+        rollout_dates_for_branch would return for it. Left None, every branch
+        gets the same pair -- which is all a test about counts or ordering
+        needs. Given, it is what lets a test prove WHICH branch each window's
+        dates were read for.
+        """
+        if visible_phases is None:
+            visible_phases = phases
+        flags = [
+            {"employee": f"EMP-{i}", "rollout_phase": phase}
+            for i, phase in enumerate(phases)
+        ]
+        entries = [
+            {"kind": "person", "flags": [{"rollout_phase": phase}]}
+            for phase in visible_phases
+        ]
+        employees_by_id = {
+            f"EMP-{i}": {"branch": branches[i % len(branches)]}
+            for i in range(len(phases))
+        }
+
+        def _dates_for(branch):
+            if dates_by_branch is None:
+                return (date(2026, 8, 15), date(2026, 9, 1))
+            return dates_by_branch[branch]
+
+        with patch.object(
+            self.api.rollout, "phases_configured", return_value=configured
+        ), patch.object(
+            self.api.rollout,
+            "rollout_dates_for_branch",
+            side_effect=_dates_for,
+        ):
+            return self.api._rollout_block(
+                flags=flags, entries=entries, employees_by_id=employees_by_id
+            )
+
+    def test_an_all_live_range_reports_live(self):
+        block = self._block(["LIVE", "LIVE"])
+        self.assertEqual(block["range_phase"], "LIVE")
+        self.assertEqual(block["testing_flag_count"], 0)
+        self.assertEqual(block["windows"], [])
+
+    def test_an_all_pilot_range_reports_testing_and_names_its_window(self):
+        block = self._block(["TESTING", "TESTING"])
+        self.assertEqual(block["range_phase"], "TESTING")
+        self.assertEqual(block["testing_flag_count"], 2)
+        self.assertEqual(
+            block["windows"],
+            [{"branch": "BR-A", "testing_start": "2026-08-15", "go_live": "2026-09-01"}],
+        )
+
+    def test_a_range_spanning_go_live_reports_mixed_with_a_count(self):
+        block = self._block(["TESTING", "LIVE", "LIVE"])
+        self.assertEqual(block["range_phase"], "MIXED")
+        self.assertEqual(block["testing_flag_count"], 1)
+        self.assertEqual(block["total_flag_count"], 3)
+
+    def test_a_blank_stored_phase_counts_as_live(self):
+        # Every row written before this feature has a blank rollout_phase, and blank
+        # is read as LIVE -- consistent with unset dates meaning LIVE.
+        block = self._block([None, None])
+        self.assertEqual(block["range_phase"], "LIVE")
+
+    def test_no_dates_anywhere_reports_not_configured(self):
+        block = self._block(["LIVE"], configured=False)
+        self.assertFalse(block["phases_configured"])
+
+    def test_multiple_pilot_branches_each_get_a_window(self):
+        block = self._block(["TESTING", "TESTING"], branches=("BR-A", "BR-B"))
+        self.assertEqual([w["branch"] for w in block["windows"]], ["BR-A", "BR-B"])
+
+    def test_a_tier_filtered_out_pilot_flag_still_moves_the_range_phase_but_not_the_count(self):
+        # The ruling this pins: range_phase/windows are a property of the DATES
+        # the caller asked for, computed over the whole `flags` range regardless
+        # of what a tier filter hid from `entries`; testing_flag_count/
+        # total_flag_count describe only the VISIBLE list. A pilot flag that
+        # exists in the range but was filtered out of entries must still show up
+        # in range_phase (the pilot period did not change) while contributing
+        # zero to testing_flag_count (HR cannot see it on this page). "0 of 1
+        # flags here are from the pilot period" is the intended, correct output.
+        block = self._block(["TESTING", "LIVE"], visible_phases=["LIVE"])
+        self.assertEqual(block["range_phase"], "MIXED")
+        self.assertEqual(block["testing_flag_count"], 0)
+        self.assertEqual(block["total_flag_count"], 1)
+
+    def test_a_branchless_pilot_roster_still_gets_a_window(self):
+        # The likeliest real rollout, not an edge case: the design calls the
+        # global pair "the primary path, not the fallback" because a great many
+        # employees have no branch set. Built from the branches present in the
+        # result set alone, this case reports range_phase TESTING with
+        # windows: [] -- a pilot banner in Phase B with no dates to put in it.
+        block = self._block(["TESTING"], branches=(None,))
+        self.assertEqual(block["range_phase"], "TESTING")
+        self.assertEqual(
+            block["windows"],
+            [{"branch": None, "testing_start": "2026-08-15", "go_live": "2026-09-01"}],
+        )
+
+    def test_a_mixed_roster_puts_the_branchless_window_last(self):
+        # Two things at once, because they only mean something together: the
+        # branchless window is APPENDED after the sorted branch names (None has
+        # no place in a sort of branch names, so its position has to be chosen
+        # and pinned for Phase B to rely on), and it carries the GLOBAL pair
+        # rather than any named branch's.
+        block = self._block(
+            ["TESTING", "TESTING"],
+            branches=("BR-A", None),
+            dates_by_branch={
+                "BR-A": (date(2026, 8, 15), date(2026, 9, 1)),
+                None: (date(2026, 7, 1), date(2026, 7, 20)),
+            },
+        )
+        self.assertEqual(
+            block["windows"],
+            [
+                {"branch": "BR-A", "testing_start": "2026-08-15", "go_live": "2026-09-01"},
+                {"branch": None, "testing_start": "2026-07-01", "go_live": "2026-07-20"},
+            ],
+        )
+
+    def test_an_empty_range_reports_live(self):
+        # `testing == 0` is evaluated before `testing == total`, so an empty
+        # queue reports LIVE -- correct, because there is no pilot data to warn
+        # about. Swapping those two branches would make an empty range report
+        # TESTING (0 == 0) and nothing else in this suite would notice.
+        block = self._block([])
+        self.assertEqual(block["range_phase"], "LIVE")
+        self.assertEqual(block["windows"], [])
+
+    def test_a_pilot_branch_with_no_configured_dates_yields_a_window_of_nulls(self):
+        # Reachable: a branch can be mid-pilot by way of the global dates while
+        # rollout_dates_for_branch answers with the (None, None) of a settings
+        # doc whose dates were cleared between the flags being written and the
+        # queue being read. Phase B receives nulls, so the shape is pinned here
+        # rather than discovered there.
+        block = self._block(["TESTING"], dates_by_branch={"BR-A": (None, None)})
+        self.assertEqual(
+            block["windows"],
+            [{"branch": "BR-A", "testing_start": None, "go_live": None}],
+        )
+
+
+class TestRolloutBlockReachesThePayload(unittest.TestCase):
+    """TestRolloutBlock above calls _rollout_block directly, so it stays green on
+    a payload that never carries the block at all, and on a scan that selects
+    rollout_phase but drops it before _flag_rows hands the row on. Both mutations
+    survive the whole suite otherwise; this end-to-end test through
+    get_flag_queue is what catches them."""
+
+    def test_the_rollout_block_is_on_the_payload_and_reflects_the_stored_phase(self):
+        rows = _roster(1)
+        rows["Attendance Flag"] = [_flag_row("HR-EMP-00000", rollout_phase="TESTING")]
+        with _harness(rows), patch.object(
+            flag_queue_api.rollout, "phases_configured", return_value=True
+        ), patch.object(
+            flag_queue_api.rollout,
+            "rollout_dates_for_branch",
+            return_value=(date(2026, 8, 15), date(2026, 9, 1)),
+        ):
+            payload = flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+        self.assertEqual(payload["rollout"]["range_phase"], "TESTING")
+        self.assertEqual(payload["rollout"]["windows"][0]["branch"], "BR-A")
+
+
+class TestFlagGroupingAgreesWithRolloutOnLive(unittest.TestCase):
+    """flag_grouping._flag_out normalises a blank stored phase with a bare
+    "LIVE" literal rather than rollout.LIVE, because that module is frappe-free
+    by design and rollout.py imports frappe (the reasoning is spelled out on
+    _flag_out's own rollout_phase key). That constraint stays; what was missing
+    was anything holding the two values equal. Rename rollout.LIVE and
+    flag_grouping keeps stamping the old string into every FlagOut while
+    _rollout_block's TESTING comparison goes on working -- the payload splits
+    silently instead of the suite going red.
+
+    Here rather than in test_flag_grouping.py because this file imports both
+    sides: test_flag_grouping.py runs with no frappe mock installed, on
+    purpose, and so cannot import rollout at all.
+    """
+
+    def test_the_blank_phase_flag_grouping_emits_is_rollout_dot_live(self):
+        flag_out = flag_grouping._flag_out(_flag_row("HR-EMP-00000"), {})
+        self.assertEqual(flag_out["rollout_phase"], rollout.LIVE)
+
+
+class TestQueueCachePrefix(unittest.TestCase):
+    def test_the_prefix_is_v4(self):
+        # flag_queue_api.py:40-53: a deploy does not clear Redis, so a payload-shape
+        # change without a new prefix means old keys answering new callers for a
+        # full TTL. This assertion is the enforcement of that comment.
+        from dewey_time.attendance_engine.flag_queue_api import _QUEUE_CACHE_PREFIX
+
+        self.assertEqual(_QUEUE_CACHE_PREFIX, "flag_queue:v4")
 
 
 if __name__ == "__main__":

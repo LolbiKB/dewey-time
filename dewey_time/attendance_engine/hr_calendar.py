@@ -8,6 +8,7 @@ from datetime import timedelta
 import frappe
 from frappe.utils import get_datetime, getdate, nowdate
 
+from dewey_time.attendance_engine import rollout
 from dewey_time.attendance_engine.closeout import _get_shift_meta, has_open_device_closeout_alert
 from dewey_time.attendance_engine.employment_type import is_clock_based
 from dewey_time.attendance_engine.lunch_detection import detect_observed_lunch
@@ -760,6 +761,12 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
                 "gross_minutes": gross_minutes,
                 "observed_lunch": observed_lunch,
                 "flags": flags_by_day.get(key, []),
+                # PRELAUNCH here means the engine never evaluated this day. Without
+                # it a pre-cutoff day is pixel-identical to a clean one, which is the
+                # single place the cutoff can actively mislead. Rendered in Phase B.
+                "rollout_phase": rollout.phase_for(
+                    branch=employee_branch, attendance_date=cur
+                ),
             }
         )
         cur = cur + timedelta(days=1)

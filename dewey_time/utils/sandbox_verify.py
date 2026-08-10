@@ -41,8 +41,10 @@ def no_duplicate_flags(rows: list[dict]) -> list[dict]:
     ]
 
 
-# closeout._generate_for_employee_date takes exactly ONE of three early-return
-# paths per pass, which partitions the punch-derived flags into these groups:
+# closeout._generate_for_employee_date takes exactly ONE of four early-return
+# paths per pass. The first is the PRELAUNCH guard, which emits nothing at all
+# and so cannot put a day in more than one group; the other three partition the
+# punch-derived flags into these groups:
 #   ABSENCE        — the `checkins_count == 0` path (on shift, zero punches)
 #   OFF_SHIFT      — the holiday / `not on_shift` path (punches, but off shift)
 #   ON_SHIFT_PUNCH — the on-shift-with-punches path (shift-boundary / site flags)

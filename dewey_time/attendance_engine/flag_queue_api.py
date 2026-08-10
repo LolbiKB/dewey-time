@@ -19,7 +19,8 @@ from __future__ import annotations
 import frappe
 from frappe.utils import getdate
 
-from dewey_time.attendance_engine.flag_grouping import build_queue, recount
+from dewey_time.attendance_engine import rollout
+from dewey_time.attendance_engine.flag_grouping import build_queue, iter_people, recount
 from dewey_time.attendance_engine.flag_identity import date_key, flag_identity, parse_evidence
 from dewey_time.attendance_engine.flag_triage import TIER_ACT, TIER_REVIEW, TIER_ROUTINE
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
@@ -51,7 +52,11 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # gained outage_dates.
 # v3: counts gained open_capped; branch-outage groups span dates, so their
 # attendance_date is now null, and every group carries `dates` / `day_count`.
-_QUEUE_CACHE_PREFIX = "flag_queue:v3"
+# v4: the payload gained a `rollout` block (phase of the visible date range and
+# its pilot windows, plus pilot flag counts over the VISIBLE list -- the two
+# scopes are deliberately different, see _rollout_block); FlagOut (inside every
+# entry) gained rollout_phase.
+_QUEUE_CACHE_PREFIX = "flag_queue:v4"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
 # below is best-effort only: the engine deletes flags with raw frappe.db.delete()
@@ -150,7 +155,15 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
         frappe.get_all(
             "Attendance Flag",
             filters={"attendance_date": ["between", [start, end]], "source": "AUTO"},
-            fields=["employee", "attendance_date", "flag_code", "severity", "day_closed", "evidence"],
+            fields=[
+                "employee",
+                "attendance_date",
+                "flag_code",
+                "severity",
+                "day_closed",
+                "evidence",
+                "rollout_phase",
+            ],
             # Deterministic so truncation at the cap always drops the same tail, and
             # NEWEST-FIRST so the tail it drops is the oldest work rather than today's.
             # This read ordered ascending until the queue saturated its cap in
@@ -197,6 +210,10 @@ def _flag_rows(start, end) -> tuple[list[dict], bool]:
             "severity": row.get("severity"),
             "day_closed": row.get("day_closed"),
             "evidence": evidence,
+            # Carried through so _rollout_block can read it without a sixth query:
+            # fetching the column above and dropping it here would leave every real
+            # row reading as blank (LIVE) regardless of what is actually stored.
+            "rollout_phase": row.get("rollout_phase"),
         }
         previous = by_identity.get(identity)
         if previous is None or (flag.get("day_closed") or 0) >= (previous.get("day_closed") or 0):
@@ -370,6 +387,104 @@ def _outage_branch_dates(*, flags, employees_by_id, alert_rows, sync_pairs) -> s
     return outage
 
 
+def _rollout_window(pilot_branch) -> dict:
+    """One `windows` entry: the pair governing `pilot_branch`, as date strings.
+
+    `pilot_branch` None means the global pair, which is what
+    rollout_dates_for_branch already returns for a falsy branch. Reads the
+    settings doc frappe.get_cached_doc has in hand, so it costs no query.
+
+    Both dates can come back None -- a branch whose flags are pilot flags but
+    whose configured dates were cleared since they were written. Phase B is
+    handed the nulls rather than a fabricated range.
+    """
+    testing_start, go_live = rollout.rollout_dates_for_branch(pilot_branch)
+    return {
+        "branch": pilot_branch,
+        "testing_start": str(testing_start) if testing_start else None,
+        "go_live": str(go_live) if go_live else None,
+    }
+
+
+def _rollout_block(*, flags, entries, employees_by_id) -> dict:
+    """What rollout phase this response is about, and how much of what HR can
+    actually see is pilot data. Two different scopes, deliberately:
+
+    - `range_phase` and `windows` describe the DATES the caller asked for, not
+      what happens to be on screen. Computed over `flags` -- every deduped AUTO
+      flag in the whole range, whole, regardless of what a tier filter or
+      include_decided=0 hid from `entries`. A tier filter must not make the
+      pilot banner vanish: the pilot period a branch is in did not change just
+      because HR is looking at one tier of it.
+    - `testing_flag_count` / `total_flag_count` describe the VISIBLE LIST
+      instead. Counted over `entries` (the tier-filtered, include_decided-
+      applied set already built by the time this is called), walked with
+      `iter_people` so group members are counted the same way `recount` counts
+      them. A whole-range count here would repeat exactly the header-versus-
+      list contradiction commits 38fbea19, b95868bf and e6cb3ae6 were spent
+      removing from `counts` -- "2 of 2 pilot flags" printed above a list that,
+      post-filter, shows none of them. "0 of 1 flags here are from the pilot
+      period" is a legal, correct answer when the only pilot flag in range was
+      filtered out of view.
+
+    Must be called AFTER any tier filter has been applied to `entries`, and
+    entirely from rows already in hand -- flags, entries, employees_by_id --
+    so this stays outside the five-query budget _build_queue_payload's
+    docstring makes a spec rule.
+
+    A blank stored phase reads as LIVE: every row written before rollout phases
+    existed has one, and that is consistent with unset dates meaning LIVE.
+    `flags` is normalised here; `entries` carries FlagOut dicts that were
+    already normalised once, upstream, in flag_grouping._flag_out -- one
+    normalisation per input, not a second copy of the same fallback.
+
+    `windows` names the pilot branches present in the result set AND, when any
+    pilot flag belongs to an employee with no branch, one entry with
+    `"branch": None` carrying the global pair. That last one is the primary
+    path rather than an edge case: rollout.rollout_dates_for_branch's docstring
+    records that a great many employees have no branch set, so the likeliest
+    real rollout is global dates over a branchless roster, and without it that
+    rollout reports range_phase TESTING with an empty `windows` -- a pilot
+    banner in Phase B with no dates to put in it. It is APPENDED after the
+    sorted branch names, because None has no place in a sort of branch names
+    and Phase B needs its position to be a decision rather than an accident.
+    """
+    phases = [(flag.get("rollout_phase") or rollout.LIVE) for flag in flags]
+    total_in_range = len(phases)
+    testing_in_range = sum(1 for phase in phases if phase == rollout.TESTING)
+
+    if testing_in_range == 0:
+        range_phase = rollout.LIVE
+    elif testing_in_range == total_in_range:
+        range_phase = rollout.TESTING
+    else:
+        range_phase = "MIXED"
+
+    pilot_branches = {
+        (employees_by_id.get(flag.get("employee")) or {}).get("branch")
+        for flag in flags
+        if (flag.get("rollout_phase") or rollout.LIVE) == rollout.TESTING
+    }
+    windows = [_rollout_window(branch) for branch in sorted(b for b in pilot_branches if b)]
+    if any(not branch for branch in pilot_branches):
+        windows.append(_rollout_window(None))
+
+    visible_phases = [
+        flag_out.get("rollout_phase") or rollout.LIVE
+        for person in iter_people(entries)
+        for flag_out in (person.get("flags") or [])
+    ]
+    testing_visible = sum(1 for phase in visible_phases if phase == rollout.TESTING)
+
+    return {
+        "phases_configured": rollout.phases_configured(),
+        "range_phase": range_phase,
+        "testing_flag_count": testing_visible,
+        "total_flag_count": len(visible_phases),
+        "windows": windows,
+    }
+
+
 def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool = False) -> dict:
     """Five queries, always: flags, decisions, employees, alerts, sync rows. Adding a
     sixth that varies with employee or day count is a spec violation, not a slow path.
@@ -444,6 +559,12 @@ def _build_queue_payload(*, start, end, tier: str | None, include_decided: bool 
         "outage_dates": [
             {"branch": branch, "date": day} for branch, day in sorted(outage_branch_dates)
         ],
+        # Phase of the visible range, so the queue can tell HR whether it is looking
+        # at the official record or at calibration data. Rendered in Phase B. Called
+        # here, after the tier filter above, so `entries` is the same list `people`/
+        # `rows` were just recounted from -- see _rollout_block for why range_phase
+        # and the counts read two different scopes.
+        "rollout": _rollout_block(flags=flags, entries=entries, employees_by_id=employees_by_id),
     }
 
 
