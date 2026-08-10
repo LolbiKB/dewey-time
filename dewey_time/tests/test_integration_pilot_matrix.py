@@ -658,3 +658,30 @@ class TestPilotMatrix(_Base):
             [day["rollout_phase"] for day in payload["days"]],
             ["PRELAUNCH", "TESTING", "LIVE"],
         )
+
+    def test_every_dewey_time_doctype_loads_its_own_controller(self):
+        """The T3-11 regression test.
+
+        Asserted on the controller CLASS, not on meta.custom, because the class
+        is the thing that actually matters -- `custom` is merely the flag that
+        made Frappe substitute the base Document. import_controller reads that
+        flag from tabDocType, so a JSON edit that never reached the database (a
+        migrate that skipped the reimport because `modified` did not move)
+        leaves this failing with a green migrate log behind it.
+        """
+        from frappe.model.base_document import get_controller
+
+        from dewey_time.utils.doctype_drift_audit import DOCTYPES
+
+        base = []
+        for doctype in DOCTYPES:
+            controller = get_controller(doctype)
+            if controller.__module__.startswith("frappe."):
+                base.append(f"{doctype} -> {controller.__module__}.{controller.__name__}")
+
+        self.assertEqual(
+            base,
+            [],
+            "these DocTypes still resolve to Frappe's base class, so their "
+            "controllers are dead: " + "; ".join(base),
+        )
