@@ -984,6 +984,104 @@ class TestSuppressionSurvivesTheWipe(unittest.TestCase):
         self.assertEqual(order[0], "check", f"read after the wipe: {order}")
         self.assertEqual(order.count("check"), 1, "asked more than once")
 
+    # --- the marker survives the wipe, not just the read ---------------------
+
+    @patch("dewey_time.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout.delivery_failure_marker_names")
+    @patch("dewey_time.attendance_engine.closeout.should_skip_absence_flags", return_value=True)
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_meta")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_the_marker_is_spared_when_nothing_will_rebuild_it(
+        self,
+        get_cached_doc,
+        get_shift,
+        _get_checkins,
+        get_shift_meta,
+        delete_flags,
+        _skip_absence,
+        marker_names,
+        _insert_flag,
+        _record,
+    ):
+        # Reading before the delete bought one correct run. The delete still
+        # destroyed the marker, so run two read "no failure" and manufactured
+        # the no-show regardless.
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._meta()
+        marker_names.return_value = ["FLAG-DELIVERY-1", "FLAG-ISSUE-7"]
+
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=True,
+        )
+
+        self.assertEqual(len(delete_flags.call_args_list), 2, "both deletes still run")
+        for call_ in delete_flags.call_args_list:
+            self.assertEqual(
+                call_.kwargs.get("exclude_names"),
+                ["FLAG-DELIVERY-1", "FLAG-ISSUE-7"],
+                "the marker rows must survive both wipes",
+            )
+
+    @patch("dewey_time.attendance_engine.closeout.evaluate_record_issue_flags", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._insert_flag")
+    @patch("dewey_time.attendance_engine.closeout.delivery_failure_marker_names")
+    @patch("dewey_time.attendance_engine.closeout.should_skip_absence_flags", return_value=True)
+    @patch("dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date")
+    @patch("dewey_time.attendance_engine.closeout._get_shift_meta")
+    @patch("dewey_time.attendance_engine.closeout._get_checkins_for_day", return_value=[])
+    @patch("dewey_time.attendance_engine.closeout._get_shift_assignment")
+    @patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc")
+    def test_the_webhook_still_wipes_the_marker_it_is_about_to_rebuild(
+        self,
+        get_cached_doc,
+        get_shift,
+        _get_checkins,
+        get_shift_meta,
+        delete_flags,
+        _skip_absence,
+        marker_names,
+        _insert_flag,
+        _record,
+    ):
+        # The one caller that DOES rebuild. Sparing the old rows here would
+        # leave them beside the freshly emitted ones -- the protection has to
+        # be exactly as narrow as "nothing will put this back".
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        get_cached_doc.return_value = employee
+        get_shift.return_value = {"shift_type": "FT_0800_1700"}
+        get_shift_meta.return_value = self._meta()
+        marker_names.return_value = ["FLAG-DELIVERY-1"]
+
+        _generate_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            include_unnotified_absence=True,
+            undelivered_items=[{"pin": "1"}],
+        )
+
+        for call_ in delete_flags.call_args_list:
+            self.assertFalse(
+                call_.kwargs.get("exclude_names"),
+                "the webhook re-emits these; sparing them would duplicate",
+            )
+        marker_names.assert_not_called()
+
     @staticmethod
     def _meta():
         from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
@@ -997,3 +1095,96 @@ class TestSuppressionSurvivesTheWipe(unittest.TestCase):
                 "early_exit_grace_period": 0,
             }
         )
+
+
+class TestDeliveryFailureMarkerNames(unittest.TestCase):
+    """One query answers both "was there a failure" and "which rows say so".
+
+    They must never diverge: a predicate reading one set while the delete
+    protects another leaves a gap, and the gap is a destroyed marker whose
+    absence then reads as "no failure".
+    """
+
+    def setUp(self):
+        # Restored on teardown. This is the shared frappe mock every test file
+        # imports, so a side_effect left behind answers get_all for every
+        # module that runs after this one -- precisely how a red CI got made.
+        frappe = sys.modules["frappe"]
+        self.frappe = frappe
+        previous = frappe.get_all
+        self.addCleanup(setattr, frappe, "get_all", previous)
+
+        def get_all(_doctype, filters=None, **kwargs):
+            code = (filters or {}).get("flag_code")
+            if code == "DELIVERY_FAILED":
+                return ["FLAG-DELIVERY-1"]
+            if code == "ATTENDANCE_ISSUE":
+                return [
+                    {"name": "FLAG-ISSUE-1", "evidence": '{"reason": "single_checkin"}'},
+                    {"name": "FLAG-ISSUE-2", "evidence": '{"reason": "delivery_failed"}'},
+                    {"name": "FLAG-ISSUE-3", "evidence": None},
+                ]
+            return []
+
+        frappe.get_all = MagicMock(side_effect=get_all)
+
+    def test_only_the_delivery_failed_variant_of_attendance_issue_counts(self):
+        from dewey_time.attendance_engine.closeout import delivery_failure_marker_names
+
+        names = delivery_failure_marker_names("EMP-1", date(2026, 5, 27))
+
+        self.assertEqual(names, ["FLAG-DELIVERY-1", "FLAG-ISSUE-2"])
+        # The others are ordinary findings the rebuild will recreate. Sparing
+        # them would leave a stale row beside its own replacement.
+        self.assertNotIn("FLAG-ISSUE-1", names)
+        self.assertNotIn("FLAG-ISSUE-3", names)
+
+    def test_the_predicate_is_the_same_question_as_the_protection(self):
+        from dewey_time.attendance_engine.closeout import (
+            delivery_failure_marker_names,
+            has_delivery_or_record_failure_today,
+        )
+
+        self.assertTrue(has_delivery_or_record_failure_today("EMP-1", date(2026, 5, 27)))
+
+        self.frappe.get_all = MagicMock(return_value=[])
+        self.assertEqual(delivery_failure_marker_names("EMP-1", date(2026, 5, 27)), [])
+        self.assertFalse(has_delivery_or_record_failure_today("EMP-1", date(2026, 5, 27)))
+
+
+class TestDeleteExcludesProtectedNames(unittest.TestCase):
+    def setUp(self):
+        frappe = sys.modules["frappe"]
+        self.frappe = frappe
+        previous = frappe.db.delete
+        self.addCleanup(setattr, frappe.db, "delete", previous)
+        frappe.db.delete = MagicMock()
+
+    def test_exclusion_is_by_name_so_siblings_in_the_same_code_still_go(self):
+        from dewey_time.attendance_engine.closeout import (
+            _delete_auto_flags_for_employee_date,
+        )
+
+        _delete_auto_flags_for_employee_date(
+            employee="EMP-1",
+            attendance_date=date(2026, 5, 27),
+            day_closed=1,
+            exclude_names=["FLAG-ISSUE-2"],
+        )
+
+        filters = self.frappe.db.delete.call_args.args[1]
+        self.assertEqual(filters["name"], ["not in", ["FLAG-ISSUE-2"]])
+        # Not scoped to a code: ATTENDANCE_ISSUE rows carrying other reasons
+        # are still inside the wipe.
+        self.assertNotIn("flag_code", filters)
+
+    def test_no_exclusion_filter_when_nothing_is_protected(self):
+        from dewey_time.attendance_engine.closeout import (
+            _delete_auto_flags_for_employee_date,
+        )
+
+        _delete_auto_flags_for_employee_date(
+            employee="EMP-1", attendance_date=date(2026, 5, 27), day_closed=1, exclude_names=[]
+        )
+
+        self.assertNotIn("name", self.frappe.db.delete.call_args.args[1])

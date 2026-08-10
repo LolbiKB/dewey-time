@@ -382,32 +382,54 @@ def should_skip_absence_flags(*, employee: str, employee_branch: str | None, att
     return has_delivery_or_record_failure_today(employee, attendance_date)
 
 
-def has_delivery_or_record_failure_today(employee: str, attendance_date) -> bool:
+def delivery_failure_marker_names(employee: str, attendance_date) -> list[str]:
+    """The rows recording "this employee's punches never arrived", by name.
+
+    One query serving two questions that must never diverge: *was* there a
+    failure, and *which rows say so*. If the predicate read one set and the
+    delete protected a different one, the gap between them would be a marker
+    destroyed while the answer still said "no failure" -- which is the exact
+    failure this pair exists to prevent. Same rows, one definition, no gap.
+    """
     attendance_date = getdate(attendance_date)
-    if frappe.db.exists(
-        "Attendance Flag",
-        {
-            "employee": employee,
-            "attendance_date": attendance_date,
-            "flag_code": "DELIVERY_FAILED",
-            "source": "AUTO",
-        },
-    ):
-        return True
-    rows = frappe.get_all(
-        "Attendance Flag",
-        filters={
-            "employee": employee,
-            "attendance_date": attendance_date,
-            "flag_code": "ATTENDANCE_ISSUE",
-            "source": "AUTO",
-        },
-        fields=["evidence"],
+    names = (
+        frappe.get_all(
+            "Attendance Flag",
+            filters={
+                "employee": employee,
+                "attendance_date": attendance_date,
+                "flag_code": "DELIVERY_FAILED",
+                "source": "AUTO",
+            },
+            pluck="name",
+        )
+        or []
     )
-    for row in rows or []:
-        if "delivery_failed" in (row.get("evidence") or ""):
-            return True
-    return False
+    rows = (
+        frappe.get_all(
+            "Attendance Flag",
+            filters={
+                "employee": employee,
+                "attendance_date": attendance_date,
+                "flag_code": "ATTENDANCE_ISSUE",
+                "source": "AUTO",
+            },
+            fields=["name", "evidence"],
+        )
+        or []
+    )
+    # ATTENDANCE_ISSUE carries several unrelated reasons (single_checkin,
+    # unpaired_punch, unknown_device_branch); only the delivery_failed variant
+    # is a marker. Protecting the code wholesale would strand the others, which
+    # the rebuild then recreates alongside the survivors.
+    names += [
+        row["name"] for row in rows if "delivery_failed" in (row.get("evidence") or "")
+    ]
+    return names
+
+
+def has_delivery_or_record_failure_today(employee: str, attendance_date) -> bool:
+    return bool(delivery_failure_marker_names(employee, attendance_date))
 
 
 def _non_primary_site_punch_flag(
@@ -496,11 +518,33 @@ def _generate_for_employee_date(
         attendance_date=attendance_date,
     )
 
+    # Reading before the delete makes THIS run correct. It does not stop the
+    # delete destroying the marker, so the NEXT run over the same day reads
+    # "no failure" and manufactures the no-show anyway -- the ordering fix
+    # bought one run, not the property.
+    #
+    # So the marker survives the wipe unless something is going to rebuild it.
+    # Exactly one caller does: the device-closeout webhook, which passes
+    # undelivered_items and re-emits the rows from them. Sparing them there
+    # would duplicate. Everywhere else -- both dev tools,
+    # enqueue_closed_day_regeneration's two-punch-corrections path, and
+    # anything added later -- nothing can recompute a marker that only ever
+    # arrives from outside, so deleting it is pure loss.
+    protected = (
+        [] if undelivered_items else delivery_failure_marker_names(employee, attendance_date)
+    )
+
     _delete_auto_flags_for_employee_date(
-        employee=employee, attendance_date=attendance_date, day_closed=0
+        employee=employee,
+        attendance_date=attendance_date,
+        day_closed=0,
+        exclude_names=protected,
     )
     _delete_auto_flags_for_employee_date(
-        employee=employee, attendance_date=attendance_date, day_closed=1
+        employee=employee,
+        attendance_date=attendance_date,
+        day_closed=1,
+        exclude_names=protected,
     )
 
     holiday = None
@@ -712,6 +756,7 @@ def _delete_auto_flags_for_employee_date(
     attendance_date,
     day_closed: int | None = None,
     flag_codes: list[str] | None = None,
+    exclude_names: list[str] | None = None,
 ):
     filters = {
         "source": "AUTO",
@@ -722,6 +767,10 @@ def _delete_auto_flags_for_employee_date(
         filters["day_closed"] = day_closed
     if flag_codes:
         filters["flag_code"] = ["in", flag_codes]
+    if exclude_names:
+        # By name, not by code: the rows worth sparing sit inside a code whose
+        # other rows must still go.
+        filters["name"] = ["not in", exclude_names]
     frappe.db.delete("Attendance Flag", filters)
 
 
