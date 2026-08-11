@@ -40,6 +40,12 @@ export type FlagQueue = {
    * answer rather than the client's question wherever the two can differ.
    */
   range: { startDate: string; endDate: string };
+  /**
+   * Rollout phases for the requested range, or undefined while loading.
+   * Handed through raw: all the copy and the null-date rules live in
+   * lib/rolloutBanner, tested there rather than in a hook.
+   */
+  rollout: QueuePayload["rollout"] | undefined;
   truncated: boolean;
   isLoading: boolean;
   error: unknown;
@@ -70,6 +76,7 @@ export function useFlagQueue(params: FlagQueueParams): FlagQueue {
         startDate: data?.start_date ?? startDate,
         endDate: data?.end_date ?? endDate,
       },
+      rollout: data?.rollout,
       truncated: data?.truncated ?? false,
       isLoading,
       error,

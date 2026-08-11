@@ -102,6 +102,37 @@ export type QueueEntry =
       members: QueuePerson[];
     };
 
+export type RolloutPhase = "PRELAUNCH" | "TESTING" | "LIVE";
+
+/**
+ * One pilot window from the queue payload. Both dates are nullable and both
+ * nulls are legitimate: `go_live: null` means the pilot runs indefinitely
+ * (rollout.phase_for treats a missing go-live as TESTING forever), and
+ * `testing_start: null` means the dates were cleared after those flags were
+ * written. flag_queue_api._rollout_window hands over the nulls rather than
+ * fabricating a range.
+ */
+export type RolloutWindow = {
+  branch: string | null;
+  testing_start: string | null;
+  go_live: string | null;
+};
+
+/**
+ * Two different scopes in one block, and the difference is load-bearing:
+ * `range_phase`/`windows` describe the DATES REQUESTED (computed over every
+ * flag in range, so a tier filter cannot make the pilot banner vanish), while
+ * the two counts describe the VISIBLE LIST after filtering. "0 of 1" is a
+ * correct answer, not a bug. See flag_queue_api._rollout_block.
+ */
+export type RolloutBlock = {
+  phases_configured: boolean;
+  range_phase: "LIVE" | "TESTING" | "MIXED";
+  testing_flag_count: number;
+  total_flag_count: number;
+  windows: RolloutWindow[];
+};
+
 export type QueuePayload = {
   entries: QueueEntry[];
   counts: {
@@ -129,6 +160,12 @@ export type QueuePayload = {
    * one field short and the page throws.
    */
   outage_dates: { branch: string; date: string }[];
+  /**
+   * Required, for the reason spelled out on `outage_dates` above: the cache
+   * prefix is versioned by payload shape and was bumped to v4 when Phase A
+   * added this block, so no pre-deploy entry can reach code expecting it.
+   */
+  rollout: RolloutBlock;
   truncated: boolean;
   start_date: string;
   end_date: string;

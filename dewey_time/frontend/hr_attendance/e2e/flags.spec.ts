@@ -5,6 +5,24 @@ import type { FlagOut, QueueEntry, QueuePayload, QueuePerson } from "@/types/fla
 
 import { stubFrappe } from "./fixtures";
 
+/**
+ * Every payload fixture in this file predates rollout phases and describes an
+ * all-live range, so the pilot banner stays silent in all of them.
+ *
+ * `rollout` is required on QueuePayload rather than optional -- the queue's
+ * cache prefix is versioned by payload shape, so a response can never arrive
+ * without it. That is why adding the field broke this file: these mocks were
+ * returning a shape production no longer sends.
+ */
+const LIVE_ROLLOUT = {
+  phases_configured: false,
+  range_phase: "LIVE",
+  testing_flag_count: 0,
+  total_flag_count: 0,
+  windows: [],
+} satisfies QueuePayload["rollout"];
+
+
 test.beforeEach(async ({ page }) => {
   await stubFrappe(page);
 });
@@ -227,6 +245,7 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
+    rollout: LIVE_ROLLOUT,
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -400,6 +419,7 @@ test("a single decision persists after the queue refetches", async ({ page }) =>
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
+    rollout: LIVE_ROLLOUT,
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -583,6 +603,7 @@ test("a bulk decision with one stale row reports partial failure, politely", asy
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
+    rollout: LIVE_ROLLOUT,
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -722,6 +743,7 @@ test("a decided flag is reachable and can be decided again", async ({ page }) =>
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
+    rollout: LIVE_ROLLOUT,
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -873,6 +895,7 @@ test("a person row's avatar loading ring stays out of the accessibility tree", a
     orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
     alerts: [],
     outage_dates: [],
+    rollout: LIVE_ROLLOUT,
     truncated: false,
     start_date: "2026-08-09",
     end_date: "2026-08-15",
@@ -1014,6 +1037,7 @@ const A11Y_PAYLOAD = {
   orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
   alerts: [],
   outage_dates: [],
+  rollout: LIVE_ROLLOUT,
   truncated: false,
   start_date: "2026-07-31",
   end_date: "2026-08-13",
@@ -1712,6 +1736,7 @@ test("unchecking a branch takes its people out of the excuse", async ({ page }) 
       { branch: "DIS Iconic", date: "2026-08-04" },
       { branch: "ISBB", date: "2026-08-03" },
     ],
+    rollout: LIVE_ROLLOUT,
     truncated: false,
     start_date: "2026-07-26",
     end_date: "2026-08-08",
