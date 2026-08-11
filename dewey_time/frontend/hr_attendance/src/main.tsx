@@ -6,6 +6,7 @@ import { HrAppShell } from "./ui/HrAppShell";
 import { WeeklySchedulePage } from "./ui/WeeklySchedulePage";
 import { ScheduleImportPage } from "./ui/schedule-import/ScheduleImportPage";
 import { ScheduleCoveragePage } from "./ui/schedule-coverage/ScheduleCoveragePage";
+import { BiometricEnrollmentPage } from "./ui/schedule-coverage/BiometricEnrollmentPage";
 import { FlagQueuePage } from "./ui/FlagQueuePage";
 import { DeweyTimeIntro } from "./brand/DeweyTimeIntro";
 import "./index.css";
@@ -28,6 +29,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/hr-schedule" element={<WeeklySchedulePage />} />
                 <Route path="/hr-schedule/import" element={<ScheduleImportPage />} />
                 <Route path="/hr-schedule/coverage" element={<ScheduleCoveragePage />} />
+                <Route path="/hr-schedule/coverage/biometrics" element={<BiometricEnrollmentPage />} />
                 <Route path="/hr-flags" element={<FlagQueuePage />} />
               </Route>
               <Route path="*" element={<Navigate to="/hr-attendance" replace />} />
