@@ -151,6 +151,7 @@ class SnapshotTest(unittest.TestCase):
         mod.frappe.throw = self._throw
         self.upserts = []
         self.cleared = []
+        self.invalidate_cache = MagicMock()
 
     def tearDown(self):
         for name, value in self._saved.items():
@@ -206,6 +207,12 @@ class SnapshotTest(unittest.TestCase):
             mod, "_existing_employee_ids", side_effect=_existing
         ), patch.object(
             mod, "_record_snapshot_time"
+        ), patch(
+            # The webhook imports this one lazily (circular import), so patch it
+            # on its own module -- the deferred import reads the attribute at
+            # call time and sees the stand-in.
+            "dewey_time.attendance_engine.enrollment_api.invalidate_enrollment_cache",
+            self.invalidate_cache,
         ), patch.object(mod.frappe.db, "commit"):
             return mod.notify_enrollment_snapshot(
                 bridge_env="prod",
@@ -247,6 +254,18 @@ class SnapshotTest(unittest.TestCase):
         result = self._run([_user("E1")], existing_registered=("E1", "E2"))
         self.assertEqual(self.cleared, ["E2"])
         self.assertEqual(result["cleared"], 1)
+
+    def test_a_clear_only_snapshot_still_drops_the_read_cache(self):
+        """_clear_absent_rows writes with db.set_value, which fires no doc
+        hooks -- so the "Employee Biometric Enrollment" doc_events invalidation
+        misses a snapshot that only cleared rows. Clearing IS the offboarding
+        signal, the highest-value row on the page; it must not sit behind the
+        read cache's TTL."""
+        result = self._run([], existing_registered=("E2",))
+        self.assertEqual(self.upserts, [])
+        self.assertEqual(self.cleared, ["E2"])
+        self.assertEqual(result["cleared"], 1)
+        self.invalidate_cache.assert_called_once_with()
 
     def test_a_users_json_string_is_parsed(self):
         """Frappe hands form-encoded bodies through as strings."""

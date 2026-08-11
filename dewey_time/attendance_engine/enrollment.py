@@ -243,6 +243,17 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
     cleared = _clear_absent_rows(absent, synced_at=scanned_at, bridge_env=bridge_env)
 
     _record_snapshot_time(scanned_at)
+
+    # Clearing writes through db.set_value (see _clear_absent_rows), which fires
+    # no doc hooks — so the doc_events invalidation misses a snapshot that only
+    # cleared rows. Drop the cache here so the offboarding signal is never up to
+    # a TTL stale. Imported inside the function: enrollment_api imports
+    # ENROLLMENT_DOCTYPE from this module, so a module-level import would be
+    # circular (the same deferred idiom device_sync.py:169 uses).
+    from dewey_time.attendance_engine.enrollment_api import invalidate_enrollment_cache
+
+    invalidate_enrollment_cache()
+
     frappe.db.commit()
 
     return {

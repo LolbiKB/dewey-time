@@ -88,6 +88,26 @@ class BuildPayloadTest(unittest.TestCase):
         payload = self._build([_emp("E1")], [], {})
         self.assertEqual(payload["window_days"], mod.NOT_PUNCHING_WINDOW_DAYS)
 
+    def test_the_payload_costs_three_queries_not_one_per_employee(self):
+        """A per-employee query passes every other test in this file while
+        making a 237-employee page do hundreds of round trips."""
+        calls = []
+
+        def _get_all(doctype, **kwargs):
+            calls.append(doctype)
+            if doctype == "Employee":
+                return [_emp("E%d" % i) for i in range(50)]
+            return []
+
+        with patch.object(mod.frappe, "get_all", side_effect=_get_all), patch.object(
+            mod.frappe.db, "get_single_value", return_value="2026-08-11 09:14:03"
+        ), patch.object(mod, "_today", return_value=date(2026, 8, 11)):
+            mod._build_enrollment_payload()
+
+        self.assertEqual(
+            calls, ["Employee", mod.ENROLLMENT_DOCTYPE, "Employee Checkin"]
+        )
+
 
 class SeamTest(unittest.TestCase):
     def test_enrollment_status_answers_for_one_employee(self):
