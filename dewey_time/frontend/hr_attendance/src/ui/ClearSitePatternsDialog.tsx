@@ -21,6 +21,7 @@ import {
   type WipeStep,
 } from "@/hooks/useClearSitePatterns";
 import { cn } from "@/lib/utils";
+import { IS_DEV_BUILD } from "@/lib/devBuild";
 import type { ClearSitePatternsPreview } from "@/types/schedule";
 
 export type ClearSitePatternsDialogProps = {
@@ -30,6 +31,8 @@ export type ClearSitePatternsDialogProps = {
 };
 
 export function ClearSitePatternsDialog(props: ClearSitePatternsDialogProps) {
+  if (!IS_DEV_BUILD) return null;
+
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<ClearSitePatternsPreview | null>(null);
   const [result, setResult] = useState<WipeStep | null>(null);
