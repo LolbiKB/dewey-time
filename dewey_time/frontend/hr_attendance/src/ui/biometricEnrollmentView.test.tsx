@@ -69,6 +69,29 @@ test("a leaver with a live template gets its own prominence", () => {
   assert.match(html, /10 days/);
 });
 
+test("a leaver of exactly one day reads '1 day', not '1 days'", () => {
+  const html = markup(payload({
+    rows: [row({ id: "E9", employee_name: "Sam Okafor", status: "Left",
+                 bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+                 fingerprint_count: 2, days_since_relieving: 1 })],
+  }));
+  assert.match(html, /1 day</);
+  assert.doesNotMatch(html, /1 days/);
+});
+
+test("a payload with no rows says so rather than rendering a blank region", () => {
+  // The empty state is not only for a filter that matched nothing: a genuinely
+  // zero-row payload took the list branch and rendered an empty div, which
+  // reads as a broken page. `visible.length === 0` alone covers both, and is
+  // the only form a static render (props in, no clicks) can reach at all.
+  const html = markup(payload({
+    rows: [],
+    counts: { reported: 0, needs_enrollment: 0, enrolled_not_punching: 0, ok: 0,
+              leaver_still_enrolled: 0, excluded_status: 0, truncated: false },
+  }));
+  assert.match(html, /No employees match the current filters/i);
+});
+
 test("export is disabled while the roster is truncated", () => {
   // A partial CSV that looks complete is worse than no CSV. Assert the actual
   // `disabled` attribute, not the word "disabled" -- buttonVariants'
@@ -101,4 +124,22 @@ test("the page holds no copy or logic of its own", () => {
   // legitimately never has.
   assert.doesNotMatch(page, /useState|useMemo|enrollmentReport|enrollmentCsv/);
   assert.match(page, /BiometricEnrollmentView/);
+});
+
+test("the page turns a non-HR visitor away instead of rendering a failure", () => {
+  // The shell hides the Coverage tab from non-HR, but the URL is reachable by
+  // bookmark. Without the gate the backend's "Not permitted" surfaced as
+  // FailureBlock "Could not load the enrollment report" with a Retry button
+  // that can never succeed -- an authorisation denial dressed up as a system
+  // fault. The page calls the hook, so it cannot be rendered by this suite;
+  // the gate is pinned in source, as the four sibling pages' gates would be.
+  assert.match(page, /useOutletContext<HrAccessOutletContext>\(\)/);
+  // Adjacency matters, not just presence: the redirect has to be the body of
+  // the !hrStaff branch. An unconditional <Navigate> would satisfy two
+  // separate assertions and lock every visitor out of the page.
+  assert.match(
+    page,
+    /if \(!hrStaff\)\s*\{?\s*return <Navigate to="\/hr-attendance" replace \/>;/,
+  );
+  assert.match(page, /if \(sessionLoading\)/);
 });

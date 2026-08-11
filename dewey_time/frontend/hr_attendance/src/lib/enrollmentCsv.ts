@@ -14,7 +14,9 @@ const HEADERS = [
 function cell(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return "";
   const text = String(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  // \r as well as \n: a lone carriage return is a record separator to any
+  // parser that still honours classic Mac line endings, Excel among them.
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 export type CsvContext = {

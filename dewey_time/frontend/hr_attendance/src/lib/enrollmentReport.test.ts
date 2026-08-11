@@ -71,8 +71,27 @@ test("snapshotNotice: reports a fresh snapshot in minutes without alarming", () 
   assert.ok(notice?.text.includes("46 minutes ago"));
 });
 
+test("snapshotNotice: says '1 minute ago', not '1 minutes ago'", () => {
+  // Hours and days already pluralise; minutes did not, and minutes is the unit
+  // HR sees most often.
+  const notice = snapshotNotice(payload({ last_snapshot_at: "2026-08-11 09:59:00" }), NOW);
+  assert.equal(notice?.text, "Device data as of 1 minute ago.");
+});
+
 test("snapshotNotice: marks a snapshot older than a day as stale", () => {
   const notice = snapshotNotice(payload({ last_snapshot_at: "2026-08-09 09:00:00" }), NOW);
+  assert.equal(notice?.stale, true);
+});
+
+test("snapshotNotice: exactly a day old is not yet stale", () => {
+  // The boundary, both sides. The existing stale case sits at 3060 minutes, so
+  // an off-by-one at 1440 would pass it.
+  const notice = snapshotNotice(payload({ last_snapshot_at: "2026-08-10 10:00:00" }), NOW);
+  assert.equal(notice?.stale, false);
+});
+
+test("snapshotNotice: one minute past a day is stale", () => {
+  const notice = snapshotNotice(payload({ last_snapshot_at: "2026-08-10 09:59:00" }), NOW);
   assert.equal(notice?.stale, true);
 });
 

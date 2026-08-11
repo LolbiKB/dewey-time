@@ -131,12 +131,12 @@ export function BiometricEnrollmentView(props: BiometricEnrollmentViewProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto" aria-live="polite">
-        {/* Only reachable once a filter narrows a non-empty roster to nothing —
-            NO_FILTERS is a no-op, so a static render (props only, no clicks)
-            can never exercise this branch. Left uncovered for that reason,
-            same as `filterLabel`'s non-default branches before it moved to
-            `describeFilters`. */}
-        {visible.length === 0 && payload.rows.length > 0 ? (
+        {/* On `visible` alone, not `visible.length === 0 && rows.length > 0`.
+            The extra conjunct sent a genuinely zero-row payload down the list
+            branch, which renders an empty div — a page that looks broken. It
+            also made the whole branch unreachable from a static render, since
+            NO_FILTERS is a no-op and this suite cannot click. */}
+        {visible.length === 0 ? (
           <p className="p-6 text-center text-sm text-muted-foreground">
             No employees match the current filters.
           </p>
