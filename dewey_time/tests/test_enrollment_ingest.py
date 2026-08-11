@@ -350,25 +350,38 @@ class ClearAbsentRowsTest(unittest.TestCase):
     all stub this out, so nothing was actually exercising the "clear" path
     the register's is_registered=0 offboarding signal depends on."""
 
-    def test_zeroes_counts_and_keeps_the_pin(self):
-        with patch.object(
-            mod.frappe.db, "get_value", return_value="1042"
-        ) as get_value, patch.object(mod, "upsert_enrollment_row") as upsert:
+    def test_zeroes_counts_via_a_direct_db_update(self):
+        with patch.object(mod.frappe.db, "set_value") as set_value:
             count = mod._clear_absent_rows(
                 ["E2"], synced_at="2026-08-11 09:14:03", bridge_env="prod"
             )
 
-        get_value.assert_called_once_with(mod.ENROLLMENT_DOCTYPE, "E2", "pin")
-        upsert.assert_called_once_with(
-            employee="E2",
-            pin="1042",
-            is_registered=False,
-            fingerprint_count=0,
-            face_count=0,
-            synced_at="2026-08-11 09:14:03",
-            bridge_env="prod",
+        set_value.assert_called_once_with(
+            mod.ENROLLMENT_DOCTYPE,
+            "E2",
+            {
+                "is_registered": 0,
+                "fingerprint_count": 0,
+                "face_count": 0,
+                "synced_at": "2026-08-11 09:14:03",
+                "bridge_env": "prod",
+            },
+            update_modified=True,
         )
         self.assertEqual(count, 1)
+
+    def test_clearing_a_row_does_not_go_through_the_full_doc_save_helper(self):
+        """The point of writing via db.set_value is to skip doc.save()'s Link
+        revalidation entirely -- a row whose Employee was force-deleted must
+        not raise LinkValidationError on this path either. Pinned here so a
+        later "simplification" back to the shared helper reintroduces that
+        wedge in an obviously-failing test rather than silently."""
+        with patch.object(mod.frappe.db, "set_value"), patch.object(
+            mod, "upsert_enrollment_row"
+        ) as upsert:
+            mod._clear_absent_rows(["E2"], synced_at="2026-08-11 09:14:03", bridge_env="prod")
+
+        upsert.assert_not_called()
 
 
 class ExistingEmployeeIdsTest(unittest.TestCase):

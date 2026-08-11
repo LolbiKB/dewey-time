@@ -118,18 +118,29 @@ def _clear_absent_rows(absent, *, synced_at=None, bridge_env=None) -> int:
     """Mark rows absent from the snapshot as unenrolled.
 
     Cleared rather than deleted: is_registered = 0 IS the "not enrolled" fact,
-    and keeping the row preserves the pin and the last-seen counts for anyone
-    investigating why a template disappeared.
+    and the row keeps its pin for anyone investigating a vanished template.
+
+    Written with db.set_value rather than upsert_enrollment_row deliberately.
+    A full doc.save() re-validates the `employee` Link, so a row whose Employee
+    record was force-deleted would raise LinkValidationError and abort the whole
+    snapshot on every retry — the same permanent wedge the missing-employee skip
+    guards against on the upsert path. It is also 237 document saves for what is
+    a status update. An orphaned row left behind is harmless: the read API
+    iterates Employee and joins the register, so a register row with no Employee
+    is never rendered.
     """
     for employee in absent:
-        upsert_enrollment_row(
-            employee=employee,
-            pin=frappe.db.get_value(ENROLLMENT_DOCTYPE, employee, "pin"),
-            is_registered=False,
-            fingerprint_count=0,
-            face_count=0,
-            synced_at=synced_at,
-            bridge_env=bridge_env,
+        frappe.db.set_value(
+            ENROLLMENT_DOCTYPE,
+            employee,
+            {
+                "is_registered": 0,
+                "fingerprint_count": 0,
+                "face_count": 0,
+                "synced_at": synced_at,
+                "bridge_env": bridge_env,
+            },
+            update_modified=True,
         )
     return len(absent)
 
