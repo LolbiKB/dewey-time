@@ -137,6 +137,35 @@ class SeamTest(unittest.TestCase):
         self.assertTrue(status["is_registered"])
         self.assertEqual(status["fingerprint_count"], 2)
 
+    def test_a_renamed_employee_is_still_found_by_field_not_by_docname(self):
+        """The docname is not a safe key here, for the same reason the upsert
+        stopped using it: frappe.rename_doc on an Employee moves the `employee`
+        field without moving the row's name. A by-name lookup then finds
+        nothing, and this seam -- the documented interface an onboarding or
+        offboarding checklist is meant to call -- answers is_registered: False
+        for someone who is enrolled. Confidently, silently, and wrongly.
+        """
+        stored = {
+            "employee": "HR-EMP-NEW",
+            "is_registered": 1,
+            "fingerprint_count": 2,
+            "face_count": 0,
+            "synced_at": "2026-08-11 09:14:03",
+        }
+
+        def _get_value(doctype, filters, fields, as_dict=False):
+            # The row is still named HR-EMP-OLD, so only a FIELD filter finds
+            # it. A bare "HR-EMP-NEW" name argument matches nothing.
+            return stored if filters == {"employee": "HR-EMP-NEW"} else None
+
+        with patch.object(mod.frappe.db, "get_value", side_effect=_get_value), patch.object(
+            mod, "_last_snapshot_at", return_value="2026-08-11 09:14:03"
+        ):
+            status = mod.enrollment_status("HR-EMP-NEW")
+
+        self.assertTrue(status["is_registered"])
+        self.assertEqual(status["fingerprint_count"], 2)
+
     def test_an_employee_with_no_register_row_is_not_registered(self):
         with patch.object(mod.frappe.db, "get_value", return_value=None), patch.object(
             mod, "_last_snapshot_at", return_value="2026-08-11 09:14:03"

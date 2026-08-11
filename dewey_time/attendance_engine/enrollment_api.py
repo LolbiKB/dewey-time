@@ -196,9 +196,14 @@ def enrollment_status(employee: str) -> dict:
     cannot tell "this person is not enrolled" from "we have never heard from
     the bridge".
     """
+    # Looked up by the `employee` FIELD, never by docname. The two are only
+    # equal at creation: frappe.rename_doc on an Employee moves the field and
+    # leaves the row's name behind, so a by-name lookup would find nothing and
+    # this seam would answer "not enrolled" for someone who is. The same reason
+    # enrollment.upsert_enrollment_row stopped keying on the docname.
     row = frappe.db.get_value(
         ENROLLMENT_DOCTYPE,
-        employee,
+        {"employee": employee},
         ["employee", "is_registered", "fingerprint_count", "face_count", "synced_at"],
         as_dict=True,
     )
