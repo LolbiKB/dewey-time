@@ -1,8 +1,10 @@
 """Bridge webhook authentication (API key, pinned principal, optional shared secret)."""
 
+import hmac
+
 import frappe
 from frappe import _
-from frappe.utils.password import check_password
+from frappe.utils.password import get_decrypted_password
 
 #: Desk-less role marking a User as an allowed Bridge caller. Created on
 #: after_migrate (see ensure_bridge_role), assigned in Desk → User.
@@ -64,7 +66,24 @@ def _validate_api_key_auth():
     if not user or not user.api_secret:
         frappe.throw(_("Invalid API key"), frappe.AuthenticationError)
 
-    if not check_password(user.api_secret, api_secret):
+    # `api_secret` is a Password field, so the User row holds only a dummy
+    # "*****" of the right length (base_document.py:1369) while the real value
+    # lives ENCRYPTED in __Auth. It must therefore be read back with
+    # get_decrypted_password — the same call Frappe core makes in
+    # validate_api_key_secret (auth.py:729).
+    #
+    # check_password cannot do this job: it passlib-verifies a HASH against
+    # rows filtered on `encrypted = 0`, and it RAISES rather than returning
+    # False. Calling it here matched nothing and raised its own "Incorrect
+    # User or Password" on every request, which is why both bridge webhooks
+    # 401'd continuously from 2026-08-01 while check-ins — core /api/resource,
+    # which never reaches this module — kept working.
+    expected_secret = get_decrypted_password(
+        "User", user.name, fieldname="api_secret", raise_exception=False
+    )
+    if not expected_secret or not hmac.compare_digest(
+        expected_secret.encode("utf-8"), api_secret.encode("utf-8")
+    ):
         frappe.throw(_("Invalid API secret"), frappe.AuthenticationError)
 
     _assert_bridge_principal(user.name)

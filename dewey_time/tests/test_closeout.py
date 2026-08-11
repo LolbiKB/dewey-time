@@ -74,6 +74,9 @@ def _install_frappe_mock():
 
     password_mod = ModuleType("frappe.utils.password")
     password_mod.check_password = MagicMock(return_value=True)
+    # bridge_auth reads api_secret back out of __Auth with this; the default
+    # stub keeps every caller that is not testing the comparison itself green.
+    password_mod.get_decrypted_password = MagicMock(return_value="SECRET")
 
     model_mod = ModuleType("frappe.model.document")
 

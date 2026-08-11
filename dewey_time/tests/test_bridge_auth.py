@@ -98,7 +98,7 @@ class BridgeAuthTest(unittest.TestCase):
         self._headers["Authorization"] = "token KEY:SECRET"
         with patch.object(
             mod.frappe.db, "get_value", return_value=_D(name="employee@example.com", api_secret="h")
-        ), patch.object(mod, "check_password", return_value=True), patch.object(
+        ), patch.object(mod, "get_decrypted_password", return_value="SECRET"), patch.object(
             mod.frappe, "get_roles", return_value=["Employee"]
         ):
             with self.assertRaises(_Throw) as ctx:
@@ -110,7 +110,7 @@ class BridgeAuthTest(unittest.TestCase):
         seen = {}
         with patch.object(
             mod.frappe.db, "get_value", return_value=_D(name="bridge@example.com", api_secret="h")
-        ), patch.object(mod, "check_password", return_value=True), patch.object(
+        ), patch.object(mod, "get_decrypted_password", return_value="SECRET"), patch.object(
             mod.frappe, "get_roles", return_value=["Bridge Device"]
         ), patch.object(
             mod.frappe, "set_user", side_effect=lambda u: seen.setdefault("user", u)
@@ -123,7 +123,7 @@ class BridgeAuthTest(unittest.TestCase):
         self._conf["bridge_user"] = "bridge@example.com"
         with patch.object(
             mod.frappe.db, "get_value", return_value=_D(name="someone-else@example.com", api_secret="h")
-        ), patch.object(mod, "check_password", return_value=True):
+        ), patch.object(mod, "get_decrypted_password", return_value="SECRET"):
             with self.assertRaises(_Throw) as ctx:
                 mod.validate_bridge_request()
         self.assertIn("not the configured bridge user", str(ctx.exception))
@@ -142,6 +142,72 @@ class BridgeAuthTest(unittest.TestCase):
                 mod.validate_bridge_request()
         self.assertEqual(captured["filters"].get("enabled"), 1)
 
+    # ---- the api_secret comparison ------------------------------------
+    #
+    # These pin the SECOND bug the reachable key path shipped with. It called
+    # `check_password(user.api_secret, api_secret)`, which is wrong twice over:
+    # the first argument is the `__Auth.name` to look up (so it searched for a
+    # row named after the secret value), and `check_password` verifies a
+    # passlib HASH on rows with `encrypted = 0` — while `api_secret` is stored
+    # ENCRYPTED and reversible. Frappe core validates it with
+    # `get_decrypted_password(..., fieldname="api_secret")` (auth.py:729).
+    #
+    # The lookup therefore matched nothing and check_password RAISED its own
+    # "Incorrect User or Password" on every call, so the `Invalid API secret`
+    # throw below it was never reached. Production logged exactly that string
+    # 19 times between 2026-08-01 and 2026-08-11; both bridge webhooks were
+    # dead the entire time while check-ins (core /api/resource, which never
+    # runs this code) kept working.
+    #
+    # Every other test here stubs the comparison to True, which is why the
+    # suite stayed green. These two assert the call itself.
+
+    def test_the_secret_is_looked_up_by_user_name_not_by_the_secret_value(self):
+        self._headers["Authorization"] = "token KEY:SECRET"
+        with patch.object(
+            mod.frappe.db, "get_value", return_value=_D(name="bridge@example.com", api_secret="enc")
+        ), patch.object(
+            mod, "get_decrypted_password", return_value="SECRET"
+        ) as get_pwd, patch.object(
+            mod.frappe, "get_roles", return_value=["Bridge Device"]
+        ), patch.object(mod.frappe, "set_user"):
+            mod.validate_bridge_request()
+
+        get_pwd.assert_called_once()
+        args, kwargs = get_pwd.call_args
+        # The User's NAME keys the lookup — passing the secret here is the bug.
+        self.assertEqual(args[:2], ("User", "bridge@example.com"))
+        self.assertEqual(kwargs.get("fieldname"), "api_secret")
+
+    def test_a_wrong_api_secret_is_rejected_by_our_own_throw(self):
+        """The mismatch path must be reachable and must be ours.
+
+        The old call raised inside frappe before returning, so this branch was
+        dead code — which is why the logs showed frappe's wording and never
+        "Invalid API secret".
+        """
+        self._headers["Authorization"] = "token KEY:WRONG"
+        with patch.object(
+            mod.frappe.db, "get_value", return_value=_D(name="bridge@example.com", api_secret="enc")
+        ), patch.object(mod, "get_decrypted_password", return_value="RIGHT"):
+            with self.assertRaises(_Throw) as ctx:
+                mod.validate_bridge_request()
+        self.assertIn("Invalid API secret", str(ctx.exception))
+
+    def test_a_user_with_no_stored_secret_is_rejected(self):
+        """get_decrypted_password returns None when nothing is stored.
+
+        Without this guard the comparison would be against None and the throw
+        below would depend on falsiness rather than an explicit check.
+        """
+        self._headers["Authorization"] = "token KEY:SECRET"
+        with patch.object(
+            mod.frappe.db, "get_value", return_value=_D(name="bridge@example.com", api_secret="enc")
+        ), patch.object(mod, "get_decrypted_password", return_value=None):
+            with self.assertRaises(_Throw) as ctx:
+                mod.validate_bridge_request()
+        self.assertIn("Invalid API secret", str(ctx.exception))
+
     # ---- the secret ---------------------------------------------------
 
     def test_the_secret_is_enforced_when_configured(self):
@@ -150,7 +216,7 @@ class BridgeAuthTest(unittest.TestCase):
         self._headers["X-Bridge-Secret"] = "wrong"
         with patch.object(
             mod.frappe.db, "get_value", return_value=_D(name="bridge@example.com", api_secret="h")
-        ), patch.object(mod, "check_password", return_value=True), patch.object(
+        ), patch.object(mod, "get_decrypted_password", return_value="SECRET"), patch.object(
             mod.frappe, "get_roles", return_value=["Bridge Device"]
         ), patch.object(mod.frappe, "set_user"):
             with self.assertRaises(_Throw) as ctx:
