@@ -89,6 +89,31 @@ def _previous_registered_count() -> int:
     return frappe.db.count(ENROLLMENT_DOCTYPE, {"is_registered": 1})
 
 
+def _existing_employee_ids(employee_ids) -> set:
+    """Which of the linked employee ids still have an Employee record.
+
+    One query for the whole payload, not one per row: a bridge user whose
+    Employee has been deleted must be detected cheaply, because upserting
+    against a dangling Link raises LinkValidationError and — left
+    unhandled — would wedge the whole feed on every retry forever.
+    """
+    employee_ids = list(employee_ids)
+    if not employee_ids:
+        return set()
+    return set(
+        frappe.get_all("Employee", filters={"name": ["in", employee_ids]}, pluck="name")
+    )
+
+
+def _coerce_bool(value) -> bool:
+    """Bridge payloads are wire data: a string "0"/"false" must not
+    round-trip through bare bool() as True the way any non-empty string
+    would — mirrors the scepticism _coerce_int applies to counts."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "0", "false", "no", "off")
+    return bool(value)
+
+
 def _clear_absent_rows(absent, *, synced_at=None, bridge_env=None) -> int:
     """Mark rows absent from the snapshot as unenrolled.
 
@@ -124,16 +149,32 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
     deleted", which is precisely the offboarding signal the report exists for.
     Any employee absent from `users` is therefore recorded as not enrolled --
     which is also why a truncated payload is dangerous enough to reject.
+
+    All-or-nothing, no partial commit: `seen` is populated *before* each row's
+    upsert runs (see the loop below), so if an upsert were caught and skipped
+    rather than left to propagate, that employee would both dodge the
+    absent-clearing pass below AND still let `_record_snapshot_time` /
+    `frappe.db.commit` advance the marker -- telling every downstream reader
+    the register is current when a row silently failed to write. Unlike
+    `_coerce_int`'s per-field tolerance for one bad count, a raise from
+    `upsert_enrollment_row` here is meant to abort the whole snapshot, not be
+    swallowed. The one exception is a deleted Employee (see
+    `_existing_employee_ids` below): a known, enumerable condition that gets
+    a count instead of a crash, precisely because it is not unexpected.
     """
     validate_bridge_request()
 
+    if not scanned_at:
+        frappe.throw("scanned_at is required")
+
     if isinstance(users, str):
-        # frappe.parse_json is the framework's usual call for this, but it is
-        # not present on the shared MagicMock the test suite runs against
-        # (nothing in this codebase has needed it before), so json.loads --
-        # what parse_json delegates to for a plain array/object body --
-        # is used directly. Same behaviour against the bridge's real payload.
-        users = json.loads(users)
+        # frappe.parse_json delegates to json.loads for a string body that is
+        # a JSON array/object, so calling json.loads directly here is
+        # production-equivalent.
+        try:
+            users = json.loads(users)
+        except json.JSONDecodeError as exc:
+            frappe.throw(f"users must be valid JSON: {exc}")
     if not isinstance(users, list):
         frappe.throw("users must be a list")
 
@@ -143,7 +184,12 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
             f"{ENROLLMENT_SNAPSHOT_MAX_USERS} ceiling"
         )
 
-    linked = [u for u in users if (u or {}).get("frappe_employee_id")]
+    # Non-dict elements (a bare string, a number, None) are silently dropped
+    # here rather than crashing on `.get(...)` -- mirrors
+    # closeout._parse_undelivered's `isinstance(item, dict)` filter. They
+    # fall out of `linked` and are counted in skipped_unlinked below same as
+    # a proper row with no frappe_employee_id.
+    linked = [u for u in users if isinstance(u, dict) and u.get("frappe_employee_id")]
     skipped_unlinked = len(users) - len(linked)
 
     previous = _previous_registered_count()
@@ -158,14 +204,24 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
             f"a truncated read than a mass departure. Set allow_shrink=1 if it is real."
         )
 
+    # One query for the whole payload -- not one per row -- to find which
+    # linked employees still have an Employee record. A bridge user whose
+    # Employee was deleted must be skipped rather than crash doc.save() with
+    # LinkValidationError, which would wedge this feed on every retry.
+    existing_ids = _existing_employee_ids(u["frappe_employee_id"] for u in linked)
+
+    skipped_missing_employee = 0
     seen = set()
     for user in linked:
         employee = user["frappe_employee_id"]
+        if employee not in existing_ids:
+            skipped_missing_employee += 1
+            continue
         seen.add(employee)
         upsert_enrollment_row(
             employee=employee,
             pin=user.get("pin"),
-            is_registered=bool(user.get("is_registered")),
+            is_registered=_coerce_bool(user.get("is_registered")),
             fingerprint_count=user.get("fingerprint_count"),
             face_count=user.get("face_count"),
             synced_at=scanned_at,
@@ -180,8 +236,9 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
 
     return {
         "ok": True,
-        "registered": len(linked),
+        "registered": len(seen),
         "cleared": cleared,
         "skipped_unlinked": skipped_unlinked,
+        "skipped_missing_employee": skipped_missing_employee,
         "scanned_at": str(scanned_at),
     }

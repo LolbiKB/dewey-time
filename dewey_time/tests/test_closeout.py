@@ -7,12 +7,19 @@ from unittest.mock import MagicMock, patch
 
 
 def _mock_cint(value, default=0):
-    """Stand-in for frappe.utils.cint: real Frappe truncates through float and
-    falls back to `default` on anything unparseable, same as this."""
+    """Stand-in for frappe.utils.cint: real Frappe tries int() first, falls
+    back through float() for numeric strings, and returns `default` for
+    anything else -- a broad except in both stages, not just
+    (TypeError, ValueError), since this is shared across every backend test
+    module and a narrower catch here would silently diverge from production
+    for inputs neither of us has hit yet."""
     try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
+        return int(value)
+    except Exception:
+        try:
+            return int(float(value))
+        except Exception:
+            return default
 
 
 def _mock_get_time(value):

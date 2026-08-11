@@ -139,6 +139,10 @@ class SnapshotTest(unittest.TestCase):
     #: dashboard_auth tests when the suite ran together.
     _PATCHED = ("throw",)
     _MISSING = object()
+    #: Sentinel distinct from None: _run(..., scanned_at=None) must be able to
+    #: drive the "scanned_at is required" guard, not silently fall back to a
+    #: default value the way a plain `scanned_at=None` default parameter would.
+    _UNSET = object()
 
     def setUp(self):
         self._saved = {
@@ -161,36 +165,60 @@ class SnapshotTest(unittest.TestCase):
     def _throw(self, msg, exc=None):
         raise AssertionError("threw: %s" % msg)
 
-    def _run(self, users, *, existing_registered=(), previous_count=None, **kwargs):
-        """Drive notify_enrollment_snapshot with the DB stubbed out."""
+    def _run(
+        self,
+        users,
+        *,
+        existing_registered=(),
+        previous_count=None,
+        existing_employees=None,
+        scanned_at=_UNSET,
+        **kwargs,
+    ):
+        """Drive notify_enrollment_snapshot with the DB stubbed out.
+
+        `existing_employees=None` means "every linked id has an Employee
+        record" (the default for tests not exercising that guard); pass an
+        explicit iterable to make some ids missing.
+        """
         if previous_count is None:
             previous_count = len(existing_registered)
+        if scanned_at is self._UNSET:
+            scanned_at = "2026-08-11 09:14:03"
 
-        def _get_all(doctype, filters=None, fields=None, pluck=None, **_):
-            return list(existing_registered)
+        def _clear(absent, **kw):
+            self.cleared.extend(absent)
+            return len(absent)
+
+        def _existing(ids, **kw):
+            ids = list(ids)
+            return set(ids) if existing_employees is None else set(existing_employees)
 
         with patch.object(mod, "validate_bridge_request"), patch.object(
             mod, "upsert_enrollment_row", side_effect=lambda **kw: self.upserts.append(kw)
         ), patch.object(
-            mod, "_clear_absent_rows", side_effect=lambda absent, **kw: self.cleared.extend(absent)
+            mod, "_clear_absent_rows", side_effect=_clear
         ), patch.object(
             mod, "_registered_employee_ids", return_value=set(existing_registered)
         ), patch.object(
             mod, "_previous_registered_count", return_value=previous_count
         ), patch.object(
+            mod, "_existing_employee_ids", side_effect=_existing
+        ), patch.object(
             mod, "_record_snapshot_time"
         ), patch.object(mod.frappe.db, "commit"):
             return mod.notify_enrollment_snapshot(
                 bridge_env="prod",
-                scanned_at="2026-08-11 09:14:03",
+                scanned_at=scanned_at,
                 users=users,
                 **kwargs,
             )
 
     def test_auth_runs_before_anything_else(self):
         """The gate must not be reachable around — assert it is called."""
+        mod.frappe.throw = self._raise
         with patch.object(mod, "validate_bridge_request") as gate:
-            with self.assertRaises(Exception):
+            with self.assertRaises(_Rejected):
                 mod.notify_enrollment_snapshot(users=None)
         gate.assert_called_once()
 
@@ -206,11 +234,19 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual([u["employee"] for u in self.upserts], ["E1"])
         self.assertEqual(result["skipped_unlinked"], 1)
 
+    def test_a_non_dict_element_is_skipped_not_fatal(self):
+        """A bare string in the array (e.g. ["E1"]) must not crash on
+        `.get("frappe_employee_id")` -- it is simply not linked."""
+        result = self._run(["E1", _user("E2")])
+        self.assertEqual([u["employee"] for u in self.upserts], ["E2"])
+        self.assertEqual(result["skipped_unlinked"], 1)
+
     def test_an_employee_absent_from_the_snapshot_is_cleared(self):
         """Snapshot semantics: absent means not enrolled. This is the whole
         offboarding signal, and a delta could not express it."""
-        self._run([_user("E1")], existing_registered=("E1", "E2"))
+        result = self._run([_user("E1")], existing_registered=("E1", "E2"))
         self.assertEqual(self.cleared, ["E2"])
+        self.assertEqual(result["cleared"], 1)
 
     def test_a_users_json_string_is_parsed(self):
         """Frappe hands form-encoded bodies through as strings."""
@@ -218,6 +254,24 @@ class SnapshotTest(unittest.TestCase):
 
         result = self._run(json.dumps([_user("E1")]))
         self.assertEqual(result["registered"], 1)
+
+    def test_a_malformed_users_string_is_rejected_not_a_500(self):
+        """json.loads raising straight out of an allow_guest=True webhook
+        would surface as an unhandled 500 -- a traceback in the Error Log,
+        nothing the bridge can parse. It must become a normal frappe.throw."""
+        mod.frappe.throw = self._raise
+        with self.assertRaises(_Rejected):
+            self._run("not valid json{")
+
+    def test_a_missing_scanned_at_is_rejected(self):
+        mod.frappe.throw = self._raise
+        with self.assertRaises(_Rejected):
+            self._run([_user("E1")], scanned_at=None)
+
+    def test_a_stringly_false_is_registered_is_coerced_correctly(self):
+        """A wire "0" must not round-trip through bare bool() as True."""
+        self._run([_user("E1", registered="0")])
+        self.assertFalse(self.upserts[0]["is_registered"])
 
     def test_a_halved_roster_is_rejected_as_a_partial_snapshot(self):
         """9 users where 30 were registered is far more likely a truncated read
@@ -247,8 +301,94 @@ class SnapshotTest(unittest.TestCase):
         with self.assertRaises(_Rejected):
             self._run([_user("E%d" % i) for i in range(mod.ENROLLMENT_SNAPSHOT_MAX_USERS + 1)])
 
+    def test_a_missing_employee_is_skipped_not_fatal(self):
+        """The bridge tracks missingInFrappeIds for exactly this state: a
+        deleted Employee must not wedge the feed with a LinkValidationError
+        on every retry, forever."""
+        result = self._run(
+            [_user("E1"), _user("E2")], existing_employees=("E1",)
+        )
+        self.assertEqual([u["employee"] for u in self.upserts], ["E1"])
+        self.assertEqual(result["skipped_missing_employee"], 1)
+        self.assertEqual(result["registered"], 1)
+
+    def test_a_failed_upsert_aborts_before_the_marker_advances(self):
+        """seen.add happens before the upsert call, so a swallowed failure
+        would both dodge the absent-clearing pass and still let the snapshot
+        marker advance -- telling the report a stale row is fresh. The
+        failure must propagate, not be swallowed."""
+
+        def _boom(**kw):
+            raise RuntimeError("db write failed")
+
+        with patch.object(mod, "validate_bridge_request"), patch.object(
+            mod, "upsert_enrollment_row", side_effect=_boom
+        ), patch.object(
+            mod, "_registered_employee_ids", return_value=set()
+        ), patch.object(
+            mod, "_previous_registered_count", return_value=0
+        ), patch.object(
+            mod, "_existing_employee_ids", return_value={"E1"}
+        ), patch.object(
+            mod, "_record_snapshot_time"
+        ) as record_time, patch.object(mod.frappe.db, "commit") as commit:
+            with self.assertRaises(RuntimeError):
+                mod.notify_enrollment_snapshot(
+                    bridge_env="prod",
+                    scanned_at="2026-08-11 09:14:03",
+                    users=[_user("E1")],
+                )
+        record_time.assert_not_called()
+        commit.assert_not_called()
+
     def _raise(self, msg, exc=None):
         raise _Rejected(str(msg))
+
+
+class ClearAbsentRowsTest(unittest.TestCase):
+    """Direct coverage of _clear_absent_rows: the endpoint-level tests above
+    all stub this out, so nothing was actually exercising the "clear" path
+    the register's is_registered=0 offboarding signal depends on."""
+
+    def test_zeroes_counts_and_keeps_the_pin(self):
+        with patch.object(
+            mod.frappe.db, "get_value", return_value="1042"
+        ) as get_value, patch.object(mod, "upsert_enrollment_row") as upsert:
+            count = mod._clear_absent_rows(
+                ["E2"], synced_at="2026-08-11 09:14:03", bridge_env="prod"
+            )
+
+        get_value.assert_called_once_with(mod.ENROLLMENT_DOCTYPE, "E2", "pin")
+        upsert.assert_called_once_with(
+            employee="E2",
+            pin="1042",
+            is_registered=False,
+            fingerprint_count=0,
+            face_count=0,
+            synced_at="2026-08-11 09:14:03",
+            bridge_env="prod",
+        )
+        self.assertEqual(count, 1)
+
+
+class ExistingEmployeeIdsTest(unittest.TestCase):
+    """Direct coverage of _existing_employee_ids: one query for the whole
+    payload, not one per row."""
+
+    def test_one_query_not_one_per_row(self):
+        with patch.object(mod.frappe, "get_all", return_value=["E1"]) as get_all:
+            result = mod._existing_employee_ids(["E1", "E2", "E3"])
+
+        get_all.assert_called_once_with(
+            "Employee", filters={"name": ["in", ["E1", "E2", "E3"]]}, pluck="name"
+        )
+        self.assertEqual(result, {"E1"})
+
+    def test_an_empty_input_skips_the_query_entirely(self):
+        with patch.object(mod.frappe, "get_all") as get_all:
+            result = mod._existing_employee_ids([])
+        get_all.assert_not_called()
+        self.assertEqual(result, set())
 
 
 if __name__ == "__main__":
