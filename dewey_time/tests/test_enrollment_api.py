@@ -24,7 +24,6 @@ def _emp(emp_id, *, status="Active", branch="ACES", dept="Ops", relieving=None):
 def _reg(emp_id, *, registered=True, fp=1):
     return {
         "employee": emp_id,
-        "pin": "1000",
         "is_registered": 1 if registered else 0,
         "fingerprint_count": fp,
         "face_count": 0,
@@ -72,6 +71,24 @@ class BuildPayloadTest(unittest.TestCase):
         )
         self.assertEqual(len(payload["rows"]), 1)
         self.assertEqual(payload["counts"]["excluded_status"], 2)
+
+    def test_a_cleanly_offboarded_leaver_is_neither_reported_nor_counted(self):
+        """The second, deliberate reason classify() returns None.
+
+        A Left employee with no template has already been dealt with: there is
+        nothing for HR to do, so they get no row AND no exclusion count. That
+        makes reported + excluded_status strictly less than len(employees) --
+        on purpose. Pinned so the next reader who "fixes the totals" starts
+        counting clean leavers as excluded in an obviously-failing test rather
+        than shipping a page that lists work that does not exist.
+        """
+        payload = self._build(
+            [_emp("E1", status="Left", relieving=date(2026, 8, 1))], [], {}
+        )
+        self.assertEqual(payload["rows"], [])
+        self.assertEqual(payload["counts"]["excluded_status"], 0)
+        self.assertEqual(payload["counts"]["reported"], 0)
+        self.assertEqual(payload["counts"]["leaver_still_enrolled"], 0)
 
     def test_a_never_synced_feed_reports_a_null_snapshot(self):
         """The client refuses to render a list on this. Without it every
@@ -151,7 +168,7 @@ class PermissionTest(unittest.TestCase):
         with patch(
             "dewey_time.attendance_engine.hr_calendar._is_hr_staff", return_value=False
         ), patch.object(mod.frappe, "cache", cache), patch.object(mod.frappe, "get_all", get_all):
-            with self.assertRaises(Exception):
+            with self.assertRaisesRegex(Exception, "Not permitted"):
                 mod.get_enrollment_report()
             cache.assert_not_called()
             get_all.assert_not_called()

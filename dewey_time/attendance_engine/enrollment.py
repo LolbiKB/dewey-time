@@ -38,7 +38,16 @@ def upsert_enrollment_row(
     synced_at=None,
     bridge_env=None,
 ) -> str:
-    """Create or update one register row. The docname IS the employee id."""
+    """Create or update one register row, keyed on the `employee` FIELD.
+
+    A new row is named after the employee (the doctype's autoname is
+    field:employee), but an existing one is found by field and never by name.
+    The two are only equal at creation: frappe.rename_doc on an Employee --
+    routine HR cleanup -- rewrites this doctype's `employee` Link column and
+    leaves the row's docname at the old id. Assuming they still match would
+    miss the row and insert a second one, which violates unique:1 on
+    `employee` and wedges every subsequent snapshot, forever.
+    """
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
@@ -55,8 +64,9 @@ def upsert_enrollment_row(
         "bridge_env": bridge_env,
     }
 
-    if frappe.db.exists(ENROLLMENT_DOCTYPE, employee):
-        doc = frappe.get_doc(ENROLLMENT_DOCTYPE, employee)
+    existing = frappe.db.get_value(ENROLLMENT_DOCTYPE, {"employee": employee}, "name")
+    if existing:
+        doc = frappe.get_doc(ENROLLMENT_DOCTYPE, existing)
     else:
         doc = frappe.get_doc({"doctype": ENROLLMENT_DOCTYPE, "name": employee})
 
@@ -75,14 +85,25 @@ SNAPSHOT_SHRINK_RATIO = 0.5
 SNAPSHOT_SHRINK_FLOOR = 20
 
 
-def _registered_employee_ids() -> set:
-    return set(
-        frappe.get_all(
+def _registered_employee_docnames() -> dict:
+    """Every currently-registered row as {employee value: docname}.
+
+    Both halves are needed and they are not interchangeable. The absent set is
+    computed on employee VALUES, because that is what the bridge reports and
+    what `seen` holds; the clearing write must go to the DOCNAME, because that
+    is what db.set_value addresses. After a frappe.rename_doc on an Employee
+    the two differ, and clearing by employee value would hand db.set_value a
+    name that does not exist -- zero rows updated, no error raised, and the
+    snapshot marker advancing as though the write had landed.
+    """
+    return {
+        row["employee"]: row["name"]
+        for row in frappe.get_all(
             ENROLLMENT_DOCTYPE,
             filters={"is_registered": 1},
-            pluck="employee",
+            fields=["name", "employee"],
         )
-    )
+    }
 
 
 def _previous_registered_count() -> int:
@@ -114,8 +135,65 @@ def _coerce_bool(value) -> bool:
     return bool(value)
 
 
-def _clear_absent_rows(absent, *, synced_at=None, bridge_env=None) -> int:
+def _aggregate_by_employee(linked) -> tuple:
+    """Collapse the payload to one entry per employee. Returns (entries, dupes).
+
+    The bridge's `users` table is one row per device PIN, and nothing stops two
+    PINs mapping to one employee -- a re-enrolment under a new PIN with the
+    stale row left behind is the ordinary way it happens. Upserting both would
+    let the LAST array element win, so a stale entry carrying
+    is_registered: false sorting after the live one flips that employee's
+    register row to 0. For a leaver that is silent and serious:
+    classify("Left", is_registered=False) returns None, so LEAVER_STILL_ENROLLED
+    -- the security finding this whole report exists to surface -- simply
+    disappears from the page with nothing anywhere reporting an error.
+
+    So: OR the flags (enrolled on any device is enrolled), take the max of each
+    count (the bigger number is the one that describes the person), and keep the
+    first non-empty pin so a stale blank cannot erase the provenance a
+    technician needs at the device. The duplicate count is returned rather than
+    swallowed -- it is a real bridge-side data problem and the operator only
+    finds out if we say so. It counts merged-away ENTRIES, not distinct
+    employees (three PINs for one person is 2), because that is the number of
+    stale rows there are to go and delete.
+    """
+    merged = {}
+    duplicates = 0
+    for user in linked:
+        employee = user["frappe_employee_id"]
+        current = merged.get(employee)
+        if current is None:
+            merged[employee] = {
+                "frappe_employee_id": employee,
+                "pin": user.get("pin"),
+                "is_registered": _coerce_bool(user.get("is_registered")),
+                "fingerprint_count": _coerce_int(user.get("fingerprint_count")),
+                "face_count": _coerce_int(user.get("face_count")),
+            }
+            continue
+
+        duplicates += 1
+        current["is_registered"] = current["is_registered"] or _coerce_bool(
+            user.get("is_registered")
+        )
+        current["fingerprint_count"] = max(
+            current["fingerprint_count"], _coerce_int(user.get("fingerprint_count"))
+        )
+        current["face_count"] = max(
+            current["face_count"], _coerce_int(user.get("face_count"))
+        )
+        if not current["pin"]:
+            current["pin"] = user.get("pin")
+
+    return list(merged.values()), duplicates
+
+
+def _clear_absent_rows(docnames, *, synced_at=None, bridge_env=None) -> int:
     """Mark rows absent from the snapshot as unenrolled.
+
+    Takes DOCNAMES, not employee ids: see _registered_employee_docnames for why
+    those are not the same value after an Employee rename, and why writing to
+    the wrong one fails silently.
 
     Cleared rather than deleted: is_registered = 0 IS the "not enrolled" fact,
     and the row keeps its pin for anyone investigating a vanished template.
@@ -129,10 +207,10 @@ def _clear_absent_rows(absent, *, synced_at=None, bridge_env=None) -> int:
     iterates Employee and joins the register, so a register row with no Employee
     is never rendered.
     """
-    for employee in absent:
+    for docname in docnames:
         frappe.db.set_value(
             ENROLLMENT_DOCTYPE,
-            employee,
+            docname,
             {
                 "is_registered": 0,
                 "fingerprint_count": 0,
@@ -142,7 +220,7 @@ def _clear_absent_rows(absent, *, synced_at=None, bridge_env=None) -> int:
             },
             update_modified=True,
         )
-    return len(absent)
+    return len(docnames)
 
 
 def _record_snapshot_time(scanned_at):
@@ -203,14 +281,20 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
     linked = [u for u in users if isinstance(u, dict) and u.get("frappe_employee_id")]
     skipped_unlinked = len(users) - len(linked)
 
+    # One entry per EMPLOYEE from here on, not per device PIN -- see
+    # _aggregate_by_employee for why a duplicate would otherwise be able to
+    # erase a leaver's enrollment flag. The shrink guard compares against a
+    # per-employee count too, so it must run on the aggregated list.
+    entries, duplicate_employee_ids = _aggregate_by_employee(linked)
+
     previous = _previous_registered_count()
     if (
         not cint(allow_shrink)
         and previous >= SNAPSHOT_SHRINK_FLOOR
-        and len(linked) < previous * SNAPSHOT_SHRINK_RATIO
+        and len(entries) < previous * SNAPSHOT_SHRINK_RATIO
     ):
         frappe.throw(
-            f"Refusing a partial snapshot: {len(linked)} linked users against "
+            f"Refusing a partial snapshot: {len(entries)} linked users against "
             f"{previous} previously registered. A halved roster is far more likely "
             f"a truncated read than a mass departure. Set allow_shrink=1 if it is real."
         )
@@ -219,42 +303,54 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
     # linked employees still have an Employee record. A bridge user whose
     # Employee was deleted must be skipped rather than crash doc.save() with
     # LinkValidationError, which would wedge this feed on every retry.
-    existing_ids = _existing_employee_ids(u["frappe_employee_id"] for u in linked)
+    existing_ids = _existing_employee_ids(e["frappe_employee_id"] for e in entries)
 
     skipped_missing_employee = 0
     seen = set()
-    for user in linked:
-        employee = user["frappe_employee_id"]
+    for entry in entries:
+        employee = entry["frappe_employee_id"]
         if employee not in existing_ids:
             skipped_missing_employee += 1
             continue
         seen.add(employee)
         upsert_enrollment_row(
             employee=employee,
-            pin=user.get("pin"),
-            is_registered=_coerce_bool(user.get("is_registered")),
-            fingerprint_count=user.get("fingerprint_count"),
-            face_count=user.get("face_count"),
+            pin=entry["pin"],
+            is_registered=entry["is_registered"],
+            fingerprint_count=entry["fingerprint_count"],
+            face_count=entry["face_count"],
             synced_at=scanned_at,
             bridge_env=bridge_env,
         )
 
-    absent = sorted(_registered_employee_ids() - seen)
-    cleared = _clear_absent_rows(absent, synced_at=scanned_at, bridge_env=bridge_env)
+    # `seen` holds employee ids, so the absent set is computed on employee
+    # values -- but the write goes to the docname, which a rename can make a
+    # different string. See _registered_employee_docnames.
+    registered = _registered_employee_docnames()
+    absent = sorted(set(registered) - seen)
+    cleared = _clear_absent_rows(
+        [registered[employee] for employee in absent],
+        synced_at=scanned_at,
+        bridge_env=bridge_env,
+    )
 
     _record_snapshot_time(scanned_at)
 
-    # Clearing writes through db.set_value (see _clear_absent_rows), which fires
-    # no doc hooks — so the doc_events invalidation misses a snapshot that only
-    # cleared rows. Drop the cache here so the offboarding signal is never up to
-    # a TTL stale. Imported inside the function: enrollment_api imports
+    frappe.db.commit()
+
+    # AFTER the commit, deliberately. Invalidating first leaves a window in
+    # which a concurrent get_enrollment_report rebuilds the payload from
+    # pre-commit state and re-caches it for the full TTL -- worse than not
+    # invalidating at all. The doc_events invalidations are inherently
+    # pre-commit, so this explicit call is the only one that can close that
+    # window, and it is also the only one a clear-only snapshot fires at all:
+    # _clear_absent_rows writes through db.set_value, which runs no doc hooks.
+    # Imported inside the function because enrollment_api imports
     # ENROLLMENT_DOCTYPE from this module, so a module-level import would be
     # circular (the same deferred idiom device_sync.py:169 uses).
     from dewey_time.attendance_engine.enrollment_api import invalidate_enrollment_cache
 
     invalidate_enrollment_cache()
-
-    frappe.db.commit()
 
     return {
         "ok": True,
@@ -262,5 +358,6 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
         "cleared": cleared,
         "skipped_unlinked": skipped_unlinked,
         "skipped_missing_employee": skipped_missing_employee,
+        "duplicate_employee_ids": duplicate_employee_ids,
         "scanned_at": str(scanned_at),
     }

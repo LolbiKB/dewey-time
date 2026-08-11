@@ -63,7 +63,7 @@ def _list_employees() -> list[dict]:
 def _register_rows() -> list[dict]:
     return frappe.get_all(
         ENROLLMENT_DOCTYPE,
-        fields=["employee", "pin", "is_registered", "fingerprint_count", "face_count"],
+        fields=["employee", "is_registered", "fingerprint_count", "face_count"],
         limit_page_length=0,
     )
 
@@ -113,8 +113,22 @@ def _build_enrollment_payload() -> dict:
             checkin_count=checkins.get(employee["name"], 0),
         )
         if bucket is None:
-            # Counted, never silently dropped: totals that do not add up read
-            # as a bug in the report rather than a deliberate exclusion.
+            # classify() returns None for two different reasons and only one of
+            # them is counted.
+            #
+            # A status outside REPORTED_STATUSES (Inactive, Suspended) IS
+            # counted: those people exist and were considered, so totals that
+            # did not add up would read as a bug in the report rather than a
+            # deliberate exclusion.
+            #
+            # A Left employee with no template is NOT counted. They are cleanly
+            # offboarded -- there is nothing to do about them and nothing to
+            # tell HR -- so they get neither a row nor an exclusion. That makes
+            # reported + excluded_status strictly less than len(employees), on
+            # purpose. Pinned by
+            # test_a_cleanly_offboarded_leaver_is_neither_reported_nor_counted,
+            # so "fixing the totals" fails a test instead of putting
+            # already-finished work back in front of HR.
             if employee.get("status") not in REPORTED_STATUSES:
                 counts["excluded_status"] += 1
             continue
