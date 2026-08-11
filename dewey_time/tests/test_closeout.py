@@ -6,6 +6,15 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 
+def _mock_cint(value, default=0):
+    """Stand-in for frappe.utils.cint: real Frappe truncates through float and
+    falls back to `default` on anything unparseable, same as this."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _mock_get_time(value):
     if value is None:
         return None
@@ -69,6 +78,7 @@ def _install_frappe_mock():
     utils_mod.get_time = _mock_get_time
     utils_mod.add_days = lambda value, days: value
     utils_mod.nowdate = lambda: str(date.today())
+    utils_mod.cint = _mock_cint
 
     frappe.scrub = lambda value: str(value).lower().replace(" ", "-").replace("_", "-")
 
