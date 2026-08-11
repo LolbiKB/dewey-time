@@ -25,9 +25,11 @@ REPORTED_STATUSES = ("Active", "Left")
 def classify(*, status: str, is_registered: bool, checkin_count: int) -> str | None:
     """The bucket for one employee, or None when they are out of population.
 
-    The status test comes FIRST and deliberately so. A departed employee has
-    check-ins by definition, so testing registration first would classify them
-    OK and hide the live template this report exists to surface.
+    The status test comes FIRST and deliberately so. Testing the Left branch
+    ensures a registered leaver returns LEAVER_STILL_ENROLLED instead of OK
+    (which would happen if the Left branch were deleted). Without the Left
+    branch, an unregistered leaver also becomes NEEDS_ENROLLMENT instead of
+    None, a false worklist entry.
     """
     if status not in REPORTED_STATUSES:
         return None

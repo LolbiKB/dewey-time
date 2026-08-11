@@ -43,10 +43,10 @@ class ClassifyTest(unittest.TestCase):
             mod.classify(status="Left", is_registered=False, checkin_count=0)
         )
 
-    def test_a_leavers_punch_history_does_not_make_them_ok(self):
-        """The regression guard: a departed employee has check-ins by
-        definition. Ordering the status test before the registration test is
-        what keeps their live template visible."""
+    def test_deleting_the_left_branch_would_classify_registered_leavers_as_ok(self):
+        """The regression guard: a registered leaver with check-ins must
+        return LEAVER_STILL_ENROLLED, not OK. This guards against accidentally
+        deleting or disabling the Left branch of the classify logic."""
         self.assertEqual(
             mod.classify(status="Left", is_registered=True, checkin_count=500),
             mod.LEAVER_STILL_ENROLLED,
@@ -58,6 +58,19 @@ class ClassifyTest(unittest.TestCase):
                 self.assertIsNone(
                     mod.classify(status=status, is_registered=True, checkin_count=0)
                 )
+
+    def test_the_bucket_values_are_the_wire_contract(self):
+        """Regression guard: bucket string values cross into TypeScript. Renaming
+        a constant here must not silently break the frontend."""
+        self.assertEqual(
+            (mod.NEEDS_ENROLLMENT, mod.ENROLLED_NOT_PUNCHING, mod.OK, mod.LEAVER_STILL_ENROLLED),
+            ("NEEDS_ENROLLMENT", "ENROLLED_NOT_PUNCHING", "OK", "LEAVER_STILL_ENROLLED"),
+        )
+
+    def test_the_reported_population_is_exactly_active_and_left(self):
+        """Regression guard: REPORTED_STATUSES filters the employee query. The
+        tuple must be exactly ("Active", "Left")."""
+        self.assertEqual(mod.REPORTED_STATUSES, ("Active", "Left"))
 
 
 class DaysSinceTest(unittest.TestCase):
@@ -71,6 +84,10 @@ class DaysSinceTest(unittest.TestCase):
 
     def test_a_future_relieving_date_clamps_to_zero(self):
         self.assertEqual(mod.days_since(date(2026, 8, 20), date(2026, 8, 11)), 0)
+
+    def test_an_empty_string_date_is_treated_as_missing(self):
+        """Frappe hands back "" for an empty Date column, not None."""
+        self.assertIsNone(mod.days_since("", date(2026, 8, 11)))
 
 
 if __name__ == "__main__":
