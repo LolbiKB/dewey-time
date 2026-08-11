@@ -11,6 +11,7 @@ import { AppTooltip } from "@/ui/AppTooltip";
 import { DatePickerInput } from "@/components/ui/date-picker-input";
 import { type RunEngineMode, useRunEngine } from "@/hooks/useRunEngine";
 import { cn } from "@/lib/utils";
+import { IS_DEV_BUILD } from "@/lib/devBuild";
 
 export type RunEngineDialogProps = {
   employee: string | null;
@@ -27,6 +28,8 @@ const MODE_LABELS: Record<RunEngineMode, string> = {
 };
 
 export function RunEngineDialog(props: RunEngineDialogProps) {
+  if (!IS_DEV_BUILD) return null;
+
   const [open, setOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<RunEngineMode | null>(null);
   const defaultStart = format(props.weekStart, "yyyy-MM-dd");

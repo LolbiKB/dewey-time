@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { useClearEmployeeSchedule } from "@/hooks/useClearEmployeeSchedule";
 import { cn } from "@/lib/utils";
+import { IS_DEV_BUILD } from "@/lib/devBuild";
 import type { CalendarEmployee } from "@/types/calendar";
 import type { ClearSchedulePreview, ClearScheduleResult } from "@/types/schedule";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
@@ -34,6 +35,8 @@ export type ClearEmployeeScheduleDialogProps = {
 };
 
 export function ClearEmployeeScheduleDialog(props: ClearEmployeeScheduleDialogProps) {
+  if (!IS_DEV_BUILD) return null;
+
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<ClearSchedulePreview | null>(null);
   const [result, setResult] = useState<ClearScheduleResult | null>(null);

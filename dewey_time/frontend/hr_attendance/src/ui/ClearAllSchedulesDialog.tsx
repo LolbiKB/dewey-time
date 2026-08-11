@@ -23,6 +23,7 @@ import {
   useClearAllSchedules,
 } from "@/hooks/useClearAllSchedules";
 import { cn } from "@/lib/utils";
+import { IS_DEV_BUILD } from "@/lib/devBuild";
 import type { ClearAllSchedulesPreview, ClearAllSchedulesResult } from "@/types/schedule";
 
 export type ClearAllSchedulesDialogProps = {
@@ -32,6 +33,22 @@ export type ClearAllSchedulesDialogProps = {
 };
 
 export function ClearAllSchedulesDialog(props: ClearAllSchedulesDialogProps) {
+  // Destructive dev tooling does not ship to the production HR UI (T1-5).
+  // Before any hook: IS_DEV_BUILD is constant for the process, so hook order
+  // never varies between renders of one mount, and returning here avoids
+  // spinning up the preview/clear hooks for a control nobody can see.
+  //
+  // Gated inside the component rather than at the mount site on purpose: these
+  // dialogs have already moved once (the punch list cites line numbers in a
+  // file where they no longer live), and a component that refuses to render
+  // itself cannot be un-gated by someone adding another mount.
+  //
+  // This stops them RENDERING, not shipping -- the module is still statically
+  // imported, so the code remains in the bundle. Getting it out would need
+  // lazy imports at each mount; the goal here is that they are absent from the
+  // HR UI.
+  if (!IS_DEV_BUILD) return null;
+
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<ClearAllSchedulesPreview | null>(null);
   const [result, setResult] = useState<ClearAllSchedulesResult | null>(null);
