@@ -6,7 +6,7 @@
 
 **Architecture:** The ADMS bridge POSTs a full-roster enrollment snapshot to a new whitelisted endpoint (the third feed to reuse `validate_bridge_request`). It lands in a per-employee register DocType. A read API joins that register to `Employee` at request time, classifies each person into one of four buckets with a pure function, and returns flat rows. The client does all grouping and filtering.
 
-**Tech Stack:** Frappe v16 (Python 3.11+), React 19 + TypeScript + TanStack Query + Tailwind v4 (`hr_attendance` SPA), vitest + Testing Library, Python `unittest` with the repo's shared frappe mock.
+**Tech Stack:** Frappe v16 (Python 3.11+), React 19 + TypeScript + TanStack Query + Tailwind v4 (`hr_attendance` SPA), `node:test` + `node:assert/strict` run by `tsx --test` (there is NO vitest and NO @testing-library/react in this SPA; components are exercised with `renderToStaticMarkup`), Python `unittest` with the repo's shared frappe mock.
 
 **Spec:** `docs/superpowers/specs/2026-08-11-biometric-enrollment-register-design.md`
 
@@ -31,7 +31,7 @@
   Claude-Session: https://claude.ai/code/session_01U57KAfPhiYScJgmrzYjK9A
   ```
 - Backend tests run with `python3 -m unittest discover -s dewey_time/tests -t .` from the repo root. Baseline before this plan: **751 tests, 24 skipped, green.**
-- Frontend tests run with `npm test` from `dewey_time/frontend/hr_attendance`. Baseline: **711 tests green.**
+- Frontend tests run with `npm run test:web` from `dewey_time/frontend/hr_attendance` (there is no `npm test` script here). Baseline: **711 tests green.** The script is an explicit glob list, not a recursive scan — a test placed in a directory it does not name passes locally and never runs in CI.
 
 ## File Structure
 
@@ -1345,7 +1345,8 @@ All pure. No React, no network.
 Create `src/lib/enrollmentReport.test.ts`:
 
 ```ts
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import test from "node:test";
 
 import {
   filterRows,
@@ -1481,7 +1482,8 @@ describe("groupRows", () => {
 Create `src/lib/enrollmentCsv.test.ts`:
 
 ```ts
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import test from "node:test";
 
 import { toEnrollmentCsv } from "@/lib/enrollmentCsv";
 import type { EnrollmentRow } from "@/lib/enrollmentReport";
@@ -1548,7 +1550,7 @@ describe("toEnrollmentCsv", () => {
 - [ ] **Step 2: Run to verify they fail**
 
 ```bash
-cd dewey_time/frontend/hr_attendance && npx vitest run src/lib/enrollmentReport.test.ts src/lib/enrollmentCsv.test.ts
+cd dewey_time/frontend/hr_attendance && npx tsx --test src/lib/enrollmentReport.test.ts src/lib/enrollmentCsv.test.ts
 ```
 
 Expected: `Failed to resolve import "@/lib/enrollmentReport"`.
@@ -1765,7 +1767,7 @@ export function toEnrollmentCsv(rows: EnrollmentRow[], context: CsvContext): str
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-cd dewey_time/frontend/hr_attendance && npx vitest run src/lib/enrollmentReport.test.ts src/lib/enrollmentCsv.test.ts
+cd dewey_time/frontend/hr_attendance && npx tsx --test src/lib/enrollmentReport.test.ts src/lib/enrollmentCsv.test.ts
 ```
 
 Expected: 20 tests passing.
@@ -1792,74 +1794,81 @@ not just the filename — a CSV outlives its context. Mutation-checked."
 
 ### Task 6: Service, hook, and query key
 
+**Test tooling reality — read before writing any test.** This SPA has **no vitest, no @testing-library/react, no jsdom**. `package.json` declares `test:web` as `tsx --test <glob list>`, and all 78 existing test files use `node:test` + `node:assert/strict`. Components are exercised with `renderToStaticMarkup` from `react-dom/server`; call sites are pinned with `readFileSync` source-text assertions (see `src/ui/DayChips.test.tsx`). There is no module mocking and no async render, so a `useQuery` hook cannot be driven to a resolved state in a test here. Do not attempt it.
+
 **Files:**
 - Create: `dewey_time/frontend/hr_attendance/src/services/enrollment.ts`
 - Create: `dewey_time/frontend/hr_attendance/src/hooks/useEnrollmentReport.ts`
 - Modify: `dewey_time/frontend/hr_attendance/src/lib/queryKeys.ts`
-- Test: `dewey_time/frontend/hr_attendance/src/hooks/useEnrollmentReport.test.tsx`
+- Modify: `dewey_time/frontend/hr_attendance/package.json` (extend the `test:web` glob — see Step 1)
+- Test: `dewey_time/frontend/hr_attendance/src/lib/enrollmentWiring.test.ts`
 
 **Interfaces:**
-- Consumes: `EnrollmentPayload` from Task 5.
+- Consumes: `EnrollmentPayload` from Task 5 (`@/lib/enrollmentReport`).
 - Produces: `getEnrollmentReport()`; `useEnrollmentReport(): { payload, isLoading, error, refresh }`; `queryKeys.enrollment.all`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Confirm where a test file is allowed to live**
 
-Create `src/hooks/useEnrollmentReport.test.tsx`:
+```bash
+cd dewey_time/frontend/hr_attendance && grep -n '"test:web"' package.json
+```
 
-```tsx
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+The glob lists directories explicitly. `src/lib/*.test.ts` is covered; **`src/hooks/` is not**. That is why this task's test lives in `src/lib/enrollmentWiring.test.ts` rather than beside the hook: a test outside the glob passes locally and never runs in CI. Do not add a `src/hooks/*.test.ts` entry to the glob — a glob that matches nothing makes `tsx --test` fail on the literal path once the file is later moved or removed.
 
-import { useEnrollmentReport } from "@/hooks/useEnrollmentReport";
+- [ ] **Step 2: Write the failing test**
 
-const getEnrollmentReport = vi.hoisted(() => vi.fn());
-vi.mock("@/services/enrollment", () => ({ getEnrollmentReport }));
+Create `src/lib/enrollmentWiring.test.ts`:
 
-function wrapper({ children }: { children: ReactNode }) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
+```ts
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
 
-describe("useEnrollmentReport", () => {
-  it("exposes the payload once it resolves", async () => {
-    getEnrollmentReport.mockResolvedValue({
-      rows: [],
-      counts: { reported: 0, needs_enrollment: 0, enrolled_not_punching: 0, ok: 0,
-                leaver_still_enrolled: 0, excluded_status: 0, truncated: false },
-      last_snapshot_at: "2026-08-11 09:14:03",
-      window_days: 14,
-    });
+import { queryKeys } from "@/lib/queryKeys";
 
-    const { result } = renderHook(() => useEnrollmentReport(), { wrapper });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.payload?.last_snapshot_at).toBe("2026-08-11 09:14:03");
-  });
+const service = readFileSync(new URL("../services/enrollment.ts", import.meta.url), "utf8");
+const hook = readFileSync(new URL("../hooks/useEnrollmentReport.ts", import.meta.url), "utf8");
 
-  it("leaves payload undefined on failure rather than inventing an empty one", async () => {
-    // An empty payload would render as "nobody is enrolled" — the exact
-    // misreading isFeedConnected exists to prevent.
-    getEnrollmentReport.mockRejectedValue(new Error("nope"));
+// The dotted path is a string handed to the server. A typo does not fail to
+// compile -- it 404s at runtime. This system lost two bridge feeds for eleven
+// days to exactly that, so the literal is pinned here rather than derived.
+test("the service calls the exact whitelisted method path", () => {
+  assert.match(
+    service,
+    /"dewey_time\.attendance_engine\.enrollment_api\.get_enrollment_report"/,
+  );
+});
 
-    const { result } = renderHook(() => useEnrollmentReport(), { wrapper });
-    await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.payload).toBeUndefined();
-  });
+test("the enrollment query key is its own family", () => {
+  assert.deepEqual(queryKeys.enrollment.all, ["enrollment"]);
+});
+
+test("the enrollment key does not collide with the coverage key", () => {
+  // Two queries sharing one key share one cache entry, and whichever mounted
+  // first would hand the other its payload.
+  assert.notDeepEqual(queryKeys.enrollment.all, queryKeys.coverage.all);
+});
+
+test("the hook returns the payload undefined rather than defaulting it", () => {
+  // An empty payload would render as "nobody is enrolled" -- the exact
+  // misreading isFeedConnected exists to prevent. There is no DOM in this
+  // suite, so the contract is pinned in source instead of by rendering.
+  assert.doesNotMatch(hook, /payload:\s*data\s*\?\?/);
+  assert.match(hook, /payload:\s*data\b/);
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 3: Run it to verify it fails**
 
 ```bash
-cd dewey_time/frontend/hr_attendance && npx vitest run src/hooks/useEnrollmentReport.test.tsx
+cd dewey_time/frontend/hr_attendance && npx tsx --test src/lib/enrollmentWiring.test.ts
 ```
 
-Expected: `Failed to resolve import "@/hooks/useEnrollmentReport"`.
+Expected: failure reading `../services/enrollment.ts` — the file does not exist yet.
 
-- [ ] **Step 3: Add the query key**
+- [ ] **Step 4: Add the query key**
 
-In `src/lib/queryKeys.ts`, add after the `coverage` block:
+In `src/lib/queryKeys.ts`, after the `coverage` block:
 
 ```ts
   enrollment: {
@@ -1867,7 +1876,7 @@ In `src/lib/queryKeys.ts`, add after the `coverage` block:
   },
 ```
 
-- [ ] **Step 4: Write the service and hook**
+- [ ] **Step 5: Write the service and hook**
 
 `src/services/enrollment.ts`:
 
@@ -1893,7 +1902,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { getEnrollmentReport } from "@/services/enrollment";
 
 export type EnrollmentReport = {
-  /** Undefined until loaded, and undefined on error — deliberately NOT an
+  /** Undefined until loaded, and undefined on error -- deliberately NOT an
    *  empty payload, which would render as "nobody is enrolled". */
   payload: EnrollmentPayload | undefined;
   isLoading: boolean;
@@ -1914,38 +1923,55 @@ export function useEnrollmentReport(): EnrollmentReport {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 6: Run the tests and the typecheck**
 
 ```bash
-cd dewey_time/frontend/hr_attendance && npx vitest run src/hooks/useEnrollmentReport.test.tsx src/lib/queryKeys.test.ts
+cd dewey_time/frontend/hr_attendance && npx tsx --test src/lib/enrollmentWiring.test.ts && npm run test:web && npm run typecheck
 ```
 
-Expected: both files pass. `queryKeys.test.ts` asserts every key sits in its family — if it fails, the new entry is misplaced, not the test.
+Expected: 4 new tests pass, the full `test:web` count rises by 4, typecheck clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Mutation check**
+
+Change the service's method path to `...get_enrollment_reportX`. Re-run. Expected: the path test FAILS. Revert and confirm green. Record the observed output for both.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add dewey_time/frontend/hr_attendance/src/services/enrollment.ts dewey_time/frontend/hr_attendance/src/hooks/useEnrollmentReport.ts dewey_time/frontend/hr_attendance/src/hooks/useEnrollmentReport.test.tsx dewey_time/frontend/hr_attendance/src/lib/queryKeys.ts
+git add dewey_time/frontend/hr_attendance/src/services/enrollment.ts \
+        dewey_time/frontend/hr_attendance/src/hooks/useEnrollmentReport.ts \
+        dewey_time/frontend/hr_attendance/src/lib/queryKeys.ts \
+        dewey_time/frontend/hr_attendance/src/lib/enrollmentWiring.test.ts
 git commit -m "feat(enrollment): service, hook, and query key
 
-payload stays undefined on error rather than defaulting to an empty payload —
+The dotted method path is pinned against a literal. A typo there does not
+fail to compile, it 404s at runtime -- which is how this system lost two
+bridge feeds for eleven days.
+
+payload stays undefined on error rather than defaulting to an empty payload;
 an empty one renders as 'nobody is enrolled', the exact misreading the feed
-gate exists to prevent."
+gate exists to prevent. No DOM in this suite, so that contract is pinned in
+source rather than by rendering."
 ```
 
 ---
 
-### Task 7: The page, the sub-nav, and the route
+### Task 7: The view, the page, the sub-nav, and the route
+
+**Why this task splits the component.** There is no DOM and no module mocking in this suite, so a component that calls `useEnrollmentReport` internally cannot be rendered in a test at all. The fix is the split this repo already uses for the flag queue: a **pure view** that takes the payload as props and is statically renderable, and a **thin page** that calls the hook and passes it down. All behaviour is tested on the view; the page is pinned by source text.
 
 **Files:**
 - Create: `dewey_time/frontend/hr_attendance/src/ui/schedule-coverage/CoverageViewNav.tsx`
+- Create: `dewey_time/frontend/hr_attendance/src/ui/BiometricEnrollmentView.tsx`
 - Create: `dewey_time/frontend/hr_attendance/src/ui/schedule-coverage/BiometricEnrollmentPage.tsx`
 - Modify: `dewey_time/frontend/hr_attendance/src/ui/schedule-coverage/ScheduleCoveragePage.tsx`
 - Modify: `dewey_time/frontend/hr_attendance/src/main.tsx`
-- Test: `dewey_time/frontend/hr_attendance/src/ui/schedule-coverage/biometricEnrollmentPage.test.tsx`
+- Test: `dewey_time/frontend/hr_attendance/src/ui/biometricEnrollmentView.test.tsx`
+
+The view lives at `src/ui/` (not the subdirectory) because `test:web` globs `src/ui/*.test.tsx` one level only; its test must sit beside it to run in CI.
 
 **Interfaces:**
-- Consumes: `useEnrollmentReport` (Task 6); `isFeedConnected`, `snapshotNotice`, `filterRows`, `groupRows`, `BUCKET_LABELS` (Task 5); `toEnrollmentCsv` (Task 5).
+- Consumes: `useEnrollmentReport` (Task 6); `isFeedConnected`, `snapshotNotice`, `filterRows`, `groupRows`, `BUCKET_LABELS`, `toEnrollmentCsv` (Task 5).
 - Produces: route `/hr-schedule/coverage/biometrics`.
 
 - [ ] **Step 1: Verify the two routing assumptions before writing anything**
@@ -1955,24 +1981,25 @@ grep -n 'startsWith("/hr-schedule/coverage")' dewey_time/frontend/hr_attendance/
 grep -n 'hr-schedule/<path:app_path>' dewey_time/hooks.py
 ```
 
-Both must already match. If either does not, stop and report — the plan assumed no new `www/` page or route rule is needed, and that assumption would be wrong.
+Both must already match, which is why no new `www/` page or `website_route_rules` entry is needed. If either does not, stop and report.
 
 - [ ] **Step 2: Write the failing test**
 
-Create `src/ui/schedule-coverage/biometricEnrollmentPage.test.tsx`:
+Create `src/ui/biometricEnrollmentView.test.tsx`:
 
 ```tsx
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { renderToStaticMarkup } from "react-dom/server";
 
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { BiometricEnrollmentPage } from "@/ui/schedule-coverage/BiometricEnrollmentPage";
+import { BiometricEnrollmentView } from "@/ui/BiometricEnrollmentView";
 import type { EnrollmentPayload, EnrollmentRow } from "@/lib/enrollmentReport";
 
-const useEnrollmentReport = vi.hoisted(() => vi.fn());
-vi.mock("@/hooks/useEnrollmentReport", () => ({ useEnrollmentReport }));
+const page = readFileSync(
+  new URL("./schedule-coverage/BiometricEnrollmentPage.tsx", import.meta.url),
+  "utf8",
+);
 
 function row(over: Partial<EnrollmentRow> = {}): EnrollmentRow {
   return {
@@ -1993,109 +2020,72 @@ function payload(over: Partial<EnrollmentPayload> = {}): EnrollmentPayload {
   };
 }
 
-function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <MemoryRouter initialEntries={["/hr-schedule/coverage/biometrics"]}>
-          <BiometricEnrollmentPage />
-        </MemoryRouter>
-      </TooltipProvider>
-    </QueryClientProvider>,
-  );
+const NOW = new Date("2026-08-11T10:00:00").getTime();
+
+function markup(p: EnrollmentPayload | undefined) {
+  return renderToStaticMarkup(<BiometricEnrollmentView payload={p} nowMs={NOW} />);
 }
 
-describe("BiometricEnrollmentPage", () => {
-  it("refuses to render the list when the feed has never reported", () => {
-    // The single most load-bearing behaviour: otherwise a plumbing failure
-    // renders as every employee needing enrolment.
-    useEnrollmentReport.mockReturnValue({
-      payload: payload({ last_snapshot_at: null }), isLoading: false,
-      error: null, refresh: vi.fn(),
-    });
+test("it refuses to render the list when the feed has never reported", () => {
+  // The load-bearing one: otherwise a plumbing failure renders as every
+  // employee needing enrolment.
+  const html = markup(payload({ last_snapshot_at: null }));
+  assert.match(html, /feed is not connected/i);
+  assert.doesNotMatch(html, /Ana Reyes/);
+});
 
-    renderPage();
+test("it renders the roster once a snapshot exists", () => {
+  const html = markup(payload());
+  assert.match(html, /Ana Reyes/);
+  assert.doesNotMatch(html, /feed is not connected/i);
+});
 
-    expect(screen.getByText(/feed is not connected/i)).toBeInTheDocument();
-    expect(screen.queryByText("Ana Reyes")).not.toBeInTheDocument();
-  });
+test("it shows the snapshot age so the list is never read as live", () => {
+  assert.match(markup(payload()), /Device data as of/i);
+});
 
-  it("renders the roster once a snapshot exists", () => {
-    useEnrollmentReport.mockReturnValue({
-      payload: payload(), isLoading: false, error: null, refresh: vi.fn(),
-    });
+test("a leaver with a live template gets its own prominence", () => {
+  const html = markup(payload({
+    rows: [row({ id: "E9", employee_name: "Sam Okafor", status: "Left",
+                 bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+                 fingerprint_count: 2, days_since_relieving: 10 })],
+  }));
+  assert.match(html, /Left — still enrolled/);
+  assert.match(html, /10 days/);
+});
 
-    renderPage();
+test("export is disabled while the roster is truncated", () => {
+  // A partial CSV that looks complete is worse than no CSV.
+  const html = markup(payload({
+    counts: { reported: 1, needs_enrollment: 1, enrolled_not_punching: 0, ok: 0,
+              leaver_still_enrolled: 0, excluded_status: 0, truncated: true },
+  }));
+  assert.match(html, /disabled/);
+});
 
-    expect(screen.getByText("Ana Reyes")).toBeInTheDocument();
-    expect(screen.queryByText(/feed is not connected/i)).not.toBeInTheDocument();
-  });
+test("employees excluded by status are footnoted, not hidden", () => {
+  const html = markup(payload({
+    counts: { reported: 1, needs_enrollment: 1, enrolled_not_punching: 0, ok: 0,
+              leaver_still_enrolled: 0, excluded_status: 3, truncated: false },
+  }));
+  assert.match(html, /3 employees are not shown/i);
+});
 
-  it("shows the snapshot age so the list is never read as live", () => {
-    useEnrollmentReport.mockReturnValue({
-      payload: payload(), isLoading: false, error: null, refresh: vi.fn(),
-    });
-
-    renderPage();
-
-    expect(screen.getByText(/Device data as of/i)).toBeInTheDocument();
-  });
-
-  it("gives leavers with a live template their own prominence", () => {
-    useEnrollmentReport.mockReturnValue({
-      payload: payload({
-        rows: [row({ id: "E9", employee_name: "Sam Okafor", status: "Left",
-                     bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
-                     fingerprint_count: 2, days_since_relieving: 10 })],
-      }),
-      isLoading: false, error: null, refresh: vi.fn(),
-    });
-
-    renderPage();
-
-    expect(screen.getByText(/Left — still enrolled/)).toBeInTheDocument();
-    expect(screen.getByText(/10 days/)).toBeInTheDocument();
-  });
-
-  it("disables export while the roster is truncated", () => {
-    // A partial CSV that looks complete is worse than no CSV.
-    useEnrollmentReport.mockReturnValue({
-      payload: payload({
-        counts: { reported: 1, needs_enrollment: 1, enrolled_not_punching: 0, ok: 0,
-                  leaver_still_enrolled: 0, excluded_status: 0, truncated: true },
-      }),
-      isLoading: false, error: null, refresh: vi.fn(),
-    });
-
-    renderPage();
-
-    expect(screen.getByRole("button", { name: /export/i })).toBeDisabled();
-  });
-
-  it("footnotes employees excluded by status rather than hiding them", () => {
-    useEnrollmentReport.mockReturnValue({
-      payload: payload({
-        counts: { reported: 1, needs_enrollment: 1, enrolled_not_punching: 0, ok: 0,
-                  leaver_still_enrolled: 0, excluded_status: 3, truncated: false },
-      }),
-      isLoading: false, error: null, refresh: vi.fn(),
-    });
-
-    renderPage();
-
-    expect(screen.getByText(/3 employees are not shown/i)).toBeInTheDocument();
-  });
+test("the page holds no copy or logic of its own", () => {
+  // A second formatting site would drift from the tested one in silence.
+  assert.doesNotMatch(page, /feed is not connected/i);
+  assert.doesNotMatch(page, /Device data as of/i);
+  assert.match(page, /BiometricEnrollmentView/);
 });
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [ ] **Step 3: Run it to verify it fails**
 
 ```bash
-cd dewey_time/frontend/hr_attendance && npx vitest run src/ui/schedule-coverage/biometricEnrollmentPage.test.tsx
+cd dewey_time/frontend/hr_attendance && npx tsx --test src/ui/biometricEnrollmentView.test.tsx
 ```
 
-Expected: `Failed to resolve import "@/ui/schedule-coverage/BiometricEnrollmentPage"`.
+Expected: cannot resolve `@/ui/BiometricEnrollmentView`.
 
 - [ ] **Step 4: Write the sub-nav**
 
@@ -2104,8 +2094,8 @@ Expected: `Failed to resolve import "@/ui/schedule-coverage/BiometricEnrollmentP
 ```tsx
 import { Link, useLocation } from "react-router-dom";
 
-// Both coverage views are "observed readiness" checks — the system looks, rather
-// than a human ticking a box. They share one entry in the tab bar because a
+// Both coverage views are "observed readiness" checks -- the system looks,
+// rather than a human ticking a box. They share one tab-bar entry because a
 // fifth top-level tab does not fit the phone bar, and because grouping them is
 // the honest information architecture.
 const VIEWS = [
@@ -2116,7 +2106,8 @@ const VIEWS = [
 export function CoverageViewNav() {
   const { pathname } = useLocation();
   // Longest match wins: "/hr-schedule/coverage" is a prefix of the other.
-  const active = [...VIEWS].sort((a, b) => b.href.length - a.href.length)
+  const active = [...VIEWS]
+    .sort((a, b) => b.href.length - a.href.length)
     .find((view) => pathname.startsWith(view.href))?.href;
 
   return (
@@ -2140,9 +2131,9 @@ export function CoverageViewNav() {
 }
 ```
 
-- [ ] **Step 5: Write the page**
+- [ ] **Step 5: Write the pure view**
 
-`src/ui/schedule-coverage/BiometricEnrollmentPage.tsx`:
+`src/ui/BiometricEnrollmentView.tsx` — takes the payload and the clock as props so it is fully statically renderable:
 
 ```tsx
 import { FingerprintIcon } from "lucide-react";
@@ -2150,7 +2141,6 @@ import { useMemo, useState } from "react";
 
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Button } from "@/components/ui/button";
-import { useEnrollmentReport } from "@/hooks/useEnrollmentReport";
 import { toEnrollmentCsv } from "@/lib/enrollmentCsv";
 import {
   BUCKET_LABELS,
@@ -2160,6 +2150,7 @@ import {
   snapshotNotice,
   type EnrollmentBucket,
   type EnrollmentFilters,
+  type EnrollmentPayload,
   type GroupBy,
 } from "@/lib/enrollmentReport";
 
@@ -2174,28 +2165,33 @@ function download(csv: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function BiometricEnrollmentPage() {
-  const { payload, isLoading, error } = useEnrollmentReport();
+export type BiometricEnrollmentViewProps = {
+  payload: EnrollmentPayload | undefined;
+  /** Injected so the snapshot age is deterministic in tests. */
+  nowMs: number;
+};
+
+export function BiometricEnrollmentView(props: BiometricEnrollmentViewProps) {
   const [filters, setFilters] = useState<EnrollmentFilters>(NO_FILTERS);
   const [groupBy, setGroupBy] = useState<GroupBy>("branch");
 
-  const notice = useMemo(() => snapshotNotice(payload, Date.now()), [payload]);
-  const visible = useMemo(() => filterRows(payload?.rows ?? [], filters), [payload, filters]);
+  const notice = useMemo(
+    () => snapshotNotice(props.payload, props.nowMs),
+    [props.payload, props.nowMs],
+  );
+  const visible = useMemo(
+    () => filterRows(props.payload?.rows ?? [], filters),
+    [props.payload, filters],
+  );
   const groups = useMemo(() => groupRows(visible, groupBy), [visible, groupBy]);
 
-  if (isLoading) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
-  if (error) {
-    return <div className="p-6 text-sm text-destructive">Could not load the enrollment report.</div>;
-  }
-
   // The gate. Without a snapshot every employee computes as unenrolled, so
-  // rendering the list would turn a plumbing failure into 236 findings.
-  if (!isFeedConnected(payload)) {
+  // rendering the list would turn a plumbing failure into a roster-sized
+  // worklist. FailureBlock, not a strip: this IS broken, and it already
+  // carries role="alert".
+  if (!isFeedConnected(props.payload)) {
     return (
       <div className="flex h-full flex-col p-4">
-        {/* FailureBlock, not a strip: this IS broken, and FailureBlock already
-            carries role="alert". AttentionStrip's tones are "amber" | "accent",
-            neither of which means "nothing here can be trusted". */}
         <FailureBlock
           title="The device feed is not connected"
           cause="No enrollment snapshot has ever been received. Until the bridge reports, this page cannot tell who is enrolled — every employee would read as unenrolled."
@@ -2204,7 +2200,8 @@ export function BiometricEnrollmentPage() {
     );
   }
 
-  const counts = payload!.counts;
+  const payload = props.payload!;
+  const counts = payload.counts;
   const filterLabel =
     filters.branches.length || filters.departments.length || filters.buckets.length
       ? [
@@ -2269,10 +2266,10 @@ export function BiometricEnrollmentPage() {
             onClick={() =>
               download(
                 toEnrollmentCsv(visible, {
-                  snapshotAt: payload!.last_snapshot_at,
+                  snapshotAt: payload.last_snapshot_at,
                   filterLabel,
                 }),
-                `biometric-enrollment-${payload!.last_snapshot_at?.slice(0, 10) ?? "unknown"}.csv`,
+                `biometric-enrollment-${payload.last_snapshot_at?.slice(0, 10) ?? "unknown"}.csv`,
               )
             }
           >
@@ -2288,21 +2285,21 @@ export function BiometricEnrollmentPage() {
               {group.key} · {group.rows.length}
             </h3>
             <ul className="divide-y divide-border rounded-md border border-border">
-              {group.rows.map((row) => (
-                <li key={row.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-                  <span className="flex-1 truncate">{row.employee_name}</span>
+              {group.rows.map((entry) => (
+                <li key={entry.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <span className="flex-1 truncate">{entry.employee_name}</span>
                   <span
                     className={
-                      row.bucket === "LEAVER_STILL_ENROLLED"
+                      entry.bucket === "LEAVER_STILL_ENROLLED"
                         ? "rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive"
                         : "text-xs text-muted-foreground"
                     }
                   >
-                    {BUCKET_LABELS[row.bucket]}
+                    {BUCKET_LABELS[entry.bucket]}
                   </span>
-                  {row.days_since_relieving !== null ? (
+                  {entry.days_since_relieving !== null ? (
                     <span className="text-xs tabular-nums text-destructive">
-                      {row.days_since_relieving} days
+                      {entry.days_since_relieving} days
                     </span>
                   ) : null}
                 </li>
@@ -2323,9 +2320,40 @@ export function BiometricEnrollmentPage() {
 }
 ```
 
-- [ ] **Step 6: Mount the sub-nav and the route**
+- [ ] **Step 6: Write the thin page**
 
-In `ScheduleCoveragePage.tsx`, import `CoverageViewNav` and render `<CoverageViewNav />` as the first child of the page's outermost `<div>` (around `:40`). Change nothing else in that file.
+`src/ui/schedule-coverage/BiometricEnrollmentPage.tsx` — no copy, no logic, nothing the view already owns:
+
+```tsx
+import { useEnrollmentReport } from "@/hooks/useEnrollmentReport";
+import { BiometricEnrollmentView } from "@/ui/BiometricEnrollmentView";
+import { CoverageViewNav } from "@/ui/schedule-coverage/CoverageViewNav";
+
+export function BiometricEnrollmentPage() {
+  const { payload, isLoading, error } = useEnrollmentReport();
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="px-4 pt-4">
+        <CoverageViewNav />
+      </div>
+      {isLoading ? (
+        <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+      ) : error ? (
+        <div className="p-6 text-sm text-destructive">
+          Could not load the enrollment report.
+        </div>
+      ) : (
+        <BiometricEnrollmentView payload={payload} nowMs={Date.now()} />
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 7: Mount the sub-nav and the route**
+
+In `ScheduleCoveragePage.tsx`, import `CoverageViewNav` and render `<CoverageViewNav />` as the first child of the page's outermost `<div>`. Change nothing else in that file.
 
 In `main.tsx`, add the import and the route **after** the existing coverage route:
 
@@ -2337,20 +2365,26 @@ import { BiometricEnrollmentPage } from "./ui/schedule-coverage/BiometricEnrollm
 <Route path="/hr-schedule/coverage/biometrics" element={<BiometricEnrollmentPage />} />
 ```
 
-- [ ] **Step 7: Run everything**
+- [ ] **Step 8: Run everything**
 
 ```bash
-cd dewey_time/frontend/hr_attendance && npm test && npm run typecheck
-cd ../../.. && python3 -m unittest discover -s dewey_time/tests -t .
+cd dewey_time/frontend/hr_attendance && npm run test:web && npm run typecheck
 ```
 
-Expected: frontend **739 tests** green (711 baseline + 20 + 2 + 6), typecheck clean, backend 773/24 skipped green.
+Expected: 7 new tests, the `test:web` count up by 7, typecheck clean. Report the actual numbers.
 
-- [ ] **Step 8: Mutation check**
+- [ ] **Step 9: Mutation check**
 
-Delete the `if (!isFeedConnected(payload))` block. Re-run the page test. Expected: `refuses to render the list when the feed has never reported` FAILS. Revert, confirm green, record it.
+Delete the `if (!isFeedConnected(props.payload))` block from the view. Re-run. Expected: the "refuses to render" test FAILS. Revert and confirm green. Record the observed output for both.
 
-- [ ] **Step 9: Build the SPA assets and commit them**
+Restore with both caches cleared, or a correctly-restored file will keep failing:
+
+```bash
+rm -rf ~/Library/Caches/com.apple.python
+find . -name __pycache__ -type d -prune -exec rm -rf {} \;
+```
+
+- [ ] **Step 10: Build the SPA assets and commit them**
 
 Built assets ARE the deployed artifact in this repo — Frappe Cloud never builds these SPAs because `@lolbikb/dewey-ui` is a private dependency. A code-only commit ships nothing.
 
@@ -2361,17 +2395,19 @@ git add dewey_time/frontend/hr_attendance/src dewey_time/public dewey_time/www
 git status --short   # confirm dewey_time/public/** and www/*.html are staged
 git commit -m "feat(enrollment): the Biometric Enrollment view
 
-A second view under the existing Coverage tab rather than a fifth top-level
-tab: the phone bar already carries four, Coverage is already the
-observed-readiness surface, and /hr-schedule/<path:app_path> already wildcards
-so no new www page or route rule is needed.
+Split into a pure view and a thin page because this suite has no DOM and no
+module mocking: a component that calls the hook internally cannot be rendered
+in a test at all. All behaviour is asserted on the view via
+renderToStaticMarkup; a source-text test pins that the page carries no copy of
+its own, since a second formatting site would drift from the tested one in
+silence.
 
-The page refuses to render the list when no snapshot has ever arrived. Every
+The view refuses to render the list when no snapshot has ever arrived. Every
 employee correctly computes as unenrolled in that state, so rendering would
 turn a plumbing failure into a roster-sized worklist.
 
 Export is disabled while the roster is truncated — a partial CSV that looks
-complete is worse than no CSV. Mutation-checked."
+complete is worse than no CSV."
 ```
 
 ---
