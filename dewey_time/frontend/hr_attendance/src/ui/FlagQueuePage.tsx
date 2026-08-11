@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
 import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
-import { CheckIcon, CloudOffIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, FlaskConicalIcon, CloudOffIcon, TriangleAlertIcon } from "lucide-react";
 import { Navigate, useOutletContext, useSearchParams } from "react-router-dom";
 
 import { ResponsiveModal } from "@/components/ResponsiveModal";
@@ -14,6 +14,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useFlagQueue, type FlagQueue } from "@/hooks/useFlagQueue";
 import { useIsBelowLg } from "@/hooks/useIsMobile";
 import type { PendingDecision } from "@/lib/flagDecisionState";
+import { rolloutBannerMessage } from "@/lib/rolloutBanner";
 import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
@@ -293,11 +294,18 @@ export function FlagQueuePage() {
     orphans,
     outageDates,
     range,
+    rollout,
     truncated,
     isLoading,
     error,
     refresh,
   } = useFlagQueue({ ...requestedRange, tier, includeDecided });
+
+  // Copy and all the null-date rules live in lib/rolloutBanner, tested there.
+  // Null means silence — an unconfigured rollout or an all-live range has
+  // nothing to say, and a banner on every queue page would train HR to ignore
+  // the one that matters.
+  const rolloutBanner = rolloutBannerMessage(rollout);
 
   // The queue holds judgments; outages are a precondition and live in a band.
   // Partitioned here rather than in the list so the header can count the two
@@ -724,6 +732,7 @@ export function FlagQueuePage() {
         onNarrowRange={handleNarrowRange}
         tier={tier}
         onTierChange={setTier}
+        rolloutBanner={rolloutBanner}
         truncated={truncated}
         isLoading={isLoading}
         error={error}
@@ -832,6 +841,9 @@ export type FlagQueueViewProps = {
   onNarrowRange: (days: number) => void;
   tier: Tier | null;
   onTierChange: (next: Tier | null) => void;
+  /** Pre-rendered pilot-period notice, or null for silence. A string rather
+   *  than the raw block: the copy has one owner, lib/rolloutBanner. */
+  rolloutBanner?: string | null;
   truncated?: boolean;
   isLoading: boolean;
   error: unknown;
@@ -1018,6 +1030,22 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           </div>
         }
       >
+        {/* First in the stack: a pilot period is context for everything below
+            it, where the capped notice is a fact about one query.
+
+            tone="accent", not the amber the capped notice uses — nothing here
+            is wrong. The range is exactly what HR asked for; the banner only
+            says how to read it. Amber for the length of a pilot would teach
+            them to ignore the bar that does mean something. */}
+        {props.rolloutBanner ? (
+          <AttentionStrip
+            tone="accent"
+            icon={<FlaskConicalIcon className="size-4 text-brand-accent" aria-hidden="true" />}
+          >
+            {props.rolloutBanner}
+          </AttentionStrip>
+        ) : null}
+
         {/* Only when capping is actually reachable by the user. The levers are
             buttons now: the old copy told HR to narrow a range while the strip
             offered no way to do it. Capping is structural on a queue at
