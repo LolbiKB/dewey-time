@@ -1,3 +1,5 @@
+import type { RolloutPhase } from "@/types/flags";
+
 export type Severity = "INFO" | "WARNING" | "CRITICAL";
 export type FlagStatus = "OPEN" | "EXPLAINED" | "APPROVED" | "REJECTED" | "CLOSED";
 
@@ -85,6 +87,13 @@ export type Day = {
   /** Punch-derived lunch OUT→IN (same heuristic as closeout flags). */
   observed_lunch?: ObservedLunch | null;
   flags?: Flag[];
+  /**
+   * Which rollout phase this day fell in, from the day's OWN attendance_date.
+   * Optional, unlike the queue's `rollout` block: hr_calendar has no cache
+   * prefix to version, so a payload from before Phase A genuinely can arrive
+   * without it. Absent reads as "no opinion", not as PRELAUNCH.
+   */
+  rollout_phase?: RolloutPhase;
 };
 
 export type CalendarPayload = {
