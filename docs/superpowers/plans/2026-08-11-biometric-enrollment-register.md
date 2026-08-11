@@ -634,11 +634,30 @@ def _user(emp, registered=True, fp=1):
 
 
 class SnapshotTest(unittest.TestCase):
+    #: The frappe mock is shared process-wide by every test module, so anything
+    #: this class rebinds MUST be restored. test_bridge_auth.py:47-49 records
+    #: what happens otherwise: a leaked `throw` broke five unrelated
+    #: dashboard_auth tests when the suite ran together.
+    _PATCHED = ("throw",)
+    _MISSING = object()
+
     def setUp(self):
-        self._throws = []
+        self._saved = {
+            name: getattr(mod.frappe, name, self._MISSING) for name in self._PATCHED
+        }
         mod.frappe.throw = self._throw
         self.upserts = []
         self.cleared = []
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            if value is self._MISSING:
+                try:
+                    delattr(mod.frappe, name)
+                except AttributeError:
+                    pass
+            else:
+                setattr(mod.frappe, name, value)
 
     def _throw(self, msg, exc=None):
         raise AssertionError("threw: %s" % msg)
@@ -731,13 +750,15 @@ class SnapshotTest(unittest.TestCase):
 
     def _raise(self, msg, exc=None):
         raise _Rejected(str(msg))
-
-
-class _Rejected(Exception):
-    pass
 ```
 
-Also add `_Rejected` above `SnapshotTest` so it resolves at class-definition time — move the `class _Rejected(Exception): pass` declaration to just below the imports instead of the bottom of the file.
+And define the sentinel exception **once, immediately below the imports** at the
+top of the file:
+
+```python
+class _Rejected(Exception):
+    """What frappe.throw becomes for the tests that assert a rejection."""
+```
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -1335,7 +1356,11 @@ import {
   type EnrollmentRow,
 } from "@/lib/enrollmentReport";
 
-const NOW = new Date("2026-08-11T10:00:00Z").getTime();
+// LOCAL, deliberately — no trailing Z. Frappe datetimes are site-local and
+// parseFrappeDatetime reads them as local, so a UTC `now` here would compare
+// two different frames. Measured: that mistake yields 466 minutes at UTC+07
+// and 46 on a UTC CI runner — a test that passes in CI and fails on a laptop.
+const NOW = new Date("2026-08-11T10:00:00").getTime();
 
 function row(over: Partial<EnrollmentRow> = {}): EnrollmentRow {
   return {
@@ -2120,10 +2145,10 @@ export function CoverageViewNav() {
 `src/ui/schedule-coverage/BiometricEnrollmentPage.tsx`:
 
 ```tsx
-import { FingerprintIcon, TriangleAlertIcon } from "lucide-react";
+import { FingerprintIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { AttentionStrip } from "@/components/ui/notice";
+import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Button } from "@/components/ui/button";
 import { useEnrollmentReport } from "@/hooks/useEnrollmentReport";
 import { toEnrollmentCsv } from "@/lib/enrollmentCsv";
@@ -2167,14 +2192,14 @@ export function BiometricEnrollmentPage() {
   // rendering the list would turn a plumbing failure into 236 findings.
   if (!isFeedConnected(payload)) {
     return (
-      <div className="p-6">
-        <AttentionStrip
-          tone="destructive"
-          icon={<TriangleAlertIcon className="size-4" aria-hidden="true" />}
-        >
-          The device feed is not connected — no enrollment snapshot has ever been
-          received. Until it reports, this page cannot tell who is enrolled.
-        </AttentionStrip>
+      <div className="flex h-full flex-col p-4">
+        {/* FailureBlock, not a strip: this IS broken, and FailureBlock already
+            carries role="alert". AttentionStrip's tones are "amber" | "accent",
+            neither of which means "nothing here can be trusted". */}
+        <FailureBlock
+          title="The device feed is not connected"
+          cause="No enrollment snapshot has ever been received. Until the bridge reports, this page cannot tell who is enrolled — every employee would read as unenrolled."
+        />
       </div>
     );
   }
@@ -2197,7 +2222,7 @@ export function BiometricEnrollmentPage() {
     <div className="flex h-full flex-col gap-3 p-4">
       {notice ? (
         <AttentionStrip
-          tone={notice.stale ? "warning" : "accent"}
+          tone={notice.stale ? "amber" : "accent"}
           icon={<FingerprintIcon className="size-4" aria-hidden="true" />}
         >
           {notice.text}
