@@ -49,3 +49,48 @@ test("clock days are excluded from off-day (destructive) styling", () => {
 test("phone day view wires the Clock chip", () => {
   assert.match(weekDayView, /isClockDay=\{isClockDay\(props\.isClockBased, selectedInfo\)\}/);
 });
+
+test("a pre-cutoff day says so instead of looking clean", () => {
+  // The whole point of the chip: an unevaluated day and a genuinely clean day
+  // are otherwise identical on screen.
+  const html = renderToStaticMarkup(
+    <TooltipProvider>
+      <DayChips day={{ date: "2026-03-01", rollout_phase: "PRELAUNCH" }} />
+    </TooltipProvider>,
+  );
+  assert.match(html, />Before go-live</);
+});
+
+test("a live day gets no rollout chip", () => {
+  const html = renderToStaticMarkup(
+    <TooltipProvider>
+      <DayChips day={{ date: "2026-03-20", rollout_phase: "LIVE" }} />
+    </TooltipProvider>,
+  );
+  assert.doesNotMatch(html, /Before go-live/);
+});
+
+test("a day with no phase at all gets no chip", () => {
+  // hr_calendar has no cache prefix to version, so a payload from before
+  // Phase A can arrive without the field. Absent means "no opinion", which
+  // must not render as "before go-live".
+  const html = renderToStaticMarkup(
+    <TooltipProvider>
+      <DayChips day={{ date: "2026-03-20" }} />
+    </TooltipProvider>,
+  );
+  assert.doesNotMatch(html, /Before go-live/);
+});
+
+test("a pre-cutoff day with nothing else on it still renders the chip row", () => {
+  // DayChips returns null when a day has no leave, no off-shift flag, no
+  // alert and is not a clock day. The rollout chip has to be part of that
+  // condition or it never appears on the quiet days it exists for -- which
+  // are most pre-cutoff days.
+  const html = renderToStaticMarkup(
+    <TooltipProvider>
+      <DayChips day={{ date: "2026-03-01", rollout_phase: "PRELAUNCH" }} alerts={[]} />
+    </TooltipProvider>,
+  );
+  assert.notEqual(html, "");
+});

@@ -25,10 +25,26 @@ export function DayChips(props: DayChipsProps) {
   const offShiftFlag = offShiftPunchFlag(props.day);
   const hasAlert = (props.alerts ?? []).length > 0;
 
-  if (!onLeave && !offShiftFlag && !hasAlert && !props.isClockDay) return null;
+  // A day before the branch's testing start was never evaluated: no flags were
+  // written for it and none ever will be. Without this it is pixel-identical
+  // to a clean day, which is the one way the cutoff can actively mislead.
+  const beforeGoLive = props.day?.rollout_phase === "PRELAUNCH";
+
+  // `beforeGoLive` belongs in this condition, not just in the JSX below. Most
+  // pre-cutoff days have no leave, no flag, no alert and no clock marker, so
+  // without it the chip would never appear on precisely the days it exists for.
+  if (!onLeave && !offShiftFlag && !hasAlert && !props.isClockDay && !beforeGoLive) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      {beforeGoLive ? (
+        <AppTooltip
+          content="Before this branch's start date — the system was not watching yet"
+          side="bottom"
+        >
+          <span className={NEUTRAL_CHIP}>Before go-live</span>
+        </AppTooltip>
+      ) : null}
       {props.isClockDay ? (
         <AppTooltip content="Clock in/out — no schedule, no lateness rules" side="bottom">
           <span className={NEUTRAL_CHIP}>Clock</span>
