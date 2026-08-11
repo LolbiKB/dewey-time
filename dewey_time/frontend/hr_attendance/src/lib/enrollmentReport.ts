@@ -138,3 +138,20 @@ export function groupRows(rows: EnrollmentRow[], by: GroupBy): EnrollmentGroup[]
       return a.key.localeCompare(b.key);
     });
 }
+
+/**
+ * Human description of the active filters, for the CSV provenance row. Lives
+ * here rather than inline in the view so it is reachable by a unit test — the
+ * view's own tests only ever see the default (no-filter) state, since filters
+ * are internal `useState`, not a prop.
+ */
+export function describeFilters(filters: EnrollmentFilters): string {
+  const parts = [
+    filters.branches.length ? `Branch: ${filters.branches.join(", ")}` : null,
+    filters.departments.length ? `Department: ${filters.departments.join(", ")}` : null,
+    filters.buckets.length
+      ? `State: ${filters.buckets.map((b) => BUCKET_LABELS[b]).join(", ")}`
+      : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" | ") : "All employees";
+}

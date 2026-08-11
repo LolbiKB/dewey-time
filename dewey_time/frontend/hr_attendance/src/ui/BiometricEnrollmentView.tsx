@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { toEnrollmentCsv } from "@/lib/enrollmentCsv";
 import {
   BUCKET_LABELS,
+  describeFilters,
   filterRows,
   groupRows,
   isFeedConnected,
@@ -64,18 +65,7 @@ export function BiometricEnrollmentView(props: BiometricEnrollmentViewProps) {
 
   const payload = props.payload!;
   const counts = payload.counts;
-  const filterLabel =
-    filters.branches.length || filters.departments.length || filters.buckets.length
-      ? [
-          filters.branches.length ? `Branch: ${filters.branches.join(", ")}` : null,
-          filters.departments.length ? `Department: ${filters.departments.join(", ")}` : null,
-          filters.buckets.length
-            ? `State: ${filters.buckets.map((b) => BUCKET_LABELS[b]).join(", ")}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" | ")
-      : "All employees";
+  const filterLabel = describeFilters(filters);
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
@@ -114,7 +104,7 @@ export function BiometricEnrollmentView(props: BiometricEnrollmentViewProps) {
             onClick={() => setGroupBy(groupBy === "branch" ? "department" : "branch")}
             className="rounded-full border border-border px-2.5 py-1 text-xs"
           >
-            Group by {groupBy === "branch" ? "branch" : "department"}
+            Group by {groupBy === "branch" ? "department" : "branch"}
           </button>
           <Button
             size="sm"
@@ -141,40 +131,52 @@ export function BiometricEnrollmentView(props: BiometricEnrollmentViewProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto" aria-live="polite">
-        {groups.map((group) => (
-          <section key={group.key} className="mb-4">
-            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {group.key} · {group.rows.length}
-            </h3>
-            <ul className="divide-y divide-border rounded-md border border-border">
-              {group.rows.map((entry) => (
-                <li key={entry.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-                  <span className="flex-1 truncate">{entry.employee_name}</span>
-                  <span
-                    className={
-                      entry.bucket === "LEAVER_STILL_ENROLLED"
-                        ? "rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive"
-                        : "text-xs text-muted-foreground"
-                    }
-                  >
-                    {BUCKET_LABELS[entry.bucket]}
-                  </span>
-                  {entry.days_since_relieving !== null ? (
-                    <span className="text-xs tabular-nums text-destructive">
-                      {entry.days_since_relieving} days
+        {/* Only reachable once a filter narrows a non-empty roster to nothing —
+            NO_FILTERS is a no-op, so a static render (props only, no clicks)
+            can never exercise this branch. Left uncovered for that reason,
+            same as `filterLabel`'s non-default branches before it moved to
+            `describeFilters`. */}
+        {visible.length === 0 && payload.rows.length > 0 ? (
+          <p className="p-6 text-center text-sm text-muted-foreground">
+            No employees match the current filters.
+          </p>
+        ) : (
+          groups.map((group) => (
+            <section key={group.key} className="mb-4">
+              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {group.key} · {group.rows.length}
+              </h3>
+              <ul className="divide-y divide-border rounded-md border border-border">
+                {group.rows.map((entry) => (
+                  <li key={entry.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                    <span className="flex-1 truncate">{entry.employee_name}</span>
+                    <span
+                      className={
+                        entry.bucket === "LEAVER_STILL_ENROLLED"
+                          ? "rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive"
+                          : "text-xs text-muted-foreground"
+                      }
+                    >
+                      {BUCKET_LABELS[entry.bucket]}
                     </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+                    {entry.bucket === "LEAVER_STILL_ENROLLED" && entry.days_since_relieving !== null ? (
+                      <span className="text-xs tabular-nums text-destructive">
+                        {entry.days_since_relieving} {entry.days_since_relieving === 1 ? "day" : "days"}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
       </div>
 
       {counts.excluded_status > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {counts.excluded_status} employees are not shown — their status is Inactive or
-          Suspended, where "should they be able to clock in?" has no clear answer.
+          {counts.excluded_status} {counts.excluded_status === 1 ? "employee is" : "employees are"} not
+          shown — their status is Inactive or Suspended, where "should they be able to clock in?" has
+          no clear answer.
         </p>
       ) : null}
     </div>

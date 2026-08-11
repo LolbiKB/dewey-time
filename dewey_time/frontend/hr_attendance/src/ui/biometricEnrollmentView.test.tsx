@@ -54,6 +54,11 @@ test("it shows the snapshot age so the list is never read as live", () => {
   assert.match(markup(payload()), /Device data as of/i);
 });
 
+test("a stale snapshot gets amber styling, not the fresh accent", () => {
+  const html = markup(payload({ last_snapshot_at: "2026-08-09 09:00:00" }));
+  assert.match(html, /amber-500/);
+});
+
 test("a leaver with a live template gets its own prominence", () => {
   const html = markup(payload({
     rows: [row({ id: "E9", employee_name: "Sam Okafor", status: "Left",
@@ -65,12 +70,20 @@ test("a leaver with a live template gets its own prominence", () => {
 });
 
 test("export is disabled while the roster is truncated", () => {
-  // A partial CSV that looks complete is worse than no CSV.
+  // A partial CSV that looks complete is worse than no CSV. Assert the actual
+  // `disabled` attribute, not the word "disabled" -- buttonVariants'
+  // Tailwind base class unconditionally contains `disabled:pointer-events-none
+  // disabled:opacity-50`, so a text match on /disabled/ passes even when the
+  // button isn't disabled at all.
   const html = markup(payload({
     counts: { reported: 1, needs_enrollment: 1, enrolled_not_punching: 0, ok: 0,
               leaver_still_enrolled: 0, excluded_status: 0, truncated: true },
   }));
-  assert.match(html, /disabled/);
+  assert.match(html, /<button[^>]*\sdisabled=""/);
+});
+
+test("export is enabled when the roster is complete", () => {
+  assert.doesNotMatch(markup(payload()), /\sdisabled=""/);
 });
 
 test("employees excluded by status are footnoted, not hidden", () => {
@@ -82,8 +95,10 @@ test("employees excluded by status are footnoted, not hidden", () => {
 });
 
 test("the page holds no copy or logic of its own", () => {
-  // A second formatting site would drift from the tested one in silence.
-  assert.doesNotMatch(page, /feed is not connected/i);
-  assert.doesNotMatch(page, /Device data as of/i);
+  // A second formatting site would drift from the tested one in silence. A
+  // doesNotMatch on specific copy strings passes trivially on any reworded
+  // drift; pin the absence of state/derivation instead, which the page
+  // legitimately never has.
+  assert.doesNotMatch(page, /useState|useMemo|enrollmentReport|enrollmentCsv/);
   assert.match(page, /BiometricEnrollmentView/);
 });

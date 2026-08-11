@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  describeFilters,
   filterRows,
   groupRows,
   isFeedConnected,
@@ -127,4 +128,32 @@ test("groupRows: collects rows with no value under one explicit group, never dro
     groups.at(-1)?.rows.map((r) => r.id),
     ["E3"],
   );
+});
+
+test("describeFilters: reads as 'All employees' with no filters set", () => {
+  assert.equal(describeFilters({ branches: [], departments: [], buckets: [] }), "All employees");
+});
+
+test("describeFilters: names a single active axis", () => {
+  assert.equal(
+    describeFilters({ branches: ["ACES"], departments: [], buckets: [] }),
+    "Branch: ACES",
+  );
+});
+
+test("describeFilters: joins two active axes with ' | '", () => {
+  assert.equal(
+    describeFilters({ branches: ["ACES"], departments: ["Ops"], buckets: [] }),
+    "Branch: ACES | Department: Ops",
+  );
+});
+
+test("describeFilters: renders bucket keys as their BUCKET_LABELS text, not the raw enum", () => {
+  const label = describeFilters({
+    branches: [],
+    departments: [],
+    buckets: ["LEAVER_STILL_ENROLLED"],
+  });
+  assert.equal(label, "State: Left — still enrolled");
+  assert.doesNotMatch(label, /LEAVER_STILL_ENROLLED/);
 });
