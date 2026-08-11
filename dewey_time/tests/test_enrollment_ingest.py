@@ -74,8 +74,8 @@ class UpsertTest(unittest.TestCase):
 
     def test_a_blank_employee_id_is_rejected(self):
         """The bridge sends frappe_employee_id straight through from Supabase;
-        a padded or empty value must not create a row named "" ."""
-        with self.assertRaises(Exception):
+        an empty (whitespace-only) value must not create a row named "" ."""
+        with self.assertRaisesRegex(Exception, "employee is required"):
             mod.upsert_enrollment_row(
                 employee="   ",
                 pin="1042",
@@ -85,6 +85,37 @@ class UpsertTest(unittest.TestCase):
                 synced_at="2026-08-11 09:14:03",
                 bridge_env="prod",
             )
+
+    def test_a_padded_employee_id_is_stripped_before_naming(self):
+        """The construction dict bypasses set_new_name's own strip, so this
+        guard is the only thing standing between a padded bridge id and a
+        docname with whitespace in it."""
+        doc = MagicMock()
+        with patch.object(mod.frappe.db, "exists", return_value=False), patch.object(
+            mod.frappe, "get_doc", return_value=doc
+        ) as get_doc:
+            mod.upsert_enrollment_row(
+                employee="  HR-EMP-0042 ", pin="1042", is_registered=True,
+                fingerprint_count=1, face_count=0,
+                synced_at="2026-08-11 09:14:03", bridge_env="prod",
+            )
+        get_doc.assert_called_once_with(
+            {"doctype": mod.ENROLLMENT_DOCTYPE, "name": "HR-EMP-0042"}
+        )
+
+    def test_a_malformed_count_does_not_abort_the_row(self):
+        """One bad value from the bridge must not take down the whole snapshot."""
+        doc = MagicMock()
+        with patch.object(mod.frappe.db, "exists", return_value=False), patch.object(
+            mod.frappe, "get_doc", return_value=doc
+        ):
+            mod.upsert_enrollment_row(
+                employee="HR-EMP-0042", pin="1042", is_registered=True,
+                fingerprint_count="abc", face_count=None,
+                synced_at="2026-08-11 09:14:03", bridge_env="prod",
+            )
+        self.assertEqual(doc.fingerprint_count, 0)
+        self.assertEqual(doc.face_count, 0)
 
 
 if __name__ == "__main__":

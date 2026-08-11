@@ -12,6 +12,17 @@ ENROLLMENT_DOCTYPE = "Employee Biometric Enrollment"
 SETTINGS_DOCTYPE = "Dewey Time Settings"
 
 
+def _coerce_int(value):
+    """Bridge payloads are wire data, not validated input. A malformed count
+    must not abort a 237-row snapshot mid-loop — mirrors device_sync._coerce_int."""
+    if value in (None, ""):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def upsert_enrollment_row(
     *,
     employee: str,
@@ -33,8 +44,8 @@ def upsert_enrollment_row(
         # Frappe Check fields are 0/1. A bool round-trips through the ORM but
         # compares badly in db filters such as {"is_registered": 1}.
         "is_registered": 1 if is_registered else 0,
-        "fingerprint_count": int(fingerprint_count or 0),
-        "face_count": int(face_count or 0),
+        "fingerprint_count": _coerce_int(fingerprint_count),
+        "face_count": _coerce_int(face_count),
         "synced_at": synced_at,
         "bridge_env": bridge_env,
     }
