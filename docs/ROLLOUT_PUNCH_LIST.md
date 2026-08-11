@@ -155,4 +155,13 @@ _(user decisions recorded here: entry id → bucket, date, rationale)_
 
 ## Launch checklist record
 
-_(completed once, per spec Phase 4)_
+**Rollout phases, Phase B — shipped 2026-08-11.** The flag queue shows a pilot banner when the range is `TESTING` or `MIXED`, and pre-cutoff calendar days carry a "Before go-live" chip. No backend change: Phase A (#149) landed both payloads deliberately, so this pass needed no migration and no cache-prefix bump.
+
+Two states the spec's banner table did not cover, both found while planning rather than in review:
+
+- **`go_live: null` is an ongoing pilot, not a broken range.** `rollout.phase_for:106` treats a missing go-live as `TESTING` indefinitely, which is the state between setting a testing start and choosing a go-live date — very likely the first banner anyone sees. The table would have rendered "Aug 15 – null is the pilot period"; it now reads "Aug 15 onward is".
+- **A window whose dates were cleared still announces the pilot**, without dates, rather than going silent. `range_phase` is `TESTING` because real pilot flags are in range, so silence would hide them.
+
+Typing `rollout` as **required** on `QueuePayload` (the cache prefix is versioned by payload shape, so a response cannot arrive without it) immediately caught seven e2e fixtures mocking a shape production no longer sends.
+
+_(launch checklist itself completed once, per spec Phase 4)_

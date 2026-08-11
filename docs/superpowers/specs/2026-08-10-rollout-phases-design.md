@@ -34,6 +34,16 @@ backend test. No frontend files, no rebuilt bundle.
 **Phase B — surfaces.** The queue banner and the calendar chip that render what
 Phase A already returns, their frontend tests, and the rebuilt bundle.
 
+> **Shipped 2026-08-11.** Both surfaces built as specified, with two additions
+> the banner table below did not cover: a window with `go_live: null` renders
+> "Aug 15 onward is the pilot period" (an ongoing pilot is TESTING
+> indefinitely per `rollout.phase_for`, so this is the normal state before a
+> go-live date is chosen — the table as written would have rendered "Aug 15 –
+> null"), and a window whose dates were cleared renders "This range falls in
+> the pilot period" rather than dropping the banner, since the flags in range
+> are still real pilot flags. Copy lives in `src/lib/rolloutBanner.ts`, tested
+> exhaustively there.
+
 The payload deliberately lands in Phase A rather than with the components that
 consume it. That makes **Phase B touch no Python at all** — no second DocType
 migration, no second `bench migrate`, and the `flag_queue:v3` → `v4` cache-prefix
