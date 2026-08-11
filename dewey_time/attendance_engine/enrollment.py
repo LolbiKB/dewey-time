@@ -23,6 +23,10 @@ def upsert_enrollment_row(
     bridge_env=None,
 ) -> str:
     """Create or update one register row. The docname IS the employee id."""
+    employee = (employee or "").strip()
+    if not employee:
+        frappe.throw("employee is required")
+
     values = {
         "employee": employee,
         "pin": pin,
@@ -42,12 +46,6 @@ def upsert_enrollment_row(
 
     for field, value in values.items():
         setattr(doc, field, value)
-
-    # autoname is field:employee, so the docname IS the employee id — but
-    # that's only computed by Frappe once the document is saved. Setting it
-    # explicitly makes the return value unambiguous immediately, rather than
-    # relying on save() to have populated doc.name as a side effect.
-    doc.name = employee
 
     doc.save(ignore_permissions=True)
     return doc.name

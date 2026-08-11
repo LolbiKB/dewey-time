@@ -12,6 +12,9 @@ class UpsertTest(unittest.TestCase):
     def test_the_docname_is_the_employee_id(self):
         """One row per employee, name-keyed, so the upsert needs no lookup."""
         doc = MagicMock()
+        # Real Frappe populates name from the construction dict; MagicMock does
+        # not, so state it here rather than bending the code to suit the mock.
+        doc.name = "HR-EMP-0042"
         with patch.object(mod.frappe.db, "exists", return_value=False), patch.object(
             mod.frappe, "get_doc", return_value=doc
         ) as get_doc:
@@ -68,6 +71,20 @@ class UpsertTest(unittest.TestCase):
                 bridge_env="prod",
             )
         self.assertIs(doc.is_registered, 1)
+
+    def test_a_blank_employee_id_is_rejected(self):
+        """The bridge sends frappe_employee_id straight through from Supabase;
+        a padded or empty value must not create a row named "" ."""
+        with self.assertRaises(Exception):
+            mod.upsert_enrollment_row(
+                employee="   ",
+                pin="1042",
+                is_registered=True,
+                fingerprint_count=1,
+                face_count=0,
+                synced_at="2026-08-11 09:14:03",
+                bridge_env="prod",
+            )
 
 
 if __name__ == "__main__":
