@@ -19,7 +19,8 @@
     "rollout_section",
     "rollout_testing_start",
     "rollout_go_live",
-    "branch_rollout"
+    "branch_rollout",
+    "last_enrollment_snapshot_at"
   ],
   "fields": [
     {
@@ -77,6 +78,13 @@
       "label": "Branch Rollout",
       "options": "Dewey Time Branch Rollout",
       "description": "Branches that roll out on their own timetable. A row is used whole and does not inherit the global dates field-by-field."
+    },
+    {
+      "description": "Set by the bridge enrollment snapshot ingest. Distinct from the per-row synced_at: a snapshot in which nothing changed still proves the feed is alive.",
+      "fieldname": "last_enrollment_snapshot_at",
+      "fieldtype": "Datetime",
+      "label": "Last Enrollment Snapshot At",
+      "read_only": 1
     }
   ],
   "index_web_pages_for_search": 0,
