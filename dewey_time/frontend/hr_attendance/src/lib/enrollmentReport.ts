@@ -64,7 +64,7 @@ export type EnrollmentGroup = {
 const UNGROUPED = "Unassigned";
 
 /** Older than this and the snapshot notice escalates from informational. */
-const STALE_AFTER_MINUTES = 24 * 60;
+export const STALE_AFTER_MINUTES = 24 * 60;
 
 /**
  * Has the bridge EVER reported? Gates the whole list.

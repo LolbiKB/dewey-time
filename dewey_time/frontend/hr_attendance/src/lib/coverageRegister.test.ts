@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  filterRegisterRows, isNotReady, joinRegisterRows, sortRegisterRows,
-  type RegisterFilters, type RegisterRow,
+  feedHealth, filterRegisterRows, isNotReady, joinRegisterRows, registerAlert, sortRegisterRows,
+  visibleColumnIds, type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import type { EnrollmentPayload } from "@/lib/enrollmentReport";
@@ -331,4 +331,81 @@ test("sortRegisterRows does not mutate the caller's array", () => {
   const originalOrder = rows.map((r) => r.id);
   sortRegisterRows(rows, {});
   assert.deepEqual(rows.map((r) => r.id), originalOrder);
+});
+
+const HEALTHY = { schedule: true, biometric: true };
+
+test("the alert counts problems and reads as a problem", () => {
+  const got = registerAlert([row(), row({ id: "X", schedule: "missing" })], HEALTHY);
+  assert.equal(got.tone, "problem");
+  assert.equal(got.count, 1);
+  assert.equal(got.knowable, true);
+  assert.match(got.label, /1 needs attention/i);
+});
+
+test("all clear is a rendered state, never an absence", () => {
+  // A missing indicator cannot distinguish "nothing wrong" from "failed to
+  // load", so the clear state has to be something you can see.
+  const got = registerAlert([row(), row({ id: "B", employee_name: "B" })], HEALTHY);
+  assert.equal(got.tone, "clear");
+  assert.equal(got.count, 0);
+  assert.match(got.label, /all 2 ready/i);
+});
+
+test("a dead biometric feed degrades the alert and says what it cannot see", () => {
+  const got = registerAlert(
+    [row({ biometric: null, schedule: "missing" })],
+    { schedule: true, biometric: false },
+  );
+  assert.equal(got.tone, "degraded");
+  assert.equal(got.knowable, false);
+  assert.match(got.label, /biometrics unavailable/i);
+});
+
+test("a degraded alert still reports the problems it CAN see", () => {
+  const got = registerAlert(
+    [row({ biometric: null, schedule: "missing" }), row({ id: "B", biometric: null })],
+    { schedule: true, biometric: false },
+  );
+  assert.equal(got.count, 1);
+});
+
+test("a dead biometric feed hides the biometric columns AND status", () => {
+  // Status is a biometric-feed fact: coverage filters status:Active, so every
+  // row it returns is Active by construction and leavers never appear there.
+  // Showing "Active" for all 241 would assert what the data cannot support.
+  const hidden = visibleColumnIds({ schedule: true, biometric: false });
+  assert.ok(!hidden.includes("biometric"));
+  assert.ok(!hidden.includes("fingerprint_count"));
+  assert.ok(!hidden.includes("status"));
+  assert.ok(hidden.includes("branch"), "branch comes from the schedule feed and survives");
+  assert.ok(hidden.includes("schedule"));
+});
+
+test("a dead schedule feed hides only its own columns", () => {
+  const shown = visibleColumnIds({ schedule: false, biometric: true });
+  assert.ok(!shown.includes("schedule"));
+  assert.ok(!shown.includes("weekly_minutes"));
+  assert.ok(shown.includes("biometric"));
+  // Added by mutation testing (Task 4): moving "branch" from ALWAYS into
+  // SCHEDULE_COLUMNS left the suite green because neither existing test
+  // checked branch's fate when the schedule feed specifically is down.
+  assert.ok(shown.includes("branch"), "branch is an always-on column, not a schedule fact");
+});
+
+test("feed health treats a never-reported snapshot as down", () => {
+  const now = Date.parse("2026-08-12T09:00:00Z");
+  assert.equal(feedHealth(undefined, undefined, now).biometric, false);
+  assert.equal(
+    feedHealth(undefined, { rows: [], counts: {} as never, last_snapshot_at: null, window_days: 30 }, now).biometric,
+    false,
+  );
+});
+
+test("feed health treats a snapshot older than the shared stale threshold as down", () => {
+  const now = Date.parse("2026-08-12T09:00:00Z");
+  const fresh = { rows: [], counts: {} as never, last_snapshot_at: "2026-08-12 08:00:00", window_days: 30 };
+  const old = { rows: [], counts: {} as never, last_snapshot_at: "2026-08-09 08:00:00", window_days: 30 };
+  assert.equal(feedHealth(undefined, fresh, now).biometric, true);
+  assert.equal(feedHealth(undefined, old, now).biometric, false);
 });

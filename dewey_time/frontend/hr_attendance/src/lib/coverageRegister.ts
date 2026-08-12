@@ -3,7 +3,9 @@ import type {
   CoverageEmployee,
   ScheduleCoveragePayload,
 } from "@/lib/scheduleCoverage";
-import { isFeedConnected, type EnrollmentPayload, type EnrollmentRow } from "@/lib/enrollmentReport";
+import {
+  isFeedConnected, STALE_AFTER_MINUTES, type EnrollmentPayload, type EnrollmentRow,
+} from "@/lib/enrollmentReport";
 
 /**
  * One row per employee, joined from the two coverage feeds.
@@ -196,4 +198,75 @@ export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters):
   }
 
   return out.sort((a, b) => a.employee_name.localeCompare(b.employee_name) * dir);
+}
+
+export type RegisterAlert = {
+  tone: "problem" | "clear" | "degraded";
+  count: number;
+  /** False when a feed is down, so the count covers only part of the roster. */
+  knowable: boolean;
+  /** The accessible name. Colour never carries meaning alone. */
+  label: string;
+};
+
+/** Column ids that survive when a feed is unavailable. */
+const SCHEDULE_COLUMNS = ["schedule", "weekly_minutes"];
+const BIOMETRIC_COLUMNS = ["biometric", "fingerprint_count", "status"];
+const ALWAYS = ["employee", "branch", "department", "action"];
+
+export function feedHealth(
+  coverage: ScheduleCoveragePayload | undefined,
+  enrollment: EnrollmentPayload | undefined,
+  nowMs: number,
+): FeedHealth {
+  if (!isFeedConnected(enrollment)) return { schedule: Boolean(coverage), biometric: false };
+
+  const reportedAt = Date.parse((enrollment?.last_snapshot_at ?? "").replace(" ", "T") + "Z");
+  const minutes = Number.isNaN(reportedAt) ? Infinity : (nowMs - reportedAt) / 60000;
+
+  return { schedule: Boolean(coverage), biometric: minutes <= STALE_AFTER_MINUTES };
+}
+
+export function registerAlert(rows: RegisterRow[], feeds: FeedHealth): RegisterAlert {
+  const count = rows.filter(isNotReady).length;
+  const knowable = feeds.schedule && feeds.biometric;
+
+  if (!knowable) {
+    const missing = !feeds.biometric ? "biometrics unavailable" : "schedules unavailable";
+    return {
+      tone: "degraded",
+      count,
+      knowable: false,
+      // Says what it cannot see. A bare count here reads as reassurance at
+      // exactly the moment the page knows least.
+      label: `${count} need attention · ${missing}`,
+    };
+  }
+
+  if (count === 0) {
+    return { tone: "clear", count: 0, knowable: true, label: `All ${rows.length} ready` };
+  }
+
+  return {
+    tone: "problem",
+    count,
+    knowable: true,
+    label: `${count} ${count === 1 ? "needs" : "need"} attention — show ${count === 1 ? "it" : "them"}`,
+  };
+}
+
+/**
+ * Columns are REMOVED when their feed is absent, never blanked. An empty
+ * Biometric column reads as 241 people who cannot clock in — a bridge fault
+ * rendered as a workforce crisis.
+ *
+ * `status` counts as biometric: coverage filters status:Active server-side, so
+ * it cannot supply the field and leavers never appear in it.
+ */
+export function visibleColumnIds(feeds: FeedHealth): string[] {
+  return [
+    ...ALWAYS,
+    ...(feeds.schedule ? SCHEDULE_COLUMNS : []),
+    ...(feeds.biometric ? BIOMETRIC_COLUMNS : []),
+  ];
 }
