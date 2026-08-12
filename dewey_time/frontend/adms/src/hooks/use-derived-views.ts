@@ -7,6 +7,8 @@ import { useDevices, useSyncStatus, useCommandQueue, useUser, useUserBiometrics 
 import { DeviceService } from '@/services/device-service'
 import { queryKeys } from '@/lib/query-keys'
 import { supabase } from '@/lib/supabase'
+import { rollUpUserSyncState } from '@/lib/user-sync-rollup'
+import { getActiveComponentsFromCommands } from '@/lib/command-types'
 
 // =====================================================
 // DEVICE-CENTRIC DERIVED VIEWS
@@ -23,8 +25,9 @@ export function useDeviceWithUsers(deviceSn: string) {
   const { data: syncData, isLoading: syncLoading } = useSyncStatus({ enabled: hasDeviceSn })
   const { data: commands, isLoading: commandsLoading } = useCommandQueue({ enabled: hasDeviceSn })
   
-  // Fetch sync summary from API
-  const { data: syncSummary, isLoading: summaryLoading } = useQuery({
+  // Kept for its loading state only — the counts now come from the per-user
+  // rollup below, so this endpoint no longer decides what the dialog reports.
+  const { isLoading: summaryLoading } = useQuery({
     queryKey: ['device-sync-summary', deviceSn],
     queryFn: () => DeviceService.getDeviceSyncSummary(deviceSn),
     enabled: hasDeviceSn,
@@ -124,7 +127,33 @@ export function useDeviceWithUsers(deviceSn: string) {
         ? Math.min(...userPendingCommands.map(c => new Date(c.created_at).getTime()))
         : null
       
+      // Rolled up from the SAME per-component evaluation the tiles render, so
+      // the headline count below cannot contradict them. It did: this device
+      // read "256 synced" while 229 of those users' own photo tiles said
+      // "Pending", because actual_state='synced' does not require
+      // photo_synced. See lib/user-sync-rollup.ts.
+      const syncRollup = rollUpUserSyncState(
+        {
+          actual_state: sync.actual_state,
+          error_message: sync.error_message,
+          user_synced: sync.user_synced,
+          fingerprint_synced: sync.fingerprint_synced,
+          fingerprint_mask: sync.fingerprint_mask,
+          face_synced: sync.face_synced,
+          photo_synced: sync.photo_synced,
+        },
+        {
+          activeComponents: getActiveComponentsFromCommands(userPendingCommands),
+          fingerprints: (sync.users?.user_biometrics ?? []).filter(
+            (b: any) => b.type === 'fingerprint'
+          ),
+          hasFaceInDb: sync.users?.user_biometrics?.some((b: any) => b.type === 'face') || false,
+          hasPhotoInDb: !!sync.users?.photo_storage_path,
+        }
+      )
+
       return {
+        syncRollup,
         userId: sync.user_id,
         userName: sync.users?.name || 'Unknown',
         userPin: sync.users?.pin,
@@ -155,13 +184,26 @@ export function useDeviceWithUsers(deviceSn: string) {
       .filter(c => c.device_sn === deviceSn)
       .slice(0, 50)
     
-    // Stats from sync summary API (single source of truth)
-    // BULLETPROOF: Backend returns notSynced instead of failed (no permanent failures)
+    // Counted from the per-user rollup, which is itself derived from the tile
+    // logic — NOT from the server sync summary.
+    //
+    // The summary and the tiles were two independent answers to "is this user
+    // synced?", and independent answers drift. On 2026-08-12 this device
+    // reported "256 synced" while 229 of those users had an undelivered photo
+    // still queued, because sync-status.ts sets actual_state='synced' without
+    // requiring photo_synced. The tiles were right and the headline was not.
+    //
+    // Counting client-side is only sound because useSyncStatus now paginates:
+    // while it was silently truncated at PostgREST's 1000-row cap these rows
+    // were incomplete, which is why the count had to come from the server.
     const stats = {
       total: users.length,
-      synced: syncSummary?.synced ?? 0,
-      syncing: syncSummary?.syncing ?? 0,
-      notSynced: (syncSummary as any)?.notSynced ?? (syncSummary as any)?.failed ?? 0,
+      synced: users.filter((u) => u.syncRollup === 'synced').length,
+      syncing: users.filter((u) => u.syncRollup === 'syncing').length,
+      // BULLETPROOF: no permanent failures, so `failed` rolls into notSynced —
+      // work that is outstanding but not currently moving.
+      notSynced: users.filter((u) => u.syncRollup === 'pending' || u.syncRollup === 'failed')
+        .length,
     }
     
     return {
@@ -172,7 +214,7 @@ export function useDeviceWithUsers(deviceSn: string) {
       batches,
       isLoading: devicesLoading || syncLoading || commandsLoading || batchesLoading || summaryLoading,
     }
-  }, [devices, syncData, commands, batches, syncSummary, deviceSn, devicesLoading, syncLoading, commandsLoading, batchesLoading, summaryLoading])
+  }, [devices, syncData, commands, batches, deviceSn, devicesLoading, syncLoading, commandsLoading, batchesLoading, summaryLoading])
 }
 
 /**
