@@ -332,17 +332,33 @@ export type RegisterRow = {
   status: string | null;
   schedule: "assigned" | "missing" | null;
   weekly_minutes: number | null;
-  biometric: "enrolled" | "none" | "still_enrolled" | null;
+  biometric: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled" | null;
   fingerprint_count: number | null;
   days_since_relieving: number | null;
 };
 
 export type FeedHealth = { schedule: boolean; biometric: boolean };
 
-function biometricOf(row: EnrollmentRow): RegisterRow["biometric"] {
-  if (row.bucket === "LEAVER_STILL_ENROLLED") return "still_enrolled";
-  if (row.bucket === "NEEDS_ENROLLMENT") return "none";
-  return "enrolled";
+/**
+ * One register value per enrollment bucket — exhaustive, so a fifth bucket is a
+ * compile error rather than something that silently renders as "Enrolled".
+ *
+ * ENROLLED_NOT_PUNCHING stays distinct. The register replaces the biometrics
+ * page, which showed it as its own bucket, and the Global Constraint that drops
+ * the Punches 30d column rests on this column carrying the zero/non-zero
+ * distinction. It is NOT a readiness problem — see isNotReady in Task 3.
+ */
+function biometricOf(row: EnrollmentRow): NonNullable<RegisterRow["biometric"]> {
+  switch (row.bucket) {
+    case "LEAVER_STILL_ENROLLED":
+      return "still_enrolled";
+    case "NEEDS_ENROLLMENT":
+      return "none";
+    case "ENROLLED_NOT_PUNCHING":
+      return "enrolled_not_punching";
+    case "OK":
+      return "enrolled";
+  }
 }
 
 /**
@@ -456,7 +472,7 @@ Claude-Session: https://claude.ai/code/session_01U57KAfPhiYScJgmrzYjK9A"
     department?: string[];
     status?: "Active" | "Left";
     schedule?: "assigned" | "missing";
-    biometric?: "enrolled" | "none" | "still_enrolled";
+    biometric?: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled";
     readiness?: "not-ready";
     sort?: "name" | "hours" | "prints";
     order?: "asc" | "desc";
@@ -565,7 +581,7 @@ export type RegisterFilters = {
   department?: string[];
   status?: "Active" | "Left";
   schedule?: "assigned" | "missing";
-  biometric?: "enrolled" | "none" | "still_enrolled";
+  biometric?: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled";
   readiness?: "not-ready";
   sort?: "name" | "hours" | "prints";
   order?: "asc" | "desc";
@@ -1164,8 +1180,21 @@ import type { RegisterRow } from "@/lib/coverageRegister";
 
 const BIOMETRIC_LABEL: Record<NonNullable<RegisterRow["biometric"]>, string> = {
   enrolled: "Enrolled",
+  enrolled_not_punching: "Enrolled, not punching",
   none: "No fingerprint",
   still_enrolled: "Still enrolled",
+};
+
+/**
+ * Only a positive statement of absence is destructive. "Enrolled, not punching"
+ * is neutral: they CAN clock in and simply have not, which is an attendance
+ * question, not a coverage one — the same rule isNotReady applies.
+ */
+const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondary" | "outline" | "destructive"> = {
+  enrolled: "secondary",
+  enrolled_not_punching: "outline",
+  none: "destructive",
+  still_enrolled: "destructive",
 };
 
 /** Ids MUST match visibleColumnIds() — a mismatch hides a column permanently. */
@@ -1227,9 +1256,7 @@ export function registerColumns(
         const days = row.original.days_since_relieving;
         return (
           <span className="flex items-center gap-1.5">
-            <Badge variant={value === "enrolled" ? "secondary" : "destructive"}>
-              {BIOMETRIC_LABEL[value]}
-            </Badge>
+            <Badge variant={BIOMETRIC_VARIANT[value]}>{BIOMETRIC_LABEL[value]}</Badge>
             {value === "still_enrolled" && days !== null ? (
               <span className="text-xs tabular-nums text-destructive">
                 {days} {days === 1 ? "day" : "days"}
