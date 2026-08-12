@@ -98,8 +98,15 @@ registerAlert(rows: RegisterRow[], feeds: FeedHealth):
 | Hrs/wk | number | sort only | coverage |
 | Biometric | enum `Enrolled` / `None` / `Still enrolled` | select | enrollment |
 | Prints | number (fingerprints) | sort only | enrollment |
-| Punches 30d | number | sort only | enrollment |
 | Action | conditional | — | derived |
+
+**No `Punches 30d` column.** The mockups showed one; the payload does not carry
+it. `enrollment_api` computes `checkin_count` to classify the bucket and then
+discards it (`enrollment_api.py:163-180` returns no punch field). Surfacing it
+would need a second backend change, and it would restate what the Biometric
+column already says: `Enrolled, not punching` *is* "zero punches in the window",
+and `Enrolled` is "more than zero". The magnitude adds nothing to the readiness
+question, so the column is dropped rather than the endpoint extended.
 
 **Status has no default filter, deliberately.** Defaulting to Active would hide
 every `Still enrolled` row — those employees are `Left` — so the page would
