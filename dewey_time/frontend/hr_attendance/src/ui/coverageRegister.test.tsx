@@ -9,7 +9,13 @@ import { getCoreRowModel, useReactTable, type SortingState } from "@tanstack/rea
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
 import { visibleColumnIds } from "@/lib/coverageRegister";
-import type { FeedHealth, RegisterAlert, RegisterRow } from "@/lib/coverageRegister";
+import type {
+  FeedHealth,
+  RegisterAlert,
+  RegisterFilters,
+  RegisterRow,
+} from "@/lib/coverageRegister";
+import { toRegisterCsv } from "@/lib/registerCsv";
 import {
   CoverageRegisterView,
   INITIAL_REGISTER_FILTERS,
@@ -18,8 +24,14 @@ import {
   type CoverageRegisterViewProps,
 } from "@/ui/schedule-coverage/CoverageRegisterPage";
 import {
+  RegisterExportButton,
+  type RegisterExportButtonProps,
+} from "@/ui/schedule-coverage/RegisterExportButton";
+import {
+  FacetFilter,
   FacetOptions,
   RegisterFilterBar,
+  SingleFacet,
   toggleFacetValue,
   type RegisterFilterBarProps,
 } from "@/ui/schedule-coverage/RegisterFilterBar";
@@ -103,6 +115,36 @@ function onClickOf(node: ReactNode): (() => void) | undefined {
 function onSortClickOf(node: ReactNode): ((event: unknown) => void) | undefined {
   if (!isValidElement<{ onClick?: (event: unknown) => void }>(node)) return undefined;
   return node.props.onClick;
+}
+
+/**
+ * The props of the first node in an UNRENDERED element tree that match.
+ *
+ * The escape hatch for everything Radix takes out of reach. `PopoverContent`
+ * and `SelectContent` resolve their portal container in a layout effect, so on
+ * the server they render to null and nothing inside a facet's menu appears in
+ * the markup at all; and `renderToStaticMarkup` drops function props even from
+ * what it does render, so every `onFiltersChange`, `onSelect` and
+ * `onValueChange` on this page was a line no test could execute.
+ *
+ * The filter bar and its facets hold no hooks, so calling one as a plain
+ * function — the same trick the AlertDot test uses — hands back the exact tree
+ * it built, and this walks it for the node under test.
+ */
+function findProps<P extends object>(
+  node: ReactNode,
+  matches: (props: P) => boolean,
+): P | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findProps<P>(child, matches);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!isValidElement<P & { children?: ReactNode }>(node)) return null;
+  if (matches(node.props)) return node.props;
+  return findProps<P>(node.props.children, matches);
 }
 
 /**
@@ -355,8 +397,24 @@ test("a sortable header is a real button carrying the column's own words", () =>
   const { html } = renderHeader("employee");
   assert.match(html, /<button/);
   assert.match(html, />Employee</, "the column's label must still be readable text");
-  assert.match(html, /aria-label="Sort by Employee, ascending"/);
+  assert.match(html, /aria-label="Employee, not sorted — press to sort ascending"/);
   assert.match(html, /aria-hidden="true"/, "the arrow is decorative");
+});
+
+test("the accessible name says which way the column is sorted NOW, not only what a press will do", () => {
+  // The arrow is aria-hidden and dewey-ui's TableHead takes no aria-sort from a
+  // columnDef, so this name is the only place the current direction exists at
+  // all. Told just the next action, a screen-reader user hearing "press to sort
+  // descending" cannot tell an ascending column from an unsorted one — and on a
+  // register whose default order is severity, "unsorted" is a meaningful state
+  // rather than an absence.
+  const unsorted = renderHeader("weekly_minutes").html;
+  const ascending = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: false }]).html;
+  const descending = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: true }]).html;
+
+  assert.match(unsorted, /aria-label="Hrs\/wk, not sorted — press to sort ascending"/);
+  assert.match(ascending, /aria-label="Hrs\/wk, sorted ascending — press to sort descending"/);
+  assert.match(descending, /aria-label="Hrs\/wk, sorted descending — press to clear the sort"/);
 });
 
 test("a display column's header is plain text, with nothing to press", () => {
@@ -380,12 +438,12 @@ test("pressing Hrs/wk asks for its own column, ascending first", () => {
 
 test("a second press reverses it, and a third clears it", () => {
   const ascending = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: false }]);
-  assert.match(ascending.html, /aria-label="Sort by Hrs\/wk, descending"/);
+  assert.match(ascending.html, /press to sort descending"/);
   assert.match(ascending.html, ARROW.ascending, "an ascending column shows which way it went");
   assert.deepEqual(ascending.press(), [{ id: "weekly_minutes", desc: true }]);
 
   const descending = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: true }]);
-  assert.match(descending.html, /aria-label="Clear the sort on Hrs\/wk"/);
+  assert.match(descending.html, /press to clear the sort"/);
   assert.match(descending.html, ARROW.descending);
   assert.deepEqual(
     descending.press(),
@@ -408,11 +466,11 @@ test("the table keys its header state by COLUMN ID — which is why the page tra
   // would, and the column the reader just sorted reads as unsorted: no
   // direction, the same first direction on every press, and no way to clear.
   const wrong = renderHeader("weekly_minutes", [{ id: "hours", desc: true }]);
-  assert.match(wrong.html, /aria-label="Sort by Hrs\/wk, ascending"/);
+  assert.match(wrong.html, /aria-label="Hrs\/wk, not sorted — press to sort ascending"/);
   assert.deepEqual(wrong.press(), [{ id: "weekly_minutes", desc: false }]);
 
   const right = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: true }]);
-  assert.match(right.html, /aria-label="Clear the sort on Hrs\/wk"/);
+  assert.match(right.html, /aria-label="Hrs\/wk, sorted descending — press to clear the sort"/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1070,6 +1128,161 @@ test("toggling does not mutate the selection it was given", () => {
 });
 
 // ---------------------------------------------------------------------------
+// RegisterFilterBar — the write path
+//
+// Everything below reaches handlers rather than markup. RegisterFilterBar,
+// FacetFilter and SingleFacet all hold no hooks, so each can be called as a
+// plain function and asked what it wired up — see findProps at the top.
+// ---------------------------------------------------------------------------
+
+/** The bar as the unrendered tree it builds, handlers and all. */
+function buildBar(over: Partial<RegisterFilterBarProps> = {}) {
+  return RegisterFilterBar({
+    rows: TWO_BRANCHES,
+    feeds: HEALTHY_FEEDS,
+    filters: {},
+    onFiltersChange: noop,
+    ...over,
+  });
+}
+
+/** Works one of the bar's controls and returns every filter object it emitted. */
+function changeFacet<T>(label: string, next: T, filters: RegisterFilters = {}): RegisterFilters[] {
+  const emitted: RegisterFilters[] = [];
+  const control = findProps<{ label?: string; onChange?: (value: T) => void }>(
+    buildBar({ filters, onFiltersChange: (value) => emitted.push(value) }),
+    (props) => props.label === label,
+  );
+  const onChange = control?.onChange;
+  assert.ok(onChange, `the bar has no ${label} control to work`);
+  onChange(next);
+  return emitted;
+}
+
+test("every facet writes its own field and leaves the reader's other filters alone", () => {
+  // `onFiltersChange({ branch })` in place of `{ ...filters, branch }` wipes the
+  // search, the readiness toggle and the sort the instant someone picks a
+  // branch — the same regression toggleReadiness's test guards against, one
+  // control over. It would also read as the facet having cleared their work.
+  // Cross-wiring is caught here too: a Branch control writing `department`
+  // moves this.
+  const held: RegisterFilters = {
+    search: "ada",
+    readiness: "not-ready",
+    sort: "hours",
+    order: "desc",
+  };
+  assert.deepEqual(changeFacet("Branch", ["DIU"], held), [{ ...held, branch: ["DIU"] }]);
+  assert.deepEqual(changeFacet("Department", ["Finance"], held), [
+    { ...held, department: ["Finance"] },
+  ]);
+  assert.deepEqual(changeFacet("Status", "Left", held), [{ ...held, status: "Left" }]);
+  assert.deepEqual(changeFacet("Schedule", "missing", held), [{ ...held, schedule: "missing" }]);
+  assert.deepEqual(changeFacet("Biometric", "none", held), [{ ...held, biometric: "none" }]);
+});
+
+test("clearing a facet through the bar leaves the rest of the filters standing", () => {
+  // The other half of "clearing works": the bar has to carry an emptied facet
+  // out as no filter without taking anything else with it.
+  const held: RegisterFilters = { search: "ada", status: "Left", branch: ["DIU"] };
+  assert.deepEqual(changeFacet<RegisterFilters["status"]>("Status", undefined, held), [
+    { search: "ada", status: undefined, branch: ["DIU"] },
+  ]);
+  assert.deepEqual(changeFacet<string[]>("Branch", [], held), [
+    { search: "ada", status: "Left", branch: [] },
+  ]);
+});
+
+/** The value the "no filter" row will hand back, read off the row that carries it. */
+function anyValueOf(select: ReactNode, anyLabel: string): string {
+  const item = findProps<{ value?: string; children?: ReactNode }>(
+    select,
+    (props) => props.children === anyLabel,
+  );
+  const value = item?.value;
+  assert.ok(value, `expected a "${anyLabel}" row carrying a value`);
+  return value;
+}
+
+test("choosing the “any” row clears the filter instead of storing the sentinel", () => {
+  // Radix rejects an empty-string item value, so "no filter" has to travel as a
+  // sentinel. Stored verbatim it becomes a truthy `filters.status` that
+  // filterRegisterRows matches nobody against: the table empties, and choosing
+  // "Any status" again re-stores it, so the control can never clear.
+  //
+  // The sentinel is read off the row itself rather than written into this test,
+  // so the row's value and the mapping that undoes it cannot drift apart.
+  const chosen: (string | undefined)[] = [];
+  const select = SingleFacet<NonNullable<RegisterFilters["status"]>>({
+    label: "Status",
+    anyLabel: "Any status",
+    value: "Left",
+    options: [
+      { value: "Active", label: "Active" },
+      { value: "Left", label: "Left" },
+    ],
+    onChange: (next) => chosen.push(next),
+  });
+  const onValueChange = findProps<{ onValueChange?: (next: string) => void }>(
+    select,
+    (props) => typeof props.onValueChange === "function",
+  )?.onValueChange;
+  assert.ok(onValueChange, "the select must report what was chosen");
+
+  onValueChange(anyValueOf(select, "Any status"));
+  onValueChange("Active");
+  assert.deepEqual(
+    chosen,
+    [undefined, "Active"],
+    "the sentinel clears the filter; a real option is passed through",
+  );
+});
+
+/** One multi-select facet, built as the tree it would portal away. */
+function buildFacet(selected: string[], onChange: (next: string[]) => void) {
+  return FacetFilter({ label: "Branch", options: ["ACES", "DIU"], selected, onChange });
+}
+
+/** The handler on the facet menu's clear row — the only `onSelect` in its tree. */
+function clearRowOf(facet: ReactNode): (() => void) | undefined {
+  return findProps<{ onSelect?: () => void }>(
+    facet,
+    (props) => typeof props.onSelect === "function",
+  )?.onSelect;
+}
+
+test("the clear row empties the facet to no filter", () => {
+  // `[]` is "no filter", never "match nothing" — filterRegisterRows guards on
+  // `?.length` for exactly this. The row is inside PopoverContent, so it has
+  // never once appeared in this suite's rendered markup.
+  const emitted: string[][] = [];
+  const onSelect = clearRowOf(buildFacet(["DIU"], (next) => emitted.push(next)));
+  assert.ok(onSelect, "a facet with a selection must offer a way to clear it");
+  onSelect();
+  assert.deepEqual(emitted, [[]]);
+});
+
+test("a facet with nothing selected offers no clear row", () => {
+  // Direction: a clear row that is always present satisfies the test above just
+  // as well, while adding a dead option to every unused facet on the bar.
+  assert.equal(clearRowOf(buildFacet([], noop)), undefined);
+});
+
+test("ticking an option hands the facet back the toggled selection", () => {
+  // The join between the option rows and toggleFacetValue, which until now were
+  // tested on either side of a link nothing crossed.
+  const emitted: string[][] = [];
+  const onToggle = findProps<{ onToggle?: (value: string) => void }>(
+    buildFacet(["DIU"], (next) => emitted.push(next)),
+    (props) => typeof props.onToggle === "function",
+  )?.onToggle;
+  assert.ok(onToggle, "the option list must report what was ticked");
+  onToggle("ACES");
+  onToggle("DIU");
+  assert.deepEqual(emitted, [["DIU", "ACES"], []], "one adds; the other takes the last one off");
+});
+
+// ---------------------------------------------------------------------------
 // The table's sort, translated at the boundary
 // ---------------------------------------------------------------------------
 
@@ -1154,7 +1367,12 @@ test("the facets are derived from the whole roster, never from the filtered rows
   assert.equal(facetName(searched, "Branch"), "Branch filter, 2 options");
 });
 
-test("the toolbar waits for the feeds, like everything else on the page", () => {
+test("a pending load offers no export, and has no roster to derive facets from", () => {
+  // Two different mechanisms, deliberately. The export is GATED on the feeds
+  // having answered — ungated it would offer a file built from an unanswered
+  // roster and count it aloud as "0 employees". The bar needs no gate: it
+  // derives every control from the rows and drops any facet with no options,
+  // and a pending load holds none.
   const html = renderView({
     isLoading: true,
     rows: [],
@@ -1203,4 +1421,49 @@ test("the export is disabled on a partial roster, and says why", () => {
   const usable = exportButton(renderView({ truncated: false }));
   assert.ok(usable, "expected an export button on a complete roster");
   assert.doesNotMatch(usable, /\sdisabled=""/, "a complete roster must be exportable");
+});
+
+// ---------------------------------------------------------------------------
+// RegisterExportButton — what pressing it actually writes
+//
+// The button holds no hooks, so it can be called directly and its onClick
+// invoked. `download` is the seam for the one browser-only line: without it,
+// the call that decides the file's contents could not be reached at all.
+// ---------------------------------------------------------------------------
+
+/** Presses the export button and returns the files it wrote. */
+function pressExport(over: Partial<RegisterExportButtonProps> = {}): string[] {
+  const written: string[] = [];
+  const element = RegisterExportButton({
+    rows: [BASE_ROW],
+    feeds: HEALTHY_FEEDS,
+    truncated: false,
+    download: (csv) => written.push(csv),
+    ...over,
+  });
+  const onClick = onClickOf(element);
+  assert.ok(onClick, "the export must be a real button with a handler");
+  onClick();
+  return written;
+}
+
+test("pressing Export writes the rows the button was handed, and only those", () => {
+  // The line that decides WHAT is exported. The row count in the accessible
+  // name is a proxy for the props, not for this call: an export rewired to a
+  // different array keeps the count and changes the file, and the file is the
+  // thing that gets mailed to somebody.
+  const ada = { ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck" };
+  const written = pressExport({ rows: [ada] });
+  assert.equal(written.length, 1, "one press, one file");
+  assert.equal(written[0], toRegisterCsv([ada], HEALTHY_FEEDS));
+  assert.match(written[0], /Ada Stuck/);
+  assert.doesNotMatch(written[0], /Amara Okafor/, "no row the button was not given");
+});
+
+test("the file follows the feeds, so a suppressed column does not travel in it", () => {
+  // Exporting a column the page refuses to show writes a fact the reader was
+  // denied into a file that outlives the outage.
+  const written = pressExport({ feeds: { schedule: true, biometric: false } });
+  assert.doesNotMatch(written[0], /Biometric/, "a hidden column must be gone from the file too");
+  assert.match(written[0], /Schedule/, "the schedule half is unaffected");
 });

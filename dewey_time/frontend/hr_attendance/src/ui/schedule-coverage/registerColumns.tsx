@@ -17,10 +17,28 @@ const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondar
   still_enrolled: "destructive",
 };
 
-/** What pressing the header will DO — an arrow glyph alone says nothing aloud. */
-function sortActionLabel(label: string, next: SortDirection | false): string {
-  if (next === false) return `Clear the sort on ${label}`;
-  return `Sort by ${label}, ${next === "desc" ? "descending" : "ascending"}`;
+/**
+ * What the header IS, and what pressing it will DO.
+ *
+ * Both halves, because neither carries the other. The arrow is `aria-hidden`
+ * and dewey-ui's TableHead takes no `aria-sort` from a columnDef, so this name
+ * is the ONLY place the current direction exists for a screen-reader user —
+ * told just the next action, they cannot tell an ascending column from an
+ * unsorted one, and on a register whose default order is severity "unsorted" is
+ * a meaningful state rather than an absence.
+ */
+function sortActionLabel(
+  label: string,
+  current: SortDirection | false,
+  next: SortDirection | false,
+): string {
+  const state = current === false ? "not sorted" : `sorted ${direction(current)}`;
+  const action = next === false ? "clear the sort" : `sort ${direction(next)}`;
+  return `${label}, ${state} — press to ${action}`;
+}
+
+function direction(sort: SortDirection): string {
+  return sort === "desc" ? "descending" : "ascending";
 }
 
 /**
@@ -28,7 +46,8 @@ function sortActionLabel(label: string, next: SortDirection | false): string {
  *
  * A real <button> carrying the column's own text, not a bare icon: the arrow
  * shows the current direction to a sighted reader and the accessible name
- * states the next action for everyone else, so neither depends on the other.
+ * states both the current direction and the next action for everyone else, so
+ * neither depends on the other.
  *
  * `getToggleSortingHandler()` rather than calling `column.toggleSorting()`
  * directly. The handler is the path that consults `getCanSort()`, which is
@@ -50,7 +69,7 @@ function sortableHeader(label: string) {
         size="sm"
         className="-ml-2 h-8 px-2 font-medium"
         onClick={column.getToggleSortingHandler()}
-        aria-label={sortActionLabel(label, column.getNextSortingOrder())}
+        aria-label={sortActionLabel(label, sorted, column.getNextSortingOrder())}
       >
         {label}
         <Arrow className="size-3.5 opacity-60" aria-hidden="true" />

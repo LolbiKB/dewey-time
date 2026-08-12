@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
-import { Button, EmptyState, GenericDataTable, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
-import { AlertTriangleIcon, DownloadIcon } from "lucide-react";
+import { EmptyState, GenericDataTable, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import { AlertTriangleIcon } from "lucide-react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
@@ -18,9 +18,9 @@ import {
   type RegisterFilters,
   type RegisterRow,
 } from "@/lib/coverageRegister";
-import { toRegisterCsv } from "@/lib/registerCsv";
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
+import { RegisterExportButton } from "@/ui/schedule-coverage/RegisterExportButton";
 import { RegisterFilterBar } from "@/ui/schedule-coverage/RegisterFilterBar";
 
 export type CoverageRegisterViewProps = {
@@ -180,20 +180,26 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             layout="fill"
             columnWidths="fixed"
             hidePageSize
-            // Both slots wait for the feeds, on the same rule as the alert dot
-            // and the notices: mid-load every facet would read as feed-down and
-            // the export would have nothing but an unanswered roster to offer.
             // Facet options come from `rows`, NOT `data` — see the bar's props.
+            //
+            // No `answered` gate here, unlike the export beside it. The bar
+            // derives every control from the roster and drops any facet with no
+            // options, so a pending load — which holds no rows — already
+            // renders nothing; a gate would be a second copy of that rule that
+            // no test could reach. And if a future load ever does hold rows
+            // while refetching, leaving the reader's controls on screen is the
+            // right answer anyway.
             toolbarLeading={
-              answered ? (
-                <RegisterFilterBar
-                  rows={rows}
-                  feeds={feeds}
-                  filters={filters}
-                  onFiltersChange={onFiltersChange}
-                />
-              ) : null
+              <RegisterFilterBar
+                rows={rows}
+                feeds={feeds}
+                filters={filters}
+                onFiltersChange={onFiltersChange}
+              />
             }
+            // The export DOES wait for the feeds, on the same rule as the alert
+            // dot and the notices: mid-load it would offer a file built from an
+            // unanswered roster and count it aloud as "0 employees".
             toolbarActions={
               answered ? (
                 <RegisterExportButton rows={data} feeds={feeds} truncated={props.truncated} />
@@ -228,7 +234,7 @@ function rosterDescription(count: number): string {
  * every column: no header shows a direction, every press repeats the first
  * direction, and the sort can never be cleared.
  */
-export type RegisterTableFilters = Omit<RegisterFilters, "sort"> & { sort?: string };
+type RegisterTableFilters = Omit<RegisterFilters, "sort"> & { sort?: string };
 
 /**
  * What the table just did, in this module's terms.
@@ -246,57 +252,6 @@ export function registerFiltersFromTable(next: RegisterTableFilters): RegisterFi
   const { sort: columnId, order, ...rest } = next;
   const resolved = columnId === undefined ? null : sortFromColumnId(columnId, order === "desc");
   return resolved === null ? rest : { ...rest, ...resolved };
-}
-
-/**
- * Hand the reader the file. Browser-only, and never reached by the static
- * renders in the test suite.
- */
-function downloadCsv(csv: string) {
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `coverage-register-${new Date().toISOString().slice(0, 10)}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-/**
- * Export what the reader is looking at.
- *
- * `rows` is the filtered, sorted set the table is rendering, and the accessible
- * name counts that same array — so a wiring change that exported the whole
- * roster instead moves the label with it, where a test can see it. A file that
- * silently disagreed with the screen it came from is indistinguishable from one
- * that agrees, once it has been mailed to somebody.
- *
- * Disabled on a truncated roster, WITH the reason in the accessible name: a
- * file that omits part of the workforce looks complete, and there is no banner
- * inside a spreadsheet to say otherwise. A control that is merely dead, with no
- * explanation, is its own defect.
- */
-export function RegisterExportButton(props: {
-  rows: RegisterRow[];
-  feeds: FeedHealth;
-  truncated: boolean;
-}) {
-  const label = props.truncated
-    ? "Export CSV — unavailable while the roster is partial, because the file would look complete"
-    : `Export ${props.rows.length} ${props.rows.length === 1 ? "employee" : "employees"} as CSV`;
-
-  return (
-    <Button
-      size="sm"
-      variant="outline"
-      disabled={props.truncated}
-      aria-label={label}
-      title={label}
-      onClick={() => downloadCsv(toRegisterCsv(props.rows, props.feeds))}
-    >
-      <DownloadIcon className="size-4" aria-hidden="true" />
-      Export CSV
-    </Button>
-  );
 }
 
 /**

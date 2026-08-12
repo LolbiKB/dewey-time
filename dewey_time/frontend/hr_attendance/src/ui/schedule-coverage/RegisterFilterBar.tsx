@@ -1,4 +1,3 @@
-import { useMemo, useState } from "react";
 import { ListFilterIcon } from "lucide-react";
 import {
   Badge,
@@ -81,6 +80,8 @@ export type RegisterFilterBarProps = {
  * `status` has no default, deliberately. Defaulting to Active would hide every
  * leaver still holding a template — the security finding this page exists for —
  * while the alert beside it went on counting them.
+ *
+ * HOLDS NO HOOKS, on purpose — see the note on `facets` below.
  */
 export function RegisterFilterBar({
   rows,
@@ -88,7 +89,17 @@ export function RegisterFilterBar({
   filters,
   onFiltersChange,
 }: RegisterFilterBarProps) {
-  const facets = useMemo(() => registerFacets(rows), [rows]);
+  // Derived on every render rather than memoised.
+  //
+  // With no hooks anywhere in this component it can be CALLED as a plain
+  // function, which is the only way a suite with no jsdom can reach the
+  // `onFiltersChange` handlers below: renderToStaticMarkup drops function props
+  // from its HTML, so every one of them was previously a line no test could
+  // execute — including the spread that keeps the reader's search and sort
+  // alive when they pick a branch. AlertDot is called the same way for the same
+  // reason. The memo was buying one sort over a few-hundred-row roster on a
+  // component that re-renders on every keystroke in the search box anyway.
+  const facets = registerFacets(rows);
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -207,17 +218,27 @@ export function FacetOptions(props: {
   );
 }
 
-/** Branch and Department: many values, any number of them at once. */
-function FacetFilter(props: {
+/**
+ * Branch and Department: many values, any number of them at once.
+ *
+ * Exported and hook-free for the same reason as the bar itself. Everything this
+ * builds below the trigger lives inside `PopoverContent`, which Radix puts in a
+ * portal whose container is resolved in a layout effect — so it server-renders
+ * to null and neither the option rows nor the clear row reaches the markup.
+ * Called as a plain function it hands back the tree it built, handlers and all.
+ *
+ * The Popover is uncontrolled: the `open` state it used to hold was only ever
+ * fed back to the Popover unchanged, which is exactly what Radix does on its
+ * own.
+ */
+export function FacetFilter(props: {
   label: string;
   options: string[];
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
-  const [open, setOpen] = useState(false);
-
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -262,8 +283,15 @@ function FacetFilter(props: {
   );
 }
 
-/** Status, Schedule and Biometric: a closed enum, one value or none. */
-function SingleFacet<T extends string>(props: {
+/**
+ * Status, Schedule and Biometric: a closed enum, one value or none.
+ *
+ * Exported and hook-free so a test can reach `onValueChange` — the mapping that
+ * turns the sentinel back into "no filter" is the only thing standing between
+ * this control and a state it can never leave, and it sits on a function prop
+ * that renderToStaticMarkup drops.
+ */
+export function SingleFacet<T extends string>(props: {
   label: string;
   /** How the "no filter" row reads in the open list, where the label is out of sight. */
   anyLabel: string;

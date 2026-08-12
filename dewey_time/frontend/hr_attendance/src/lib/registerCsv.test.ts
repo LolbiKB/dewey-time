@@ -141,7 +141,14 @@ test("a field containing a comma is quoted", () => {
   // shifts every later value on the row one column left — silently.
   const csv = toRegisterCsv([row({ employee_name: "Reyes, Ana" })], HEALTHY);
   assert.match(csv, /"Reyes, Ana"/);
-  assert.equal(csv.split("\n")[1].split(",").length, 11, "the comma must stay inside one field");
+  // The whole line, so the quoting is pinned IN PLACE rather than in
+  // isolation. Counting the pieces of a naive split(",") cannot do this: an
+  // unquoted "Reyes, Ana" yields the same eleven pieces a quoted one does, so
+  // the count holds whichever way the field went out.
+  assert.equal(
+    csv.split("\n")[1],
+    'E1,"Reyes, Ana",DIU,Finance,Active,Assigned,2400,Enrolled,2,',
+  );
 });
 
 test("an embedded quote is doubled, inside a quoted field", () => {
@@ -164,6 +171,41 @@ test("a field containing a lone carriage return is quoted", () => {
 test("an ordinary field is not quoted", () => {
   // Direction: quoting everything would pass every test above.
   assert.match(toRegisterCsv([row()], HEALTHY), /\nE1,Sok Dara,DIU,/);
+});
+
+// ---------------------------------------------------------------------------
+// Formula injection
+// ---------------------------------------------------------------------------
+
+test("a field a spreadsheet would run as a formula is marked as text", () => {
+  // Excel and Sheets evaluate any cell whose text begins = + - or @. A name or
+  // a branch carrying one arrives from Frappe as ordinary text and becomes code
+  // the moment the file is opened — =HYPERLINK() posting the row somewhere, or
+  // a DDE call — and the reader who opened it is HR, on the machine that has
+  // the roster on it.
+  for (const value of ["=1+1", "+1", "-1", "@SUM(A1)"]) {
+    const line = toRegisterCsv([row({ employee_name: value })], HEALTHY).split("\n")[1];
+    assert.equal(
+      line,
+      `E1,'${value},DIU,Finance,Active,Assigned,2400,Enrolled,2,`,
+      `${value} must go out marked as text`,
+    );
+  }
+  // Direction is held by "a data row is pinned whole" above: marking every
+  // field would move that line, so this cannot be satisfied by a blanket
+  // prefix.
+});
+
+test("a formula field that also needs quoting gets both, in that order", () => {
+  // The realistic payload: a hyperlink carries commas and quotes of its own, so
+  // the text marker has to sit INSIDE the quoted field, not before it — a
+  // leading apostrophe outside the quotes would make the whole field unquoted
+  // again and split the row.
+  const csv = toRegisterCsv(
+    [row({ employee_name: '=HYPERLINK("http://x","click")' })],
+    HEALTHY,
+  );
+  assert.match(csv, /,"'=HYPERLINK\(""http:\/\/x"",""click""\)",/);
 });
 
 // ---------------------------------------------------------------------------
