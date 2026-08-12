@@ -3,7 +3,8 @@ import test from "node:test";
 
 import {
   composeRegister, feedHealth, filterRegisterRows, isNotReady, joinRegisterRows, registerAlert,
-  sortRegisterRows, suppressUnusableFacts, visibleColumnIds, type RegisterFilters, type RegisterRow,
+  registerFeedState, sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
+  type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import { STALE_AFTER_MINUTES, type EnrollmentPayload } from "@/lib/enrollmentReport";
@@ -603,4 +604,94 @@ test("composeRegister suppresses a stale-but-once-seen bridge's facts before the
     got.alert.count, 0,
     "the alert must count only what the suppressed rows still carry, not what the raw join produced",
   );
+  // Suppressing the rows alone is not enough: rows already carry biometric:
+  // null, so count reads 0 either way. What proves the ALERT itself saw the
+  // real (unhealthy) feed state, and not a hardcoded healthy one, is
+  // knowable/tone/label — a knowable:true "All ready" here would be a false
+  // all-clear synthesised from a feed that is actually down.
+  assert.equal(
+    got.alert.knowable, false,
+    "the alert must reflect the real feedHealth reading, not an assumed-healthy one",
+  );
+  assert.equal(got.alert.tone, "degraded");
+  assert.match(got.alert.label, /biometrics unavailable/i);
+});
+
+const HEALTHY_QUERY_STATE = { data: undefined, error: undefined, isLoading: false };
+
+test("registerFeedState: bothFailed requires no leftover data, not just both feeds erroring", () => {
+  // react-query's "error" reducer case spreads ...state and only overwrites
+  // error/status, so `data` survives a failed refetch. A refresh() that fails
+  // on both feeds after a prior successful load must not read as bothFailed:
+  // rows are still fully joined and there is something to render.
+  const withLeftoverData = registerFeedState(
+    { data: coverage(), error: new Error("boom"), isLoading: false },
+    { data: enrollment(), error: new Error("boom"), isLoading: false },
+  );
+  assert.equal(withLeftoverData.bothFailed, false, "leftover data from a prior load must suppress bothFailed");
+
+  const withNoDataAtAll = registerFeedState(
+    { data: undefined, error: new Error("boom"), isLoading: false },
+    { data: undefined, error: new Error("boom"), isLoading: false },
+  );
+  assert.equal(withNoDataAtAll.bothFailed, true, "no data anywhere and both feeds erroring IS bothFailed");
+});
+
+test("registerFeedState: bothFailed needs BOTH feeds erroring, not just one", () => {
+  const oneDown = registerFeedState(
+    { data: undefined, error: new Error("boom"), isLoading: false },
+    { data: undefined, error: undefined, isLoading: false },
+  );
+  assert.equal(oneDown.bothFailed, false, "only one feed failing must not read as bothFailed");
+});
+
+test("registerFeedState: no data yet and no errors (the very first load) is not bothFailed", () => {
+  const initial = registerFeedState(
+    { data: undefined, error: undefined, isLoading: true },
+    { data: undefined, error: undefined, isLoading: true },
+  );
+  assert.equal(initial.bothFailed, false);
+});
+
+test("registerFeedState: truncated is true when either feed's counts say so", () => {
+  const coverageTruncated = registerFeedState(
+    { data: coverage({ counts: { active: 1, unassigned: 1, assigned: 0, truncated: true } }), error: undefined, isLoading: false },
+    HEALTHY_QUERY_STATE,
+  );
+  assert.equal(coverageTruncated.truncated, true);
+
+  const enrollmentTruncated = registerFeedState(
+    HEALTHY_QUERY_STATE,
+    {
+      data: enrollment({
+        counts: { reported: 1, needs_enrollment: 0, enrolled_not_punching: 0, ok: 1,
+                  leaver_still_enrolled: 0, excluded_status: 0, truncated: true },
+      }),
+      error: undefined, isLoading: false,
+    },
+  );
+  assert.equal(enrollmentTruncated.truncated, true);
+
+  const neitherTruncated = registerFeedState(
+    { data: coverage(), error: undefined, isLoading: false },
+    { data: enrollment(), error: undefined, isLoading: false },
+  );
+  assert.equal(neitherTruncated.truncated, false);
+});
+
+test("registerFeedState: isLoading is true while either feed is loading, false only when both are done", () => {
+  const coverageLoading = registerFeedState(
+    { data: undefined, error: undefined, isLoading: true },
+    HEALTHY_QUERY_STATE,
+  );
+  assert.equal(coverageLoading.isLoading, true);
+
+  const enrollmentLoading = registerFeedState(
+    HEALTHY_QUERY_STATE,
+    { data: undefined, error: undefined, isLoading: true },
+  );
+  assert.equal(enrollmentLoading.isLoading, true);
+
+  const neitherLoading = registerFeedState(HEALTHY_QUERY_STATE, HEALTHY_QUERY_STATE);
+  assert.equal(neitherLoading.isLoading, false);
 });

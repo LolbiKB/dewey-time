@@ -341,3 +341,47 @@ export function composeRegister(
   const rows = suppressUnusableFacts(joinRegisterRows(coverage, enrollment), feeds);
   return { rows, feeds, alert: registerAlert(rows, feeds) };
 }
+
+/** The bits of a react-query result registerFeedState needs — payload, error, loading. */
+export type FeedQueryState<T> = {
+  data: T | undefined;
+  error: unknown;
+  isLoading: boolean;
+};
+
+export type RegisterFeedState = {
+  truncated: boolean;
+  isLoading: boolean;
+  bothFailed: boolean;
+};
+
+/**
+ * Loading/failure/truncation bookkeeping for the two feed queries. Extracted
+ * out of the hook so it is unit-testable without rendering — there is no
+ * jsdom or React Testing Library in this suite, so a hook cannot be rendered
+ * in a test, only its non-React logic.
+ */
+export function registerFeedState(
+  coverage: FeedQueryState<ScheduleCoveragePayload>,
+  enrollment: FeedQueryState<EnrollmentPayload>,
+): RegisterFeedState {
+  return {
+    truncated: Boolean(coverage.data?.counts.truncated || enrollment.data?.counts.truncated),
+    // OR, deliberately: the default retry policy (count < 2, 1s/2s backoff)
+    // means a single-feed outage can still be retrying for ~3s after the
+    // healthy feed has already answered. AND would drop isLoading the moment
+    // the first feed resolves, flashing the degraded/failure state before the
+    // retry budget on the other feed is spent.
+    isLoading: coverage.isLoading || enrollment.isLoading,
+    // Both feeds erroring is necessary but not sufficient: react-query's
+    // "error" reducer case spreads ...state and only overwrites error/status,
+    // so `data` survives a failed refetch. Without the `!data` guard, a
+    // refresh() that fails on both feeds after a prior successful load would
+    // report bothFailed while `rows` is still fully joined — replacing a
+    // working table with a full-region failure placeholder over data that is
+    // still in hand. Mirrors react-query's own isLoadingError (isError &&
+    // !hasData).
+    bothFailed:
+      Boolean(coverage.error) && Boolean(enrollment.error) && !coverage.data && !enrollment.data,
+  };
+}
