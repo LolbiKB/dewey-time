@@ -110,6 +110,56 @@ class TestInvalidateCoverageCache(unittest.TestCase):
         coverage_api.invalidate_coverage_cache(doc=object(), method="on_update")
 
 
+class TestEmployeeBranchField(unittest.TestCase):
+    def test_branch_is_declared_in_employee_fields(self):
+        """Branch is declared as a field to project into the coverage payload.
+
+        This is a cheap assertion: it checks the projection tuple directly.
+        The real mapping is tested by test_branch_is_mapped_from_database_row.
+        """
+        from dewey_time.attendance_engine import coverage_api as mod
+
+        self.assertIn("branch", mod._EMPLOYEE_FIELDS)
+
+    def test_branch_is_mapped_from_database_row(self):
+        """Branch is read from the Employee DB row and included in the mapped dict.
+
+        This exercises the full path: frappe.get_all fetches branch, and
+        _list_calendar_employee_rows includes it in the returned employee dict.
+        """
+        from dewey_time.attendance_engine import hr_calendar
+
+        db_row = {
+            "name": "HR-EMP-0001",
+            "employee_name": "Sok Dara",
+            "designation": "Analyst",
+            "department": "Finance",
+            "company": "Company 1",
+            "image": None,
+            "branch": "DIU",
+        }
+
+        # No self-wrapping patch on _list_calendar_employee_rows: it bound a
+        # `wrapped_list` mock nothing ever asserted on, and since the call
+        # below goes through that same attribute it only ever passed straight
+        # through to the real function.
+        with patch("frappe.get_all", return_value=[db_row]), patch.object(
+            hr_calendar, "_shift_schedule_assignment_metadata_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "shift_assignment_bounds_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "first_checkin_date_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "is_full_time_employment", return_value=True
+        ), patch.object(
+            hr_calendar, "is_clock_based", return_value=True
+        ):
+            result = hr_calendar._list_calendar_employee_rows(None, include_all=True, limit=500)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["branch"], "DIU")
+
+
 class TestCoverageTruncationFlag(unittest.TestCase):
     def test_not_truncated_below_the_limit(self):
         from dewey_time.attendance_engine import coverage_api

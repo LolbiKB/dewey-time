@@ -5,7 +5,6 @@ import { readFileSync } from "node:fs";
 import { queryKeys } from "@/lib/queryKeys";
 
 const service = readFileSync(new URL("../services/enrollment.ts", import.meta.url), "utf8");
-const hook = readFileSync(new URL("../hooks/useEnrollmentReport.ts", import.meta.url), "utf8");
 
 // The dotted path is a string handed to the server. A typo does not fail to
 // compile -- it 404s at runtime. This system lost two bridge feeds for eleven
@@ -27,10 +26,7 @@ test("the enrollment key does not collide with the coverage key", () => {
   assert.notDeepEqual(queryKeys.enrollment.all, queryKeys.coverage.all);
 });
 
-test("the hook returns the payload undefined rather than defaulting it", () => {
-  // An empty payload would render as "nobody is enrolled" -- the exact
-  // misreading isFeedConnected exists to prevent. There is no DOM in this
-  // suite, so the contract is pinned in source instead of by rendering.
-  assert.doesNotMatch(hook, /payload:\s*data\s*\?\?/);
-  assert.match(hook, /payload:\s*data\b/);
-});
+// useEnrollmentReport, and the fourth test that read it, went with the page it
+// served. The register fetches this feed through useCoverageRegister, whose
+// own wiring is pinned in coverageRegisterWiring.test.ts — including that its
+// enrollment query still uses the key and queryFn asserted above.

@@ -146,7 +146,7 @@ test("migrated pages no longer import the Alert primitive", () => {
   for (const rel of [
     "ui/App.tsx",
     "ui/DeviceAlerts.tsx",
-    "ui/schedule-coverage/ScheduleCoveragePage.tsx",
+    "ui/schedule-coverage/CoverageRegisterPage.tsx",
   ]) {
     const source = readFileSync(SRC + rel, "utf8");
     assert.doesNotMatch(

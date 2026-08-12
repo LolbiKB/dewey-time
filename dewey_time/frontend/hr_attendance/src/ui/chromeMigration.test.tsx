@@ -6,13 +6,188 @@ function source(path: string): string {
   return readFileSync(new URL(`./${path}`, import.meta.url), "utf8");
 }
 
-test("WeeklySchedulePage uses dewey-ui's Page rather than a hand-rolled container", () => {
-  const src = source("WeeklySchedulePage.tsx");
-  assert.ok(src.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
-  assert.ok(
-    !src.includes("max-w-7xl"),
-    "hand-rolled max-w-7xl container should be gone — Page owns page insets",
+const MAIN_URL = new URL("../main.tsx", import.meta.url);
+
+/**
+ * The file with its comments removed, so prose ABOUT a class is not read as
+ * the class.
+ *
+ * FlagQueuePage carries two comments recounting the max-w-7xl cap dewey-ui
+ * 2.0.0 dropped — the history that makes the rule below make sense. A raw
+ * substring scan reads those as the violation they explain, which would leave
+ * the only ways to keep this guard green being to delete the explanation or to
+ * stop scanning. String and template literals are stepped over intact so a
+ * `//` inside one (a URL, say) cannot swallow the rest of a line.
+ *
+ * An apostrophe in JSX TEXT (`don't`) is read here as opening a string, so
+ * everything up to the next quote is copied through unstripped. That errs in
+ * the safe direction — this can only ever preserve MORE source than a real
+ * parser would, never hide a class from the assertions below.
+ */
+function withoutComments(src: string): string {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const two = src.slice(i, i + 2);
+    if (two === "//") {
+      while (i < src.length && src[i] !== "\n") i++;
+      continue;
+    }
+    if (two === "/*") {
+      i += 2;
+      while (i < src.length && src.slice(i, i + 2) !== "*/") i++;
+      i += 2;
+      continue;
+    }
+    const quote = src[i];
+    if (quote === '"' || quote === "'" || quote === "`") {
+      out += src[i++];
+      while (i < src.length) {
+        if (src[i] === "\\") {
+          out += src.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        out += src[i];
+        if (src[i++] === quote) break;
+      }
+      continue;
+    }
+    out += src[i++];
+  }
+  return out;
+}
+
+/**
+ * Every `<Route …>` opening tag in the source, attributes and all.
+ *
+ * Walked rather than matched with `/<Route\b([^>]*?)\/?>/`, because a Route's
+ * attributes contain `>` characters of their own: `element={<Navigate … />}`
+ * closes a nested tag inside the braces. A `[^>]` scan therefore ends the tag
+ * at that nested `/>` and returns only the text BEFORE it — which silently
+ * drops any attribute written after `element`, `path` included. JSX prop order
+ * is arbitrary, so `<Route element={<NewPage />} path="/new" />` would opt a
+ * page out of this guard with nothing going red.
+ *
+ * So: track brace depth and string literals, and end the tag at the first `>`
+ * that is at depth 0 — its own.
+ */
+function routeTags(src: string): string[] {
+  const tags: string[] = [];
+  let at = src.indexOf("<Route");
+
+  while (at !== -1) {
+    let i = at + "<Route".length;
+    let depth = 0;
+    while (i < src.length) {
+      const ch = src[i];
+      if (ch === '"' || ch === "'" || ch === "`") {
+        i += 1;
+        while (i < src.length && src[i] !== ch) i += src[i] === "\\" ? 2 : 1;
+      } else if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      else if (ch === ">" && depth === 0) break;
+      i += 1;
+    }
+    tags.push(src.slice(at, i));
+    at = src.indexOf("<Route", i);
+  }
+  return tags;
+}
+
+/**
+ * Every component `main.tsx` mounts at a `path`, resolved to the file that
+ * defines it, plus the redirects that sit alongside them.
+ *
+ * Read out of the router rather than off a filename glob. A glob over
+ * `*Page.tsx` is a naming convention, not the class of routed surfaces: it
+ * misses `App.tsx` (which serves /hr-attendance) and it would miss the next
+ * page whose author picked any other name — which is exactly the escape hatch
+ * this guard exists to close.
+ *
+ * The layout route is dropped because it carries no `path`: `HrAppShell` wraps
+ * pages, it is not one. `Navigate` is counted but not resolved — a redirect
+ * renders no surface of its own — and it is counted rather than ignored so the
+ * cross-check below can account for every routed tag in the file.
+ */
+function routedElements(): { pages: { name: string; url: URL }[]; redirects: number } {
+  const main = readFileSync(MAIN_URL, "utf8");
+
+  const specifiers = new Map<string, string>();
+  for (const [, names, from] of main.matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
+    for (const clause of names.split(",")) {
+      const local = clause.trim().split(/\s+as\s+/).pop();
+      if (local) specifiers.set(local, from);
+    }
+  }
+
+  const pages: { name: string; url: URL }[] = [];
+  let redirects = 0;
+
+  for (const tag of routeTags(main)) {
+    if (!/\bpath\s*=/.test(tag)) continue;
+
+    // Loud rather than skipped, here and below: a routed tag this scan cannot
+    // read is a page silently escaping the guard, which is the whole defect
+    // again.
+    const element = /element=\{<\s*([A-Za-z_$][\w$]*)/.exec(tag);
+    assert.ok(element, `a <Route> with a path has an element this scan cannot read: ${tag.trim()}`);
+
+    const name = element[1];
+    if (name === "Navigate") {
+      redirects += 1;
+      continue;
+    }
+
+    const from = specifiers.get(name);
+    assert.ok(from, `main.tsx routes <${name} /> but no import in main.tsx names it`);
+    assert.match(
+      from,
+      /^\.{1,2}\//,
+      `<${name} /> is routed from the package "${from}" — this guard can only read local files`,
+    );
+    pages.push({ name, url: new URL(`${from}.tsx`, MAIN_URL) });
+  }
+
+  // Counted a SECOND way, straight off the source, and compared. The walker
+  // above is the only thing deciding what this guard looks at, so nothing else
+  // would notice it quietly returning a smaller world; two independent counts
+  // disagreeing is what turns that into a failure instead of a silent pass.
+  // This replaces a hardcoded "at least five pages" floor, which would have
+  // gone stale the first time a route was added or removed.
+  const declaredPaths = (main.match(/\bpath\s*=/g) ?? []).length;
+  assert.ok(declaredPaths > 0, "main.tsx declares no routes at all — the scan is broken");
+  assert.equal(
+    pages.length + redirects,
+    declaredPaths,
+    `main.tsx declares ${declaredPaths} routed paths but this scan resolved ${pages.length} pages and ${redirects} redirects`,
   );
+
+  return { pages, redirects };
+}
+
+// Was "WeeklySchedulePage uses <Page>" — a per-file assertion. The biometrics
+// page then shipped as the only routed page WITHOUT <Page>, hand-rolling px-4
+// against Page's px-5 sm:px-8, so the nav it shared with its sibling shifted
+// 16px between tabs. The guard existed; it just named one page instead of the
+// class. This is the generalised form: it reads the router, so a page cannot
+// opt out by being new, by being named something else, or by living in a
+// subdirectory.
+test("every routed page uses dewey-ui's Page rather than a hand-rolled container", () => {
+  const { pages } = routedElements();
+
+  for (const { name, url } of pages) {
+    const src = withoutComments(readFileSync(url, "utf8"));
+    // The import too, not just the tag: a locally defined `Page` would satisfy
+    // the tag while hand-rolling exactly the container this forbids.
+    assert.match(
+      src,
+      /import\s*\{[^}]*\bPage\b[^}]*\}\s*from\s*"@lolbikb\/dewey-ui"/,
+      `${name} must import Page from @lolbikb/dewey-ui`,
+    );
+    assert.match(src, /<Page[\s>]/, `${name} must render dewey-ui's <Page>`);
+    assert.ok(!src.includes("max-w-7xl"), `${name} must not hand-roll a container`);
+  }
 });
 
 // savedNonce was a counter that faked a refetch because the mutation had no
@@ -49,23 +224,11 @@ test("schedule/maintenance write hooks invalidate schedule, calendar, and covera
   }
 });
 
-test("ScheduleImportPage uses dewey-ui's Page", () => {
-  const src = readFileSync(
-    new URL("./schedule-import/ScheduleImportPage.tsx", import.meta.url),
-    "utf8",
-  );
-  assert.ok(src.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
-  assert.ok(!src.includes("max-w-7xl"), "hand-rolled container should be gone");
-});
-
-test("ScheduleCoveragePage uses dewey-ui's Page", () => {
-  const src = readFileSync(
-    new URL("./schedule-coverage/ScheduleCoveragePage.tsx", import.meta.url),
-    "utf8",
-  );
-  assert.ok(src.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
-  assert.ok(!src.includes("max-w-7xl"), "hand-rolled container should be gone");
-});
+// The per-page "ScheduleImportPage uses <Page>" and "CoverageRegisterPage uses
+// <Page>" tests that stood here are gone: the routed-page test above makes the
+// same two assertions about the same two files, and about every other routed
+// page as well. Keeping them would restate the naming habit the generalisation
+// exists to stop relying on.
 
 // /hr-attendance is the one route that never had a heading to convert, so —
 // unlike the other three — it gets no PageHeader. Its nav tab already reads
