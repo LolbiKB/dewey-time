@@ -229,8 +229,9 @@ Deferred to a future `/dashboard`, deliberately and not dropped:
 - per-branch rollups
 
 The register answers "who", the dashboard will answer "how are we doing". Losing
-the hours *distribution* is a real cost of this design, accepted on the basis
-that the dashboard will carry it.
+the hours *distribution* is a real cost of this design — **confirmed acceptable
+2026-08-12: nobody reads that spread today.** It is deferred rather than dropped
+so the dashboard has a starting point.
 
 Also out of scope: any change to `get_enrollment_report` or
 `get_schedule_coverage`; row grouping; server-side pagination.
