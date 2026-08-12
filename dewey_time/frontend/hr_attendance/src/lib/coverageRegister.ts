@@ -4,7 +4,8 @@ import type {
   ScheduleCoveragePayload,
 } from "@/lib/scheduleCoverage";
 import {
-  isFeedConnected, STALE_AFTER_MINUTES, type EnrollmentPayload, type EnrollmentRow,
+  isFeedConnected, parseFrappeDatetime, STALE_AFTER_MINUTES,
+  type EnrollmentPayload, type EnrollmentRow,
 } from "@/lib/enrollmentReport";
 
 /**
@@ -219,12 +220,22 @@ export function feedHealth(
   enrollment: EnrollmentPayload | undefined,
   nowMs: number,
 ): FeedHealth {
-  if (!isFeedConnected(enrollment)) return { schedule: Boolean(coverage), biometric: false };
+  const schedule = Boolean(coverage);
+  if (!isFeedConnected(enrollment)) return { schedule, biometric: false };
 
-  const reportedAt = Date.parse((enrollment?.last_snapshot_at ?? "").replace(" ", "T") + "Z");
-  const minutes = Number.isNaN(reportedAt) ? Infinity : (nowMs - reportedAt) / 60000;
+  // Reuses parseFrappeDatetime — the same site-local reading snapshotNotice
+  // uses — rather than a second, UTC-forcing parse of the same field. A
+  // one-hour offset between the two readings would put a snapshot on
+  // opposite sides of "stale" depending on which function asked.
+  const reportedAt = parseFrappeDatetime(enrollment?.last_snapshot_at ?? "");
+  const minutes = reportedAt === null ? Infinity : (nowMs - reportedAt) / 60000;
 
-  return { schedule: Boolean(coverage), biometric: minutes <= STALE_AFTER_MINUTES };
+  return { schedule, biometric: minutes <= STALE_AFTER_MINUTES };
+}
+
+/** "needs"/"need" — the label is the accessible name, so it must agree with the count everywhere it appears. */
+function attentionVerb(count: number): string {
+  return count === 1 ? "needs" : "need";
 }
 
 export function registerAlert(rows: RegisterRow[], feeds: FeedHealth): RegisterAlert {
@@ -232,14 +243,22 @@ export function registerAlert(rows: RegisterRow[], feeds: FeedHealth): RegisterA
   const knowable = feeds.schedule && feeds.biometric;
 
   if (!knowable) {
-    const missing = !feeds.biometric ? "biometrics unavailable" : "schedules unavailable";
+    // Names every down feed, not just one — naming only the biometric feed
+    // when the schedule feed is ALSO down would assert by omission that the
+    // schedule half is fine, which is exactly the over-reassurance this
+    // alert exists to avoid.
+    const missingFeeds = [
+      feeds.schedule ? null : "schedules",
+      feeds.biometric ? null : "biometrics",
+    ].filter((feed): feed is string => feed !== null);
+
     return {
       tone: "degraded",
       count,
       knowable: false,
       // Says what it cannot see. A bare count here reads as reassurance at
       // exactly the moment the page knows least.
-      label: `${count} need attention · ${missing}`,
+      label: `${count} ${attentionVerb(count)} attention · ${missingFeeds.join(" and ")} unavailable`,
     };
   }
 
@@ -251,7 +270,7 @@ export function registerAlert(rows: RegisterRow[], feeds: FeedHealth): RegisterA
     tone: "problem",
     count,
     knowable: true,
-    label: `${count} ${count === 1 ? "needs" : "need"} attention — show ${count === 1 ? "it" : "them"}`,
+    label: `${count} ${attentionVerb(count)} attention — show ${count === 1 ? "it" : "them"}`,
   };
 }
 
@@ -269,4 +288,25 @@ export function visibleColumnIds(feeds: FeedHealth): string[] {
     ...(feeds.schedule ? SCHEDULE_COLUMNS : []),
     ...(feeds.biometric ? BIOMETRIC_COLUMNS : []),
   ];
+}
+
+/**
+ * Blank the facts a feed cannot currently vouch for, so every consumer agrees.
+ *
+ * joinRegisterRows already does this for a bridge that has NEVER reported, by
+ * gating on isFeedConnected. A bridge that reported but went stale needs the
+ * same treatment and cannot get it there: staleness needs `now`, which the join
+ * does not take. Without this, the columns vanish while the alert count and the
+ * not-ready filter keep counting the hidden facts — so the reader is shown a
+ * number they cannot verify, and filtering to it surfaces rows that look ready.
+ */
+export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): RegisterRow[] {
+  if (feeds.schedule && feeds.biometric) return rows;
+  return rows.map((row) => ({
+    ...row,
+    ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null }),
+    ...(feeds.biometric
+      ? {}
+      : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),
+  }));
 }

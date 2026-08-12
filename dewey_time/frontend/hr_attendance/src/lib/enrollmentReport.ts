@@ -78,7 +78,7 @@ export function isFeedConnected(payload: EnrollmentPayload | undefined): boolean
 }
 
 /** Frappe datetimes are "YYYY-MM-DD HH:MM:SS" in site-local time. */
-function parseFrappeDatetime(value: string): number | null {
+export function parseFrappeDatetime(value: string): number | null {
   const ms = Date.parse(value.replace(" ", "T"));
   return Number.isNaN(ms) ? null : ms;
 }

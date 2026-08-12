@@ -3,10 +3,24 @@ import test from "node:test";
 
 import {
   feedHealth, filterRegisterRows, isNotReady, joinRegisterRows, registerAlert, sortRegisterRows,
-  visibleColumnIds, type RegisterFilters, type RegisterRow,
+  suppressUnusableFacts, visibleColumnIds, type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
-import type { EnrollmentPayload } from "@/lib/enrollmentReport";
+import { STALE_AFTER_MINUTES, type EnrollmentPayload } from "@/lib/enrollmentReport";
+
+/**
+ * Formats a local Date offset from `nowMs` as a Frappe datetime string
+ * ("YYYY-MM-DD HH:MM:SS"). Deliberately local (getFullYear/getMonth/etc, not
+ * the UTC variants) so it lands in the same frame `parseFrappeDatetime` reads
+ * it back in, whatever timezone the test runs under — see enrollmentReport
+ * .test.ts's NOW comment for the measured consequence of mixing frames.
+ */
+function minutesBefore(nowMs: number, minutes: number): string {
+  const d = new Date(nowMs - minutes * 60000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
 function coverage(over: Partial<ScheduleCoveragePayload> = {}): ScheduleCoveragePayload {
   return {
@@ -343,6 +357,30 @@ test("the alert counts problems and reads as a problem", () => {
   assert.match(got.label, /1 needs attention/i);
 });
 
+test("the problem alert pluralizes and offers a call to action for multiple problems", () => {
+  // "the alert counts problems..." above only ever exercises count === 1, so
+  // it cannot tell "needs"/"it" from "need"/"them", nor notice the
+  // "— show ..." call to action being deleted outright.
+  const got = registerAlert(
+    [row({ schedule: "missing" }), row({ id: "B", schedule: "missing" })],
+    HEALTHY,
+  );
+  assert.equal(got.tone, "problem");
+  assert.equal(got.count, 2);
+  assert.match(got.label, /2 need attention — show them/i);
+});
+
+test("a biometric-only problem still reaches the count", () => {
+  // Every other fixture in this file that feeds registerAlert derives its
+  // problem from schedule: "missing" — a count that silently switched to
+  // counting only that would still pass them all.
+  const got = registerAlert(
+    [row({ biometric: "none" }), row({ id: "B", biometric: "still_enrolled" }), row({ id: "C" })],
+    HEALTHY,
+  );
+  assert.equal(got.count, 2);
+});
+
 test("all clear is a rendered state, never an absence", () => {
   // A missing indicator cannot distinguish "nothing wrong" from "failed to
   // load", so the clear state has to be something you can see.
@@ -353,13 +391,19 @@ test("all clear is a rendered state, never an absence", () => {
 });
 
 test("a dead biometric feed degrades the alert and says what it cannot see", () => {
+  // Two problem rows, not one — pins that the degraded label pluralizes
+  // ("2 need", not "2 needs") the same way the problem-tone label does; the
+  // single-row version of this fixture could not have caught that.
   const got = registerAlert(
-    [row({ biometric: null, schedule: "missing" })],
+    [row({ biometric: null, schedule: "missing" }), row({ id: "B", biometric: null, schedule: "missing" })],
     { schedule: true, biometric: false },
   );
   assert.equal(got.tone, "degraded");
   assert.equal(got.knowable, false);
+  assert.equal(got.count, 2);
+  assert.match(got.label, /2 need attention/i);
   assert.match(got.label, /biometrics unavailable/i);
+  assert.doesNotMatch(got.label, /schedules/i, "the schedule feed is healthy here; it must not be named");
 });
 
 test("a degraded alert still reports the problems it CAN see", () => {
@@ -370,6 +414,27 @@ test("a degraded alert still reports the problems it CAN see", () => {
   assert.equal(got.count, 1);
 });
 
+test("a dead schedule feed degrades the alert and names schedules, not biometrics", () => {
+  // No test previously called registerAlert with { schedule: false,
+  // biometric: true } at all — the schedule-down half of the branch was
+  // reachable but entirely unexercised.
+  const got = registerAlert([row({ schedule: "missing" })], { schedule: false, biometric: true });
+  assert.equal(got.tone, "degraded");
+  assert.equal(got.knowable, false);
+  assert.match(got.label, /schedules unavailable/i);
+  assert.doesNotMatch(got.label, /biometrics/i, "the biometric feed is healthy here; it must not be named");
+});
+
+test("both feeds down names both, rather than reassuring about the one it omits", () => {
+  // Naming only one down feed asserts by omission that the other is fine —
+  // over-reassurance at exactly the moment the page knows least.
+  const got = registerAlert([row()], { schedule: false, biometric: false });
+  assert.equal(got.tone, "degraded");
+  assert.equal(got.knowable, false);
+  assert.match(got.label, /schedules.*unavailable/i);
+  assert.match(got.label, /biometrics.*unavailable/i);
+});
+
 test("a dead biometric feed hides the biometric columns AND status", () => {
   // Status is a biometric-feed fact: coverage filters status:Active, so every
   // row it returns is Active by construction and leavers never appear there.
@@ -378,7 +443,7 @@ test("a dead biometric feed hides the biometric columns AND status", () => {
   assert.ok(!hidden.includes("biometric"));
   assert.ok(!hidden.includes("fingerprint_count"));
   assert.ok(!hidden.includes("status"));
-  assert.ok(hidden.includes("branch"), "branch comes from the schedule feed and survives");
+  assert.ok(hidden.includes("branch"), "branch is an always-on column and survives even when biometric is down");
   assert.ok(hidden.includes("schedule"));
 });
 
@@ -393,6 +458,21 @@ test("a dead schedule feed hides only its own columns", () => {
   assert.ok(shown.includes("branch"), "branch is an always-on column, not a schedule fact");
 });
 
+test("visibleColumnIds returns the full column set when both feeds are healthy", () => {
+  // Pins ALWAYS in full — reducing it to e.g. ["employee", "branch"] would
+  // permanently hide "department" and "action" with a green suite, since
+  // every other test here only ever checks for a column's presence, never
+  // the complete list.
+  assert.deepEqual(
+    visibleColumnIds({ schedule: true, biometric: true }),
+    [
+      "employee", "branch", "department", "action",
+      "schedule", "weekly_minutes",
+      "biometric", "fingerprint_count", "status",
+    ],
+  );
+});
+
 test("feed health treats a never-reported snapshot as down", () => {
   const now = Date.parse("2026-08-12T09:00:00Z");
   assert.equal(feedHealth(undefined, undefined, now).biometric, false);
@@ -403,9 +483,88 @@ test("feed health treats a never-reported snapshot as down", () => {
 });
 
 test("feed health treats a snapshot older than the shared stale threshold as down", () => {
-  const now = Date.parse("2026-08-12T09:00:00Z");
-  const fresh = { rows: [], counts: {} as never, last_snapshot_at: "2026-08-12 08:00:00", window_days: 30 };
-  const old = { rows: [], counts: {} as never, last_snapshot_at: "2026-08-09 08:00:00", window_days: 30 };
-  assert.equal(feedHealth(undefined, fresh, now).biometric, true);
-  assert.equal(feedHealth(undefined, old, now).biometric, false);
+  // LOCAL, deliberately — no trailing Z. feedHealth reads Frappe datetimes
+  // through parseFrappeDatetime, which treats them as site-local, so `now`
+  // must be anchored the same way or the boundary shifts with the runner's
+  // timezone. Fixtures are computed FROM STALE_AFTER_MINUTES, not
+  // hardcoded — a fixture picked to merely straddle 24h (e.g. 1h vs. 3
+  // days) cannot tell a correct 1440-minute threshold from a mutated one
+  // (doubled, halved, off by a day); only a fixture one minute either side
+  // of the real threshold can.
+  const now = new Date("2026-08-13T09:00:00").getTime();
+  const justInside = {
+    rows: [], counts: {} as never,
+    last_snapshot_at: minutesBefore(now, STALE_AFTER_MINUTES - 1), window_days: 30,
+  };
+  const justOutside = {
+    rows: [], counts: {} as never,
+    last_snapshot_at: minutesBefore(now, STALE_AFTER_MINUTES + 1), window_days: 30,
+  };
+  assert.equal(feedHealth(undefined, justInside, now).biometric, true);
+  assert.equal(feedHealth(undefined, justOutside, now).biometric, false);
+});
+
+test("feed health treats an unparseable snapshot timestamp as stale, not fresh", () => {
+  // The Infinity fail-closed fallback: a garbage value must read as maximally
+  // old, not as `0` (which would read as "just reported" and pass every
+  // staleness check it should fail).
+  const now = new Date("2026-08-13T09:00:00").getTime();
+  const garbage = { rows: [], counts: {} as never, last_snapshot_at: "not a date", window_days: 30 };
+  assert.equal(feedHealth(undefined, garbage, now).biometric, false);
+});
+
+test("feed health reflects the schedule feed independently of biometric health", () => {
+  // Every other feedHealth test passes `coverage: undefined` and only reads
+  // `.biometric` — a hardcoded `schedule: true` would pass all of them and
+  // keep schedule columns rendered through a total coverage outage.
+  const now = new Date("2026-08-13T09:00:00").getTime();
+  const fresh = {
+    rows: [], counts: {} as never,
+    last_snapshot_at: minutesBefore(now, 5), window_days: 30,
+  };
+  assert.deepEqual(feedHealth(undefined, fresh, now), { schedule: false, biometric: true });
+  assert.deepEqual(feedHealth(coverage(), fresh, now), { schedule: true, biometric: true });
+});
+
+test("suppressUnusableFacts nulls exactly the biometric fields when that feed is unhealthy", () => {
+  const input = [row({ biometric: "none", fingerprint_count: 3, status: "Active", days_since_relieving: 5 })];
+  const [got] = suppressUnusableFacts(input, { schedule: true, biometric: false });
+  assert.equal(got.biometric, null);
+  assert.equal(got.fingerprint_count, null);
+  assert.equal(got.status, null);
+  assert.equal(got.days_since_relieving, null);
+  assert.equal(got.schedule, "assigned", "schedule facts survive a biometric-only outage");
+  assert.equal(got.weekly_minutes, 2400, "schedule facts survive a biometric-only outage");
+});
+
+test("suppressUnusableFacts nulls exactly the schedule fields when that feed is unhealthy", () => {
+  const input = [row({ schedule: "missing", weekly_minutes: 1800 })];
+  const [got] = suppressUnusableFacts(input, { schedule: false, biometric: true });
+  assert.equal(got.schedule, null);
+  assert.equal(got.weekly_minutes, null);
+  assert.equal(got.biometric, "enrolled", "biometric facts survive a schedule-only outage");
+  assert.equal(got.status, "Active", "biometric facts survive a schedule-only outage");
+});
+
+test("suppressUnusableFacts is a no-op when both feeds are healthy", () => {
+  const input = [row()];
+  assert.deepEqual(suppressUnusableFacts(input, { schedule: true, biometric: true }), input);
+});
+
+test("suppressUnusableFacts does not mutate its input array or row objects", () => {
+  const input = [row({ biometric: "none" })];
+  const snapshot = { ...input[0] };
+  suppressUnusableFacts(input, { schedule: true, biometric: false });
+  assert.deepEqual(input[0], snapshot);
+  assert.equal(input.length, 1);
+});
+
+test("suppressUnusableFacts composed with registerAlert stops counting a fact the reader cannot see", () => {
+  // The whole point: without suppression, a stale-biometric row with
+  // biometric: "none" still increments the count even though the biometric
+  // column is hidden — a number the reader cannot verify, and a
+  // readiness:"not-ready" filter that would surface a row that looks ready.
+  const feeds = { schedule: true, biometric: false };
+  const suppressed = suppressUnusableFacts([row({ biometric: "none" })], feeds);
+  assert.equal(registerAlert(suppressed, feeds).count, 0);
 });
