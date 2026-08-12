@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { joinRegisterRows } from "@/lib/coverageRegister";
+import {
+  filterRegisterRows, isNotReady, joinRegisterRows, sortRegisterRows,
+  type RegisterRow,
+} from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import type { EnrollmentPayload } from "@/lib/enrollmentReport";
 
@@ -169,4 +172,90 @@ test("ENROLLED_NOT_PUNCHING stays distinct from OK", () => {
   const byId = new Map(rows.map((r) => [r.id, r]));
   assert.equal(byId.get("E3")?.biometric, "enrolled_not_punching");
   assert.equal(byId.get("E4")?.biometric, "enrolled");
+});
+
+const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
+  id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  status: "Active", schedule: "assigned", weekly_minutes: 2400,
+  biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null, ...over,
+});
+
+test("not-ready covers missing schedule, missing template, and live leavers", () => {
+  assert.equal(isNotReady(row({ schedule: "missing" })), true);
+  assert.equal(isNotReady(row({ biometric: "none" })), true);
+  assert.equal(isNotReady(row({ biometric: "still_enrolled" })), true);
+  assert.equal(isNotReady(row()), false);
+});
+
+test("an unknown fact is not a problem", () => {
+  // A null biometric means the feed is down, not that someone is unenrolled.
+  // Counting it as not-ready would report 241 findings during an outage.
+  assert.equal(isNotReady(row({ biometric: null })), false);
+  assert.equal(isNotReady(row({ schedule: null, biometric: "enrolled" })), false);
+});
+
+test("enrolled-but-not-punching is not a readiness problem", () => {
+  // They can clock in; they simply have not. That is an attendance question,
+  // not a coverage one, and putting it here floods the list.
+  assert.equal(isNotReady(row({ biometric: "enrolled", fingerprint_count: 1 })), false);
+});
+
+test("search matches name and employee id, case-insensitively", () => {
+  const rows = [row({ id: "HR-EMP-0042", employee_name: "Sok Dara" }),
+                row({ id: "HR-EMP-0117", employee_name: "Chan Sophea" })];
+  assert.equal(filterRegisterRows(rows, { search: "sok" }).length, 1);
+  assert.equal(filterRegisterRows(rows, { search: "0117" })[0].employee_name, "Chan Sophea");
+  assert.equal(filterRegisterRows(rows, { search: "   " }).length, 2);
+});
+
+test("filters compose — problems AND one branch", () => {
+  const rows = [
+    row({ id: "A", employee_name: "A", branch: "DIU", schedule: "missing" }),
+    row({ id: "B", employee_name: "B", branch: "PM", schedule: "missing" }),
+    row({ id: "C", employee_name: "C", branch: "DIU" }),
+  ];
+  const got = filterRegisterRows(rows, { readiness: "not-ready", branch: ["DIU"] });
+  assert.deepEqual(got.map((r) => r.id), ["A"]);
+});
+
+test("severity order when filtered to problems, name order otherwise", () => {
+  // Names are deliberately NOT alphabetical in severity order (Zed is worst,
+  // Amy is least severe) so that severity ordering and name ordering produce
+  // different row sequences — a fixture where they coincide can't tell the
+  // two code paths apart.
+  const rows = [
+    row({ id: "S", employee_name: "Amy", schedule: "missing", biometric: "enrolled" }),
+    row({ id: "L", employee_name: "Zed", biometric: "still_enrolled", status: "Left" }),
+    row({ id: "N", employee_name: "Moe", biometric: "none" }),
+  ];
+  assert.deepEqual(
+    sortRegisterRows(rows, { readiness: "not-ready" }).map((r) => r.id),
+    ["L", "N", "S"],
+    "leaver, then no-template, then no-schedule — not alphabetical order",
+  );
+  assert.deepEqual(
+    sortRegisterRows(rows, {}).map((r) => r.employee_name),
+    ["Amy", "Moe", "Zed"],
+  );
+});
+
+test("sorting by hours puts unknown minutes last in both directions", () => {
+  // Three rows, input order C, B, A (known-high, known-low, unknown), is
+  // deliberate. With only one known value, or with the unknown row listed
+  // first, V8's sort can resolve the whole array from the single surviving
+  // null guard and never actually exercise the removed one — this exact
+  // fixture is what turns red when `if (av === null) return 1` is deleted.
+  const rows = [
+    row({ id: "C", weekly_minutes: 1200 }),
+    row({ id: "B", weekly_minutes: 2400 }),
+    row({ id: "A", weekly_minutes: null }),
+  ];
+  assert.deepEqual(
+    sortRegisterRows(rows, { sort: "hours", order: "asc" }).map((r) => r.id),
+    ["C", "B", "A"],
+  );
+  assert.deepEqual(
+    sortRegisterRows(rows, { sort: "hours", order: "desc" }).map((r) => r.id),
+    ["B", "C", "A"],
+  );
 });

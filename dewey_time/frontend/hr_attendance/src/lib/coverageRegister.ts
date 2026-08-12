@@ -119,3 +119,81 @@ export function joinRegisterRows(
 
   return [...byId.values()].sort((a, b) => a.employee_name.localeCompare(b.employee_name));
 }
+
+export type RegisterFilters = {
+  search?: string;
+  branch?: string[];
+  department?: string[];
+  status?: "Active" | "Left";
+  schedule?: "assigned" | "missing";
+  biometric?: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled";
+  readiness?: "not-ready";
+  sort?: "name" | "hours" | "prints";
+  order?: "asc" | "desc";
+};
+
+/**
+ * Can this person be tracked today?
+ *
+ * A NULL fact is never a problem. Null means the feed did not speak, and
+ * counting silence as a finding is how a bridge outage becomes 241 false
+ * alarms. Only a positive statement of absence counts.
+ *
+ * ENROLLED_NOT_PUNCHING is deliberately absent: they can clock in and simply
+ * have not, which is an attendance question, not a coverage one.
+ */
+export function isNotReady(row: RegisterRow): boolean {
+  return row.schedule === "missing" || row.biometric === "none" || row.biometric === "still_enrolled";
+}
+
+/** Severity for the filtered view: worst first. Lower sorts earlier. */
+function severity(row: RegisterRow): number {
+  if (row.biometric === "still_enrolled") return 0;
+  if (row.biometric === "none") return 1;
+  if (row.schedule === "missing") return 2;
+  return 3;
+}
+
+export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters): RegisterRow[] {
+  const needle = (filters.search ?? "").trim().toLowerCase();
+
+  return rows.filter((row) => {
+    if (needle && !`${row.employee_name} ${row.id}`.toLowerCase().includes(needle)) return false;
+    if (filters.branch?.length && !filters.branch.includes(row.branch ?? "")) return false;
+    if (filters.department?.length && !filters.department.includes(row.department ?? "")) return false;
+    if (filters.status && row.status !== filters.status) return false;
+    if (filters.schedule && row.schedule !== filters.schedule) return false;
+    if (filters.biometric && row.biometric !== filters.biometric) return false;
+    if (filters.readiness === "not-ready" && !isNotReady(row)) return false;
+    return true;
+  });
+}
+
+export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters): RegisterRow[] {
+  const out = [...rows];
+  const dir = filters.order === "desc" ? -1 : 1;
+
+  // A flat filter cannot group the way a modal would; severity ordering while
+  // filtered is what recovers "worst first".
+  if (filters.readiness === "not-ready" && !filters.sort) {
+    return out.sort(
+      (a, b) => severity(a) - severity(b) || a.employee_name.localeCompare(b.employee_name),
+    );
+  }
+
+  if (filters.sort === "hours" || filters.sort === "prints") {
+    const key = filters.sort === "hours" ? "weekly_minutes" : "fingerprint_count";
+    return out.sort((a, b) => {
+      const av = a[key];
+      const bv = b[key];
+      // Unknown sorts last in BOTH directions — an absent value is not a small
+      // one, and flipping it to the top on desc would read as a finding.
+      if (av === null && bv === null) return a.employee_name.localeCompare(b.employee_name);
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return (av - bv) * dir || a.employee_name.localeCompare(b.employee_name);
+    });
+  }
+
+  return out.sort((a, b) => a.employee_name.localeCompare(b.employee_name) * dir);
+}
