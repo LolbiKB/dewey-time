@@ -1,3 +1,5 @@
+import type { BaseTableMeta } from "@lolbikb/dewey-ui";
+
 import type {
   CoverageAssignedEmployee,
   CoverageEmployee,
@@ -178,7 +180,59 @@ export type RegisterFilters = {
   readiness?: "not-ready";
   sort?: "name" | "hours" | "prints";
   order?: "asc" | "desc";
+  /**
+   * Which page, 1-based. Absent is the first page.
+   *
+   * The one field a control may change WITHOUT starting over — see
+   * `applyFilterChange`. Everything else here narrows the list, and a page
+   * number counted against a list that no longer exists is not a place.
+   */
+  page?: number;
+  /** Rows per page. Absent means `REGISTER_PAGE_SIZE`. */
+  limit?: number;
 };
+
+/**
+ * Rows per page, and what the "Rows per page" control opens on.
+ *
+ * MUST stay inside GenericDataTable's own option list — [10, 20, 30, 40, 50].
+ * That control is a raw `<select value={filters.limit || 10}>` over exactly
+ * those five, so a size the list does not contain is not merely unusual: left
+ * out of `limit` it leaves the control reading 10 beside a table showing
+ * something else, and written into `limit` it matches no option at all, which
+ * sets `selectedIndex` to -1 and renders the select BLANK. 25 was the first
+ * choice for this register and is unreachable for exactly that reason.
+ *
+ * 50 of the five, because the behaviour being replaced was "every row on one
+ * page": this is the gentlest step away from it — 11 pages over a 503-employee
+ * roster rather than 26 — and this reader narrows far more often than they
+ * page, which makes every page turn pure cost.
+ */
+export const REGISTER_PAGE_SIZE = 50;
+
+/**
+ * A filter change, and back to the first page with it.
+ *
+ * Every control on this page narrows the list, and a page number only means
+ * anything against the list it was counted from: narrow 503 rows to 3 while
+ * sitting on page 8 and page 8 has stopped existing. `paginateRegisterRows`
+ * clamps rather than showing an empty table, but a clamp is a rescue, not an
+ * answer — the reader asked for "everyone in DIU" and would be handed the last
+ * page of them.
+ *
+ * Applied by the controls that NARROW — the facets, the bar's own search box
+ * and the alert dot — rather than by the state setter they share, because the
+ * one write that must not reset the page is a page change itself.
+ * GenericDataTable already stamps `page: 1` on its own search, sort and
+ * page-size writes and an explicit page on its pager buttons, so its side of
+ * the boundary needs nothing from here.
+ */
+export function applyFilterChange(
+  filters: RegisterFilters,
+  change: Partial<RegisterFilters>,
+): RegisterFilters {
+  return { ...filters, ...change, page: 1 };
+}
 
 /**
  * Can this person be tracked today?
@@ -271,6 +325,51 @@ export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters):
   }
 
   return out.sort((a, b) => a.employee_name.localeCompare(b.employee_name) * dir);
+}
+
+/**
+ * One page of the register, and the pager's reading of where that page sits.
+ *
+ * Composed LAST — `paginate(sort(filter(rows)))`. GenericDataTable is told
+ * `manualPagination` and never slices `data`: it renders whatever array it is
+ * handed and takes every number under it from `meta`. Given the whole list and
+ * a hardcoded one-page meta — which is what shipped — all 503 rows drew into a
+ * single scrolling frame, the pager read "Page 1 of 1" and every button was
+ * dead, because they are `disabled: !meta?.hasNext`.
+ *
+ * `meta.total` is the FILTERED count, not the roster. The footer reads
+ * "Showing {data.length} of {meta.total}", so the second number has to be the
+ * size of the set the first is a page of, or the two do not describe the same
+ * thing. The roster total moved to the search placeholder.
+ *
+ * The page is CLAMPED to the last one that exists, and `meta.page` reports the
+ * clamp so the pager and the slice agree about where the reader is. An empty
+ * result is page 1 of 1 — never page 0, and never "Page 1 of 0".
+ *
+ * The alert count, the CSV and the roster figure all keep reading the UNPAGED
+ * rows: a reader on page 2 still needs the whole-roster truth, and a file that
+ * quietly held one page of a filtered set would be indistinguishable from one
+ * that held all of it.
+ */
+export function paginateRegisterRows(
+  rows: RegisterRow[],
+  filters: RegisterFilters,
+): { rows: RegisterRow[]; meta: BaseTableMeta } {
+  // A non-positive size is not a smaller page, it is no instruction at all —
+  // and `ceil(n / 0)` is Infinity, which the pager would render as "Page 1 of
+  // Infinity" above a permanently empty slice.
+  const requested = filters.limit ?? REGISTER_PAGE_SIZE;
+  const limit = requested > 0 ? requested : REGISTER_PAGE_SIZE;
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(Math.max(1, filters.page ?? 1), totalPages);
+  const start = (page - 1) * limit;
+
+  return {
+    rows: rows.slice(start, start + limit),
+    meta: { total, page, limit, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
+  };
 }
 
 /**

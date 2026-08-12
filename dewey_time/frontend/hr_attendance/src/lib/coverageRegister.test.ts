@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  columnIdForSort, composeRegister, feedHealth, filterRegisterRows, isNotReady, joinRegisterRows,
-  registerAlert, registerFacets, registerFeedState, sortFromColumnId, SORT_COLUMN_IDS,
-  sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
+  applyFilterChange, columnIdForSort, composeRegister, feedHealth, filterRegisterRows, isNotReady,
+  joinRegisterRows, paginateRegisterRows, registerAlert, registerFacets, registerFeedState,
+  REGISTER_PAGE_SIZE, sortFromColumnId, SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts,
+  visibleColumnIds,
   type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import { toRegisterCsv } from "@/lib/registerCsv";
@@ -506,6 +507,165 @@ test("sortRegisterRows does not mutate the caller's array", () => {
   const originalOrder = rows.map((r) => r.id);
   sortRegisterRows(rows, {});
   assert.deepEqual(rows.map((r) => r.id), originalOrder);
+});
+
+// ---------------------------------------------------------------------------
+// paginateRegisterRows — the slice, and the pager's reading of it
+// ---------------------------------------------------------------------------
+
+/** `n` rows, ids E001.. in order, so a slice can be named rather than counted. */
+function roster(n: number): RegisterRow[] {
+  return Array.from({ length: n }, (_, i) =>
+    row({ id: `E${String(i + 1).padStart(3, "0")}`, employee_name: `Person ${i + 1}` }),
+  );
+}
+
+test("a page is the slice the reader is on, never the whole list", () => {
+  // GenericDataTable sets `manualPagination` and never slices `data` — it
+  // renders exactly the array it is handed. Returning everything here is what
+  // shipped, and it put all 503 rows in one scrolling frame.
+  const { rows: got, meta } = paginateRegisterRows(roster(7), { page: 2, limit: 3 });
+  assert.deepEqual(got.map((r) => r.id), ["E004", "E005", "E006"]);
+  assert.deepEqual(meta, {
+    // The FILTERED count, not the roster: the footer reads "Showing
+    // {data.length} of {meta.total}", so the second number has to be the size
+    // of the set the first is a page of.
+    total: 7,
+    page: 2,
+    limit: 3,
+    totalPages: 3,
+    hasNext: true,
+    hasPrev: true,
+  });
+});
+
+test("the last page is the remainder, and nothing claims to follow it", () => {
+  const { rows: got, meta } = paginateRegisterRows(roster(7), { page: 3, limit: 3 });
+  assert.deepEqual(got.map((r) => r.id), ["E007"], "one row, not a padded page of three");
+  assert.equal(meta.hasNext, false, "there is no page 4");
+  assert.equal(meta.hasPrev, true);
+});
+
+test("the page is clamped to the last one that exists, and meta reports the clamp", () => {
+  // Narrow 503 rows down to 3 while sitting on page 8 and page 8 has stopped
+  // existing. Unclamped, the slice starts past the end and the table renders
+  // empty under a pager still reading "Page 8" — so the reader cannot tell
+  // their filter from a broken register. The clamp has to reach `meta.page`
+  // too, or the number under the table disagrees with the rows in it.
+  const { rows: got, meta } = paginateRegisterRows(roster(3), { page: 8, limit: 2 });
+  assert.deepEqual(got.map((r) => r.id), ["E003"], "the last page, not an empty one");
+  assert.equal(meta.page, 2, "the pager is told where it actually landed");
+  assert.equal(meta.totalPages, 2);
+  assert.equal(meta.hasNext, false, "nothing follows the last page, however it was reached");
+  assert.equal(meta.hasPrev, true);
+});
+
+test("a page below the first is the first, not a negative slice", () => {
+  // `rows.slice(-4, ...)` counts from the END of the array, so an unclamped
+  // page 0 would quietly serve the last rows of the roster as the first page.
+  const { rows: got, meta } = paginateRegisterRows(roster(5), { page: 0, limit: 2 });
+  assert.deepEqual(got.map((r) => r.id), ["E001", "E002"]);
+  assert.equal(meta.page, 1);
+  assert.equal(meta.hasPrev, false);
+});
+
+test("an empty result is page 1 of 1, never page 0 of 0", () => {
+  const { rows: got, meta } = paginateRegisterRows([], { page: 4, limit: 10 });
+  assert.deepEqual(got, []);
+  assert.equal(meta.total, 0);
+  assert.equal(meta.page, 1, "\"Page 0\" is not a place the reader can be");
+  assert.equal(meta.totalPages, 1, "nor is \"of 0\"");
+  assert.equal(meta.hasNext, false);
+  assert.equal(meta.hasPrev, false);
+});
+
+test("asking for no page is the first page, at the default size", () => {
+  const { rows: got, meta } = paginateRegisterRows(roster(120), {});
+  assert.equal(meta.page, 1);
+  assert.equal(meta.limit, REGISTER_PAGE_SIZE);
+  assert.equal(got.length, REGISTER_PAGE_SIZE, "a default that does not slice is not a default");
+  assert.equal(meta.totalPages, Math.ceil(120 / REGISTER_PAGE_SIZE));
+  assert.equal(meta.hasNext, true);
+});
+
+test("the default page size is one the page-size control can actually display", () => {
+  // GenericDataTable's "Rows per page" is a raw `<select value={filters.limit
+  // || 10}>` whose only options are these five. A default outside the list
+  // either leaves the control reading 10 beside a table showing something else
+  // (with `limit` unset) or, written into `limit`, matches no option at all —
+  // `selectedIndex: -1`, and the select renders blank. 25 was the first choice
+  // for this register and is unreachable for precisely that reason.
+  assert.ok(
+    [10, 20, 30, 40, 50].includes(REGISTER_PAGE_SIZE),
+    `${REGISTER_PAGE_SIZE} is not one of the sizes the control can show`,
+  );
+});
+
+test("a page size that is not a size falls back to the default, not to an infinite pager", () => {
+  // Unreachable through the control, which offers five fixed sizes — but
+  // `limit` is a plain number on a plain filters object, and `ceil(n / 0)` is
+  // Infinity, which the pager would render as "Page 1 of Infinity" above a
+  // permanently empty slice.
+  for (const limit of [0, -5]) {
+    const { rows: got, meta } = paginateRegisterRows(roster(3), { limit });
+    assert.equal(meta.limit, REGISTER_PAGE_SIZE, `limit: ${limit} must not be taken literally`);
+    assert.equal(meta.totalPages, 1);
+    assert.equal(got.length, 3);
+  }
+});
+
+test("paginateRegisterRows does not mutate the array it was given", () => {
+  const rows = roster(5);
+  const before = rows.map((r) => r.id);
+  paginateRegisterRows(rows, { page: 2, limit: 2 });
+  assert.deepEqual(rows.map((r) => r.id), before);
+  assert.equal(rows.length, 5, "the caller still holds every filtered row — the CSV reads them");
+});
+
+// ---------------------------------------------------------------------------
+// applyFilterChange — narrowing starts over
+// ---------------------------------------------------------------------------
+
+test("a filter change returns to page 1 and leaves every other filter standing", () => {
+  // Dropping the reset leaves the reader on page 8 of a set that may now have
+  // two pages; dropping the spread wipes the search, sort and facets the way
+  // `onFiltersChange({ branch })` would.
+  assert.deepEqual(
+    applyFilterChange(
+      { search: "ada", branch: ["DIU"], sort: "hours", order: "desc", page: 8, limit: 20 },
+      { status: "Left" },
+    ),
+    {
+      search: "ada", branch: ["DIU"], sort: "hours", order: "desc",
+      status: "Left", page: 1, limit: 20,
+    },
+  );
+});
+
+test("the page size survives a filter change — it is a preference, not a filter", () => {
+  assert.equal(applyFilterChange({ limit: 10, page: 3 }, { search: "ada" }).limit, 10);
+});
+
+test("clearing a filter starts over too, and the cleared field goes out as undefined", () => {
+  // `[]` and `undefined` are both "no filter"; neither may be mistaken for a
+  // change too small to reset the page.
+  assert.deepEqual(
+    applyFilterChange({ status: "Left", page: 5 }, { status: undefined }),
+    { status: undefined, page: 1 },
+  );
+  assert.deepEqual(
+    applyFilterChange({ branch: ["DIU"], page: 5 }, { branch: [] }),
+    { branch: [], page: 1 },
+  );
+});
+
+test("applyFilterChange does not mutate the filters it was given", () => {
+  // The page holds these in useState and INITIAL_REGISTER_FILTERS is frozen —
+  // an in-place write would throw there and silently corrupt state everywhere
+  // else.
+  const held: RegisterFilters = { search: "ada", page: 4 };
+  applyFilterChange(held, { status: "Left" });
+  assert.deepEqual(held, { search: "ada", page: 4 });
 });
 
 const HEALTHY = { schedule: true, biometric: true };

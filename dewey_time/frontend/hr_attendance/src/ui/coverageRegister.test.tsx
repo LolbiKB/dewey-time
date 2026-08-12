@@ -8,7 +8,11 @@ import { getCoreRowModel, useReactTable, type SortingState } from "@tanstack/rea
 
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
-import { visibleColumnIds } from "@/lib/coverageRegister";
+import {
+  paginateRegisterRows,
+  REGISTER_PAGE_SIZE,
+  visibleColumnIds,
+} from "@/lib/coverageRegister";
 import type {
   FeedHealth,
   RegisterAlert,
@@ -33,7 +37,7 @@ import {
 import {
   FacetFilter,
   FacetOptions,
-  REGISTER_SEARCH_PLACEHOLDER,
+  registerSearchPlaceholder,
   RegisterFilterBar,
   SingleFacet,
   toggleFacetValue,
@@ -647,10 +651,27 @@ const mainSource = readFileSync(new URL("../main.tsx", import.meta.url), "utf8")
 test("the page uses dewey-ui Page chrome like every other routed page", () => {
   // The old biometrics page was the only routed page without it, which is why
   // the shared nav shifted 16px between tabs (Page is px-5 sm:px-8, that page
-  // hand-rolled px-4).
+  // hand-rolled px-4). <Page> is what the parity guard in chromeMigration.test
+  // and the geometry measured by e2e/page-insets.spec.ts both rest on, so it
+  // stays even though the header above it is gone.
   assert.ok(pageSource.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
-  assert.ok(pageSource.includes("PageHeader"), "expected PageHeader");
   assert.ok(!/className="[^"]*\bpx-4\b/.test(pageSource), "no hand-rolled page inset");
+});
+
+test("the register has a heading, and it costs no vertical space", () => {
+  // PageHeader went because a title block above the table was a whole row of
+  // height to restate the tab the reader arrived through. The HEADING is a
+  // different thing: screen-reader users navigate by heading, and a route with
+  // none cannot answer "where am I". `sr-only` is zero pixels, so both hold.
+  //
+  // Rendered, not grepped, because the class is what makes this free — an <h1>
+  // that lost `sr-only` would put the 40px straight back.
+  const html = renderView();
+  assert.match(html, /<h1 class="sr-only">Coverage<\/h1>/);
+  assert.ok(
+    !pageSource.includes("<PageHeader"),
+    "the header block is what this round removed; only the heading survives",
+  );
 });
 
 test("the page gates on hrStaff like its siblings", () => {
@@ -727,19 +748,15 @@ const PENDING_ALERT: RegisterAlert = {
 };
 
 /**
- * The text of PageHeader's description line.
+ * The accessible name of the register's search box — which is where the roster
+ * total lives now that the page header is gone.
  *
- * Anchored on `data-slot="page-header"` — dewey-ui's own stable hook, the same
- * one e2e/page-insets.spec.ts selects on — and on the element structure around
- * it, never on the utility classes PageHeader happens to style that <p> with
- * today. A restyle in the shared package is not a behaviour change here and
- * must not turn into red tests.
+ * There is exactly one box at any width (the bar's below 768, the primitive's
+ * above), and both are named from `registerSearchPlaceholder`, so this reads
+ * whichever one is on screen.
  */
-function headerDescription(html: string): string {
-  const start = html.indexOf('data-slot="page-header"');
-  assert.notEqual(start, -1, "expected a PageHeader");
-  const region = html.slice(start, html.indexOf('data-slot="section"', start));
-  return region.match(/<\/h1>\s*<p[^>]*>(.*?)<\/p>/)?.[1] ?? "";
+function searchBoxName(html: string): string | null {
+  return html.match(/(?:aria-label|placeholder)="(Search[^"]*)"/)?.[1] ?? null;
 }
 
 function renderView(over: Partial<CoverageRegisterViewProps> = {}): string {
@@ -779,34 +796,71 @@ test("an ordinary page load does not flash an outage", () => {
   assert.doesNotMatch(html, /data-tone=/, "no alert dot until the feeds have answered");
   assert.doesNotMatch(html, /unavailable/, "no outage banner until the feeds have answered");
   assert.doesNotMatch(html, /roster is partial/);
-  // Same rule one line up in the header. The roster size is not known yet, so
-  // the description must say so rather than report a count of nobody.
-  // Asserted against PageHeader's own description element, not the whole
-  // document: GenericDataTable's footer legitimately reads "Showing 0 of 0"
-  // beside its spinner, and a bare /0 employees/ search would either collide
-  // with that or — with a one-row fixture — never be able to fail at all.
+  // Same rule in the search box, which is where the roster total went when the
+  // header was dropped. Nobody has answered yet, so the size is UNKNOWN, not
+  // zero — "Search 0 employees…" would state as a count the one thing the page
+  // does not have.
   assert.equal(
-    headerDescription(html),
-    "Loading…",
-    "the header must say it is loading, not report a roster size it does not have",
+    searchBoxName(html),
+    "Search by name or employee ID…",
+    "the box must claim no roster size it does not have",
   );
+  assert.doesNotMatch(html, /Search 0 employees/);
   // Direction: the gate must be on `isLoading`, not on the page as a whole.
   assert.match(html, /Loading data/, "the table still reports that it is loading");
 });
 
-test("the header names the roster size, and says employee once at one", () => {
-  assert.equal(headerDescription(renderView({ rows: [BASE_ROW] })), "1 employee");
+test("the search box names the roster size, and says employee once at one", () => {
+  // Where "Coverage · N employees" went. It costs no vertical space here, and
+  // it is derived from the UNFILTERED rows — see the facet test below for the
+  // same rule on the facet options.
+  assert.equal(searchBoxName(renderView({ rows: [BASE_ROW] })), "Search 1 employee by name or ID…");
   assert.equal(
-    headerDescription(renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] })),
-    "2 employees",
+    searchBoxName(renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] })),
+    "Search 2 employees by name or ID…",
   );
 });
 
-test("the alert dot is the header's action once the feeds have answered", () => {
+test("the roster count in the search box does not follow the filters down", () => {
+  // Derived from `rows`, not from what survived the filter. A count that
+  // shrank as the reader typed would be describing the result, not the roster,
+  // and the search box is the only place the roster size is stated at all now.
+  const two = [BASE_ROW, { ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing" as const }];
+  assert.equal(
+    searchBoxName(renderView({ rows: two, filters: { readiness: "not-ready" } })),
+    "Search 2 employees by name or ID…",
+  );
+});
+
+test("the placeholder is the same wording on both sides of the breakpoint", () => {
+  // Two owners, one control: below 768 the bar renders the box and the
+  // primitive's is hidden. A reader who learned it on a laptop has to find the
+  // same name on a phone, and one e2e locator has to match both.
+  const wide = renderView({ rows: [BASE_ROW] });
+  const narrow = renderView({ rows: [BASE_ROW], narrow: true });
+  assert.equal(searchBoxName(wide), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(narrow), searchBoxName(wide));
+});
+
+test("the alert dot leads the toolbar once the feeds have answered", () => {
   const html = renderView();
   assert.match(html, /data-tone="clear"/, "the dot must render when not loading");
   assert.match(html, /aria-label="All 1 ready"/);
   assert.match(html, /aria-pressed="false"/, "nothing is filtered yet");
+
+  // AHEAD of the facets. It left PageHeader's actions with the header, and the
+  // toolbar is where an alarm that doubles as a filter belongs — but it has to
+  // be the first thing there, not buried after five facet chips.
+  const dotAt = html.indexOf('data-tone="clear"');
+  const branchAt = html.indexOf("Branch filter");
+  assert.notEqual(branchAt, -1, "expected the facets beside it");
+  assert.ok(dotAt < branchAt, "the dot must come before the facets, not after them");
+
+  // And inside the toolbar rather than loose above the table: the toolbar is
+  // what holds the export button, so the dot must precede that too and sit
+  // above the table's own header row.
+  assert.ok(dotAt < html.indexOf('aria-label="Export'), "the dot is toolbar-leading, not an action");
+  assert.ok(dotAt < html.indexOf("<table"), "and the toolbar sits above the table");
 
   // The dot doubles as the not-ready filter's control, so it has to show that
   // the filter is on — and `active` is the view's wiring, not AlertDot's.
@@ -815,18 +869,27 @@ test("the alert dot is the header's action once the feeds have answered", () => 
 });
 
 test("pressing the alert dot toggles the not-ready filter, keeping every other filter", () => {
-  assert.deepEqual(toggleReadiness({}), { readiness: "not-ready" }, "off -> on");
+  assert.deepEqual(toggleReadiness({}), { readiness: "not-ready", page: 1 }, "off -> on");
   assert.deepEqual(
     toggleReadiness({ readiness: "not-ready" }),
-    { readiness: undefined },
+    { readiness: undefined, page: 1 },
     "on -> off, so the dot is a toggle rather than a one-way trip",
   );
   // A toggle that reset the reader's search or branch facets would read as the
   // dot clearing their work.
   assert.deepEqual(
     toggleReadiness({ search: "ada", branch: ["DIU"], sort: "hours" }),
-    { search: "ada", branch: ["DIU"], sort: "hours", readiness: "not-ready" },
+    { search: "ada", branch: ["DIU"], sort: "hours", readiness: "not-ready", page: 1 },
   );
+});
+
+test("the dot narrows a 503-row roster, so it puts the reader back on page 1", () => {
+  // Filtering to the four findings while sitting on page 8 would otherwise
+  // clamp the reader onto the LAST page of them — the register's whole
+  // headline act, delivered from the wrong end.
+  assert.equal(toggleReadiness({ page: 8 }).page, 1);
+  assert.equal(toggleReadiness({ readiness: "not-ready", page: 8 }).page, 1, "and coming back too");
+  assert.equal(toggleReadiness({ page: 8, limit: 10 }).limit, 10, "the page SIZE is a preference, and survives");
 });
 
 test("a downed biometric feed says so, and takes its columns with it", () => {
@@ -898,16 +961,18 @@ test("the feed notice covers all four combinations, including saying nothing", (
 
 test("a failed load counts nobody, rather than counting nobody aloud", () => {
   // `answered` is true once both queries have SETTLED — failing counts as
-  // settling — so this used to render "0 employees" directly above "Coverage
-  // didn't load": a roster size stated as fact by a page that had just said it
-  // could not find out. Same class as the footer's "Showing 241 of 0".
+  // settling — so a count derived from `rows.length` reads 0 here just as it
+  // does mid-load, and 0 is not the roster size, it is the absence of one.
+  // The FailureBlock replaces the whole table, toolbar and all, so there is no
+  // search box to say it in either; this pins that nothing else invents it.
   const failed = renderView({ bothFailed: true, rows: [] });
-  assert.equal(headerDescription(failed), "", "no description at all beside the failure block");
   assert.doesNotMatch(failed, /0 employees/);
+  assert.equal(searchBoxName(failed), null, "the failure replaces the table, search box and all");
+  assert.match(failed, /Coverage didn’t load/, "the failure itself must still be reported");
 
   // The two states either side of it still speak.
-  assert.equal(headerDescription(renderView({ isLoading: true, rows: [] })), "Loading…");
-  assert.equal(headerDescription(renderView()), "1 employee");
+  assert.equal(searchBoxName(renderView({ isLoading: true, rows: [] })), "Search by name or employee ID…");
+  assert.equal(searchBoxName(renderView()), "Search 1 employee by name or ID…");
 });
 
 test("a partial roster says so", () => {
@@ -951,11 +1016,15 @@ test("when both feeds fail the table is replaced, not banner-stacked", () => {
   assert.doesNotMatch(html, /Search by name/, "the table must be gone, not sitting under a banner");
 });
 
-test("the footer counts the real roster, never zero", () => {
+test("the footer counts this page out of everything the filters admit", () => {
   // GenericDataTable's footer reads `Showing {data.length} of {meta?.total || 0}`
   // and its pager reads "Loading..." whenever `meta` is absent — so omitting
   // `meta` ships a permanent "Showing 241 of 0 employees" under a full table.
   // Zero is a rendered non-fact, which is the one thing this page may not do.
+  //
+  // The second number is the FILTERED count, not the roster: it has to be the
+  // size of the set the first number is a page of, or the two do not describe
+  // the same thing. The roster total lives in the search box now.
   const ready = { ...BASE_ROW, id: "READY", employee_name: "Bea Ready" };
   const notReady: RegisterRow = {
     ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing",
@@ -964,9 +1033,108 @@ test("the footer counts the real roster, never zero", () => {
     rows: [ready, notReady],
     filters: { readiness: "not-ready" },
   });
-  assert.match(html, /Showing 1 of 2 employees/, "filtered count of roster count");
+  assert.match(html, /Showing 1 of 1 employees/, "one row on screen, one row matching");
   assert.doesNotMatch(html, /of 0 employees/);
   assert.doesNotMatch(html, /Loading\.\.\./, "the pager must not be stuck reporting a load");
+  assert.match(html, /Page 1 of 1/);
+});
+
+// ---------------------------------------------------------------------------
+// CoverageRegisterView — pagination, wired
+// ---------------------------------------------------------------------------
+
+/** `n` rows, names in order, so what reached the table can be named. */
+function manyRows(n: number): RegisterRow[] {
+  return Array.from({ length: n }, (_, i) => ({
+    ...BASE_ROW,
+    id: `E${String(i + 1).padStart(3, "0")}`,
+    employee_name: `Person ${String(i + 1).padStart(3, "0")}`,
+  }));
+}
+
+/** Which of `names` actually reached the rendered table body. */
+function rendered(html: string, names: string[]): string[] {
+  const body = html.slice(html.indexOf("<tbody"));
+  return names.filter((name) => body.includes(name));
+}
+
+test("the table is handed one page, not every filtered row", () => {
+  // GenericDataTable never slices `data` — whatever it is handed is what it
+  // draws. Before this the view passed all 503 rows and a hardcoded one-page
+  // meta, so the roster rendered into a single scrolling frame under a pager
+  // that read "Page 1 of 1" with every button dead.
+  const rows = manyRows(5);
+  const html = renderView({ rows, filters: { limit: 2 } });
+
+  assert.deepEqual(
+    rendered(html, rows.map((r) => r.employee_name)),
+    ["Person 001", "Person 002"],
+    "the first page only",
+  );
+  assert.match(html, /Showing 2 of 5 employees/);
+  assert.match(html, /Page 1 of 3/);
+});
+
+test("page 2 is the second slice, and the pager says so", () => {
+  const rows = manyRows(5);
+  const html = renderView({ rows, filters: { limit: 2, page: 2 } });
+  assert.deepEqual(
+    rendered(html, rows.map((r) => r.employee_name)),
+    ["Person 003", "Person 004"],
+  );
+  assert.match(html, /Page 2 of 3/);
+});
+
+test("a page past the end lands on the last page, not on an empty table", () => {
+  // Reachable without any filter change: a refetch can shrink the roster under
+  // a reader already on page 8, and so can the bridge going stale mid-session,
+  // because suppressUnusableFacts then drops every row it was the sole witness
+  // to. Unclamped, the slice starts past the end and the register renders
+  // blank under a pager still claiming page 8.
+  const rows = manyRows(3);
+  const html = renderView({ rows, filters: { limit: 2, page: 8 } });
+  assert.deepEqual(rendered(html, rows.map((r) => r.employee_name)), ["Person 003"]);
+  assert.match(html, /Page 2 of 2/, "the pager reports where the reader actually landed");
+  assert.doesNotMatch(html, /Page 8/);
+});
+
+test("the default page size is what the reader gets, and the size control is offered", () => {
+  // `hidePageSize` was set for "fixed-page-size APIs". Real paging is exactly
+  // what stops this being one, and on a 503-employee roster the size control is
+  // the reader's own answer to how much they want at once.
+  const html = renderView({ rows: manyRows(REGISTER_PAGE_SIZE + 5) });
+  assert.match(html, /Showing 50 of 55 employees/);
+  assert.match(html, /Rows per page/, "the size control must be on screen");
+  assert.match(html, /Page 1 of 2/);
+});
+
+test("below the breakpoint the size control goes, and the pager stays", () => {
+  // dewey-ui's FOOTER row does not wrap either — the same defect as its
+  // toolbar, one row down. Measured at 375: "Rows per page" plus its `w-16`
+  // select pushed the document 49px past the viewport, which is a page that
+  // scrolls sideways rather than a control that is merely cramped.
+  //
+  // Only the size CHOICE waits for a wider screen. The count and the pager are
+  // how the reader knows where they are, and they stay at every width.
+  const rows = manyRows(REGISTER_PAGE_SIZE + 5);
+  const narrow = renderView({ rows, narrow: true });
+  assert.doesNotMatch(narrow, /Rows per page/, "the footer has no room for it at 375");
+  assert.match(narrow, /Showing 50 of 55 employees/, "the count stays");
+  assert.match(narrow, /Page 1 of 2/, "and so does the pager");
+});
+
+test("the export writes every filtered row, not the page in view", () => {
+  // A reader who narrowed to 55 problem rows and exported from page 1 must get
+  // all 55. A file holding one page of a filtered set is indistinguishable
+  // from one holding the whole set, once it has been mailed to somebody — and
+  // the count in the button's name is built from the same array the file is.
+  const html = renderView({ rows: manyRows(55) });
+  assert.match(html, /Showing 50 of 55 employees/, "the table is paged");
+  assert.match(
+    html,
+    /aria-label="Export 55 employees as CSV"/,
+    "the export is not",
+  );
 });
 
 test("below the breakpoint the search box moves into the wrapping bar and the column toggle goes", () => {
@@ -979,24 +1147,26 @@ test("below the breakpoint the search box moves into the wrapping bar and the co
   // Both branches are asserted here, and both from markup: the e2e can only
   // measure the phone, and a gate that turned the desktop toolbar off too
   // would still look right at 375.
+  const placeholder = registerSearchPlaceholder(1);
+
   const wide = renderView();
   assert.match(wide, />Columns/, "the desktop toolbar keeps dewey-ui's column toggle");
   assert.ok(
-    !wide.includes(`aria-label="${REGISTER_SEARCH_PLACEHOLDER}"`),
+    !wide.includes(`aria-label="${placeholder}"`),
     "and dewey-ui's own search box, which is not the one the bar renders",
   );
-  assert.match(wide, /placeholder="Search by name or employee ID…"/, "the primitive's box");
+  assert.ok(wide.includes(`placeholder="${placeholder}"`), "the primitive's box");
 
   const narrow = renderView({ narrow: true });
   assert.doesNotMatch(narrow, />Columns/, "which columns exist here is feed health's call, not a reader's");
   assert.ok(
-    narrow.includes(`aria-label="${REGISTER_SEARCH_PLACEHOLDER}"`),
+    narrow.includes(`aria-label="${placeholder}"`),
     "the register renders its own box, inside the bar that wraps",
   );
   // ONE box, not two: the handoff has to remove the primitive's, or the phone
   // gets two controls writing one field.
   assert.equal(
-    narrow.split(`placeholder="${REGISTER_SEARCH_PLACEHOLDER}"`).length - 1,
+    narrow.split(`placeholder="${placeholder}"`).length - 1,
     1,
     "exactly one search box at any width",
   );
@@ -1116,14 +1286,26 @@ test("each single select says what it filters, not only what it is set to", () =
 
 test("the bar holds no search box unless it is asked to", () => {
   assert.ok(
-    !renderBar().includes(REGISTER_SEARCH_PLACEHOLDER),
+    !renderBar().includes("Search "),
     "above the breakpoint the search box belongs to GenericDataTable's toolbar",
   );
+  // TWO_BRANCHES, so the count in the name is the bar's own reading of the
+  // roster it was handed rather than a constant it could have hardcoded.
   const narrow = renderBar({ showSearch: true });
   assert.ok(
-    narrow.includes(`aria-label="${REGISTER_SEARCH_PLACEHOLDER}"`),
+    narrow.includes(`aria-label="${registerSearchPlaceholder(2)}"`),
     "a placeholder alone is a name only by fallback, and vanishes once anything is typed",
   );
+});
+
+test("the search placeholder counts the roster, is silent when there is none, and says employee once at one", () => {
+  assert.equal(registerSearchPlaceholder(503), "Search 503 employees by name or ID…");
+  assert.equal(registerSearchPlaceholder(1), "Search 1 employee by name or ID…");
+  // Zero is not a roster size, it is the absence of one — during a load, and
+  // after a failure that left the page holding nothing. A box reading "Search 0
+  // employees…" states as a count the very thing the page does not know.
+  assert.equal(registerSearchPlaceholder(0), "Search by name or employee ID…");
+  assert.doesNotMatch(registerSearchPlaceholder(0), /\d/, "no count may survive into the silent form");
 });
 
 test("the bar offers every facet the two feeds can speak to", () => {
@@ -1293,13 +1475,55 @@ test("every facet writes its own field and leaves the reader's other filters alo
     sort: "hours",
     order: "desc",
   };
-  assert.deepEqual(changeFacet("Branch", ["DIU"], held), [{ ...held, branch: ["DIU"] }]);
+  assert.deepEqual(changeFacet("Branch", ["DIU"], held), [{ ...held, branch: ["DIU"], page: 1 }]);
   assert.deepEqual(changeFacet("Department", ["Finance"], held), [
-    { ...held, department: ["Finance"] },
+    { ...held, department: ["Finance"], page: 1 },
   ]);
-  assert.deepEqual(changeFacet("Status", "Left", held), [{ ...held, status: "Left" }]);
-  assert.deepEqual(changeFacet("Schedule", "missing", held), [{ ...held, schedule: "missing" }]);
-  assert.deepEqual(changeFacet("Biometric", "none", held), [{ ...held, biometric: "none" }]);
+  assert.deepEqual(changeFacet("Status", "Left", held), [{ ...held, status: "Left", page: 1 }]);
+  assert.deepEqual(changeFacet("Schedule", "missing", held), [
+    { ...held, schedule: "missing", page: 1 },
+  ]);
+  assert.deepEqual(changeFacet("Biometric", "none", held), [
+    { ...held, biometric: "none", page: 1 },
+  ]);
+});
+
+test("every facet puts the reader back on page 1, and keeps the page size", () => {
+  // Narrowing 503 rows to 3 while sitting on page 8 leaves page 8 not existing.
+  // paginateRegisterRows clamps rather than rendering an empty table, but a
+  // clamp is a rescue: the reader asked for one branch and would land on the
+  // last page of it.
+  const held: RegisterFilters = { page: 8, limit: 10 };
+  for (const [label, value] of [
+    ["Branch", ["DIU"]],
+    ["Department", ["Finance"]],
+    ["Status", "Left"],
+    ["Schedule", "missing"],
+    ["Biometric", "none"],
+  ] as const) {
+    const [emitted] = changeFacet(label, value, held);
+    assert.equal(emitted.page, 1, `the ${label} facet must start again at page 1`);
+    assert.equal(emitted.limit, 10, `the ${label} facet must not resize the page`);
+  }
+});
+
+test("the bar's own search box narrows too, so it resets the page as the facets do", () => {
+  // The phone's search box is the bar's, not the primitive's — the primitive
+  // stamps `page: 1` on its own search and this one has to match it, or the
+  // same keystroke behaves differently either side of 768px.
+  const emitted: RegisterFilters[] = [];
+  const onChange = findProps<{ placeholder?: string; onChange?: (next: string) => void }>(
+    buildBar({
+      showSearch: true,
+      filters: { page: 8 },
+      onFiltersChange: (value) => emitted.push(value),
+    }),
+    (props) => typeof props.placeholder === "string" && props.placeholder.startsWith("Search"),
+  )?.onChange;
+  assert.ok(onChange, "the bar must render a search box when asked to");
+
+  onChange("ada");
+  assert.deepEqual(emitted, [{ search: "ada", page: 1 }]);
 });
 
 test("clearing a facet through the bar leaves the rest of the filters standing", () => {
@@ -1307,10 +1531,10 @@ test("clearing a facet through the bar leaves the rest of the filters standing",
   // out as no filter without taking anything else with it.
   const held: RegisterFilters = { search: "ada", status: "Left", branch: ["DIU"] };
   assert.deepEqual(changeFacet<RegisterFilters["status"]>("Status", undefined, held), [
-    { search: "ada", status: undefined, branch: ["DIU"] },
+    { search: "ada", status: undefined, branch: ["DIU"], page: 1 },
   ]);
   assert.deepEqual(changeFacet<string[]>("Branch", [], held), [
-    { search: "ada", status: "Left", branch: [] },
+    { search: "ada", status: "Left", branch: [], page: 1 },
   ]);
 });
 
@@ -1448,6 +1672,9 @@ test("a column id nothing sorts by leaves the register unsorted", () => {
   assert.deepEqual(registerFiltersFromTable({ sort: "hours", order: "asc" }), {});
 });
 
+/** The meta a one-page register produces, for the boundary tests below. */
+const ONE_PAGE = paginateRegisterRows([BASE_ROW], {}).meta;
+
 test("the table is never told the search the bar owns", () => {
   // GenericDataTable keeps its own debounced copy of `filters.search`, seeded
   // once at mount, and an effect writes that copy back through
@@ -1456,20 +1683,51 @@ test("the table is never told the search the bar owns", () => {
   // Told the bar's search it answers ~300ms later with that empty string, and
   // the phone's search box undoes itself between keystrokes. Caught in a
   // browser: the box typed fine and the table never narrowed.
-  assert.equal(registerTableFilters({ search: "ada" }, true).search, "");
+  assert.equal(registerTableFilters({ search: "ada" }, true, ONE_PAGE).search, "");
   assert.equal(
-    registerTableFilters({}, true).search,
+    registerTableFilters({}, true, ONE_PAGE).search,
     "",
     "blanked to \"\", never omitted — its copy is `filters.search || \"\"`, so undefined is the one value that does NOT match and would trigger the write-back",
   );
   assert.equal(
-    registerTableFilters({ search: "ada" }, false).search,
+    registerTableFilters({ search: "ada" }, false, ONE_PAGE).search,
     "ada",
     "above the breakpoint the primitive's own box is the real one",
   );
   // And the sort translation is unaffected either way.
-  assert.equal(registerTableFilters({ sort: "hours" }, true).sort, "weekly_minutes");
-  assert.equal(registerTableFilters({ sort: "hours" }, false).sort, "weekly_minutes");
+  assert.equal(registerTableFilters({ sort: "hours" }, true, ONE_PAGE).sort, "weekly_minutes");
+  assert.equal(registerTableFilters({ sort: "hours" }, false, ONE_PAGE).sort, "weekly_minutes");
+});
+
+test("the table is told the page it is actually on, not the one the reader last asked for", () => {
+  // The pager does its arithmetic on what it is HANDED — `page: (filters.page
+  // || 1) - 1` — not on `meta.page`. Pass a stale 8 straight through against a
+  // set that now makes two pages and "‹" writes 7, then 6, then 5: three
+  // presses that visibly do nothing, which is the "pagination is broken"
+  // complaint that started this round wearing a different hat.
+  //
+  // Reachable even though every filter change resets to page 1: a refetch can
+  // shrink the roster under a reader already on page 8, and so can the bridge
+  // going stale mid-session, since suppressUnusableFacts then drops every row
+  // that feed was the only witness to.
+  const stale: RegisterFilters = { page: 8, limit: 2 };
+  const { meta } = paginateRegisterRows(manyRows(3), stale);
+
+  const table = registerTableFilters(stale, false, meta);
+  assert.equal(table.page, 2, "the clamped page, so the arrows step from where the reader is");
+  assert.equal(table.limit, 2);
+  // The pager's own next/prev arithmetic, run on what it was given: from the
+  // clamped page, one press back is a page that exists.
+  assert.equal((table.page ?? 1) - 1, 1);
+});
+
+test("the table is told the page SIZE in force, so its control cannot disagree with the slice", () => {
+  // "Rows per page" reads `filters.limit || 10`. With `limit` unset the control
+  // would say 10 beside a table showing REGISTER_PAGE_SIZE rows — the same
+  // class of defect as a footer reading "of 0". The default is resolved by
+  // paginateRegisterRows and handed back through the meta.
+  const { meta } = paginateRegisterRows(manyRows(3), {});
+  assert.equal(registerTableFilters({}, false, meta).limit, REGISTER_PAGE_SIZE);
 });
 
 test("a column press keeps the search the reader typed on a phone", () => {

@@ -22,6 +22,7 @@ import {
 } from "@lolbikb/dewey-ui";
 
 import {
+  applyFilterChange,
   BIOMETRIC_LABELS,
   registerFacets,
   SCHEDULE_LABELS,
@@ -55,15 +56,29 @@ const BIOMETRIC_OPTIONS: { value: NonNullable<RegisterFilters["biometric"]>; lab
 ];
 
 /**
- * The one wording for the register's search box, wherever it is rendered.
+ * How the register's search box reads, wherever it is rendered.
  *
  * Shared with `GenericDataTable`'s `config.searchPlaceholder`, because below
  * the breakpoint the bar renders its own box in place of the primitive's and
  * the two must read — and be NAMED — identically. A reader who learned the
  * control on a laptop must find the same one on a phone, and one e2e locator
  * has to match both or the wide branch stops being measured.
+ *
+ * It carries the roster total, which is where that number went when the page
+ * header was dropped: this is the one place on the page that can hold it at no
+ * cost in vertical space, and it is worth holding — searching a roster of 503
+ * is a different act from searching one of 14.
+ *
+ * DERIVED from the unfiltered rows, never hardcoded, and SILENT at zero. "Search
+ * 0 employees…" is a rendered non-fact: during a load, and after a failure that
+ * left the page with nothing, the roster size is not zero, it is unknown. At
+ * zero this falls back to the wording that claims nothing — which is what the
+ * box said before it counted anything.
  */
-export const REGISTER_SEARCH_PLACEHOLDER = "Search by name or employee ID…";
+export function registerSearchPlaceholder(rosterSize: number): string {
+  if (rosterSize <= 0) return "Search by name or employee ID…";
+  return `Search ${rosterSize} ${rosterSize === 1 ? "employee" : "employees"} by name or ID…`;
+}
 
 /** What the box waits before it narrows the table. dewey-ui's own toolbar uses the same. */
 const SEARCH_DEBOUNCE_MS = 300;
@@ -86,7 +101,11 @@ const SEARCH_DEBOUNCE_MS = 300;
  * spreads `filters`, and one that cleared the search would otherwise leave
  * stale text sitting in the box.
  */
-export function RegisterSearchInput(props: { value: string; onChange: (next: string) => void }) {
+export function RegisterSearchInput(props: {
+  value: string;
+  placeholder: string;
+  onChange: (next: string) => void;
+}) {
   const { value, onChange } = props;
   const [text, setText] = useState(value);
 
@@ -113,8 +132,8 @@ export function RegisterSearchInput(props: { value: string; onChange: (next: str
           is typed. */}
       <Input
         className="h-8 w-full pl-8"
-        placeholder={REGISTER_SEARCH_PLACEHOLDER}
-        aria-label={REGISTER_SEARCH_PLACEHOLDER}
+        placeholder={props.placeholder}
+        aria-label={props.placeholder}
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
@@ -184,12 +203,23 @@ export function RegisterFilterBar({
   // component that re-renders on every keystroke in the search box anyway.
   const facets = registerFacets(rows);
 
+  // Every control below NARROWS the list, so every one of them starts again at
+  // page 1 — see applyFilterChange. Bound once here rather than repeated at six
+  // call sites, where the seventh control added would be the one that forgot.
+  // A plain closure, not useCallback: this component holds no hooks on purpose
+  // (see `facets` above), and the handlers it builds are re-read on every call.
+  const change = (next: Partial<RegisterFilters>) =>
+    onFiltersChange(applyFilterChange(filters, next));
+
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       {showSearch ? (
         <RegisterSearchInput
           value={filters.search ?? ""}
-          onChange={(search) => onFiltersChange({ ...filters, search })}
+          // The roster, not the filtered rows — `rows` is already the
+          // unfiltered set, and the count must not move as the reader types.
+          placeholder={registerSearchPlaceholder(rows.length)}
+          onChange={(search) => change({ search })}
         />
       ) : null}
 
@@ -201,7 +231,7 @@ export function RegisterFilterBar({
           label="Branch"
           options={facets.branch}
           selected={filters.branch ?? []}
-          onChange={(branch) => onFiltersChange({ ...filters, branch })}
+          onChange={(branch) => change({ branch })}
         />
       ) : null}
 
@@ -210,7 +240,7 @@ export function RegisterFilterBar({
           label="Department"
           options={facets.department}
           selected={filters.department ?? []}
-          onChange={(department) => onFiltersChange({ ...filters, department })}
+          onChange={(department) => change({ department })}
         />
       ) : null}
 
@@ -220,7 +250,7 @@ export function RegisterFilterBar({
           anyLabel="Any status"
           value={filters.status}
           options={STATUS_OPTIONS}
-          onChange={(status) => onFiltersChange({ ...filters, status })}
+          onChange={(status) => change({ status })}
         />
       ) : null}
 
@@ -230,7 +260,7 @@ export function RegisterFilterBar({
           anyLabel="Any schedule"
           value={filters.schedule}
           options={SCHEDULE_OPTIONS}
-          onChange={(schedule) => onFiltersChange({ ...filters, schedule })}
+          onChange={(schedule) => change({ schedule })}
         />
       ) : null}
 
@@ -240,7 +270,7 @@ export function RegisterFilterBar({
           anyLabel="Any biometric state"
           value={filters.biometric}
           options={BIOMETRIC_OPTIONS}
-          onChange={(biometric) => onFiltersChange({ ...filters, biometric })}
+          onChange={(biometric) => change({ biometric })}
         />
       ) : null}
     </div>

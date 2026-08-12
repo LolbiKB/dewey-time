@@ -30,6 +30,17 @@ const ROSTER = 14;
 /** Rows with a problem, worst first: still-enrolled leaver, then no fingerprint, then no schedule. */
 const NOT_READY = ["Nora Vance", "Marco Diaz", "Priya Nair", "Tom O'Brien"];
 
+/**
+ * The search box's accessible name at a given roster size.
+ *
+ * Kept in step with `registerSearchPlaceholder` by hand rather than imported:
+ * this file is the outside view, and a locator built from the same function the
+ * page builds the name with could not notice the two disagreeing.
+ */
+function rosterSearchBox(size: number): string {
+  return `Search ${size} employees by name or ID…`;
+}
+
 function bodyRows(page: Page) {
   return page.locator("tbody tr");
 }
@@ -46,9 +57,42 @@ function alertDot(page: Page) {
   return page.getByRole("button", { name: /needs? attention|All \d+ ready/ });
 }
 
+/**
+ * dewey-ui's "Rows per page" control — a raw `<select>`, and the only native
+ * one on the page. Located by tag rather than by role or name because it has
+ * neither a label element nor an aria-label: the "Rows per page" beside it is a
+ * plain `<p>`, so the control announces as an unnamed combobox. That is a gap
+ * in the shared primitive, noted here rather than papered over from this side.
+ */
+function pageSizeControl(page: Page) {
+  return page.locator("select");
+}
+
+/**
+ * Above the 768 breakpoint, where the whole toolbar and footer are on screen.
+ *
+ * Set explicitly by the tests that need the page-size control: it is hidden
+ * below 768 for the same measured reason the search box moves and the column
+ * toggle goes — dewey-ui's footer row does not wrap either.
+ */
+const LAPTOP = { width: 1280, height: 900 };
+
+/**
+ * The register's heading, which is `sr-only` since the page header was dropped.
+ *
+ * Still a real heading in the accessibility tree — `getByRole` finds it, and so
+ * does a screen reader's heading list — but zero pixels tall, so `toBeVisible`
+ * would fail on it. Attached-ness is the strongest claim available here, and it
+ * is the one that matters: a route with no heading has no answer to "where am
+ * I", whatever it looks like.
+ */
+function registerHeading(page: Page) {
+  return page.getByRole("heading", { name: "Coverage", level: 1 });
+}
+
 async function openRegister(page: Page): Promise<void> {
   await page.goto("/hr-schedule/coverage");
-  await expect(page.getByRole("heading", { name: "Coverage" })).toBeVisible();
+  await expect(registerHeading(page)).toBeAttached();
 }
 
 test("the register lists both feeds' employees and the dot filters to problems", async ({
@@ -57,10 +101,11 @@ test("the register lists both feeds' employees and the dot filters to problems",
   await stubFrappe(page);
   await openRegister(page);
 
-  // The roster description, not just "some rows": it is the page's own count of
-  // the join, and it must include the leaver only the biometric feed knows of.
-  // `exact`, or this also matches the table footer's "Showing 14 of 14 employees".
-  await expect(page.getByText(`${ROSTER} employees`, { exact: true })).toBeVisible();
+  // The roster count, not just "some rows": it is the page's own count of the
+  // join, and it must include the leaver only the biometric feed knows of. It
+  // rides in the search box now that the page header is gone — one line of
+  // chrome fewer, and the number still on screen.
+  await expect(page.getByRole("textbox", { name: rosterSearchBox(ROSTER) })).toBeVisible();
   await expect(bodyRows(page)).toHaveCount(ROSTER);
 
   const dot = alertDot(page);
@@ -82,12 +127,97 @@ test("the register lists both feeds' employees and the dot filters to problems",
   await expect(dot).toHaveAttribute("aria-pressed", "false");
 });
 
+/**
+ * Paging, pressed rather than computed.
+ *
+ * `paginateRegisterRows` is pure and pinned in node:test, but every way it can
+ * be WIRED wrong is invisible there: a `meta` the table never receives leaves
+ * the pager reading "Loading...", a `data` that was never sliced renders the
+ * whole roster under a correct-looking pager, and buttons that write `page`
+ * into a filters object nothing re-reads do nothing at all. That last shape is
+ * what shipped — `disabled: !meta?.hasNext` against a hardcoded
+ * `hasNext: false` — and it is why this round exists.
+ *
+ * The default page size (50) is larger than this fixture's roster, so the size
+ * control is used to get to two pages. That exercises it too: it is only on
+ * screen because `hidePageSize` came off, and it writes `limit` through the
+ * same filters everything else does.
+ */
+test("the pager turns real pages, and the size control sets how big they are", async ({ page }) => {
+  await stubFrappe(page);
+  // Explicitly wide: the `mobile` project runs this file at 412, where the size
+  // control is deliberately absent.
+  await page.setViewportSize(LAPTOP);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  // One page to begin with: 14 rows under a default of 50.
+  await expect(page.getByText("Page 1 of 1")).toBeVisible();
+  await expect(page.getByText(`Showing ${ROSTER} of ${ROSTER} employees`)).toBeVisible();
+
+  // The control agrees with the slice. This is the assertion that rules out
+  // REGISTER_PAGE_SIZE drifting outside the five sizes this <select> offers: a
+  // size it has no option for leaves `selectedIndex` at -1 and the value empty,
+  // so the control would sit there blank above a table showing 25 rows.
+  await expect(pageSizeControl(page)).toHaveValue("50");
+
+  await pageSizeControl(page).selectOption("10");
+
+  await expect(bodyRows(page)).toHaveCount(10);
+  await expect(page.getByText("Page 1 of 2")).toBeVisible();
+  await expect(page.getByText(`Showing 10 of ${ROSTER} employees`)).toBeVisible();
+
+  const next = page.getByRole("button", { name: "Go to next page" });
+  const previous = page.getByRole("button", { name: "Go to previous page" });
+  await expect(previous).toBeDisabled();
+  await expect(next).toBeEnabled();
+
+  // The rows on page 2 must be DIFFERENT rows, not the same ten again — a
+  // pager wired to a `data` that is never sliced looks exactly like this
+  // otherwise.
+  const firstPage = await employeeNames(page);
+  await next.click();
+
+  await expect(bodyRows(page)).toHaveCount(ROSTER - 10);
+  await expect(page.getByText("Page 2 of 2")).toBeVisible();
+  const secondPage = await employeeNames(page);
+  expect(secondPage.some((name) => firstPage.includes(name))).toBe(false);
+  await expect(next).toBeDisabled();
+
+  // And back. A pager with no way home is worse than none.
+  await previous.click();
+  await expect(page.getByText("Page 1 of 2")).toBeVisible();
+  expect(await employeeNames(page)).toEqual(firstPage);
+});
+
+test("narrowing the roster puts the reader back on page 1", async ({ page }) => {
+  // Filter while on page 2 and page 2 may not exist any more. The clamp in
+  // paginateRegisterRows stops that rendering an empty table, but landing on
+  // the LAST page of your four findings is not what pressing the dot asked
+  // for — every control that narrows resets the page, and this presses one.
+  await stubFrappe(page);
+  await page.setViewportSize(LAPTOP);
+  await openRegister(page);
+  await pageSizeControl(page).selectOption("10");
+
+  await page.getByRole("button", { name: "Go to next page" }).click();
+  await expect(page.getByText("Page 2 of 2")).toBeVisible();
+
+  await alertDot(page).click();
+
+  await expect(bodyRows(page)).toHaveCount(NOT_READY.length);
+  await expect(page.getByText("Page 1 of 1")).toBeVisible();
+  // Worst first, from the top — the register's headline act, delivered from
+  // the right end of the list.
+  expect(await employeeNames(page)).toEqual(NOT_READY);
+});
+
 test("the biometrics URL redirects to the register", async ({ page }) => {
   await stubFrappe(page);
   await page.goto("/hr-schedule/coverage/biometrics");
 
   await expect(page).toHaveURL(/\/hr-schedule\/coverage$/);
-  await expect(page.getByRole("heading", { name: "Coverage" })).toBeVisible();
+  await expect(registerHeading(page)).toBeAttached();
 });
 
 /**
@@ -242,7 +372,7 @@ test("the dot's `degraded` tone adds a concentric ring to the disc", async ({ pa
   // very banner saying leaver detection was hidden.
   await expect(page.getByText("Nora Vance")).toHaveCount(0);
   await expect(bodyRows(page)).toHaveCount(ROSTER - 1);
-  await expect(page.getByText(`${ROSTER - 1} employees`, { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: rosterSearchBox(ROSTER - 1) })).toBeVisible();
 });
 
 test("a facet popover opens, narrows the table, and clears back", async ({ page }) => {
@@ -341,11 +471,10 @@ test("the export button hands over the rows on screen as a file", async ({ page 
  * Both are closed by remounting the table at the breakpoint — see the `key` in
  * CoverageRegisterPage.
  */
-const LAPTOP = { width: 1280, height: 900 };
 const PHONE = { width: 375, height: 812 };
 
 /** The search box, under the one name both owners give it. */
-const SEARCH_BOX = "Search by name or employee ID…";
+const SEARCH_BOX = rosterSearchBox(ROSTER);
 
 /**
  * Everything the page logs as an error, for the duration of the test.
@@ -382,7 +511,7 @@ test("a search typed on a laptop survives the phone breakpoint", async ({ page }
   // The register is still on screen at all. Before the fix the whole SPA was
   // replaced by the ErrorBoundary's "Something went wrong", recoverable only
   // by reloading.
-  await expect(page.getByRole("heading", { name: "Coverage" })).toBeVisible();
+  await expect(registerHeading(page)).toBeAttached();
   await expect(page.getByText("Something went wrong")).toHaveCount(0);
 
   // And the handoff kept the reader's work: the bar's box holds the text and
@@ -511,13 +640,20 @@ test("on a phone the register's toolbar fits, whole and without overlaps", async
     expect(fit.viewport, `viewport did not take at ${width}`).toBe(width);
 
     // The register hands its search box to the wrapping facet bar below 768,
-    // so at these widths the toolbar is entirely its own controls: five
-    // facets, the search box and the export button.
-    expect(fit.controls, `@${width}: the toolbar is not the one being measured`).toHaveLength(7);
+    // so at these widths the toolbar is entirely its own controls: the alert
+    // dot, five facets, the search box and the export button. The dot is the
+    // eighth — it moved here from the page header, and it is the one control
+    // that does NOT wrap with the bar, so it is also the one this measurement
+    // most needed to be re-run for.
+    expect(fit.controls, `@${width}: the toolbar is not the one being measured`).toHaveLength(8);
     expect(
       fit.controls,
       `@${width}: the search box must survive the handoff, under the same name`,
-    ).toContain("Search by name or employee ID…");
+    ).toContain(rosterSearchBox(ROSTER));
+    expect(
+      fit.controls,
+      `@${width}: the alert dot must reach the phone toolbar too`,
+    ).toContain("4 need attention — show them");
 
     // 1px of rounding, and no more. The TABLE scrolls horizontally by design —
     // GenericDataTable's fill layout gives it its own scroller — but the page

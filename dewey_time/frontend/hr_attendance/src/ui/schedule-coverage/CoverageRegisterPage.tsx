@@ -3,9 +3,9 @@ import {
   EmptyState,
   GenericDataTable,
   Page,
-  PageHeader,
   Section,
   useIsMobile,
+  type BaseTableMeta,
 } from "@lolbikb/dewey-ui";
 import { AlertTriangleIcon } from "lucide-react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
@@ -15,8 +15,10 @@ import { Spinner } from "@/components/ui/spinner";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { useCoverageRegister } from "@/hooks/useCoverageRegister";
 import {
+  applyFilterChange,
   columnIdForSort,
   filterRegisterRows,
+  paginateRegisterRows,
   sortFromColumnId,
   sortRegisterRows,
   visibleColumnIds,
@@ -29,7 +31,7 @@ import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
 import { RegisterExportButton } from "@/ui/schedule-coverage/RegisterExportButton";
 import {
-  REGISTER_SEARCH_PLACEHOLDER,
+  registerSearchPlaceholder,
   RegisterFilterBar,
 } from "@/ui/schedule-coverage/RegisterFilterBar";
 
@@ -100,40 +102,32 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
     [columns, visible],
   );
 
-  const data = useMemo(
+  // `paginate(sort(filter(rows)))`, and the middle result is kept: `matching`
+  // is every row the reader's filters admit, `data` is the one page of them the
+  // table renders. The CSV and the export button's own count read `matching`,
+  // because a reader on page 2 still needs the whole filtered truth and a file
+  // holding one page of it would look exactly like a file holding all of it.
+  const matching = useMemo(
     () => sortRegisterRows(filterRegisterRows(rows, filters), filters),
     [rows, filters],
+  );
+  const { rows: data, meta } = useMemo(
+    () => paginateRegisterRows(matching, filters),
+    [matching, filters],
   );
 
   // Translated at the boundary, in both directions — see RegisterTableFilters.
   const tableFilters = useMemo<RegisterTableFilters>(
-    () => registerTableFilters(filters, narrow),
-    [filters, narrow],
+    () => registerTableFilters(filters, narrow, meta),
+    [filters, narrow, meta],
   );
+  // NOT wrapped in applyFilterChange, unlike the bar's controls and the alert
+  // dot: GenericDataTable already stamps `page: 1` on its own search, sort and
+  // page-size writes, and its pager buttons write the one page change that must
+  // survive. Resetting here would make the pager unable to leave page 1.
   const handleTableFiltersChange = useCallback(
     (next: RegisterTableFilters) => onFiltersChange(mergeTableFilters(filters, next, narrow)),
     [filters, narrow, onFiltersChange],
-  );
-
-  // Without this GenericDataTable's footer reads "Showing 241 of 0 employees"
-  // (`meta?.total || 0`) and its pager reads a permanent "Loading...". There is
-  // one page: every row is already in hand, and the table is told
-  // `manualPagination`, so nothing slices `data`.
-  //
-  // `limit` is the page SIZE, and one page holds the lot. It is not the
-  // filtered count — GenericDataTable takes its page size from `filters.limit`
-  // and never reads this field, so naming it after the filtered row count
-  // would only mislead whoever reads it next.
-  const meta = useMemo(
-    () => ({
-      total: rows.length,
-      page: 1,
-      limit: rows.length,
-      totalPages: 1,
-      hasNext: false,
-      hasPrev: false,
-    }),
-    [rows.length],
   );
 
   // Everything below is withheld until the feeds have actually answered.
@@ -147,19 +141,19 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
 
   return (
     <Page>
-      <PageHeader
-        title="Coverage"
-        description={rosterDescription(rows.length, answered, bothFailed)}
-        actions={
-          answered ? (
-            <AlertDot
-              alert={props.alert}
-              active={filters.readiness === "not-ready"}
-              onToggle={() => onFiltersChange(toggleReadiness(filters))}
-            />
-          ) : null
-        }
-      />
+      {/* No PageHeader. It cost a whole block of vertical space to say
+          "Coverage · 503 employees", and neither half was earning it: the tab
+          the reader arrived through already reads Coverage, and the count now
+          rides in the search placeholder, where it costs no height at all.
+          /hr-attendance is the existing precedent for a routed page with no
+          header (chromeMigration.test.tsx pins that one); `<Page>` stays, which
+          is what the parity guard and page-insets.spec.ts actually require.
+
+          The heading does NOT go with it. `sr-only` is zero pixels, so the
+          space is still reclaimed, but screen-reader users navigate by heading
+          and a route with none has no answer to "where am I". It is also a
+          stabler e2e anchor than any column header. */}
+      <h1 className="sr-only">Coverage</h1>
 
       {/* AttentionStrip, NOT FailureBlock: FailureBlock carries a 13rem
           min-height and is a full-region placeholder — as a banner above a
@@ -237,7 +231,21 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             getRowId={(row: RegisterRow) => row.id}
             layout="fill"
             columnWidths="fixed"
-            hidePageSize
+            // The size control was hidden for "fixed-page-size APIs", which
+            // this stopped being the moment paginateRegisterRows started
+            // slicing: with real pages it is the reader's own answer to a
+            // 503-employee roster, so on a laptop it earns its place.
+            // REGISTER_PAGE_SIZE has to stay inside the five sizes it offers —
+            // see that constant for what a size outside them does to the
+            // select.
+            //
+            // Below 768 it goes, for the same measured reason the search box
+            // and the column toggle do: dewey-ui's footer row does not wrap
+            // either, and adding "Rows per page" plus a `w-16` select to it
+            // pushed the document 49px wider than a 375px viewport — measured,
+            // and caught by the toolbar-fit spec. The reader keeps the pager
+            // and the count; only the size choice waits for a wider screen.
+            hidePageSize={narrow}
             // Under 768px both of these are handed off or dropped, because
             // dewey-ui's toolbar row does not wrap: measured at 375 and 412,
             // its `w-64` search input is drawn over this bar's Status facet
@@ -259,56 +267,59 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             // no test could reach. And if a future load ever does hold rows
             // while refetching, leaving the reader's controls on screen is the
             // right answer anyway.
+            //
+            // The alert dot LEADS this slot, ahead of the facets. It used to
+            // sit in PageHeader's actions, on the reasoning that an alarm
+            // belongs with the title rather than among the filters — there is
+            // no title now, and pressing it does filter the table, so the
+            // toolbar is where it belongs. Its three shapes, its accessible
+            // name and its toggle are unchanged.
             toolbarLeading={
-              <RegisterFilterBar
-                rows={rows}
-                feeds={feeds}
-                filters={filters}
-                onFiltersChange={onFiltersChange}
-                showSearch={narrow}
-              />
+              <>
+                {answered ? (
+                  <AlertDot
+                    alert={props.alert}
+                    active={filters.readiness === "not-ready"}
+                    onToggle={() => onFiltersChange(toggleReadiness(filters))}
+                  />
+                ) : null}
+                <RegisterFilterBar
+                  rows={rows}
+                  feeds={feeds}
+                  filters={filters}
+                  onFiltersChange={onFiltersChange}
+                  showSearch={narrow}
+                />
+              </>
             }
             // The export DOES wait for the feeds, on the same rule as the alert
             // dot and the notices: mid-load it would offer a file built from an
             // unanswered roster and count it aloud as "0 employees".
+            //
+            // `matching`, NOT `data`: every filtered row, not the page in view.
+            // A reader who narrowed to 80 problem rows and exported from page 2
+            // would otherwise get 50 of them in a file that says nothing about
+            // the other 30, and nothing downstream could tell that file from a
+            // complete one.
             toolbarActions={
               answered ? (
-                <RegisterExportButton rows={data} feeds={feeds} truncated={props.truncated} />
+                <RegisterExportButton rows={matching} feeds={feeds} truncated={props.truncated} />
               ) : null
             }
             config={{
               entityName: "employees",
               entityNameSingular: "employee",
               // Shared with the bar's own box, so the control reads and is
-              // NAMED the same on either side of the breakpoint.
-              searchPlaceholder: REGISTER_SEARCH_PLACEHOLDER,
+              // NAMED the same on either side of the breakpoint. `rows` is the
+              // whole roster, so the count is the roster's and does not move
+              // as the reader filters.
+              searchPlaceholder: registerSearchPlaceholder(rows.length),
             }}
           />
         )}
       </Section>
     </Page>
   );
-}
-
-/**
- * What sits under the title, or nothing.
- *
- * Three states, and two of them are silence. "0 employees" under a spinner is
- * the same rendered non-fact as the footer's zero — the roster size is not
- * known yet. It is also what `bothFailed` produced, because both queries
- * having settled-failed makes `answered` true: "0 employees" sat directly
- * above "Coverage didn’t load", stating as a count the one thing the page
- * had just said it could not find out. The FailureBlock below says all there
- * is to say.
- */
-export function rosterDescription(
-  count: number,
-  answered: boolean,
-  bothFailed: boolean,
-): string | undefined {
-  if (!answered) return "Loading…";
-  if (bothFailed) return undefined;
-  return `${count} ${count === 1 ? "employee" : "employees"}`;
 }
 
 /**
@@ -373,6 +384,19 @@ type RegisterTableFilters = Omit<RegisterFilters, "sort"> & { sort?: string };
  *
  * `sort` is translated, per the note above.
  *
+ * `page` and `limit` come from the META, not from `filters` — they are the page
+ * and size ACTUALLY in force, after paginateRegisterRows has clamped and
+ * defaulted them. The pager does its arithmetic on what it is given here
+ * (`page: (filters.page || 1) - 1`), not on `meta.page`, so a stale page
+ * handed straight through leaves the arrows stepping through pages that no
+ * longer exist: sitting on 8 against a set that now makes 2, "‹" writes 7, then
+ * 6, then 5 — three presses that visibly do nothing.
+ *
+ * That state is reachable even though every filter change resets to page 1: a
+ * refetch can shrink the roster under a reader who is already on page 8, and so
+ * can the bridge going stale mid-session, because the suppression pass in
+ * coverageRegister.ts then drops every row that feed was the only witness to.
+ *
  * `search` is BLANKED whenever the bar owns the search box. GenericDataTable
  * keeps its own debounced copy of `filters.search`, seeded once at mount, and
  * an effect writes that copy back through `onFiltersChange` whenever the two
@@ -391,8 +415,14 @@ type RegisterTableFilters = Omit<RegisterFilters, "sort"> & { sort?: string };
 export function registerTableFilters(
   filters: RegisterFilters,
   narrow: boolean,
+  meta: BaseTableMeta,
 ): RegisterTableFilters {
-  const table: RegisterTableFilters = { ...filters, sort: columnIdForSort(filters.sort) };
+  const table: RegisterTableFilters = {
+    ...filters,
+    sort: columnIdForSort(filters.sort),
+    page: meta.page,
+    limit: meta.limit,
+  };
   return narrow ? { ...table, search: "" } : table;
 }
 
@@ -465,12 +495,15 @@ export const INITIAL_REGISTER_FILTERS: RegisterFilters = Object.freeze({});
  * test in this suite can reach. Every other filter has to survive the toggle:
  * silently dropping a search the reader had typed would look like the dot
  * clearing their work.
+ *
+ * Through `applyFilterChange`, because this narrows: filtering a 503-employee
+ * roster down to its four findings while sitting on page 8 would otherwise
+ * clamp the reader onto the last page of them.
  */
 export function toggleReadiness(filters: RegisterFilters): RegisterFilters {
-  return {
-    ...filters,
+  return applyFilterChange(filters, {
     readiness: filters.readiness === "not-ready" ? undefined : "not-ready",
-  };
+  });
 }
 
 /**
