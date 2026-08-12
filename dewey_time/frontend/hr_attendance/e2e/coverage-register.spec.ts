@@ -107,9 +107,20 @@ type DotShape = {
   width: number;
   filled: boolean;
   borderWidth: string;
-  /** Box-shadow layers that actually paint. Tailwind emits transparent placeholders for the unset ones. */
-  shadows: number;
+  /**
+   * The GEOMETRY of each box-shadow layer that actually paints — "0px 0px 0px
+   * 3px" and so on — with the colour dropped and the transparent placeholders
+   * Tailwind emits for unset slots discarded.
+   *
+   * The set, not a count. `ring-2 ring-offset-2` paints two layers by itself,
+   * so a `> 1` count stays green with the halo deleted — and the halo is the
+   * whole reason `degraded` reads as loud as `problem`.
+   */
+  shadows: string[];
 };
+
+/** The halo both `problem` and `degraded` carry: `shadow-[0_0_0_3px]`. */
+const HALO = "0px 0px 0px 3px";
 
 async function dotShape(page: Page): Promise<DotShape> {
   return page.evaluate(() => {
@@ -142,13 +153,19 @@ async function dotShape(page: Page): Promise<DotShape> {
       return !/rgba\([^)]*,\s*0\s*\)/.test(text);
     };
 
+    // Colour dropped: this is a claim about shape. The lengths are the only
+    // part of a layer that says where it sits and how thick it is, and every
+    // colour notation Chrome may hand back — rgb(), oklab(), a bare keyword —
+    // is free of `px`.
+    const geometry = (layer: string) => (layer.match(/-?[\d.]+px/g) ?? []).join(" ");
+
     return {
       tone: button.getAttribute("data-tone"),
       label: button.getAttribute("aria-label"),
       width: dot.getBoundingClientRect().width,
       filled: !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(style.backgroundColor),
       borderWidth: style.borderTopWidth,
-      shadows: layers.filter(paints).length,
+      shadows: layers.filter(paints).map(geometry),
     };
   });
 }
@@ -164,7 +181,7 @@ test("the dot's `problem` tone is a filled disc with a halo", async ({ page }) =
   expect(shape.width).toBeCloseTo(12, 0);
   expect(shape.filled).toBe(true);
   expect(shape.borderWidth).toBe("0px");
-  expect(shape.shadows, "the halo, and nothing else").toBe(1);
+  expect(shape.shadows, "the halo, and nothing else").toEqual([HALO]);
 });
 
 test("the dot's `clear` tone is a hollow ring", async ({ page }) => {
@@ -183,7 +200,7 @@ test("the dot's `clear` tone is a hollow ring", async ({ page }) => {
   // wrong — an absent indicator cannot be told from a page that failed to draw.
   expect(shape.filled).toBe(false);
   expect(shape.borderWidth).toBe("2px");
-  expect(shape.shadows).toBe(0);
+  expect(shape.shadows).toEqual([]);
 });
 
 test("the dot's `degraded` tone adds a concentric ring to the disc", async ({ page }) => {
@@ -199,9 +216,20 @@ test("the dot's `degraded` tone adds a concentric ring to the disc", async ({ pa
   expect(shape.width).toBeCloseTo(12, 0);
   expect(shape.filled).toBe(true);
   expect(shape.borderWidth).toBe("0px");
-  // Strictly louder than `problem`'s single halo — this is the state where the
-  // count covers only part of the roster, so it may not read as the quieter one.
-  expect(shape.shadows, "halo plus the detached ring").toBeGreaterThan(1);
+
+  // The two halves pinned separately, because either alone is satisfiable
+  // without the other. `ring-2 ring-offset-2` paints two layers on its own, so
+  // any count-based check stays green with the halo deleted — and the halo is
+  // what keeps this tone as LOUD as `problem`, which is the point: this is the
+  // state where the count covers only part of the roster.
+  expect(shape.shadows, "the same halo `problem` carries").toContain(HALO);
+  // And a ring outside it — the SHAPE that separates the two filled-disc
+  // tones, so they are not told apart by hue alone. Not pinned to an exact
+  // radius: ring-2 could become ring-[3px] without touching the claim.
+  expect(
+    shape.shadows.filter((layer) => layer !== HALO),
+    "a concentric ring, detached from the halo",
+  ).not.toEqual([]);
 
   // And the columns the stale feed cannot vouch for are gone, not blanked.
   await expect(page.getByRole("columnheader", { name: "Biometric" })).toHaveCount(0);
@@ -212,6 +240,16 @@ test("a facet popover opens, narrows the table, and clears back", async ({ page 
   await stubFrappe(page);
   await openRegister(page);
   await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  // Radix renders the three single-value facets as `role="combobox"`, which is
+  // nameFrom:author — the "Status: Any" a sighted reader sees contributes
+  // NOTHING to the accessible name, and until one was given all three
+  // announced as bare unnamed comboboxes. Located BY NAME here so the name
+  // stays load-bearing: the unit suite can only assert the attribute is in the
+  // markup, not that a browser computes it into the name.
+  for (const name of ["Status filter, Any", "Schedule filter, Any", "Biometric filter, Any"]) {
+    await expect(page.getByRole("combobox", { name, exact: true })).toBeVisible();
+  }
 
   // Branch is a fact only the biometric feed carries, so the roster has exactly
   // the two branches its rows mention.
@@ -271,90 +309,119 @@ test("the export button hands over the rows on screen as a file", async ({ page 
 });
 
 /**
- * 375px — the narrowest phone this app is expected on.
+ * Phone widths — 375 (the narrowest this app is expected on) and 412 (the
+ * Pixel 7 the `mobile` project runs, and the shape a phone actually gets).
  *
  * page-insets.spec.ts measures gutter geometry, but only from 1024 up, and the
  * only 375px walk in the suite is behind AUDIT=1 and asserts nothing. The
- * register's toolbar is the widest thing this app puts in one row — five facet
- * controls, a fixed-width search box and an export button — so it is where a
- * phone runs out of room first.
+ * register's toolbar is the widest thing this app puts in one row, so it is
+ * where a phone runs out of room first.
  *
- * TWO measurements, because the first alone cannot see the second. `Section
- * grow` is `overflow-hidden`, so anything the toolbar spills is CLIPPED rather
- * than scrolled: the document stays 375px wide while a control sits outside
- * the viewport, perfectly invisible to a scrollWidth check. So the register's
- * own controls are measured against the viewport directly as well.
+ * THREE measurements, because none of them can see what the others do:
  *
- * KNOWN, MEASURED, AND NOT YET FIXED — deliberately not asserted here, so this
- * file does not quietly claim the toolbar is sound: dewey-ui's toolbar row does
- * not wrap, so below 768px its own search input overlaps the Status facet, and
- * below ~480px its "Columns" dropdown is off-screen entirely (right edge 432 at
- * both 375 and 412). Neither control is one this page renders or can place; the
- * fix is in the primitive's toolbar, not here. What IS asserted is everything
- * the register itself puts in that row.
+ * 1. The page must not scroll sideways. On its own this is nearly blind here —
+ *    `Section grow` is `overflow-hidden`, so anything the toolbar spills is
+ *    CLIPPED, and the document stays exactly 375px wide with a control sitting
+ *    outside the viewport.
+ * 2. No control may sit outside the viewport. Catches the clipped case.
+ * 3. No two controls may overlap. Catches the case where everything is on
+ *    screen but drawn on top of each other, which is what a non-wrapping
+ *    toolbar row does when its flex items are crushed to nothing — measured at
+ *    375 before the handoff: dewey-ui's search input over the Status facet,
+ *    the export button over the search input.
+ *
+ * `test.use({ viewport })` replaces the viewport on BOTH projects, so a single
+ * fixed width would leave the Pixel 7's native 412 measured by nobody. Both
+ * widths are walked inside the test instead.
  */
-test.describe("at 375px", () => {
-  test.use({ viewport: { width: 375, height: 812 } });
+const PHONE_WIDTHS = [375, 412];
 
-  /**
-   * The controls the register itself contributes to the toolbar.
-   *
-   * The three single-value facets are located by their TEXT, not by an
-   * accessible name, because they have none: Radix's SelectTrigger is a
-   * `role="combobox"`, and ARIA does not allow a combobox to take its name
-   * from its contents, so the "Status: Any" a sighted reader sees is not a
-   * name any assistive technology is given. Reported, not fixed here — see
-   * SingleFacet's own comment in RegisterFilterBar.tsx, which assumes the
-   * opposite.
-   */
-  function registerControls(page: Page) {
-    const single = (text: string) =>
-      page.locator('button[role="combobox"]').filter({ hasText: text });
-    return [
-      page.getByRole("button", { name: "Branch filter, 2 options" }),
-      page.getByRole("button", { name: "Department filter, 2 options" }),
-      single("Status: Any"),
-      single("Schedule: Any"),
-      single("Biometric: Any"),
-      page.getByRole("button", { name: `Export ${ROSTER} employees as CSV` }),
-    ];
-  }
+/** Every control in the toolbar, and what is wrong with where it sits. */
+type ToolbarFit = {
+  viewport: number;
+  documentScroll: number;
+  documentClient: number;
+  controls: string[];
+  offscreen: string[];
+  overlapping: string[];
+};
 
-  test("the register does not scroll sideways, and its own controls stay on screen", async ({
-    page,
-  }) => {
-    await stubFrappe(page);
-    await openRegister(page);
+async function toolbarFit(page: Page): Promise<ToolbarFit> {
+  return page.evaluate(() => {
+    const named = (el: Element) => el.getAttribute("aria-label") ?? (el.textContent ?? "").trim();
 
-    // A precondition, not a claim: this passes just as happily on a blank page.
-    await expect(bodyRows(page)).toHaveCount(ROSTER);
+    const buttons = [...document.querySelectorAll("button")];
+    const exportButton = buttons.find((b) => /^Export /.test(b.getAttribute("aria-label") ?? ""));
+    const facet = buttons.find((b) => /^Branch filter/.test(b.getAttribute("aria-label") ?? ""));
+    if (!exportButton || !facet) throw new Error("expected the register's toolbar controls");
 
-    const measured = await page.evaluate(() => ({
+    // The toolbar found structurally — the nearest ancestor of the export
+    // button that also holds the facets — rather than by a dewey-ui class
+    // string that could change under us without anything going red.
+    let toolbar: Element | null = exportButton.parentElement;
+    while (toolbar && !toolbar.contains(facet)) toolbar = toolbar.parentElement;
+    if (!toolbar) throw new Error("the export button and the facets share no toolbar");
+
+    const boxes = [...toolbar.querySelectorAll("button, input")]
+      .map((el) => ({ name: named(el), rect: el.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 0 && rect.height > 0);
+
+    const overlapping: string[] = [];
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i].rect;
+        const b = boxes[j].rect;
+        // 1px of slack, so two controls sharing an edge are not an overlap.
+        const hit =
+          a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+        if (hit) overlapping.push(`${boxes[i].name} × ${boxes[j].name}`);
+      }
+    }
+
+    return {
       viewport: window.innerWidth,
       documentScroll: document.documentElement.scrollWidth,
       documentClient: document.documentElement.clientWidth,
-      bodyScroll: document.body.scrollWidth,
-    }));
+      controls: boxes.map(({ name }) => name),
+      offscreen: boxes
+        .filter(({ rect }) => rect.right > window.innerWidth + 1 || rect.left < -1)
+        .map(({ name, rect }) => `${name} @${Math.round(rect.left)}..${Math.round(rect.right)}`),
+      overlapping,
+    };
+  });
+}
 
-    expect(measured.viewport, "viewport did not take").toBe(375);
+test("on a phone the register's toolbar fits, whole and without overlaps", async ({ page }) => {
+  await stubFrappe(page);
+
+  for (const width of PHONE_WIDTHS) {
+    await page.setViewportSize({ width, height: 812 });
+    await openRegister(page);
+
+    // Preconditions. Without them this passes just as happily on a blank page,
+    // or on a run whose viewport never narrowed.
+    await expect(bodyRows(page)).toHaveCount(ROSTER);
+    const fit = await toolbarFit(page);
+    expect(fit.viewport, `viewport did not take at ${width}`).toBe(width);
+
+    // The register hands its search box to the wrapping facet bar below 768,
+    // so at these widths the toolbar is entirely its own controls: five
+    // facets, the search box and the export button.
+    expect(fit.controls, `@${width}: the toolbar is not the one being measured`).toHaveLength(7);
+    expect(
+      fit.controls,
+      `@${width}: the search box must survive the handoff, under the same name`,
+    ).toContain("Search by name or employee ID…");
+
     // 1px of rounding, and no more. The TABLE scrolls horizontally by design —
     // GenericDataTable's fill layout gives it its own scroller — but the page
     // under it must not move.
     expect(
-      measured.documentScroll,
-      `document overflows by ${measured.documentScroll - measured.documentClient}px`,
-    ).toBeLessThanOrEqual(measured.documentClient + 1);
-    expect(measured.bodyScroll).toBeLessThanOrEqual(measured.documentClient + 1);
+      fit.documentScroll,
+      `@${width}: document overflows by ${fit.documentScroll - fit.documentClient}px`,
+    ).toBeLessThanOrEqual(fit.documentClient + 1);
 
-    for (const control of registerControls(page)) {
-      const name = (await control.getAttribute("aria-label")) ?? (await control.innerText());
-      const box = await control.boundingBox();
-      expect(box, `${name} is not laid out at all`).not.toBeNull();
-      expect(box!.x, `${name} starts left of the viewport`).toBeGreaterThanOrEqual(-1);
-      expect(
-        box!.x + box!.width,
-        `${name} runs ${Math.round(box!.x + box!.width - measured.viewport)}px past the right edge`,
-      ).toBeLessThanOrEqual(measured.viewport + 1);
-    }
-  });
+    expect(fit.offscreen, `@${width}: a toolbar control is off the screen`).toEqual([]);
+    expect(fit.overlapping, `@${width}: toolbar controls are drawn over each other`).toEqual([]);
+  }
 });

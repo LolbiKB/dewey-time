@@ -1,4 +1,5 @@
-import { ListFilterIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ListFilterIcon, SearchIcon } from "lucide-react";
 import {
   Badge,
   Button,
@@ -9,6 +10,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  Input,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -52,6 +54,74 @@ const BIOMETRIC_OPTIONS: { value: NonNullable<RegisterFilters["biometric"]>; lab
   { value: "still_enrolled", label: BIOMETRIC_LABELS.still_enrolled },
 ];
 
+/**
+ * The one wording for the register's search box, wherever it is rendered.
+ *
+ * Shared with `GenericDataTable`'s `config.searchPlaceholder`, because below
+ * the breakpoint the bar renders its own box in place of the primitive's and
+ * the two must read — and be NAMED — identically. A reader who learned the
+ * control on a laptop must find the same one on a phone, and one e2e locator
+ * has to match both or the wide branch stops being measured.
+ */
+export const REGISTER_SEARCH_PLACEHOLDER = "Search by name or employee ID\u2026";
+
+/** What the box waits before it narrows the table. dewey-ui's own toolbar uses the same. */
+const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * The register's own search box.
+ *
+ * Rendered only when the bar is told to — see `showSearch`. It writes
+ * `filters.search`, the SAME field `GenericDataTable`'s box writes, so the two
+ * are one control that changes place rather than two states that can disagree.
+ *
+ * Its own component, not inlined into the bar, because it is the only thing
+ * here that holds hooks and the bar must not: the bar is CALLED as a plain
+ * function by the write-path tests below, which is the only way a suite with
+ * no jsdom can reach its `onFiltersChange` handlers. As an element in the tree
+ * the bar builds, this runs no hooks until something renders it.
+ *
+ * The local buffer is re-seeded whenever `value` changes, so it is a DELAY on
+ * the shared field rather than a second copy of it: every other control here
+ * spreads `filters`, and one that cleared the search would otherwise leave
+ * stale text sitting in the box.
+ */
+export function RegisterSearchInput(props: { value: string; onChange: (next: string) => void }) {
+  const { value, onChange } = props;
+  const [text, setText] = useState(value);
+
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (text === value) return;
+    const timer = setTimeout(() => onChange(text), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text, value, onChange]);
+
+  return (
+    // `basis-full` so it takes a row of its own in the wrapping bar: it is the
+    // widest control here, and the facet chips flow underneath it.
+    <div className="relative basis-full">
+      <SearchIcon
+        className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden="true"
+      />
+      {/* An explicit name as well as the placeholder: a placeholder is the
+          accessible name only by fallback, and it is gone the moment anything
+          is typed. */}
+      <Input
+        className="h-8 w-full pl-8"
+        placeholder={REGISTER_SEARCH_PLACEHOLDER}
+        aria-label={REGISTER_SEARCH_PLACEHOLDER}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+      />
+    </div>
+  );
+}
+
 export type RegisterFilterBarProps = {
   /**
    * The UNFILTERED roster — the hook's rows, suppressed but not narrowed.
@@ -66,6 +136,18 @@ export type RegisterFilterBarProps = {
   feeds: FeedHealth;
   filters: RegisterFilters;
   onFiltersChange: (next: RegisterFilters) => void;
+  /**
+   * Take the search box in, because the toolbar outside cannot hold it.
+   *
+   * dewey-ui's toolbar row does not wrap and its search input is a fixed
+   * `w-64`, so below 768px that input is drawn straight over this bar's Status
+   * facet and its Columns dropdown leaves the screen — measured at 375 and
+   * 412, and invisible to a scrollWidth check because `Section grow` clips it.
+   * This bar DOES wrap, so at those widths the page hides the primitive's box
+   * and hands the search here instead. At 768 and above everything measured
+   * clean where it already was, so nothing moves.
+   */
+  showSearch?: boolean;
 };
 
 /**
@@ -88,6 +170,7 @@ export function RegisterFilterBar({
   feeds,
   filters,
   onFiltersChange,
+  showSearch = false,
 }: RegisterFilterBarProps) {
   // Derived on every render rather than memoised.
   //
@@ -103,6 +186,13 @@ export function RegisterFilterBar({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {showSearch ? (
+        <RegisterSearchInput
+          value={filters.search ?? ""}
+          onChange={(search) => onFiltersChange({ ...filters, search })}
+        />
+      ) : null}
+
       {/* No options means no control. An empty menu is a dead affordance, and
           on this page an empty one would also be a claim: that the roster has
           branches, and none of them matched. */}
@@ -310,10 +400,19 @@ export function SingleFacet<T extends string>(props: {
         props.onChange(props.options.find((option) => option.value === next)?.value)
       }
     >
-      {/* No aria-label: it would REPLACE the trigger's text as the accessible
-          name, and that text is the current value. The label is inside the
-          value instead, so the name is complete either way. */}
-      <SelectTrigger size="sm" className="h-8 w-auto gap-1.5">
+      {/* An aria-label IS required here, and this comment used to say the
+          opposite — that the trigger's own "Status: Any" text was name enough.
+          It is not. Radix renders this trigger as `role="combobox"`, which is
+          nameFrom:author: its contents contribute NOTHING to the accessible
+          name, so without this the control had no name at all and three of the
+          register's filters announced as bare comboboxes. The current value
+          travels in the name too, so replacing the visible text costs
+          nothing. */}
+      <SelectTrigger
+        size="sm"
+        className="h-8 w-auto gap-1.5"
+        aria-label={`${props.label} filter, ${selected?.label ?? "Any"}`}
+      >
         {/* Explicit children. Radix fills SelectValue from the mounted
             SelectItem, which lives in a portal, so with children omitted the
             trigger renders blank until the list has been opened once. */}

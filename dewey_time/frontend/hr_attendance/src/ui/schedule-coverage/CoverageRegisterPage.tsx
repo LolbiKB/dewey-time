@@ -1,5 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { EmptyState, GenericDataTable, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import {
+  EmptyState,
+  GenericDataTable,
+  Page,
+  PageHeader,
+  Section,
+  useIsMobile,
+} from "@lolbikb/dewey-ui";
 import { AlertTriangleIcon } from "lucide-react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
@@ -21,7 +28,10 @@ import {
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
 import { RegisterExportButton } from "@/ui/schedule-coverage/RegisterExportButton";
-import { RegisterFilterBar } from "@/ui/schedule-coverage/RegisterFilterBar";
+import {
+  REGISTER_SEARCH_PLACEHOLDER,
+  RegisterFilterBar,
+} from "@/ui/schedule-coverage/RegisterFilterBar";
 
 export type CoverageRegisterViewProps = {
   /** Joined AND suppressed — the hook's `rows`, never a fresh join. */
@@ -37,6 +47,16 @@ export type CoverageRegisterViewProps = {
   onRetry: () => void;
   onOpen: (row: RegisterRow) => void;
   onAddSchedule: (row: RegisterRow) => void;
+  /**
+   * Under 768px, where dewey-ui's toolbar row runs out of room.
+   *
+   * A prop rather than a `useIsMobile()` call in here, so both branches are
+   * reachable from a suite with no DOM: `useIsMobile` reads `matchMedia` in an
+   * effect, and under `renderToStaticMarkup` no effect runs, so it would
+   * report the desktop branch forever and the phone toolbar would be pinned by
+   * nothing but the e2e. The page above supplies it.
+   */
+  narrow?: boolean;
 };
 
 /**
@@ -51,8 +71,17 @@ export type CoverageRegisterViewProps = {
  * most of what this component does — are exactly what a grep cannot verify.
  */
 export function CoverageRegisterView(props: CoverageRegisterViewProps) {
-  const { rows, feeds, filters, isLoading, bothFailed, onFiltersChange, onOpen, onAddSchedule } =
-    props;
+  const {
+    rows,
+    feeds,
+    filters,
+    isLoading,
+    bothFailed,
+    narrow = false,
+    onFiltersChange,
+    onOpen,
+    onAddSchedule,
+  } = props;
 
   // Memoised, and fed only stable callbacks: registerColumns allocates a new
   // array and new per-row closures on every call, and TanStack resets column
@@ -78,12 +107,12 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
 
   // Translated at the boundary, in both directions — see RegisterTableFilters.
   const tableFilters = useMemo<RegisterTableFilters>(
-    () => ({ ...filters, sort: columnIdForSort(filters.sort) }),
-    [filters],
+    () => registerTableFilters(filters, narrow),
+    [filters, narrow],
   );
   const handleTableFiltersChange = useCallback(
-    (next: RegisterTableFilters) => onFiltersChange(registerFiltersFromTable(next)),
-    [onFiltersChange],
+    (next: RegisterTableFilters) => onFiltersChange(mergeTableFilters(filters, next, narrow)),
+    [filters, narrow, onFiltersChange],
   );
 
   // Without this GenericDataTable's footer reads "Showing 241 of 0 employees"
@@ -180,6 +209,18 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             layout="fill"
             columnWidths="fixed"
             hidePageSize
+            // Under 768px both of these are handed off or dropped, because
+            // dewey-ui's toolbar row does not wrap: measured at 375 and 412,
+            // its `w-64` search input is drawn over this bar's Status facet
+            // and its Columns dropdown sits ~57px off the right of the screen
+            // (Section's overflow-hidden clips it, so the page never scrolls
+            // and no scrollWidth check can see it). The search moves INTO the
+            // bar, which wraps; the column toggle simply goes, and loses
+            // nothing — which columns exist here is decided by feed health,
+            // and a reader hiding one by hand would be quietly contradicting
+            // the suppression rule this page is built on.
+            hideSearch={narrow}
+            hideColumnToggle={narrow}
             // Facet options come from `rows`, NOT `data` — see the bar's props.
             //
             // No `answered` gate here, unlike the export beside it. The bar
@@ -195,6 +236,7 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
                 feeds={feeds}
                 filters={filters}
                 onFiltersChange={onFiltersChange}
+                showSearch={narrow}
               />
             }
             // The export DOES wait for the feeds, on the same rule as the alert
@@ -208,7 +250,9 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             config={{
               entityName: "employees",
               entityNameSingular: "employee",
-              searchPlaceholder: "Search by name or employee ID…",
+              // Shared with the bar's own box, so the control reads and is
+              // NAMED the same on either side of the breakpoint.
+              searchPlaceholder: REGISTER_SEARCH_PLACEHOLDER,
             }}
           />
         )}
@@ -235,6 +279,53 @@ function rosterDescription(count: number): string {
  * direction, and the sort can never be cleared.
  */
 type RegisterTableFilters = Omit<RegisterFilters, "sort"> & { sort?: string };
+
+/**
+ * The register's filters as GenericDataTable must see them.
+ *
+ * `sort` is translated, per the note above.
+ *
+ * `search` is BLANKED whenever the bar owns the search box. GenericDataTable
+ * keeps its own debounced copy of `filters.search`, seeded once at mount, and
+ * an effect writes that copy back through `onFiltersChange` whenever the two
+ * differ — and it runs that effect whether or not `hideSearch` stopped it
+ * rendering an input to change the copy with. Handed the bar's search it would
+ * answer, ~300ms later, with the empty string it still believes in, so every
+ * keystroke on a phone would undo itself. Blanked, its copy and this one agree
+ * and it stays quiet.
+ *
+ * Blanked to `""`, not omitted: its copy is `useState(filters.search || "")`,
+ * so `undefined` is the one value that does NOT match and would trigger
+ * exactly the write-back this avoids.
+ *
+ * The table never needed the search anyway — `data` above is already filtered.
+ */
+export function registerTableFilters(
+  filters: RegisterFilters,
+  narrow: boolean,
+): RegisterTableFilters {
+  const table: RegisterTableFilters = { ...filters, sort: columnIdForSort(filters.sort) };
+  return narrow ? { ...table, search: "" } : table;
+}
+
+/**
+ * The register's filters after the table reported a change.
+ *
+ * While the bar owns the search box the table's `search` is the blank it was
+ * given above, so the real one is carried over from what the register already
+ * held. Without this, pressing any column header would wipe whatever the
+ * reader had typed on a phone.
+ */
+export function mergeTableFilters(
+  held: RegisterFilters,
+  next: RegisterTableFilters,
+  narrow: boolean,
+): RegisterFilters {
+  const merged = registerFiltersFromTable(next);
+  if (!narrow) return merged;
+  const { search: _tableCopy, ...rest } = merged;
+  return held.search === undefined ? rest : { ...rest, search: held.search };
+}
 
 /**
  * What the table just did, in this module's terms.
@@ -307,6 +398,10 @@ export function CoverageRegisterPage() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<RegisterFilters>(INITIAL_REGISTER_FILTERS);
+  // dewey-ui's own breakpoint, 768 — which is exactly where the toolbar's
+  // overlaps were measured to stop. Held here rather than in the view so the
+  // view stays renderable, and testable, without a DOM.
+  const narrow = useIsMobile();
 
   // Computed once. An inline `Date.now()` would move the staleness boundary
   // feedHealth reads on every render, so a snapshot could flip either side of
@@ -345,6 +440,7 @@ export function CoverageRegisterPage() {
       isLoading={isLoading}
       bothFailed={bothFailed}
       filters={filters}
+      narrow={narrow}
       onFiltersChange={setFilters}
       onRetry={refresh}
       onOpen={handleOpen}

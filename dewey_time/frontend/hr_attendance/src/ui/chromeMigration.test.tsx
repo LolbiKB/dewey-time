@@ -18,6 +18,11 @@ const MAIN_URL = new URL("../main.tsx", import.meta.url);
  * the only ways to keep this guard green being to delete the explanation or to
  * stop scanning. String and template literals are stepped over intact so a
  * `//` inside one (a URL, say) cannot swallow the rest of a line.
+ *
+ * An apostrophe in JSX TEXT (`don't`) is read here as opening a string, so
+ * everything up to the next quote is copied through unstripped. That errs in
+ * the safe direction — this can only ever preserve MORE source than a real
+ * parser would, never hide a class from the assertions below.
  */
 function withoutComments(src: string): string {
   let out = "";
@@ -54,8 +59,45 @@ function withoutComments(src: string): string {
 }
 
 /**
+ * Every `<Route …>` opening tag in the source, attributes and all.
+ *
+ * Walked rather than matched with `/<Route\b([^>]*?)\/?>/`, because a Route's
+ * attributes contain `>` characters of their own: `element={<Navigate … />}`
+ * closes a nested tag inside the braces. A `[^>]` scan therefore ends the tag
+ * at that nested `/>` and returns only the text BEFORE it — which silently
+ * drops any attribute written after `element`, `path` included. JSX prop order
+ * is arbitrary, so `<Route element={<NewPage />} path="/new" />` would opt a
+ * page out of this guard with nothing going red.
+ *
+ * So: track brace depth and string literals, and end the tag at the first `>`
+ * that is at depth 0 — its own.
+ */
+function routeTags(src: string): string[] {
+  const tags: string[] = [];
+  let at = src.indexOf("<Route");
+
+  while (at !== -1) {
+    let i = at + "<Route".length;
+    let depth = 0;
+    while (i < src.length) {
+      const ch = src[i];
+      if (ch === '"' || ch === "'" || ch === "`") {
+        i += 1;
+        while (i < src.length && src[i] !== ch) i += src[i] === "\\" ? 2 : 1;
+      } else if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      else if (ch === ">" && depth === 0) break;
+      i += 1;
+    }
+    tags.push(src.slice(at, i));
+    at = src.indexOf("<Route", i);
+  }
+  return tags;
+}
+
+/**
  * Every component `main.tsx` mounts at a `path`, resolved to the file that
- * defines it.
+ * defines it, plus the redirects that sit alongside them.
  *
  * Read out of the router rather than off a filename glob. A glob over
  * `*Page.tsx` is a naming convention, not the class of routed surfaces: it
@@ -63,11 +105,12 @@ function withoutComments(src: string): string {
  * page whose author picked any other name — which is exactly the escape hatch
  * this guard exists to close.
  *
- * The layout route is skipped because it carries no `path`: `HrAppShell` wraps
- * pages, it is not one. `Navigate` is skipped because a redirect renders no
- * surface of its own.
+ * The layout route is dropped because it carries no `path`: `HrAppShell` wraps
+ * pages, it is not one. `Navigate` is counted but not resolved — a redirect
+ * renders no surface of its own — and it is counted rather than ignored so the
+ * cross-check below can account for every routed tag in the file.
  */
-function routedPages(): { name: string; url: URL }[] {
+function routedElements(): { pages: { name: string; url: URL }[]; redirects: number } {
   const main = readFileSync(MAIN_URL, "utf8");
 
   const specifiers = new Map<string, string>();
@@ -79,16 +122,48 @@ function routedPages(): { name: string; url: URL }[] {
   }
 
   const pages: { name: string; url: URL }[] = [];
-  for (const [, attrs, name] of main.matchAll(/<Route\b([^>]*?)element=\{<([A-Za-z_$][\w$]*)/g)) {
-    if (!attrs.includes("path=")) continue;
-    if (name === "Navigate") continue;
+  let redirects = 0;
+
+  for (const tag of routeTags(main)) {
+    if (!/\bpath\s*=/.test(tag)) continue;
+
+    // Loud rather than skipped, here and below: a routed tag this scan cannot
+    // read is a page silently escaping the guard, which is the whole defect
+    // again.
+    const element = /element=\{<\s*([A-Za-z_$][\w$]*)/.exec(tag);
+    assert.ok(element, `a <Route> with a path has an element this scan cannot read: ${tag.trim()}`);
+
+    const name = element[1];
+    if (name === "Navigate") {
+      redirects += 1;
+      continue;
+    }
+
     const from = specifiers.get(name);
-    // Loud rather than skipped: a routed component this scan cannot resolve is
-    // a page silently escaping the guard, which is the whole defect again.
     assert.ok(from, `main.tsx routes <${name} /> but no import in main.tsx names it`);
+    assert.match(
+      from,
+      /^\.{1,2}\//,
+      `<${name} /> is routed from the package "${from}" — this guard can only read local files`,
+    );
     pages.push({ name, url: new URL(`${from}.tsx`, MAIN_URL) });
   }
-  return pages;
+
+  // Counted a SECOND way, straight off the source, and compared. The walker
+  // above is the only thing deciding what this guard looks at, so nothing else
+  // would notice it quietly returning a smaller world; two independent counts
+  // disagreeing is what turns that into a failure instead of a silent pass.
+  // This replaces a hardcoded "at least five pages" floor, which would have
+  // gone stale the first time a route was added or removed.
+  const declaredPaths = (main.match(/\bpath\s*=/g) ?? []).length;
+  assert.ok(declaredPaths > 0, "main.tsx declares no routes at all — the scan is broken");
+  assert.equal(
+    pages.length + redirects,
+    declaredPaths,
+    `main.tsx declares ${declaredPaths} routed paths but this scan resolved ${pages.length} pages and ${redirects} redirects`,
+  );
+
+  return { pages, redirects };
 }
 
 // Was "WeeklySchedulePage uses <Page>" — a per-file assertion. The biometrics
@@ -99,13 +174,9 @@ function routedPages(): { name: string; url: URL }[] {
 // opt out by being new, by being named something else, or by living in a
 // subdirectory.
 test("every routed page uses dewey-ui's Page rather than a hand-rolled container", () => {
-  const routed = routedPages();
+  const { pages } = routedElements();
 
-  // A precondition, not a claim: with a broken scan the loop below would pass
-  // over an empty list, and a guard that checks nothing is worse than none.
-  assert.ok(routed.length >= 5, `expected to find the routed pages, saw ${routed.length}`);
-
-  for (const { name, url } of routed) {
+  for (const { name, url } of pages) {
     const src = withoutComments(readFileSync(url, "utf8"));
     // The import too, not just the tag: a locally defined `Page` would satisfy
     // the tag while hand-rolling exactly the container this forbids.

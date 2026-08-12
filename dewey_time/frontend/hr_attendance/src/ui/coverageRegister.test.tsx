@@ -19,7 +19,9 @@ import { toRegisterCsv } from "@/lib/registerCsv";
 import {
   CoverageRegisterView,
   INITIAL_REGISTER_FILTERS,
+  mergeTableFilters,
   registerFiltersFromTable,
+  registerTableFilters,
   toggleReadiness,
   type CoverageRegisterViewProps,
 } from "@/ui/schedule-coverage/CoverageRegisterPage";
@@ -30,6 +32,7 @@ import {
 import {
   FacetFilter,
   FacetOptions,
+  REGISTER_SEARCH_PLACEHOLDER,
   RegisterFilterBar,
   SingleFacet,
   toggleFacetValue,
@@ -905,6 +908,39 @@ test("the footer counts the real roster, never zero", () => {
   assert.doesNotMatch(html, /Loading\.\.\./, "the pager must not be stuck reporting a load");
 });
 
+test("below the breakpoint the search box moves into the wrapping bar and the column toggle goes", () => {
+  // dewey-ui's toolbar row does not wrap and its search input is a fixed
+  // `w-64`, so at 375 and 412 it was measured drawn straight over the Status
+  // facet, with the Columns dropdown ~57px off the right of the screen.
+  // `Section grow` is overflow-hidden, so none of that moved the page and no
+  // scrollWidth check could see it — see coverage-register.spec.ts.
+  //
+  // Both branches are asserted here, and both from markup: the e2e can only
+  // measure the phone, and a gate that turned the desktop toolbar off too
+  // would still look right at 375.
+  const wide = renderView();
+  assert.match(wide, />Columns/, "the desktop toolbar keeps dewey-ui's column toggle");
+  assert.ok(
+    !wide.includes(`aria-label="${REGISTER_SEARCH_PLACEHOLDER}"`),
+    "and dewey-ui's own search box, which is not the one the bar renders",
+  );
+  assert.match(wide, /placeholder="Search by name or employee ID…"/, "the primitive's box");
+
+  const narrow = renderView({ narrow: true });
+  assert.doesNotMatch(narrow, />Columns/, "which columns exist here is feed health's call, not a reader's");
+  assert.ok(
+    narrow.includes(`aria-label="${REGISTER_SEARCH_PLACEHOLDER}"`),
+    "the register renders its own box, inside the bar that wraps",
+  );
+  // ONE box, not two: the handoff has to remove the primitive's, or the phone
+  // gets two controls writing one field.
+  assert.equal(
+    narrow.split(`placeholder="${REGISTER_SEARCH_PLACEHOLDER}"`).length - 1,
+    1,
+    "exactly one search box at any width",
+  );
+});
+
 /** Which of two names the rendered table puts first. */
 function orderOf(html: string, first: string, second: string): [number, number] {
   const a = html.indexOf(first);
@@ -1004,6 +1040,30 @@ function facetName(html: string, label: string): string | null {
 function selectValue(html: string, label: string): string | null {
   return html.match(new RegExp(`data-slot="select-value"[^>]*>${label}: ([^<]*)<`))?.[1] ?? null;
 }
+
+test("each single select says what it filters, not only what it is set to", () => {
+  // Radix renders these as `role="combobox"`, which is nameFrom:author — the
+  // "Status: Left" a sighted reader sees contributes NOTHING to the accessible
+  // name. Without an explicit label all three announced as bare comboboxes,
+  // and the aria snapshot in coverage-register.spec.ts is what caught it. The
+  // value travels in the name too, so nothing is lost by naming them.
+  const html = renderBar({ filters: { status: "Left" } });
+  assert.equal(facetName(html, "Status"), "Status filter, Left");
+  assert.equal(facetName(html, "Schedule"), "Schedule filter, Any");
+  assert.equal(facetName(html, "Biometric"), "Biometric filter, Any");
+});
+
+test("the bar holds no search box unless it is asked to", () => {
+  assert.ok(
+    !renderBar().includes(REGISTER_SEARCH_PLACEHOLDER),
+    "above the breakpoint the search box belongs to GenericDataTable's toolbar",
+  );
+  const narrow = renderBar({ showSearch: true });
+  assert.ok(
+    narrow.includes(`aria-label="${REGISTER_SEARCH_PLACEHOLDER}"`),
+    "a placeholder alone is a name only by fallback, and vanishes once anything is typed",
+  );
+});
 
 test("the bar offers every facet the two feeds can speak to", () => {
   const html = renderBar();
@@ -1325,6 +1385,54 @@ test("a column id nothing sorts by leaves the register unsorted", () => {
   // had quietly been switched off underneath it.
   assert.deepEqual(registerFiltersFromTable({ sort: "branch", order: "desc" }), {});
   assert.deepEqual(registerFiltersFromTable({ sort: "hours", order: "asc" }), {});
+});
+
+test("the table is never told the search the bar owns", () => {
+  // GenericDataTable keeps its own debounced copy of `filters.search`, seeded
+  // once at mount, and an effect writes that copy back through
+  // onFiltersChange whenever the two differ — with `hideSearch` set it has
+  // rendered no input that could ever move the copy, so it is frozen at "".
+  // Told the bar's search it answers ~300ms later with that empty string, and
+  // the phone's search box undoes itself between keystrokes. Caught in a
+  // browser: the box typed fine and the table never narrowed.
+  assert.equal(registerTableFilters({ search: "ada" }, true).search, "");
+  assert.equal(
+    registerTableFilters({}, true).search,
+    "",
+    "blanked to \"\", never omitted — its copy is `filters.search || \"\"`, so undefined is the one value that does NOT match and would trigger the write-back",
+  );
+  assert.equal(
+    registerTableFilters({ search: "ada" }, false).search,
+    "ada",
+    "above the breakpoint the primitive's own box is the real one",
+  );
+  // And the sort translation is unaffected either way.
+  assert.equal(registerTableFilters({ sort: "hours" }, true).sort, "weekly_minutes");
+  assert.equal(registerTableFilters({ sort: "hours" }, false).sort, "weekly_minutes");
+});
+
+test("a column press keeps the search the reader typed on a phone", () => {
+  // What comes back from the table is the blank it was handed, so the real
+  // search has to be carried over from what the register held — otherwise
+  // pressing any column header wipes it.
+  const pressed = { search: "", status: "Left" as const, sort: "employee", order: "asc" as const };
+
+  assert.deepEqual(mergeTableFilters({ search: "ada", status: "Left" }, pressed, true), {
+    status: "Left",
+    search: "ada",
+    sort: "name",
+    order: "asc",
+  });
+  assert.deepEqual(
+    mergeTableFilters({ status: "Left" }, pressed, true),
+    { status: "Left", sort: "name", order: "asc" },
+    "with no search held, none is invented",
+  );
+  assert.deepEqual(
+    mergeTableFilters({ search: "ada" }, { ...pressed, search: "typed here" }, false),
+    { status: "Left", search: "typed here", sort: "name", order: "asc" },
+    "above the breakpoint the table's box is authoritative and passes straight through",
+  );
 });
 
 test("the register opens with nothing filtered and nothing sorted", () => {
