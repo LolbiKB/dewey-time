@@ -669,6 +669,19 @@ test("a page size that is not a size falls back to the default, not to an infini
   }
 });
 
+test("a page that is not a number is the first page, not an empty one", () => {
+  // The other end of the guard above. `Math.max(1, NaN)` is NaN, so a NaN page
+  // would pass straight through into `meta.page`, empty the slice, and leave
+  // the footer reading "Page NaN of 2" with both arrows dead — `NaN < 2` and
+  // `NaN > 1` are both false, so hasNext and hasPrev would BOTH be false and
+  // the reader would have no way off the page at all.
+  const { rows: got, meta } = paginateRegisterRows(roster(3), { page: Number.NaN, limit: 2 });
+  assert.equal(meta.page, 1);
+  assert.deepEqual(got.map((r) => r.id), ["E001", "E002"]);
+  assert.equal(meta.hasNext, true, "and the way forward is still open");
+  assert.equal(meta.hasPrev, false);
+});
+
 test("paginateRegisterRows does not mutate the array it was given", () => {
   const rows = roster(5);
   const before = rows.map((r) => r.id);

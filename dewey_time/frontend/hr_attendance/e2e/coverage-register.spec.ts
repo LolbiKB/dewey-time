@@ -218,6 +218,62 @@ test("narrowing the roster puts the reader back on page 1", async ({ page }) => 
   expect(await employeeNames(page)).toEqual(NOT_READY);
 });
 
+/**
+ * Sorting starts again at page 1 — and that rule is dewey-ui's, not ours.
+ *
+ * `CoverageRegisterPage` deliberately does NOT wrap `handleTableFiltersChange`
+ * in `applyFilterChange`, because GenericDataTable already stamps `page: 1` on
+ * its own sort write and wrapping it would stop the pager ever leaving page 1.
+ * That makes this the one reset rule the repo does not own, and it was pinned
+ * by nothing: no unit test asserts it, because the write happens inside the
+ * primitive, and no e2e pressed a sort header at all. A dewey-ui bump that
+ * dropped it would have shipped green.
+ *
+ * Pressing the header is also the only end-to-end exercise of the FUSED
+ * column's sort — header -> onSortingChange -> columnIdForSort -> filters ->
+ * sortRegisterRows -> reordered rows — so the order is asserted too, not just
+ * the page number.
+ */
+test("sorting starts again at page 1, and the fused column sorts by print count", async ({
+  page,
+}) => {
+  await stubFrappe(page);
+  await page.setViewportSize(LAPTOP);
+  await openRegister(page);
+  await pageSizeControl(page).selectOption("10");
+
+  await page.getByRole("button", { name: "Go to next page" }).click();
+  await expect(page.getByText("Page 2 of 2")).toBeVisible();
+  await expect(bodyRows(page)).toHaveCount(ROSTER - 10);
+
+  await page.getByRole("button", { name: /^Biometric, not sorted/ }).click();
+
+  // Back to the top of the newly ordered list. Left on page 2, the reader
+  // would press a column header and land in the middle of their own sort.
+  await expect(page.getByText("Page 1 of 2")).toBeVisible();
+  await expect(bodyRows(page)).toHaveCount(10);
+
+  // The header now says which way it went, in the wording the fused column
+  // needs: a column labelled "Biometric" ordering by print count is a surprise
+  // worth stating.
+  await expect(
+    page.getByRole("button", { name: "Biometric, sorted by fingerprint count ascending — press to sort descending" }),
+  ).toBeVisible();
+
+  // And it really is the print count doing the ordering, not the name. The
+  // biometric feed knows four of these fourteen — 0, 1, 2 and 2 prints — and
+  // the ten it has never heard of carry a null count, which sorts LAST in both
+  // directions because an absent value is not a small one. The two on 2 tie and
+  // fall back to name order, so Jane precedes Nora. Alphabetical order would
+  // put Aaron Wells first; print order puts Marco Diaz there.
+  expect((await employeeNames(page)).slice(0, 4)).toEqual([
+    "Marco Diaz",
+    "Aaron Wells",
+    "Jane Doe",
+    "Nora Vance",
+  ]);
+});
+
 test("the biometrics URL redirects to the register", async ({ page }) => {
   await stubFrappe(page);
   await page.goto("/hr-schedule/coverage/biometrics");

@@ -1059,12 +1059,19 @@ test("a healthy pair of feeds shows every column", () => {
   // Without this the test above passes just as well against a table that never
   // renders any column at all.
   const html = renderView();
-  for (const header of ["Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric"]) {
+  const labelled = ["Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric"];
+  for (const header of labelled) {
     assert.ok(html.includes(`>${header}<`), `expected the ${header} column`);
   }
-  // And exactly SEVEN of them. Prints was fused into Biometric, so a Prints
-  // column reappearing — or any other column quietly arriving — is a change to
-  // the register's shape that has to be made on purpose.
+  // And EIGHT columns in total — the seven above plus `action`, whose header is
+  // deliberately empty. Counted, not implied: the loop above is satisfied by a
+  // table that has quietly grown a ninth column, and this test is the one a
+  // reader will look at to find out what the register's shape is.
+  assert.equal(
+    html.split('data-slot="table-head"').length - 1,
+    labelled.length + 1,
+    "seven labelled columns and the unlabelled action column, and nothing else",
+  );
   assert.doesNotMatch(html, />Prints</, "the print count lives inside the biometric cell now");
   assert.doesNotMatch(html, /Biometric feed unavailable/, "no outage banner on a healthy load");
 });
@@ -1871,9 +1878,15 @@ test("the table is told the page it is actually on, not the one the reader last 
   const table = registerTableFilters(stale, false, meta);
   assert.equal(table.page, 2, "the clamped page, so the arrows step from where the reader is");
   assert.equal(table.limit, 2);
-  // The pager's own next/prev arithmetic, run on what it was given: from the
-  // clamped page, one press back is a page that exists.
-  assert.equal((table.page ?? 1) - 1, 1);
+
+  // The pager's own formula, run for real and fed back through pagination —
+  // `page: (filters.page || 1) - 1` is what the "‹" button writes. From the
+  // clamp, one press must land on a page that exists and show DIFFERENT rows.
+  // Handed the stale 8 instead, this same press writes 7, clamps back to 2 and
+  // returns the identical row, which is the dead arrow in full.
+  const back = paginateRegisterRows(manyRows(3), { ...stale, page: (table.page ?? 1) - 1 });
+  assert.equal(back.meta.page, 1, "one press back from the clamp is page 1, not the clamp again");
+  assert.deepEqual(back.rows.map((r) => r.id), ["E001", "E002"]);
 });
 
 test("the table is told the page SIZE in force, so its control cannot disagree with the slice", () => {

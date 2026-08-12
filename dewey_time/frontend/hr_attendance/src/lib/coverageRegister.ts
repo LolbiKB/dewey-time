@@ -378,7 +378,19 @@ export function paginateRegisterRows(
 
   const total = rows.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
-  const page = Math.min(Math.max(1, filters.page ?? 1), totalPages);
+
+  // `Number.isFinite` for the same reason `limit` rejects a non-positive size
+  // two lines up: `Math.max(1, NaN)` is NaN, so a NaN page would reach
+  // `meta.page` intact, empty the slice, and leave the footer reading "Page NaN
+  // of 2" with BOTH arrows dead — `NaN < totalPages` and `NaN > 1` are each
+  // false, so hasNext and hasPrev would both be false and there would be no way
+  // off the page at all. Unreachable through the pager, which only ever writes
+  // integers, but guarding one end of this and not the other reads as an
+  // oversight rather than a decision.
+  const requestedPage = filters.page ?? 1;
+  const page = Number.isFinite(requestedPage)
+    ? Math.min(Math.max(1, requestedPage), totalPages)
+    : 1;
   const start = (page - 1) * limit;
 
   return {
