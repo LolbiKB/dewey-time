@@ -149,6 +149,13 @@ test("the degraded state is a filled disc PLUS its own concentric ring — a thi
   assert.match(html, /bg-brand-accent/, "degraded must be filled");
   assert.match(html, /ring-offset-2/, "degraded must carry its own concentric ring, separate from problem's plain disc");
   assert.doesNotMatch(html, /border-2/, "degraded must not carry clear's hollow-ring look");
+  // The ring is what makes degraded a distinct SHAPE; the halo is what keeps
+  // it as loud as problem. Dropping the halo would leave the state that says
+  // "this count is partial" quieter than the one that says "here are the
+  // problems" — under-noticing, in the case where it costs most. Tailwind
+  // composes shadow-* and ring-* into one box-shadow via separate custom
+  // properties, so both survive; this pins that they are both emitted.
+  assert.match(html, /shadow-\[0_0_0_3px\]/, "degraded must keep problem's halo, not just the ring");
 });
 
 test("the clear state still renders — absence is not a signal", () => {

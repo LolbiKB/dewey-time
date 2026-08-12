@@ -45,14 +45,16 @@ export function AlertDot({
         className={cn(
           "size-3 rounded-full transition-shadow",
           alert.tone === "problem" && "bg-destructive shadow-[0_0_0_3px] shadow-destructive/20",
-          // The halo shadow above and `ring-*` both resolve to the CSS
-          // `box-shadow` property; layering them on the same state would
-          // have one silently overwrite the other. `degraded` uses the ring
-          // family exclusively — offset creates the "gap", ring-current
-          // (with the accent text colour) draws the outer ring — the same
-          // mechanism `active` below already relies on.
+          // `degraded` carries BOTH the halo and a concentric ring: the ring
+          // is the shape that separates it from `problem` (colour never
+          // carries meaning alone), the halo keeps it as loud as `problem`,
+          // which matters because this is the state that says the count is
+          // partial. The two compose rather than collide — Tailwind emits one
+          // `box-shadow` built from `--tw-shadow` and `--tw-ring-shadow`, and
+          // each utility sets only its own slice. Verified against the
+          // project's tailwindcss 4.3.0, not assumed.
           alert.tone === "degraded" &&
-            "bg-brand-accent text-brand-accent ring-2 ring-offset-2 ring-current",
+            "bg-brand-accent text-brand-accent shadow-[0_0_0_3px] shadow-brand-accent/20 ring-2 ring-offset-2 ring-current",
           alert.tone === "clear" && "border-2 border-primary bg-transparent",
           active && "ring-2 ring-offset-1 ring-current",
         )}
