@@ -7,6 +7,7 @@ import {
   sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
   type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
+import { toRegisterCsv } from "@/lib/registerCsv";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import { STALE_AFTER_MINUTES, type EnrollmentPayload } from "@/lib/enrollmentReport";
 
@@ -193,7 +194,10 @@ test("ENROLLED_NOT_PUNCHING stays distinct from OK", () => {
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
-  biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null, ...over,
+  biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
+  // Both feeds know this employee — the ordinary row. Override it to build the
+  // one-witness rows suppressUnusableFacts has to drop.
+  sources: { schedule: true, biometric: true }, ...over,
 });
 
 test("not-ready covers missing schedule, missing template, and live leavers", () => {
@@ -724,6 +728,118 @@ test("suppressUnusableFacts composed with registerAlert stops counting a fact th
   const feeds = { schedule: true, biometric: false };
   const suppressed = suppressUnusableFacts([row({ biometric: "none" })], feeds);
   assert.equal(registerAlert(suppressed, feeds).count, 0);
+});
+
+/**
+ * Coverage returns Active employees only, so a leaver still holding a template
+ * exists in the enrolment feed ALONE. Two employees: one both feeds know, one
+ * only the bridge does.
+ */
+function twoFeedRoster(lastSnapshotAt: string | null) {
+  return {
+    coverage: coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance",
+                   branch: "DIU", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment: enrollment({
+      rows: [
+        { id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+          status: "Active", bucket: "OK", is_registered: true,
+          fingerprint_count: 2, face_count: 0, days_since_relieving: null },
+        { id: "E9", employee_name: "Leaver Lee", branch: "PM", department: "Ops",
+          status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+          fingerprint_count: 2, face_count: 0, days_since_relieving: 42 },
+      ],
+      last_snapshot_at: lastSnapshotAt,
+    }),
+  };
+}
+
+test("a stale bridge drops the rows only it knew about, exactly as a never-reported one does", () => {
+  // MEMBERSHIP, not field nulling — the seam nothing reached. Blanking a row's
+  // fields leaves the row, and a row whose only witness is the stale feed then
+  // sits in the table as em dashes still carrying the name, branch and
+  // department that only that feed ever supplied: counted in the header's
+  // roster size, written into the CSV, under a banner saying leaver detection
+  // is hidden. The failure table has always said stale behaves as
+  // never-reported; this is the assertion that makes that true.
+  const now = new Date("2026-08-13T09:00:00").getTime();
+
+  const neverReported = twoFeedRoster(null);
+  const wentStale = twoFeedRoster(minutesBefore(now, STALE_AFTER_MINUTES + 60));
+
+  const never = composeRegister(neverReported.coverage, neverReported.enrollment, now);
+  const stale = composeRegister(wentStale.coverage, wentStale.enrollment, now);
+
+  assert.deepEqual(never.rows.map((r) => r.id), ["E1"], "a never-reported bridge contributes no rows");
+  assert.deepEqual(
+    stale.rows.map((r) => r.id),
+    ["E1"],
+    "and neither may a stale one — E9 exists in the stale feed alone",
+  );
+  // Not just the id list: the facts that came with her must be gone too. Her
+  // name is the thing a reader would have seen and believed.
+  assert.doesNotMatch(JSON.stringify(stale.rows), /Leaver Lee|"PM"/);
+});
+
+test("everything downstream of the drop follows: the roster size and the export", () => {
+  // The header counts `rows.length` and the CSV is built from the same rows,
+  // so a ghost row would have been counted aloud and mailed out as a
+  // near-blank line. Both are checked here rather than assumed to follow.
+  const now = new Date("2026-08-13T09:00:00").getTime();
+  const { coverage: cov, enrollment: enr } = twoFeedRoster(
+    minutesBefore(now, STALE_AFTER_MINUTES + 60),
+  );
+  const got = composeRegister(cov, enr, now);
+
+  assert.equal(got.rows.length, 1, "the roster size the header reads");
+  const csv = toRegisterCsv(got.rows, got.feeds);
+  assert.equal(csv.split("\n").length, 2, "one header row and one employee, with no blank line");
+  assert.doesNotMatch(csv, /Leaver Lee/);
+});
+
+test("a row a HEALTHY feed still vouches for is never dropped", () => {
+  // The inverse guard. Dropping on "any unhealthy source" rather than "no
+  // healthy source" would empty the table of every ordinary employee the
+  // moment either feed went quiet — a far louder bug than the one being
+  // fixed, and one the membership test above would not notice.
+  const bothKnow = row({ id: "BOTH", sources: { schedule: true, biometric: true } });
+  const scheduleOnly = row({ id: "SCHED", sources: { schedule: true, biometric: false } });
+  const biometricOnly = row({ id: "BIO", sources: { schedule: false, biometric: true } });
+  const input = [bothKnow, scheduleOnly, biometricOnly];
+
+  assert.deepEqual(
+    suppressUnusableFacts(input, { schedule: true, biometric: false }).map((r) => r.id),
+    ["BOTH", "SCHED"],
+    "a stale bridge keeps everyone coverage still vouches for",
+  );
+  assert.deepEqual(
+    suppressUnusableFacts(input, { schedule: false, biometric: true }).map((r) => r.id),
+    ["BOTH", "BIO"],
+    "and a downed coverage service keeps everyone the bridge still vouches for",
+  );
+  assert.deepEqual(
+    suppressUnusableFacts(input, { schedule: false, biometric: false }).map((r) => r.id),
+    [],
+    "with neither feed usable there is nobody the page can name at all",
+  );
+});
+
+test("the join records which feeds vouched for each row", () => {
+  // `sources` is what suppressUnusableFacts drops on, so a join that recorded
+  // it wrongly would drop the wrong rows — and every assertion above would
+  // still pass if it were hardcoded to {true, true}.
+  const { coverage: cov, enrollment: enr } = twoFeedRoster("2026-08-12 09:00:00");
+  const byId = new Map(joinRegisterRows(cov, enr).map((r) => [r.id, r]));
+
+  assert.deepEqual(byId.get("E1")?.sources, { schedule: true, biometric: true });
+  assert.deepEqual(byId.get("E9")?.sources, { schedule: false, biometric: true });
+  assert.deepEqual(
+    joinRegisterRows(cov, undefined)[0].sources,
+    { schedule: true, biometric: false },
+    "coverage alone vouches for the schedule half only",
+  );
 });
 
 test("composeRegister suppresses a stale-but-once-seen bridge's facts before the alert counts them", () => {

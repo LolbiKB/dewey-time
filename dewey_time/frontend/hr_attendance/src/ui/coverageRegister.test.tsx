@@ -18,6 +18,7 @@ import type {
 import { toRegisterCsv } from "@/lib/registerCsv";
 import {
   CoverageRegisterView,
+  feedNotice,
   INITIAL_REGISTER_FILTERS,
   mergeTableFilters,
   registerFiltersFromTable,
@@ -52,6 +53,8 @@ const BASE_ROW: RegisterRow = {
   biometric: "enrolled",
   fingerprint_count: 2,
   days_since_relieving: null,
+  // Both feeds know this employee — the ordinary row.
+  sources: { schedule: true, biometric: true },
 };
 
 /**
@@ -847,6 +850,64 @@ test("a healthy pair of feeds shows every column", () => {
     assert.ok(html.includes(`>${header}<`), `expected the ${header} column`);
   }
   assert.doesNotMatch(html, /Biometric feed unavailable/, "no outage banner on a healthy load");
+});
+
+test("a downed SCHEDULE feed says so too, and takes its columns with it", () => {
+  // The asymmetry this closes: only the biometric outage had a notice, so a
+  // coverage-service error — the likelier of the two — made Schedule and
+  // Hrs/wk vanish with the reason living only in the alert dot's accessible
+  // name, which a sighted reader never hears.
+  const html = renderView({ feeds: { schedule: false, biometric: true } });
+  assert.match(html, /Schedule feed unavailable/, "the outage must be named on screen");
+  assert.doesNotMatch(html, />Schedule</, "the Schedule column must be gone, not empty");
+  assert.doesNotMatch(html, />Hrs\/wk</, "the Hrs/wk column must be gone, not empty");
+  // The biometric half is unaffected — that is the claim this banner makes.
+  assert.match(html, />Biometric</, "the biometric columns must survive a schedule outage");
+  assert.match(html, />Prints</);
+});
+
+test("with both feeds down the notice names both, and promises nothing about either", () => {
+  // registerAlert's label already names every down feed for the same reason:
+  // naming one asserts by omission that the other half is fine. A per-feed
+  // strip would have stacked two banners here, each closing with a promise the
+  // other one denies.
+  const html = renderView({ feeds: { schedule: false, biometric: false } });
+  assert.match(html, /Schedule and biometric feeds are both unavailable/);
+  assert.doesNotMatch(html, /is unaffected/, "neither half may be called fine here");
+  // And exactly one strip, not two.
+  assert.equal(html.split("are both unavailable").length - 1, 1);
+});
+
+test("the feed notice covers all four combinations, including saying nothing", () => {
+  // Reached directly as well as through the render, because the both-down
+  // wording is the one a reader only ever sees on the worst day.
+  assert.equal(feedNotice({ schedule: true, biometric: true }), null);
+  assert.match(feedNotice({ schedule: true, biometric: false }) ?? "", /^Biometric feed unavailable/);
+  assert.match(feedNotice({ schedule: false, biometric: true }) ?? "", /^Schedule feed unavailable/);
+  assert.match(
+    feedNotice({ schedule: false, biometric: false }) ?? "",
+    /^Schedule and biometric feeds are both unavailable/,
+  );
+  // No roster size anywhere in the copy. It used to read "not 241 people
+  // losing their fingerprints" — a number frozen at whatever the roster was
+  // the day it was written, and unverifiable against a page whose feed is down.
+  for (const feeds of [{ schedule: true, biometric: false }, { schedule: false, biometric: true }]) {
+    assert.doesNotMatch(feedNotice(feeds) ?? "", /\d/, "no count may be hardcoded into the copy");
+  }
+});
+
+test("a failed load counts nobody, rather than counting nobody aloud", () => {
+  // `answered` is true once both queries have SETTLED — failing counts as
+  // settling — so this used to render "0 employees" directly above "Coverage
+  // didn't load": a roster size stated as fact by a page that had just said it
+  // could not find out. Same class as the footer's "Showing 241 of 0".
+  const failed = renderView({ bothFailed: true, rows: [] });
+  assert.equal(headerDescription(failed), "", "no description at all beside the failure block");
+  assert.doesNotMatch(failed, /0 employees/);
+
+  // The two states either side of it still speak.
+  assert.equal(headerDescription(renderView({ isLoading: true, rows: [] })), "Loading…");
+  assert.equal(headerDescription(renderView()), "1 employee");
 });
 
 test("a partial roster says so", () => {

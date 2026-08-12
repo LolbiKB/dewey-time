@@ -234,6 +234,15 @@ test("the dot's `degraded` tone adds a concentric ring to the disc", async ({ pa
   // And the columns the stale feed cannot vouch for are gone, not blanked.
   await expect(page.getByRole("columnheader", { name: "Biometric" })).toHaveCount(0);
   await expect(page.getByText("Biometric feed unavailable")).toBeVisible();
+
+  // The leaver goes with them. Coverage returns Active employees only, so Nora
+  // Vance exists in the stale feed ALONE — she used to survive as a row of em
+  // dashes still carrying the name, branch and department that only that feed
+  // supplied, counted in the roster size and exported to the CSV, under this
+  // very banner saying leaver detection was hidden.
+  await expect(page.getByText("Nora Vance")).toHaveCount(0);
+  await expect(bodyRows(page)).toHaveCount(ROSTER - 1);
+  await expect(page.getByText(`${ROSTER - 1} employees`, { exact: true })).toBeVisible();
 });
 
 test("a facet popover opens, narrows the table, and clears back", async ({ page }) => {
@@ -336,7 +345,7 @@ const LAPTOP = { width: 1280, height: 900 };
 const PHONE = { width: 375, height: 812 };
 
 /** The search box, under the one name both owners give it. */
-const SEARCH_BOX = "Search by name or employee ID\u2026";
+const SEARCH_BOX = "Search by name or employee ID…";
 
 /**
  * Everything the page logs as an error, for the duration of the test.

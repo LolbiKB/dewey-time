@@ -63,7 +63,7 @@ const BIOMETRIC_OPTIONS: { value: NonNullable<RegisterFilters["biometric"]>; lab
  * control on a laptop must find the same one on a phone, and one e2e locator
  * has to match both or the wide branch stops being measured.
  */
-export const REGISTER_SEARCH_PLACEHOLDER = "Search by name or employee ID\u2026";
+export const REGISTER_SEARCH_PLACEHOLDER = "Search by name or employee ID…";
 
 /** What the box waits before it narrows the table. dewey-ui's own toolbar uses the same. */
 const SEARCH_DEBOUNCE_MS = 300;

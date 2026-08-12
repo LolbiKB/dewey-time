@@ -139,9 +139,11 @@ class TestEmployeeBranchField(unittest.TestCase):
             "branch": "DIU",
         }
 
-        with patch.object(
-            hr_calendar, "_list_calendar_employee_rows", wraps=hr_calendar._list_calendar_employee_rows
-        ) as wrapped_list, patch("frappe.get_all", return_value=[db_row]), patch.object(
+        # No self-wrapping patch on _list_calendar_employee_rows: it bound a
+        # `wrapped_list` mock nothing ever asserted on, and since the call
+        # below goes through that same attribute it only ever passed straight
+        # through to the real function.
+        with patch("frappe.get_all", return_value=[db_row]), patch.object(
             hr_calendar, "_shift_schedule_assignment_metadata_by_employee", return_value={}
         ), patch.object(
             hr_calendar, "shift_assignment_bounds_by_employee", return_value={}

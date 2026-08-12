@@ -28,7 +28,26 @@ export type RegisterRow = {
   biometric: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled" | null;
   fingerprint_count: number | null;
   days_since_relieving: number | null;
+  /**
+   * Which feeds vouched for this row EXISTING — not for any field on it.
+   *
+   * Required, not optional, so every construction site has to state it rather
+   * than inherit a default that would be wrong for half of them.
+   *
+   * `suppressUnusableFacts` needs this and cannot derive it. Nulling a row's
+   * fields is not enough for a row that only ONE feed ever knew about: the
+   * leaver who exists in the enrolment feed alone (coverage returns Active
+   * employees only) would otherwise survive a stale bridge as a row of em
+   * dashes carrying her name, branch and department — three facts vouched for
+   * by nothing but the feed the page has just declared unusable — counted in
+   * the header's roster size and written into the CSV, under a banner saying
+   * leaver detection is hidden.
+   */
+  sources: RowSources;
 };
+
+/** The feeds a row came from. See `RegisterRow["sources"]`. */
+export type RowSources = { schedule: boolean; biometric: boolean };
 
 export type FeedHealth = { schedule: boolean; biometric: boolean };
 
@@ -105,6 +124,7 @@ export function joinRegisterRows(
       biometric: null,
       fingerprint_count: null,
       days_since_relieving: null,
+      sources: { schedule: true, biometric: false },
     });
   };
 
@@ -128,7 +148,11 @@ export function joinRegisterRows(
         biometric: null,
         fingerprint_count: null,
         days_since_relieving: null,
+        sources: { schedule: false, biometric: false },
       };
+      // A NEW object rather than a mutation: `merged` may be the seeded row
+      // still held in the map, and its `sources` would then be aliased.
+      merged.sources = { schedule: merged.sources.schedule, biometric: true };
       merged.status = row.status ?? null;
       merged.biometric = biometricOf(row);
       merged.fingerprint_count = row.fingerprint_count;
@@ -458,25 +482,49 @@ export function registerCsvRows(rows: RegisterRow[], feeds: FeedHealth): string[
   ];
 }
 
+/** Is this row still vouched for by a feed the page can currently believe? */
+function hasHealthySource(row: RegisterRow, feeds: FeedHealth): boolean {
+  return (row.sources.schedule && feeds.schedule) || (row.sources.biometric && feeds.biometric);
+}
+
 /**
- * Blank the facts a feed cannot currently vouch for, so every consumer agrees.
+ * Blank the facts a feed cannot currently vouch for — and DROP the rows it was
+ * the only witness to — so every consumer agrees.
  *
- * joinRegisterRows already does this for a bridge that has NEVER reported, by
- * gating on isFeedConnected. A bridge that reported but went stale needs the
- * same treatment and cannot get it there: staleness needs `now`, which the join
- * does not take. Without this, the columns vanish while the alert count and the
+ * joinRegisterRows already does both for a bridge that has NEVER reported, by
+ * gating the whole enrolment merge on isFeedConnected. A bridge that reported
+ * and then went stale needs the same treatment and cannot get it there:
+ * staleness needs `now`, which the join does not take.
+ *
+ * Blanking alone was not the same treatment, and the difference was visible. A
+ * stale bridge passes isFeedConnected, so its rows are joined; blanking then
+ * nulls their fields but keeps the rows. Coverage returns Active employees
+ * only, so a leaver still holding a template exists in the enrolment feed
+ * ALONE — and she survived as a row of em dashes still carrying her name,
+ * branch and department, three facts vouched for by nothing but the feed the
+ * page had just declared unusable. She was counted in the header's roster size
+ * and written into the CSV as a near-blank line, under a banner saying leaver
+ * detection was hidden. Stale and never-reported now behave identically, which
+ * is what the failure table always claimed.
+ *
+ * Without the blanking half, the columns vanish while the alert count and the
  * not-ready filter keep counting the hidden facts — so the reader is shown a
  * number they cannot verify, and filtering to it surfaces rows that look ready.
  */
 export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): RegisterRow[] {
+  // Every row has at least one source, so with both feeds healthy the filter
+  // below is a no-op and this is only skipping the copy.
   if (feeds.schedule && feeds.biometric) return rows;
-  return rows.map((row) => ({
-    ...row,
-    ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null }),
-    ...(feeds.biometric
-      ? {}
-      : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),
-  }));
+
+  return rows
+    .filter((row) => hasHealthySource(row, feeds))
+    .map((row) => ({
+      ...row,
+      ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null }),
+      ...(feeds.biometric
+        ? {}
+        : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),
+    }));
 }
 
 export type ComposedRegister = {

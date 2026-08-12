@@ -149,9 +149,7 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
     <Page>
       <PageHeader
         title="Coverage"
-        // "0 employees" under a spinner is the same rendered non-fact as the
-        // footer's zero — the roster size is not known yet.
-        description={answered ? rosterDescription(rows.length) : "Loading…"}
+        description={rosterDescription(rows.length, answered, bothFailed)}
         actions={
           answered ? (
             <AlertDot
@@ -168,18 +166,23 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
           working table it would squash the table. AttentionStrip's tone union
           is exactly "amber" | "accent"; there is no "destructive"/"warning".
 
-          Suppressed when `bothFailed`, on top of the loading gate. Its closing
-          sentence promises the schedule half is fine, which is precisely what
-          bothFailed denies — and notice.tsx's own rule is that a page showing
-          both a banner and a replaced region reports one failure twice. */}
-      {answered && !bothFailed && !feeds.biometric ? (
+          Suppressed when `bothFailed`, on top of the loading gate: notice.tsx's
+          own rule is that a page showing both a banner and a replaced region
+          reports one failure twice.
+
+          ONE strip naming whichever feeds are down, not one per feed. A
+          schedule outage used to get no notice at all — its columns vanished
+          with the reason living only in the alert dot's accessible name, which
+          a sighted reader never hears — and it is the likelier of the two, an
+          app-server error rather than a bridge going quiet. Two strips would
+          have stacked two banners over one table for the both-down case and
+          each would have closed by promising the other half was fine. */}
+      {answered && !bothFailed && feedNotice(feeds) !== null ? (
         <AttentionStrip
           tone="amber"
           icon={<AlertTriangleIcon className="size-4 text-amber-600" aria-hidden="true" />}
         >
-          Biometric feed unavailable — enrolment <strong>and leaver detection</strong> are hidden
-          rather than shown as empty. Every employee would otherwise read as unenrolled, which is a
-          bridge fault, not 241 people losing their fingerprints. Schedule coverage is unaffected.
+          {feedNotice(feeds)}
         </AttentionStrip>
       ) : null}
 
@@ -287,8 +290,67 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
   );
 }
 
-function rosterDescription(count: number): string {
+/**
+ * What sits under the title, or nothing.
+ *
+ * Three states, and two of them are silence. "0 employees" under a spinner is
+ * the same rendered non-fact as the footer's zero — the roster size is not
+ * known yet. It is also what `bothFailed` produced, because both queries
+ * having settled-failed makes `answered` true: "0 employees" sat directly
+ * above "Coverage didn’t load", stating as a count the one thing the page
+ * had just said it could not find out. The FailureBlock below says all there
+ * is to say.
+ */
+export function rosterDescription(
+  count: number,
+  answered: boolean,
+  bothFailed: boolean,
+): string | undefined {
+  if (!answered) return "Loading…";
+  if (bothFailed) return undefined;
   return `${count} ${count === 1 ? "employee" : "employees"}`;
+}
+
+/**
+ * What the notice says about the feeds that are down, or null when neither is.
+ *
+ * Names every down feed, on the same rule as `registerAlert`'s label: naming
+ * only one when both are down asserts by omission that the other half is fine.
+ * That is why the reassurance clause is dropped entirely in the both-down case
+ * rather than being written twice.
+ *
+ * No roster size in the copy. It used to read "not 241 people losing their
+ * fingerprints" — a number frozen at whatever the roster was the day it was
+ * written, which would have aged silently and, on the day the biometric feed
+ * was down, could not have been checked against anything on screen.
+ *
+ * Exported so both halves of the both-down wording are reachable without a
+ * DOM; the strip itself is asserted in the rendered view.
+ */
+export function feedNotice(feeds: FeedHealth): string | null {
+  if (feeds.schedule && feeds.biometric) return null;
+
+  if (!feeds.schedule && !feeds.biometric) {
+    return (
+      "Schedule and biometric feeds are both unavailable — assignments, weekly hours, " +
+      "enrolment and leaver detection are all hidden rather than shown as empty, and any " +
+      "employee only one of these feeds knew about is not listed at all."
+    );
+  }
+
+  if (!feeds.biometric) {
+    return (
+      "Biometric feed unavailable — enrolment and leaver detection are hidden rather than " +
+      "shown as empty. Every employee would otherwise read as unenrolled, which is a bridge " +
+      "fault rather than a workforce losing their fingerprints. Schedule coverage is unaffected."
+    );
+  }
+
+  return (
+    "Schedule feed unavailable — assignments and weekly hours are hidden rather than shown " +
+    "as empty. Every employee would otherwise read as unscheduled, which is a coverage-service " +
+    "fault rather than a workforce with no shifts. Biometric enrolment is unaffected."
+  );
 }
 
 /**

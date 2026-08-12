@@ -9,7 +9,10 @@ const HEALTHY: FeedHealth = { schedule: true, biometric: true };
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
-  biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null, ...over,
+  biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
+  // Both feeds know this employee — the ordinary row. Override it to build the
+  // one-witness rows suppressUnusableFacts has to drop.
+  sources: { schedule: true, biometric: true }, ...over,
 });
 
 /** The file's header line, split back into fields (none of them quoted here). */
