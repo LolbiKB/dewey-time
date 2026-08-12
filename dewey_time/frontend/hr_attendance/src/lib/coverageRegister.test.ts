@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  feedHealth, filterRegisterRows, isNotReady, joinRegisterRows, registerAlert, sortRegisterRows,
-  suppressUnusableFacts, visibleColumnIds, type RegisterFilters, type RegisterRow,
+  composeRegister, feedHealth, filterRegisterRows, isNotReady, joinRegisterRows, registerAlert,
+  sortRegisterRows, suppressUnusableFacts, visibleColumnIds, type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import { STALE_AFTER_MINUTES, type EnrollmentPayload } from "@/lib/enrollmentReport";
@@ -567,4 +567,40 @@ test("suppressUnusableFacts composed with registerAlert stops counting a fact th
   const feeds = { schedule: true, biometric: false };
   const suppressed = suppressUnusableFacts([row({ biometric: "none" })], feeds);
   assert.equal(registerAlert(suppressed, feeds).count, 0);
+});
+
+test("composeRegister suppresses a stale-but-once-seen bridge's facts before the alert counts them", () => {
+  // A bridge that reported and then went stale passes isFeedConnected (it HAS
+  // a last_snapshot_at), so joinRegisterRows merges the real-but-old facts —
+  // unlike a bridge that has never reported, which joinRegisterRows already
+  // guards against on its own. Only composeRegister's ordering (feedHealth,
+  // then suppress, then alert on the SUPPRESSED rows) can catch this case.
+  const now = new Date("2026-08-13T09:00:00").getTime();
+  const staleSnapshot = minutesBefore(now, STALE_AFTER_MINUTES + 60);
+  const got = composeRegister(
+    // Assigned, deliberately — schedule: "assigned" contributes nothing to
+    // isNotReady, so the row's only possible not-ready cause is the biometric
+    // "none" fact this fixture is testing the suppression of.
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance",
+                   branch: "DIU", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "NEEDS_ENROLLMENT", is_registered: false,
+               fingerprint_count: 0, face_count: 0, days_since_relieving: null }],
+      last_snapshot_at: staleSnapshot,
+    }),
+    now,
+  );
+  assert.equal(got.feeds.biometric, false, "a snapshot this old must read as an unhealthy feed");
+  assert.equal(
+    got.rows[0].biometric, null,
+    "the returned rows must be the SUPPRESSED rows, not the raw join — a stale feed cannot vouch for this fact",
+  );
+  assert.equal(
+    got.alert.count, 0,
+    "the alert must count only what the suppressed rows still carry, not what the raw join produced",
+  );
 });

@@ -310,3 +310,34 @@ export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): R
       : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),
   }));
 }
+
+export type ComposedRegister = {
+  /** Joined AND suppressed — never the raw join. See the ordering note below. */
+  rows: RegisterRow[];
+  feeds: FeedHealth;
+  alert: RegisterAlert;
+};
+
+/**
+ * The one true composition order, extracted so it is unit-testable without a
+ * DOM: join, then suppress, then alert on the SUPPRESSED rows.
+ *
+ * feedHealth must run first — both suppression and the alert take it, and it
+ * is the only one of the three that also needs `now`. Suppression must run
+ * before the alert: registerAlert counts isNotReady over whatever rows it is
+ * given, and joinRegisterRows alone cannot detect a bridge that reported and
+ * then went stale (it only gates on isFeedConnected, which a stale-but-once-
+ * seen bridge still passes). Alerting on the join's output would count facts
+ * that suppressUnusableFacts is about to hide from the same rows the caller
+ * renders — a number the reader could not verify, and a `readiness: "not-
+ * ready"` filter that would surface rows the table shows as fine.
+ */
+export function composeRegister(
+  coverage: ScheduleCoveragePayload | undefined,
+  enrollment: EnrollmentPayload | undefined,
+  nowMs: number,
+): ComposedRegister {
+  const feeds = feedHealth(coverage, enrollment, nowMs);
+  const rows = suppressUnusableFacts(joinRegisterRows(coverage, enrollment), feeds);
+  return { rows, feeds, alert: registerAlert(rows, feeds) };
+}
