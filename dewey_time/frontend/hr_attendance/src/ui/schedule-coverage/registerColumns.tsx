@@ -1,15 +1,9 @@
-import type { ColumnDef } from "@tanstack/react-table";
+import type { ColumnDef, HeaderContext, SortDirection } from "@tanstack/react-table";
 
 import { Badge, Button } from "@lolbikb/dewey-ui";
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from "lucide-react";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
-import type { RegisterRow } from "@/lib/coverageRegister";
-
-const BIOMETRIC_LABEL: Record<NonNullable<RegisterRow["biometric"]>, string> = {
-  enrolled: "Enrolled",
-  enrolled_not_punching: "Enrolled, not punching",
-  none: "No fingerprint",
-  still_enrolled: "Still enrolled",
-};
+import { BIOMETRIC_LABELS, SCHEDULE_LABELS, type RegisterRow } from "@/lib/coverageRegister";
 
 /**
  * Only a positive statement of absence is destructive. "Enrolled, not punching"
@@ -23,8 +17,72 @@ const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondar
   still_enrolled: "destructive",
 };
 
+/** What pressing the header will DO — an arrow glyph alone says nothing aloud. */
+function sortActionLabel(label: string, next: SortDirection | false): string {
+  if (next === false) return `Clear the sort on ${label}`;
+  return `Sort by ${label}, ${next === "desc" ? "descending" : "ascending"}`;
+}
+
+/**
+ * A column header that sorts.
+ *
+ * A real <button> carrying the column's own text, not a bare icon: the arrow
+ * shows the current direction to a sighted reader and the accessible name
+ * states the next action for everyone else, so neither depends on the other.
+ *
+ * `getToggleSortingHandler()` rather than calling `column.toggleSorting()`
+ * directly. The handler is the path that consults `getCanSort()`, which is
+ * `(enableSorting ?? true) && (options.enableSorting ?? true) &&
+ * !!column.accessorFn` (@tanstack/table-core RowSorting) — the reason the
+ * sortable columns below carry an `accessorFn` at all. Calling toggleSorting()
+ * to dodge that guard works, but leaves getCanSort() false while the header
+ * sorts anyway, so any later header-state or a11y logic keyed off it is
+ * silently wrong.
+ */
+function sortableHeader(label: string) {
+  return function SortableHeader({ column }: HeaderContext<RegisterRow, unknown>) {
+    const sorted = column.getIsSorted();
+    const Arrow = sorted === "asc" ? ArrowUpIcon : sorted === "desc" ? ArrowDownIcon : ArrowUpDownIcon;
+
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-2 h-8 px-2 font-medium"
+        onClick={column.getToggleSortingHandler()}
+        aria-label={sortActionLabel(label, column.getNextSortingOrder())}
+      >
+        {label}
+        <Arrow className="size-3.5 opacity-60" aria-hidden="true" />
+      </Button>
+    );
+  };
+}
+
+/**
+ * The sorting options every sortable column shares.
+ *
+ * `sortDescFirst: false` so the first press is always ascending, on numbers as
+ * well as text. TanStack otherwise sniffs the direction from the FIRST row's
+ * value, which means the cycle would depend on whichever employee happens to
+ * sort first — and on this page the low end of Hrs/wk and Prints is where the
+ * findings are, so ascending is the useful first press anyway.
+ *
+ * `enableMultiSort: false` because GenericDataTable reads only `sorting[0]`
+ * and RegisterFilters carries a single sort. A shift-click would otherwise
+ * append a second sort that the page then ignores — an affordance that looks
+ * like it did nothing.
+ */
+const SORTABLE = { sortDescFirst: false, enableMultiSort: false } as const;
+
 /**
  * Ids MUST match visibleColumnIds() — a mismatch hides a column permanently.
+ *
+ * The three sortable columns keep their explicit id and their custom cell and
+ * add an `accessorFn`, which is what makes `column.getCanSort()` true. It does
+ * NOT make the table sort locally: GenericDataTable sets `manualSorting`, so
+ * TanStack only reports the intent through `onSortingChange` and
+ * sortRegisterRows still does the ordering.
  *
  * Callers must memoize the result (e.g. `useMemo`): this allocates a new
  * array and new per-row closures on every call, and TanStack resets column
@@ -37,7 +95,9 @@ export function registerColumns(
   return [
     {
       id: "employee",
-      header: "Employee",
+      ...SORTABLE,
+      accessorFn: (row) => row.employee_name,
+      header: sortableHeader("Employee"),
       cell: ({ row }) => (
         <span className="flex min-w-0 flex-col">
           <span className="truncate font-medium">{row.original.employee_name}</span>
@@ -66,14 +126,16 @@ export function registerColumns(
         if (row.original.schedule === null) return "—";
         return (
           <Badge variant={row.original.schedule === "missing" ? "outline" : "secondary"}>
-            {row.original.schedule === "missing" ? "Missing" : "Assigned"}
+            {SCHEDULE_LABELS[row.original.schedule]}
           </Badge>
         );
       },
     },
     {
       id: "weekly_minutes",
-      header: "Hrs/wk",
+      ...SORTABLE,
+      accessorFn: (row) => row.weekly_minutes,
+      header: sortableHeader("Hrs/wk"),
       cell: ({ row }) => {
         const minutes = row.original.weekly_minutes;
         if (minutes === null) return "—";
@@ -96,7 +158,7 @@ export function registerColumns(
         const days = row.original.days_since_relieving;
         return (
           <span className="flex items-center gap-1.5">
-            <Badge variant={BIOMETRIC_VARIANT[value]}>{BIOMETRIC_LABEL[value]}</Badge>
+            <Badge variant={BIOMETRIC_VARIANT[value]}>{BIOMETRIC_LABELS[value]}</Badge>
             {value === "still_enrolled" && days !== null ? (
               <span className="text-xs tabular-nums text-destructive">
                 {days} {days === 1 ? "day" : "days"}
@@ -108,7 +170,9 @@ export function registerColumns(
     },
     {
       id: "fingerprint_count",
-      header: "Prints",
+      ...SORTABLE,
+      accessorFn: (row) => row.fingerprint_count,
+      header: sortableHeader("Prints"),
       cell: ({ row }) =>
         row.original.fingerprint_count === null ? "—" : row.original.fingerprint_count,
     },

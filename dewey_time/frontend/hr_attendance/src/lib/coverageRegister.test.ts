@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  composeRegister, feedHealth, filterRegisterRows, isNotReady, joinRegisterRows, registerAlert,
-  registerFeedState, sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
+  columnIdForSort, composeRegister, feedHealth, filterRegisterRows, isNotReady, joinRegisterRows,
+  registerAlert, registerFacets, registerFeedState, sortFromColumnId, SORT_COLUMN_IDS,
+  sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
   type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
@@ -272,6 +273,138 @@ test("a branch filter excludes a row with no branch fact; an empty branch list f
     filterRegisterRows(rows, { branch: [] }).map((r) => r.id),
     ["DIU", "UNKNOWN"],
   );
+});
+
+// ---------------------------------------------------------------------------
+// registerFacets — the filter bar's options
+// ---------------------------------------------------------------------------
+
+test("facet options are derived from the rows, de-duplicated and alphabetical", () => {
+  // Input order is deliberately not alphabetical, and every value repeats, so
+  // a version that just collected values in encounter order fails.
+  const rows = [
+    row({ id: "1", branch: "PM", department: "Ops" }),
+    row({ id: "2", branch: "ACES", department: "Finance" }),
+    row({ id: "3", branch: "PM", department: "Ops" }),
+    row({ id: "4", branch: "DIU", department: "Finance" }),
+  ];
+  assert.deepEqual(registerFacets(rows), {
+    branch: ["ACES", "DIU", "PM"],
+    department: ["Finance", "Ops"],
+  });
+});
+
+test("a facet offers nothing the rows do not contain", () => {
+  // The whole point of deriving them. A hardcoded list would offer branches
+  // this roster has never heard of — every one of which filters to nobody —
+  // while silently omitting any branch the list's author did not know about.
+  assert.deepEqual(registerFacets([row({ branch: "ACES", department: "Ops" })]), {
+    branch: ["ACES"],
+    department: ["Ops"],
+  });
+  assert.deepEqual(registerFacets([]), { branch: [], department: [] });
+});
+
+test("a row with no branch or department contributes no option", () => {
+  // There would be nothing for such an option to select: filterRegisterRows
+  // reads `row.branch ?? ""`, so a row with no branch fact is excluded by any
+  // branch filter. An "Unassigned" option here would return nobody, every time.
+  assert.deepEqual(registerFacets([row({ branch: null, department: null })]), {
+    branch: [],
+    department: [],
+  });
+  // An empty string is the same absence wearing a different type.
+  assert.deepEqual(registerFacets([row({ branch: "", department: "" })]), {
+    branch: [],
+    department: [],
+  });
+});
+
+test("the two facets are independent — a row can contribute to one and not the other", () => {
+  assert.deepEqual(registerFacets([row({ branch: "DIU", department: null })]), {
+    branch: ["DIU"],
+    department: [],
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sortFromColumnId / columnIdForSort — the boundary with the table
+// ---------------------------------------------------------------------------
+
+test("each sortable column id maps to its own sort key", () => {
+  // Pinned against literals, not against SORT_COLUMN_IDS: checking the two
+  // directions agree with each other cannot catch them agreeing on the wrong
+  // answer, which is exactly what swapping two entries looks like.
+  assert.deepEqual(sortFromColumnId("employee", false), { sort: "name", order: "asc" });
+  assert.deepEqual(sortFromColumnId("weekly_minutes", false), { sort: "hours", order: "asc" });
+  assert.deepEqual(sortFromColumnId("fingerprint_count", false), { sort: "prints", order: "asc" });
+});
+
+test("desc carries through to order, and only to order", () => {
+  assert.deepEqual(sortFromColumnId("weekly_minutes", true), { sort: "hours", order: "desc" });
+  assert.deepEqual(sortFromColumnId("employee", true), { sort: "name", order: "desc" });
+});
+
+test("a column id nothing sorts by yields null, never a wrong sort", () => {
+  // The display columns, plus a typo and the empty string. A guess here would
+  // silently reorder the register AND — since severity ordering is gated on
+  // `!filters.sort` — retire "worst first" for the not-ready view at the same
+  // time, from a click on a header that is not supposed to sort at all.
+  for (const id of ["branch", "department", "status", "schedule", "biometric", "action", "hours", ""]) {
+    assert.equal(sortFromColumnId(id, false), null, `${id} must not resolve to a sort`);
+  }
+});
+
+test("columnIdForSort names the column the table should show as sorted", () => {
+  assert.equal(columnIdForSort("name"), "employee");
+  assert.equal(columnIdForSort("hours"), "weekly_minutes");
+  assert.equal(columnIdForSort("prints"), "fingerprint_count");
+});
+
+test("columnIdForSort translates, rather than passing the sort key through", () => {
+  // The defect this function exists to fix. GenericDataTable reads
+  // `filters.sort` as a COLUMN ID when it builds its own sorting state, so
+  // handing it "hours" leaves getIsSorted() false on every column: the header
+  // shows no direction, every press repeats the first direction, and the sort
+  // can never be cleared. Returning the key unchanged compiles and typechecks.
+  for (const sort of ["name", "hours", "prints"] as const) {
+    assert.notEqual(columnIdForSort(sort), sort, `${sort} is not a column id`);
+  }
+});
+
+test("no sort round-trips as no sort, not as a default column", () => {
+  // An unsorted register is a real state — the one where severity ordering
+  // runs. Defaulting to a column here would put an arrow on a header the
+  // reader never pressed and quietly retire "worst first".
+  assert.equal(columnIdForSort(undefined), undefined);
+});
+
+test("every sort key round-trips through its column id", () => {
+  // Iterates the mapping itself rather than a hand-written list, and
+  // SORT_COLUMN_IDS is exhaustive over the sort union by type — so a fourth
+  // sort key cannot be added without a column id (compile error) nor without
+  // teaching sortFromColumnId about it (this test).
+  const keys = Object.keys(SORT_COLUMN_IDS) as NonNullable<RegisterFilters["sort"]>[];
+  assert.ok(keys.length >= 3, "the mapping must not have been emptied");
+  for (const sort of keys) {
+    const id = columnIdForSort(sort);
+    assert.ok(id, `${sort} has no column id`);
+    assert.deepEqual(
+      sortFromColumnId(id, false),
+      { sort, order: "asc" },
+      `${sort} -> ${id} -> ? did not come back`,
+    );
+  }
+});
+
+test("every sortable column id is a column that actually exists", () => {
+  // A mapping to a column id nothing renders would put the table's sorting
+  // state on a phantom column: getIsSorted() false everywhere, same defect as
+  // passing the sort key through.
+  const known = visibleColumnIds({ schedule: true, biometric: true });
+  for (const id of Object.values(SORT_COLUMN_IDS)) {
+    assert.ok(known.includes(id), `${id} is not a register column`);
+  }
 });
 
 test("severity order when filtered to problems, name order otherwise", () => {

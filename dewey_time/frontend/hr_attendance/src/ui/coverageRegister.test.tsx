@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { Command, CommandList } from "@lolbikb/dewey-ui";
+import { getCoreRowModel, useReactTable, type SortingState } from "@tanstack/react-table";
 
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
@@ -11,9 +12,17 @@ import { visibleColumnIds } from "@/lib/coverageRegister";
 import type { FeedHealth, RegisterAlert, RegisterRow } from "@/lib/coverageRegister";
 import {
   CoverageRegisterView,
+  INITIAL_REGISTER_FILTERS,
+  registerFiltersFromTable,
   toggleReadiness,
   type CoverageRegisterViewProps,
 } from "@/ui/schedule-coverage/CoverageRegisterPage";
+import {
+  FacetOptions,
+  RegisterFilterBar,
+  toggleFacetValue,
+  type RegisterFilterBarProps,
+} from "@/ui/schedule-coverage/RegisterFilterBar";
 
 const noop = () => {};
 
@@ -88,6 +97,66 @@ function renderRow(
 function onClickOf(node: ReactNode): (() => void) | undefined {
   if (!isValidElement<{ onClick?: () => void }>(node)) return undefined;
   return node.props.onClick;
+}
+
+/** The same, for a handler that takes the event — a sort header's does. */
+function onSortClickOf(node: ReactNode): ((event: unknown) => void) | undefined {
+  if (!isValidElement<{ onClick?: (event: unknown) => void }>(node)) return undefined;
+  return node.props.onClick;
+}
+
+/**
+ * Renders one column HEADER through the real table runtime, configured the way
+ * GenericDataTable configures it — `manualSorting`, with the sorting supplied
+ * as controlled state — and reports what the table would emit if the header
+ * were pressed.
+ *
+ * `sorting` is keyed by COLUMN ID, because that is what GenericDataTable puts
+ * there: `sorting: filters.sort ? [{ id: filters.sort, ... }] : []`.
+ */
+function renderHeader(columnId: string, sorting: SortingState = []) {
+  let emitted: SortingState | null = null;
+  let onClick: ((event: unknown) => void) | undefined;
+  let canSort = false;
+
+  function Harness() {
+    const table = useReactTable({
+      data: [BASE_ROW],
+      columns: registerColumns(noop, noop),
+      getCoreRowModel: getCoreRowModel(),
+      manualSorting: true,
+      state: { sorting },
+      onSortingChange: (updater) => {
+        emitted = typeof updater === "function" ? updater(sorting) : updater;
+      },
+    });
+    const header = table.getHeaderGroups()[0].headers.find((h) => h.column.id === columnId);
+    assert.ok(header, `no such column: ${columnId}`);
+    canSort = header.column.getCanSort();
+    const def = header.column.columnDef;
+    const node = typeof def.header === "function" ? def.header(header.getContext()) : def.header;
+    onClick = onSortClickOf(node);
+    return (
+      <table>
+        <thead>
+          <tr>
+            <th>{node}</th>
+          </tr>
+        </thead>
+      </table>
+    );
+  }
+
+  const html = renderToStaticMarkup(<Harness />);
+  return {
+    html,
+    canSort,
+    /** Presses the header and returns the sorting the table reported, if any. */
+    press(): SortingState | null {
+      onClick?.({});
+      return emitted;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +314,105 @@ test("every column id is one visibleColumnIds knows about", () => {
   const known = visibleColumnIds({ schedule: true, biometric: true });
   for (const id of ids) assert.ok(known.includes(id!), `unknown column id: ${id}`);
   for (const id of known) assert.ok(ids.includes(id), `visibleColumnIds names a column that does not exist: ${id}`);
+});
+
+// ---------------------------------------------------------------------------
+// registerColumns — sortable headers
+// ---------------------------------------------------------------------------
+
+const SORTABLE_IDS = ["employee", "weekly_minutes", "fingerprint_count"];
+const DISPLAY_IDS = ["branch", "department", "status", "schedule", "biometric", "action"];
+
+/**
+ * The arrow glyphs, matched to the end of the lucide class name. Without the
+ * trailing space `lucide-arrow-up` also matches inside `lucide-arrow-up-down`,
+ * so the neutral glyph would read as "ascending".
+ */
+const ARROW = {
+  none: /lucide-arrow-up-down /,
+  ascending: /lucide-arrow-up /,
+  descending: /lucide-arrow-down /,
+};
+
+test("exactly the three sort-only columns can sort", () => {
+  // getCanSort() is `(enableSorting ?? true) && (options.enableSorting ?? true)
+  // && !!column.accessorFn`, so a sortable column that loses its accessorFn
+  // keeps its header button and silently stops doing anything —
+  // getToggleSortingHandler() returns a handler that checks canSort and
+  // returns. Nothing about the markup would give that away.
+  for (const id of SORTABLE_IDS) {
+    assert.equal(renderHeader(id).canSort, true, `${id} must be sortable`);
+  }
+  for (const id of DISPLAY_IDS) {
+    assert.equal(renderHeader(id).canSort, false, `${id} must not be sortable`);
+  }
+});
+
+test("a sortable header is a real button carrying the column's own words", () => {
+  // Not a bare glyph: the arrow shows the direction to a sighted reader and
+  // the accessible name states the next action for everyone else, so neither
+  // one is carrying the meaning alone.
+  const { html } = renderHeader("employee");
+  assert.match(html, /<button/);
+  assert.match(html, />Employee</, "the column's label must still be readable text");
+  assert.match(html, /aria-label="Sort by Employee, ascending"/);
+  assert.match(html, /aria-hidden="true"/, "the arrow is decorative");
+});
+
+test("a display column's header is plain text, with nothing to press", () => {
+  for (const id of DISPLAY_IDS) {
+    assert.doesNotMatch(renderHeader(id).html, /<button/, `${id} must not offer a sort`);
+  }
+});
+
+test("pressing Hrs/wk asks for its own column, ascending first", () => {
+  // ascending first on purpose (sortDescFirst: false): the low end of Hrs/wk
+  // and Prints is where the findings are, and TanStack would otherwise pick a
+  // direction by sniffing the first row's value.
+  assert.deepEqual(renderHeader("weekly_minutes").press(), [
+    { id: "weekly_minutes", desc: false },
+  ]);
+  assert.deepEqual(renderHeader("fingerprint_count").press(), [
+    { id: "fingerprint_count", desc: false },
+  ]);
+  assert.deepEqual(renderHeader("employee").press(), [{ id: "employee", desc: false }]);
+});
+
+test("a second press reverses it, and a third clears it", () => {
+  const ascending = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: false }]);
+  assert.match(ascending.html, /aria-label="Sort by Hrs\/wk, descending"/);
+  assert.match(ascending.html, ARROW.ascending, "an ascending column shows which way it went");
+  assert.deepEqual(ascending.press(), [{ id: "weekly_minutes", desc: true }]);
+
+  const descending = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: true }]);
+  assert.match(descending.html, /aria-label="Clear the sort on Hrs\/wk"/);
+  assert.match(descending.html, ARROW.descending);
+  assert.deepEqual(
+    descending.press(),
+    [],
+    "the reader must be able to get back to the default order, which is where severity ranking lives",
+  );
+});
+
+test("an unsorted header says so, and shows neither direction", () => {
+  const html = renderHeader("weekly_minutes").html;
+  assert.match(html, ARROW.none, "the neutral glyph, not one of the two directions");
+  assert.doesNotMatch(html, ARROW.ascending);
+  assert.doesNotMatch(html, ARROW.descending);
+});
+
+test("the table keys its header state by COLUMN ID — which is why the page translates", () => {
+  // The defect columnIdForSort exists to prevent, pinned against the real
+  // runtime rather than argued from the source. Put this module's own sort
+  // vocabulary into the table's state, as storing `filters.sort` unchanged
+  // would, and the column the reader just sorted reads as unsorted: no
+  // direction, the same first direction on every press, and no way to clear.
+  const wrong = renderHeader("weekly_minutes", [{ id: "hours", desc: true }]);
+  assert.match(wrong.html, /aria-label="Sort by Hrs\/wk, ascending"/);
+  assert.deepEqual(wrong.press(), [{ id: "weekly_minutes", desc: false }]);
+
+  const right = renderHeader("weekly_minutes", [{ id: "weekly_minutes", desc: true }]);
+  assert.match(right.html, /aria-label="Clear the sort on Hrs\/wk"/);
 });
 
 // ---------------------------------------------------------------------------
@@ -739,4 +907,300 @@ test("severity order reaches the table, not just the alert count", () => {
     leaverAt < schedAt,
     "the leaver still holding a template must sort above a missing schedule, and alphabetically would not",
   );
+});
+
+// ---------------------------------------------------------------------------
+// RegisterFilterBar
+//
+// Only the TRIGGERS reach this markup. Radix renders Popover/Select content
+// inside a Portal whose container is resolved in a layout effect, so on the
+// server it renders to nothing and everything inside a facet's menu is
+// dropped. The option rows are therefore exported and exercised on their own,
+// the way EmployeePicker's `EmployeeOption` already is, and the derivation
+// itself is pinned on `registerFacets` in coverageRegister.test.ts.
+// ---------------------------------------------------------------------------
+
+const TWO_BRANCHES: RegisterRow[] = [
+  { ...BASE_ROW, id: "E1", branch: "DIU", department: "Finance" },
+  { ...BASE_ROW, id: "E2", employee_name: "Bea Second", branch: "ACES", department: "Finance" },
+];
+
+function renderBar(over: Partial<RegisterFilterBarProps> = {}): string {
+  return renderToStaticMarkup(
+    <RegisterFilterBar
+      rows={TWO_BRANCHES}
+      feeds={HEALTHY_FEEDS}
+      filters={{}}
+      onFiltersChange={noop}
+      {...over}
+    />,
+  );
+}
+
+/** The accessible name of the facet trigger whose name begins with `label`. */
+function facetName(html: string, label: string): string | null {
+  return html.match(new RegExp(`aria-label="(${label} filter[^"]*)"`))?.[1] ?? null;
+}
+
+/** The single-select triggers render "Label: value" as their whole content. */
+function selectValue(html: string, label: string): string | null {
+  return html.match(new RegExp(`data-slot="select-value"[^>]*>${label}: ([^<]*)<`))?.[1] ?? null;
+}
+
+test("the bar offers every facet the two feeds can speak to", () => {
+  const html = renderBar();
+  assert.ok(facetName(html, "Branch"), "expected a Branch facet");
+  assert.ok(facetName(html, "Department"), "expected a Department facet");
+  assert.equal(selectValue(html, "Status"), "Any");
+  assert.equal(selectValue(html, "Schedule"), "Any");
+  assert.equal(selectValue(html, "Biometric"), "Any");
+});
+
+test("a downed biometric feed takes Status and Biometric with it", () => {
+  // The same rule as their columns. Offering a filter over a fact the page has
+  // blanked on every row invites the reader to narrow to nobody, and reads as
+  // the roster having no leavers rather than the bridge having gone quiet.
+  const html = renderBar({ feeds: { schedule: true, biometric: false } });
+  assert.equal(selectValue(html, "Status"), null, "Status is a biometric-feed fact");
+  assert.equal(selectValue(html, "Biometric"), null);
+  assert.equal(selectValue(html, "Schedule"), "Any", "the schedule half is unaffected");
+  assert.ok(facetName(html, "Branch"), "branch comes from either feed and survives");
+});
+
+test("a downed schedule feed takes only the Schedule facet", () => {
+  const html = renderBar({ feeds: { schedule: false, biometric: true } });
+  assert.equal(selectValue(html, "Schedule"), null);
+  assert.equal(selectValue(html, "Status"), "Any");
+  assert.equal(selectValue(html, "Biometric"), "Any");
+});
+
+test("with both feeds down only the facets neither feed owns remain", () => {
+  const html = renderBar({ feeds: { schedule: false, biometric: false } });
+  for (const label of ["Status", "Schedule", "Biometric"]) {
+    assert.equal(selectValue(html, label), null, `${label} must be gone`);
+  }
+  assert.ok(facetName(html, "Branch"));
+  assert.ok(facetName(html, "Department"));
+});
+
+test("the bar opens with no status chosen", () => {
+  // A Global Constraint. Defaulting to Active hides every leaver still holding
+  // a template while the alert dot beside it goes on counting them, so the
+  // reader is shown a number they cannot reach.
+  assert.equal(selectValue(renderBar(), "Status"), "Any");
+});
+
+test("each single select shows the value it was given, in the column's own words", () => {
+  assert.equal(selectValue(renderBar({ filters: { status: "Left" } }), "Status"), "Left");
+  assert.equal(selectValue(renderBar({ filters: { schedule: "missing" } }), "Schedule"), "Missing");
+  assert.equal(
+    selectValue(renderBar({ filters: { biometric: "none" } }), "Biometric"),
+    "No fingerprint",
+    "the filter must read the same as the badge it selects",
+  );
+  assert.equal(
+    selectValue(renderBar({ filters: { biometric: "enrolled_not_punching" } }), "Biometric"),
+    "Enrolled, not punching",
+  );
+});
+
+test("a facet with no options in the data does not render at all", () => {
+  // The test a hardcoded option list fails. Nothing in this roster has a
+  // branch, so there is no branch to offer — a list written into the source
+  // would put branches here that filter to nobody, every time.
+  const html = renderBar({ rows: [{ ...BASE_ROW, branch: null, department: "Finance" }] });
+  assert.equal(facetName(html, "Branch"), null, "no branch fact, so no branch facet");
+  assert.ok(facetName(html, "Department"), "the facet that does have data still renders");
+});
+
+test("the facet trigger counts the options it holds and names what is selected", () => {
+  assert.equal(facetName(renderBar(), "Branch"), "Branch filter, 2 options");
+  assert.equal(
+    facetName(renderBar({ filters: { branch: ["DIU"] } }), "Branch"),
+    "Branch filter, 2 options, 1 selected: DIU",
+  );
+  assert.equal(
+    facetName(renderBar({ filters: { branch: ["ACES", "DIU"] } }), "Branch"),
+    "Branch filter, 2 options, 2 selected: ACES, DIU",
+  );
+  // Singular, so a one-option facet does not read as "1 options".
+  assert.equal(facetName(renderBar(), "Department"), "Department filter, 1 option");
+});
+
+test("an empty selection is no filter, and shows no count badge", () => {
+  const html = renderBar({ filters: { branch: [] } });
+  assert.equal(facetName(html, "Branch"), "Branch filter, 2 options");
+  assert.doesNotMatch(html, /data-slot="badge"/, "nothing is selected, so nothing is counted");
+});
+
+test("the facet option rows are exactly the options handed to them", () => {
+  // Rendered inside a bare <Command>, because inside the popover they would be
+  // portalled away. Two options, one selected, so a row that ignored `selected`
+  // and a row that hardcoded its own list both fail.
+  const html = renderToStaticMarkup(
+    <Command>
+      <CommandList>
+        <FacetOptions options={["ACES", "DIU"]} selected={["DIU"]} onToggle={noop} />
+      </CommandList>
+    </Command>,
+  );
+  assert.match(html, />ACES</);
+  assert.match(html, />DIU</);
+  assert.doesNotMatch(html, />PM</, "an option nothing asked for must not appear");
+  // The tick is a shape and it is decorative, so the state is said aloud too —
+  // colour never carries meaning alone.
+  assert.match(html, /data-checked="true" aria-label="DIU, selected"/);
+  assert.match(html, /data-checked="false" aria-label="ACES"/);
+});
+
+test("toggling a facet value adds it, removes it, and empties to no filter", () => {
+  assert.deepEqual(toggleFacetValue([], "DIU"), ["DIU"]);
+  assert.deepEqual(toggleFacetValue(["DIU"], "ACES"), ["DIU", "ACES"]);
+  assert.deepEqual(toggleFacetValue(["DIU", "ACES"], "DIU"), ["ACES"]);
+  // The last one off is "no branch filter", never "match nothing" —
+  // filterRegisterRows guards on `?.length` for exactly this.
+  assert.deepEqual(toggleFacetValue(["DIU"], "DIU"), []);
+});
+
+test("toggling does not mutate the selection it was given", () => {
+  const selected = ["DIU"];
+  toggleFacetValue(selected, "ACES");
+  toggleFacetValue(selected, "DIU");
+  assert.deepEqual(selected, ["DIU"]);
+});
+
+// ---------------------------------------------------------------------------
+// The table's sort, translated at the boundary
+// ---------------------------------------------------------------------------
+
+test("a pressed header becomes this module's own sort key", () => {
+  assert.deepEqual(registerFiltersFromTable({ sort: "weekly_minutes", order: "desc" }), {
+    sort: "hours",
+    order: "desc",
+  });
+  assert.deepEqual(registerFiltersFromTable({ sort: "employee", order: "asc" }), {
+    sort: "name",
+    order: "asc",
+  });
+});
+
+test("the rest of the reader's filters survive a sort", () => {
+  // GenericDataTable hands back the whole filter object with `sort` replaced.
+  // Dropping the others here would clear a search and a branch selection the
+  // moment someone pressed a column header.
+  assert.deepEqual(
+    registerFiltersFromTable({
+      search: "ada",
+      branch: ["DIU"],
+      readiness: "not-ready",
+      sort: "fingerprint_count",
+      order: "asc",
+    }),
+    { search: "ada", branch: ["DIU"], readiness: "not-ready", sort: "prints", order: "asc" },
+  );
+});
+
+test("clearing the sort clears the order with it", () => {
+  // A third press removes the sort entirely; an order left behind would be a
+  // half-instruction, and any `sort` value at all suppresses severity ranking.
+  assert.deepEqual(registerFiltersFromTable({ search: "ada", order: "desc" }), { search: "ada" });
+});
+
+test("a column id nothing sorts by leaves the register unsorted", () => {
+  // Not stored raw. sortRegisterRows would not recognise it, so the table
+  // would look unsorted while severity ranking — gated on `!filters.sort` —
+  // had quietly been switched off underneath it.
+  assert.deepEqual(registerFiltersFromTable({ sort: "branch", order: "desc" }), {});
+  assert.deepEqual(registerFiltersFromTable({ sort: "hours", order: "asc" }), {});
+});
+
+test("the register opens with nothing filtered and nothing sorted", () => {
+  // `status` above all: defaulting it to Active hides every leaver still
+  // enrolled while the alert keeps counting them. `sort` matters too, since
+  // severity ranking only runs while it is unset.
+  assert.deepEqual(INITIAL_REGISTER_FILTERS, {});
+});
+
+test("the page seeds its filter state from that constant, not a literal of its own", () => {
+  // Without this the constant could be correct and unused. There is no jsdom
+  // here, so a component's useState cannot be read any other way.
+  assert.match(
+    pageSource,
+    /useState<RegisterFilters>\(INITIAL_REGISTER_FILTERS\)/,
+    "the initial filters must be the exported constant",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// CoverageRegisterView — the toolbar
+// ---------------------------------------------------------------------------
+
+test("the facets are derived from the whole roster, never from the filtered rows", () => {
+  // The trap. Derive the options from `data` and choosing a branch leaves that
+  // branch as the only option — or, at one value, no options and no control —
+  // so the reader is shut inside a filter they can no longer see or clear.
+  const unfiltered = renderView({ rows: TWO_BRANCHES });
+  assert.equal(facetName(unfiltered, "Branch"), "Branch filter, 2 options");
+
+  const filtered = renderView({ rows: TWO_BRANCHES, filters: { branch: ["DIU"] } });
+  assert.equal(
+    facetName(filtered, "Branch"),
+    "Branch filter, 2 options, 1 selected: DIU",
+    "narrowing to one branch must not narrow the branch facet",
+  );
+
+  // A search narrows the table to one row; the facets must not follow it down.
+  const searched = renderView({ rows: TWO_BRANCHES, filters: { search: "Bea" } });
+  assert.equal(facetName(searched, "Branch"), "Branch filter, 2 options");
+});
+
+test("the toolbar waits for the feeds, like everything else on the page", () => {
+  const html = renderView({
+    isLoading: true,
+    rows: [],
+    feeds: { schedule: false, biometric: false },
+    alert: PENDING_ALERT,
+  });
+  assert.equal(facetName(html, "Branch"), null, "no facets until there is a roster to derive them from");
+  assert.doesNotMatch(html, /aria-label="Export/, "nothing to export until the feeds answer");
+});
+
+test("the export offers exactly the rows on screen, not the whole roster", () => {
+  // The count in the name is built from the same array the file is, so a
+  // wiring change that exported everything moves this with it.
+  const ready = { ...BASE_ROW, id: "READY", employee_name: "Bea Ready" };
+  const notReady: RegisterRow = {
+    ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing",
+  };
+  assert.match(
+    renderView({ rows: [ready, notReady] }),
+    /aria-label="Export 2 employees as CSV"/,
+  );
+  assert.match(
+    renderView({ rows: [ready, notReady], filters: { readiness: "not-ready" } }),
+    /aria-label="Export 1 employee as CSV"/,
+    "a filtered register exports the filtered rows, and says how many",
+  );
+});
+
+/** The export button's opening tag, for attribute assertions. */
+function exportButton(html: string): string {
+  return html.match(/<button[^>]*aria-label="Export[^"]*"[^>]*>/)?.[0] ?? "";
+}
+
+test("the export is disabled on a partial roster, and says why", () => {
+  // A CSV that quietly omits part of the workforce looks complete, and a
+  // spreadsheet carries no banner to say otherwise. A control that is merely
+  // dead, with no reason given, is its own defect.
+  const button = exportButton(renderView({ truncated: true }));
+  assert.match(button, /\sdisabled=""/, "a partial roster must not be exportable");
+  assert.match(
+    button,
+    /aria-label="Export CSV — unavailable while the roster is partial[^"]*"/,
+    "the reason must be in the accessible name, not only in a tooltip",
+  );
+
+  const usable = exportButton(renderView({ truncated: false }));
+  assert.ok(usable, "expected an export button on a complete roster");
+  assert.doesNotMatch(usable, /\sdisabled=""/, "a complete roster must be exportable");
 });

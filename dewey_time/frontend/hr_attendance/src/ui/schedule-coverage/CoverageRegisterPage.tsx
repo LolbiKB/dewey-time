@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
-import { EmptyState, GenericDataTable, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
-import { AlertTriangleIcon } from "lucide-react";
+import { Button, EmptyState, GenericDataTable, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import { AlertTriangleIcon, DownloadIcon } from "lucide-react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
 import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
@@ -8,7 +8,9 @@ import { Spinner } from "@/components/ui/spinner";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { useCoverageRegister } from "@/hooks/useCoverageRegister";
 import {
+  columnIdForSort,
   filterRegisterRows,
+  sortFromColumnId,
   sortRegisterRows,
   visibleColumnIds,
   type FeedHealth,
@@ -16,8 +18,10 @@ import {
   type RegisterFilters,
   type RegisterRow,
 } from "@/lib/coverageRegister";
+import { toRegisterCsv } from "@/lib/registerCsv";
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
+import { RegisterFilterBar } from "@/ui/schedule-coverage/RegisterFilterBar";
 
 export type CoverageRegisterViewProps = {
   /** Joined AND suppressed — the hook's `rows`, never a fresh join. */
@@ -70,6 +74,16 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
   const data = useMemo(
     () => sortRegisterRows(filterRegisterRows(rows, filters), filters),
     [rows, filters],
+  );
+
+  // Translated at the boundary, in both directions — see RegisterTableFilters.
+  const tableFilters = useMemo<RegisterTableFilters>(
+    () => ({ ...filters, sort: columnIdForSort(filters.sort) }),
+    [filters],
+  );
+  const handleTableFiltersChange = useCallback(
+    (next: RegisterTableFilters) => onFiltersChange(registerFiltersFromTable(next)),
+    [onFiltersChange],
   );
 
   // Without this GenericDataTable's footer reads "Showing 241 of 0 employees"
@@ -160,12 +174,31 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             data={data}
             meta={meta}
             loading={isLoading}
-            filters={filters}
-            onFiltersChange={onFiltersChange}
+            filters={tableFilters}
+            onFiltersChange={handleTableFiltersChange}
             getRowId={(row: RegisterRow) => row.id}
             layout="fill"
             columnWidths="fixed"
             hidePageSize
+            // Both slots wait for the feeds, on the same rule as the alert dot
+            // and the notices: mid-load every facet would read as feed-down and
+            // the export would have nothing but an unanswered roster to offer.
+            // Facet options come from `rows`, NOT `data` — see the bar's props.
+            toolbarLeading={
+              answered ? (
+                <RegisterFilterBar
+                  rows={rows}
+                  feeds={feeds}
+                  filters={filters}
+                  onFiltersChange={onFiltersChange}
+                />
+              ) : null
+            }
+            toolbarActions={
+              answered ? (
+                <RegisterExportButton rows={data} feeds={feeds} truncated={props.truncated} />
+              ) : null
+            }
             config={{
               entityName: "employees",
               entityNameSingular: "employee",
@@ -181,6 +214,112 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
 function rosterDescription(count: number): string {
   return `${count} ${count === 1 ? "employee" : "employees"}`;
 }
+
+/**
+ * RegisterFilters as GenericDataTable sees it.
+ *
+ * That primitive treats `sort` as one of its own COLUMN IDS in both
+ * directions: it builds its sorting state as `[{ id: filters.sort, ... }]` and
+ * hands the pressed column's id straight back through `onFiltersChange`. This
+ * module's vocabulary is `"name" | "hours" | "prints"`, which sortRegisterRows
+ * and its tests have used since the sort was written, so the two are
+ * translated here at the boundary rather than smeared through the pure
+ * functions. Without the inbound half, `column.getIsSorted()` is false on
+ * every column: no header shows a direction, every press repeats the first
+ * direction, and the sort can never be cleared.
+ */
+export type RegisterTableFilters = Omit<RegisterFilters, "sort"> & { sort?: string };
+
+/**
+ * What the table just did, in this module's terms.
+ *
+ * A column id nothing sorts by clears the sort rather than storing a value
+ * sortRegisterRows does not understand — which would look like no sort while
+ * still suppressing severity order, since that is gated on `!filters.sort`.
+ * `order` goes with it: an order with no sort is a half-instruction.
+ *
+ * Lifted out of the callback for the reason `toggleReadiness` is —
+ * `renderToStaticMarkup` drops function props, so a body left inline there is
+ * a line no test in this suite can reach.
+ */
+export function registerFiltersFromTable(next: RegisterTableFilters): RegisterFilters {
+  const { sort: columnId, order, ...rest } = next;
+  const resolved = columnId === undefined ? null : sortFromColumnId(columnId, order === "desc");
+  return resolved === null ? rest : { ...rest, ...resolved };
+}
+
+/**
+ * Hand the reader the file. Browser-only, and never reached by the static
+ * renders in the test suite.
+ */
+function downloadCsv(csv: string) {
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `coverage-register-${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export what the reader is looking at.
+ *
+ * `rows` is the filtered, sorted set the table is rendering, and the accessible
+ * name counts that same array — so a wiring change that exported the whole
+ * roster instead moves the label with it, where a test can see it. A file that
+ * silently disagreed with the screen it came from is indistinguishable from one
+ * that agrees, once it has been mailed to somebody.
+ *
+ * Disabled on a truncated roster, WITH the reason in the accessible name: a
+ * file that omits part of the workforce looks complete, and there is no banner
+ * inside a spreadsheet to say otherwise. A control that is merely dead, with no
+ * explanation, is its own defect.
+ */
+export function RegisterExportButton(props: {
+  rows: RegisterRow[];
+  feeds: FeedHealth;
+  truncated: boolean;
+}) {
+  const label = props.truncated
+    ? "Export CSV — unavailable while the roster is partial, because the file would look complete"
+    : `Export ${props.rows.length} ${props.rows.length === 1 ? "employee" : "employees"} as CSV`;
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={props.truncated}
+      aria-label={label}
+      title={label}
+      onClick={() => downloadCsv(toRegisterCsv(props.rows, props.feeds))}
+    >
+      <DownloadIcon className="size-4" aria-hidden="true" />
+      Export CSV
+    </Button>
+  );
+}
+
+/**
+ * How the register opens: nothing filtered, nothing sorted.
+ *
+ * `status` in particular has NO default. Defaulting to Active would hide every
+ * leaver still holding a template — the security finding this page exists to
+ * show — while the alert dot beside it went on counting them, so the reader
+ * would see a number they could not reach.
+ *
+ * `sort` is left undefined for a second reason: sortRegisterRows only applies
+ * severity ordering while `filters.sort` is unset, so seeding it with "name"
+ * would quietly retire "worst first" for the not-ready view.
+ *
+ * A constant rather than an inline literal so both claims are pinnable
+ * directly — this suite has no jsdom and cannot read a component's useState.
+ *
+ * Frozen because useState holds this exact object as the first state: every
+ * update goes through a spread today, but a single in-place write anywhere
+ * would give the register a default status for the rest of the session, and
+ * silently. This turns that into a throw.
+ */
+export const INITIAL_REGISTER_FILTERS: RegisterFilters = Object.freeze({});
 
 /**
  * What pressing the alert dot does: show only the rows that need attention,
@@ -212,11 +351,7 @@ export function toggleReadiness(filters: RegisterFilters): RegisterFilters {
 export function CoverageRegisterPage() {
   const { hrStaff, sessionLoading } = useOutletContext<HrAccessOutletContext>();
   const navigate = useNavigate();
-  // Empty, and `sort` in particular is left undefined rather than seeded with
-  // "name". sortRegisterRows only applies severity ordering while
-  // `filters.sort` is unset, so a seed here would silently retire "worst
-  // first" for the not-ready view — pinned in coverageRegister.test.ts.
-  const [filters, setFilters] = useState<RegisterFilters>({});
+  const [filters, setFilters] = useState<RegisterFilters>(INITIAL_REGISTER_FILTERS);
 
   // Computed once. An inline `Date.now()` would move the staleness boundary
   // feedHealth reads on every render, so a snapshot could flip either side of

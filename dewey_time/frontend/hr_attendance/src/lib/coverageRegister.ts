@@ -33,6 +33,27 @@ export type RegisterRow = {
 export type FeedHealth = { schedule: boolean; biometric: boolean };
 
 /**
+ * The one wording for each biometric bucket.
+ *
+ * The column badge, the filter option and the CSV field all read from here, so
+ * a reader who narrowed the table to "No fingerprint" gets a file that says the
+ * same thing. Exhaustive by type: a fifth bucket is a compile error rather than
+ * a blank badge, an unlabelled filter option and an empty CSV cell.
+ */
+export const BIOMETRIC_LABELS: Record<NonNullable<RegisterRow["biometric"]>, string> = {
+  enrolled: "Enrolled",
+  enrolled_not_punching: "Enrolled, not punching",
+  none: "No fingerprint",
+  still_enrolled: "Still enrolled",
+};
+
+/** Same rule as BIOMETRIC_LABELS, for the schedule fact. */
+export const SCHEDULE_LABELS: Record<NonNullable<RegisterRow["schedule"]>, string> = {
+  assigned: "Assigned",
+  missing: "Missing",
+};
+
+/**
  * One register value per enrollment bucket — exhaustive, so a fifth bucket is a
  * compile error rather than something that silently renders as "Enrolled".
  *
@@ -157,6 +178,33 @@ function severity(row: RegisterRow): number {
   return 3;
 }
 
+/**
+ * The branch and department values the roster actually contains.
+ *
+ * DERIVED, never hardcoded. A branch that exists in the data must be offerable
+ * and one that does not must not appear: an option that can only ever return
+ * nothing is a fact the page does not have, and a branch missing from a
+ * hardcoded list is a slice of the roster the reader cannot reach at all.
+ *
+ * `null` is excluded because there is nothing for such an option to select —
+ * filterRegisterRows reads `row.branch ?? ""`, so a row with no branch fact
+ * cannot satisfy "is in this branch" and is dropped by any branch filter.
+ *
+ * Callers must pass the UNFILTERED roster. Deriving from the filtered rows
+ * would leave the chosen branch as the only surviving option the moment it was
+ * picked, so the reader could no longer see — or clear — what they had done.
+ */
+export function registerFacets(rows: RegisterRow[]): { branch: string[]; department: string[] } {
+  const branch = new Set<string>();
+  const department = new Set<string>();
+  for (const row of rows) {
+    if (row.branch) branch.add(row.branch);
+    if (row.department) department.add(row.department);
+  }
+  const sorted = (values: Set<string>) => [...values].sort((a, b) => a.localeCompare(b));
+  return { branch: sorted(branch), department: sorted(department) };
+}
+
 export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters): RegisterRow[] {
   const needle = (filters.search ?? "").trim().toLowerCase();
 
@@ -201,6 +249,61 @@ export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters):
   return out.sort((a, b) => a.employee_name.localeCompare(b.employee_name) * dir);
 }
 
+/**
+ * Which table column each sort key belongs to.
+ *
+ * Exhaustive over the sort union by type, so a fourth key cannot be added
+ * without deciding which column it sorts — and the round-trip test iterates
+ * these keys, so it cannot be added without teaching sortFromColumnId either.
+ */
+export const SORT_COLUMN_IDS: Record<NonNullable<RegisterFilters["sort"]>, string> = {
+  name: "employee",
+  hours: "weekly_minutes",
+  prints: "fingerprint_count",
+};
+
+/**
+ * A pressed column header, translated into this module's own vocabulary.
+ *
+ * An id nothing sorts by yields null rather than a guess: a wrong sort silently
+ * reorders the register, and — because sortRegisterRows only applies severity
+ * ordering while `filters.sort` is unset — it would also retire "worst first"
+ * for the not-ready view.
+ */
+export function sortFromColumnId(
+  id: string,
+  desc: boolean,
+): Pick<RegisterFilters, "sort" | "order"> | null {
+  const order = desc ? "desc" : "asc";
+  switch (id) {
+    case "employee":
+      return { sort: "name", order };
+    case "weekly_minutes":
+      return { sort: "hours", order };
+    case "fingerprint_count":
+      return { sort: "prints", order };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The inverse, for the boundary with GenericDataTable.
+ *
+ * That primitive derives its own sorting STATE from `filters.sort`, reading it
+ * as a column id — `sorting: filters.sort ? [{ id: filters.sort, ... }] : []`.
+ * Handing it "hours" leaves `column.getIsSorted()` false on every column, so
+ * the header shows no direction, `getNextSortingOrder()` returns the first
+ * direction forever, and the sort can be neither reversed nor cleared.
+ *
+ * Undefined maps to undefined: an unsorted register is a real state (it is the
+ * one where severity ordering runs) and must round-trip as one, not fall back
+ * to some default column.
+ */
+export function columnIdForSort(sort: RegisterFilters["sort"]): string | undefined {
+  return sort === undefined ? undefined : SORT_COLUMN_IDS[sort];
+}
+
 export type RegisterAlert = {
   tone: "problem" | "clear" | "degraded";
   count: number;
@@ -223,10 +326,10 @@ export function feedHealth(
   const schedule = Boolean(coverage);
   if (!isFeedConnected(enrollment)) return { schedule, biometric: false };
 
-  // Reuses parseFrappeDatetime — the same site-local reading snapshotNotice
-  // uses — rather than a second, UTC-forcing parse of the same field. A
-  // one-hour offset between the two readings would put a snapshot on
-  // opposite sides of "stale" depending on which function asked.
+  // Reuses parseFrappeDatetime — the shared site-local reading of this field —
+  // rather than a second, UTC-forcing parse of it here. A one-hour offset
+  // between two readings would put the same snapshot on opposite sides of
+  // "stale" depending on which one asked.
   const reportedAt = parseFrappeDatetime(enrollment?.last_snapshot_at ?? "");
   const minutes = reportedAt === null ? Infinity : (nowMs - reportedAt) / 60000;
 
@@ -287,6 +390,71 @@ export function visibleColumnIds(feeds: FeedHealth): string[] {
     ...ALWAYS,
     ...(feeds.schedule ? SCHEDULE_COLUMNS : []),
     ...(feeds.biometric ? BIOMETRIC_COLUMNS : []),
+  ];
+}
+
+type CsvField = {
+  /** The table column this field belongs to; it is exported only when that column is. */
+  column: string;
+  header: string;
+  value: (row: RegisterRow) => string | number | null;
+};
+
+/**
+ * The exportable fields, in the order the table shows their columns.
+ *
+ * Keyed by column so the export obeys visibleColumnIds: writing a column the
+ * page is hiding would put a fact the reader was refused into a file that
+ * outlives the outage. `action` is a control, not a fact, so it has no field.
+ *
+ * Two fields may share a column where the cell renders two facts. The employee
+ * cell shows a name over an id, and jamming them into one CSV field would make
+ * neither sortable in a spreadsheet. The leaver day count is drawn inside the
+ * biometric cell, so it travels with that column and disappears with it.
+ */
+const CSV_FIELDS: CsvField[] = [
+  { column: "employee", header: "Employee ID", value: (row) => row.id },
+  { column: "employee", header: "Name", value: (row) => row.employee_name },
+  { column: "branch", header: "Branch", value: (row) => row.branch },
+  { column: "department", header: "Department", value: (row) => row.department },
+  { column: "status", header: "Employment status", value: (row) => row.status },
+  {
+    column: "schedule",
+    header: "Schedule",
+    value: (row) => (row.schedule === null ? null : SCHEDULE_LABELS[row.schedule]),
+  },
+  { column: "weekly_minutes", header: "Weekly minutes", value: (row) => row.weekly_minutes },
+  {
+    column: "biometric",
+    header: "Biometric",
+    value: (row) => (row.biometric === null ? null : BIOMETRIC_LABELS[row.biometric]),
+  },
+  { column: "fingerprint_count", header: "Fingerprints", value: (row) => row.fingerprint_count },
+  { column: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
+];
+
+/**
+ * The export as a grid — a header row, then one row per employee — before any
+ * CSV quoting. Split from the serialisation so the column-suppression and
+ * empty-cell rules are testable without parsing a string back apart.
+ *
+ * A null cell is an EMPTY field, never `0` and never "None": zero fingerprints
+ * is a finding and no report of fingerprints is not, and a file that renders
+ * one as the other is the page's central rule broken where it is least
+ * recoverable — nothing downstream can tell the two apart afterwards.
+ */
+export function registerCsvRows(rows: RegisterRow[], feeds: FeedHealth): string[][] {
+  const visible = new Set(visibleColumnIds(feeds));
+  const fields = CSV_FIELDS.filter((field) => visible.has(field.column));
+
+  return [
+    fields.map((field) => field.header),
+    ...rows.map((row) =>
+      fields.map((field) => {
+        const value = field.value(row);
+        return value === null ? "" : String(value);
+      }),
+    ),
   ];
 }
 
