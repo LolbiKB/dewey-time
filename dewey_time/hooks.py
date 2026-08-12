@@ -132,6 +132,13 @@ doc_events = {
         "on_update": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
         "on_trash": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
     },
+    # Keep the Biometric Enrollment view fresh: a snapshot rewrites many rows,
+    # so drop the cached payload rather than serve a stale one for the TTL.
+    "Employee Biometric Enrollment": {
+        "after_insert": "dewey_time.attendance_engine.enrollment_api.invalidate_enrollment_cache",
+        "on_update": "dewey_time.attendance_engine.enrollment_api.invalidate_enrollment_cache",
+        "on_trash": "dewey_time.attendance_engine.enrollment_api.invalidate_enrollment_cache",
+    },
     # Keep the HR flag queue fresh: clear its cached pages whenever an HR decision is
     # written, so a decision disappears from the queue on the next refresh rather than up
     # to 60s later. Decisions are HR-rate — a handful of writes a minute at most.

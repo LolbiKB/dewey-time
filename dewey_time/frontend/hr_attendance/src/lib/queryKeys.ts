@@ -42,6 +42,10 @@ export const queryKeys = {
     all: ["coverage"] as const,
   },
 
+  enrollment: {
+    all: ["enrollment"] as const,
+  },
+
   flags: {
     all: ["flags"] as const,
     // `includeDecided` is part of the key and deliberately has no default: the

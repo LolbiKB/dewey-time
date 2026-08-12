@@ -6,6 +6,22 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 
+def _mock_cint(value, default=0):
+    """Stand-in for frappe.utils.cint: real Frappe tries int() first, falls
+    back through float() for numeric strings, and returns `default` for
+    anything else -- a broad except in both stages, not just
+    (TypeError, ValueError), since this is shared across every backend test
+    module and a narrower catch here would silently diverge from production
+    for inputs neither of us has hit yet."""
+    try:
+        return int(value)
+    except Exception:
+        try:
+            return int(float(value))
+        except Exception:
+            return default
+
+
 def _mock_get_time(value):
     if value is None:
         return None
@@ -69,6 +85,7 @@ def _install_frappe_mock():
     utils_mod.get_time = _mock_get_time
     utils_mod.add_days = lambda value, days: value
     utils_mod.nowdate = lambda: str(date.today())
+    utils_mod.cint = _mock_cint
 
     frappe.scrub = lambda value: str(value).lower().replace(" ", "-").replace("_", "-")
 
@@ -77,6 +94,16 @@ def _install_frappe_mock():
     # bridge_auth reads api_secret back out of __Auth with this; the default
     # stub keeps every caller that is not testing the comparison itself green.
     password_mod.get_decrypted_password = MagicMock(return_value="SECRET")
+
+    # enrollment_api builds its check-in aggregate with frappe.qb, because
+    # Frappe v16 rejects SQL functions written as strings in SELECT. The mock
+    # only has to make the IMPORT resolve -- every test patches _checkin_counts
+    # wholesale, and the query itself is proven on a real bench instead.
+    qb_functions_mod = ModuleType("frappe.query_builder.functions")
+    qb_functions_mod.Count = MagicMock(name="Count")
+    query_builder_mod = ModuleType("frappe.query_builder")
+    query_builder_mod.functions = qb_functions_mod
+    frappe.qb = MagicMock(name="qb")
 
     model_mod = ModuleType("frappe.model.document")
 
@@ -90,6 +117,8 @@ def _install_frappe_mock():
 
     model_mod.Document = Document
 
+    sys.modules["frappe.query_builder"] = query_builder_mod
+    sys.modules["frappe.query_builder.functions"] = qb_functions_mod
     sys.modules["frappe"] = frappe
     sys.modules["frappe.utils"] = utils_mod
     sys.modules["frappe.utils.password"] = password_mod

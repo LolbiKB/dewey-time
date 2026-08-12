@@ -8,6 +8,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { useScheduleCoverage } from "@/hooks/useScheduleCoverage";
+import { CoverageViewNav } from "@/ui/schedule-coverage/CoverageViewNav";
 import { HoursBuckets } from "@/ui/schedule-coverage/HoursBuckets";
 import { UnassignedList } from "@/ui/schedule-coverage/UnassignedList";
 
@@ -39,6 +40,8 @@ export function ScheduleCoveragePage() {
 
   return (
     <Page>
+      <CoverageViewNav />
+
       <Link
         to="/hr-schedule"
         className="inline-flex w-fit shrink-0 items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
