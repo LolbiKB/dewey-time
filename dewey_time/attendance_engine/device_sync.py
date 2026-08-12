@@ -140,13 +140,31 @@ def upsert_device_sync_status(
 
     if frappe.db.exists("Device Sync Status", canonical):
         doc = frappe.get_doc("Device Sync Status", canonical)
+        for field, value in values.items():
+            setattr(doc, field, value)
+        doc.save(ignore_permissions=True)
     else:
-        doc = frappe.get_doc({"doctype": "Device Sync Status", "name": canonical})
+        # insert(), not save(): Document._save() branches on
+        # `self.get("__islocal") or not self.get("name")`, and a dict-constructed
+        # doc carrying an explicit `name` satisfies NEITHER -- so save() took the
+        # UPDATE path against a row that does not exist and check_if_latest()
+        # raised DoesNotExistError on every first write. Frappe maps that to
+        # HTTP 404, which the bridge's isFrappeMethodMissing() then read as
+        # "endpoint not deployed yet" and logged as a benign skip. The feed was
+        # dead and looked merely pending.
+        #
+        # Invisible here for eleven days because the bridge was 401-blocked, and
+        # invisible to the suite because frappe.get_doc is a MagicMock that
+        # cannot tell insert() from save(). Same defect the enrollment register
+        # hit; found by running against a real bench.
+        #
+        # The name is assigned rather than passed in the construction dict:
+        # naming_rule is "By script", so insert() keeps a preset name, while a
+        # `name` key in the dict is what triggers the UPDATE path above.
+        doc = frappe.get_doc({"doctype": "Device Sync Status", **values})
+        doc.name = canonical
+        doc.insert(ignore_permissions=True)
 
-    for field, value in values.items():
-        setattr(doc, field, value)
-
-    doc.save(ignore_permissions=True)
     return doc.name
 
 
