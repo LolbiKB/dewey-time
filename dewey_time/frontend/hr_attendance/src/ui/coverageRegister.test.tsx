@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -7,7 +8,12 @@ import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
 import { visibleColumnIds } from "@/lib/coverageRegister";
-import type { RegisterRow } from "@/lib/coverageRegister";
+import type { FeedHealth, RegisterAlert, RegisterRow } from "@/lib/coverageRegister";
+import {
+  CoverageRegisterView,
+  toggleReadiness,
+  type CoverageRegisterViewProps,
+} from "@/ui/schedule-coverage/CoverageRegisterPage";
 
 const noop = () => {};
 
@@ -391,4 +397,264 @@ test("the action column stays empty for enrolled-not-punching", () => {
 test("a fully ready row has no action button at all", () => {
   const { html } = renderRow({ ...BASE_ROW, schedule: "assigned", biometric: "enrolled" });
   assert.doesNotMatch(html.action, /data-slot="button"/);
+});
+
+// ---------------------------------------------------------------------------
+// CoverageRegisterPage — the source contract
+//
+// These read the file rather than render it. The page half owns the router and
+// react-query wiring, and this suite has no jsdom, so what it DELEGATES is the
+// only thing checkable from outside. Everything the page actually renders is
+// exercised for real against CoverageRegisterView further down.
+// ---------------------------------------------------------------------------
+
+const pageSource = readFileSync(
+  new URL("./schedule-coverage/CoverageRegisterPage.tsx", import.meta.url), "utf8");
+const mainSource = readFileSync(new URL("../main.tsx", import.meta.url), "utf8");
+
+test("the page uses dewey-ui Page chrome like every other routed page", () => {
+  // The old biometrics page was the only routed page without it, which is why
+  // the shared nav shifted 16px between tabs (Page is px-5 sm:px-8, that page
+  // hand-rolled px-4).
+  assert.ok(pageSource.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");
+  assert.ok(pageSource.includes("PageHeader"), "expected PageHeader");
+  assert.ok(!/className="[^"]*\bpx-4\b/.test(pageSource), "no hand-rolled page inset");
+});
+
+test("the page gates on hrStaff like its siblings", () => {
+  assert.ok(pageSource.includes("hrStaff"));
+  assert.ok(pageSource.includes("Navigate"));
+  // Direction, not just presence. Deleting the guard while leaving the outlet
+  // context destructured — which is what removing the gate actually looks like
+  // in a diff — keeps both strings above in the file, so on their own they
+  // cannot fail for the mutation they exist to catch.
+  assert.match(
+    pageSource,
+    /if \(!hrStaff\)[\s\S]{0,120}<Navigate to="\/hr-attendance" replace \/>/,
+    "a non-HR visitor must be redirected, not merely have their role read",
+  );
+});
+
+test("the page holds no ROW derivation of its own", () => {
+  // All logic lives in lib/ as pure tested functions. A second site would drift.
+  // Assert delegation rather than banning `.filter(` outright: the page
+  // legitimately filters the COLUMN list by visibility. What must never appear
+  // is row derivation.
+  assert.ok(pageSource.includes("filterRegisterRows"), "rows come from filterRegisterRows");
+  assert.ok(pageSource.includes("sortRegisterRows"), "rows come from sortRegisterRows");
+  assert.ok(!pageSource.includes("rows.filter("), "row filtering belongs in filterRegisterRows");
+  assert.ok(!pageSource.includes(".sort("), "sorting belongs in sortRegisterRows");
+  assert.ok(!pageSource.includes("localeCompare"), "name ordering belongs in sortRegisterRows");
+  assert.ok(!pageSource.includes("isNotReady"), "readiness belongs in coverageRegister.ts");
+});
+
+test("the page renders the hook's rows, never a join of its own", () => {
+  // useCoverageRegister hands back rows that are joined AND suppressed, in that
+  // order (composeRegister owns it). A page that reached for joinRegisterRows
+  // itself would render facts a downed-or-stale feed cannot vouch for, in the
+  // very columns suppression exists to blank — and the alert count beside them
+  // would then describe a different set of rows than the table does.
+  assert.ok(!pageSource.includes("joinRegisterRows"), "the join belongs to the hook");
+  assert.ok(!pageSource.includes("suppressUnusableFacts"), "suppression belongs to the hook");
+  assert.ok(!pageSource.includes("composeRegister"), "composition belongs to the hook");
+  assert.ok(pageSource.includes("useCoverageRegister"), "the page's rows come from the hook");
+});
+
+test("the retired biometrics route redirects into the register", () => {
+  // The page it pointed at is deleted by this change; a link or bookmark to it
+  // must land on the register rather than on the catch-all.
+  assert.match(
+    mainSource,
+    /path="\/hr-schedule\/coverage\/biometrics"[\s\S]{0,120}<Navigate to="\/hr-schedule\/coverage" replace \/>/,
+    "/hr-schedule/coverage/biometrics must redirect to /hr-schedule/coverage",
+  );
+  assert.ok(
+    !mainSource.includes("BiometricEnrollmentPage"),
+    "the deleted page must not still be routed",
+  );
+  assert.ok(
+    !mainSource.includes("ScheduleCoveragePage"),
+    "the deleted page must not still be routed",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// CoverageRegisterView — rendered for real
+// ---------------------------------------------------------------------------
+
+const HEALTHY_FEEDS: FeedHealth = { schedule: true, biometric: true };
+
+const CLEAR_ALERT: RegisterAlert = {
+  tone: "clear", count: 0, knowable: true, label: "All 1 ready",
+};
+
+/** What both queries look like before either has answered — see feedHealth. */
+const PENDING_ALERT: RegisterAlert = {
+  tone: "degraded", count: 0, knowable: false,
+  label: "0 need attention · schedules and biometrics unavailable",
+};
+
+function renderView(over: Partial<CoverageRegisterViewProps> = {}): string {
+  return renderToStaticMarkup(
+    <CoverageRegisterView
+      rows={[BASE_ROW]}
+      feeds={HEALTHY_FEEDS}
+      alert={CLEAR_ALERT}
+      truncated={false}
+      isLoading={false}
+      bothFailed={false}
+      filters={{}}
+      onFiltersChange={noop}
+      onRetry={noop}
+      onOpen={noop}
+      onAddSchedule={noop}
+      {...over}
+    />,
+  );
+}
+
+test("an ordinary page load does not flash an outage", () => {
+  // While either query is pending BOTH payloads are undefined, so feedHealth
+  // reads {schedule:false, biometric:false} and the alert is `degraded`
+  // — every single load would otherwise open on a red-adjacent dot reading
+  // "schedules and biometrics unavailable" plus a feed-down banner, for the
+  // second or so before the data lands. Nothing is wrong yet; nothing may say
+  // so yet.
+  // `rows: []` is not a convenience — it is what a pending load actually
+  // holds, since composeRegister joins two undefined payloads into nothing.
+  const html = renderView({
+    isLoading: true,
+    rows: [],
+    feeds: { schedule: false, biometric: false },
+    alert: PENDING_ALERT,
+  });
+  assert.doesNotMatch(html, /data-tone=/, "no alert dot until the feeds have answered");
+  assert.doesNotMatch(html, /unavailable/, "no outage banner until the feeds have answered");
+  assert.doesNotMatch(html, /roster is partial/);
+  // Same rule one line up in the header. The roster size is not known yet, so
+  // the description must say so rather than report a count of nobody.
+  // Asserted against PageHeader's own description element, not the whole
+  // document: GenericDataTable's footer legitimately reads "Showing 0 of 0"
+  // beside its spinner, and a bare /0 employees/ search would either collide
+  // with that or — with a one-row fixture — never be able to fail at all.
+  assert.match(
+    html,
+    /<p class="text-sm text-muted-foreground">Loading…<\/p>/,
+    "the header must say it is loading, not report a roster size it does not have",
+  );
+  // Direction: the gate must be on `isLoading`, not on the page as a whole.
+  assert.match(html, /Loading data/, "the table still reports that it is loading");
+});
+
+test("the header names the roster size, and says employee once at one", () => {
+  const one = renderView({ rows: [BASE_ROW] });
+  assert.match(one, /<p class="text-sm text-muted-foreground">1 employee<\/p>/);
+  const two = renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] });
+  assert.match(two, /<p class="text-sm text-muted-foreground">2 employees<\/p>/);
+});
+
+test("the alert dot is the header's action once the feeds have answered", () => {
+  const html = renderView();
+  assert.match(html, /data-tone="clear"/, "the dot must render when not loading");
+  assert.match(html, /aria-label="All 1 ready"/);
+  assert.match(html, /aria-pressed="false"/, "nothing is filtered yet");
+
+  // The dot doubles as the not-ready filter's control, so it has to show that
+  // the filter is on — and `active` is the view's wiring, not AlertDot's.
+  const filtered = renderView({ filters: { readiness: "not-ready" } });
+  assert.match(filtered, /aria-pressed="true"/, "a filtered register shows a pressed dot");
+});
+
+test("pressing the alert dot toggles the not-ready filter, keeping every other filter", () => {
+  assert.deepEqual(toggleReadiness({}), { readiness: "not-ready" }, "off -> on");
+  assert.deepEqual(
+    toggleReadiness({ readiness: "not-ready" }),
+    { readiness: undefined },
+    "on -> off, so the dot is a toggle rather than a one-way trip",
+  );
+  // A toggle that reset the reader's search or branch facets would read as the
+  // dot clearing their work.
+  assert.deepEqual(
+    toggleReadiness({ search: "ada", branch: ["DIU"], sort: "hours" }),
+    { search: "ada", branch: ["DIU"], sort: "hours", readiness: "not-ready" },
+  );
+});
+
+test("a downed biometric feed says so, and takes its columns with it", () => {
+  const html = renderView({ feeds: { schedule: true, biometric: false } });
+  assert.match(html, /Biometric feed unavailable/, "the outage must be named");
+  // Columns are REMOVED, never blanked: an empty Biometric column reads as a
+  // whole roster who cannot clock in.
+  assert.doesNotMatch(html, />Biometric</, "the Biometric column must be gone, not empty");
+  assert.doesNotMatch(html, />Prints</, "the Prints column must be gone, not empty");
+  assert.doesNotMatch(html, />Status</, "Status is a biometric-feed fact and must go with it");
+  // The schedule half is unaffected — that is the claim the banner makes.
+  assert.match(html, />Schedule</, "the schedule columns must survive a biometric outage");
+  assert.match(html, />Hrs\/wk</);
+});
+
+test("a healthy pair of feeds shows every column", () => {
+  // Without this the test above passes just as well against a table that never
+  // renders any column at all.
+  const html = renderView();
+  for (const header of ["Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric", "Prints"]) {
+    assert.ok(html.includes(`>${header}<`), `expected the ${header} column`);
+  }
+  assert.doesNotMatch(html, /Biometric feed unavailable/, "no outage banner on a healthy load");
+});
+
+test("a partial roster says so", () => {
+  const html = renderView({ truncated: true });
+  assert.match(html, /roster is partial/);
+});
+
+test("when both feeds fail the table is replaced, not banner-stacked", () => {
+  // notice.tsx's own rule: a page that shows both a banner and a replaced
+  // region reports one failure twice. The biometric strip also ends with
+  // "Schedule coverage is unaffected", which is flatly false here.
+  const html = renderView({
+    bothFailed: true,
+    isLoading: false,
+    rows: [],
+    feeds: { schedule: false, biometric: false },
+  });
+  assert.match(html, /Coverage didn’t load/, "the failure must replace the region");
+  assert.match(html, /role="alert"/);
+  assert.doesNotMatch(html, /Biometric feed unavailable/, "one failure, reported once");
+  assert.doesNotMatch(html, /Search by name/, "the table must be gone, not sitting under a banner");
+});
+
+test("the footer counts the real roster, never zero", () => {
+  // GenericDataTable's footer reads `Showing {data.length} of {meta?.total || 0}`
+  // and its pager reads "Loading..." whenever `meta` is absent — so omitting
+  // `meta` ships a permanent "Showing 241 of 0 employees" under a full table.
+  // Zero is a rendered non-fact, which is the one thing this page may not do.
+  const ready = { ...BASE_ROW, id: "READY", employee_name: "Bea Ready" };
+  const notReady: RegisterRow = {
+    ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing",
+  };
+  const html = renderView({
+    rows: [ready, notReady],
+    filters: { readiness: "not-ready" },
+  });
+  assert.match(html, /Showing 1 of 2 employees/, "filtered count of roster count");
+  assert.doesNotMatch(html, /of 0 employees/);
+  assert.doesNotMatch(html, /Loading\.\.\./, "the pager must not be stuck reporting a load");
+});
+
+test("the view filters and sorts through lib, so the not-ready filter reaches the table", () => {
+  // The rows the table receives must be filterRegisterRows + sortRegisterRows
+  // of what came in, not the raw list — otherwise clicking the alert dot
+  // changes the header and leaves the table showing everybody.
+  const ready = { ...BASE_ROW, id: "READY", employee_name: "Bea Ready" };
+  const notReady: RegisterRow = {
+    ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing",
+  };
+  const unfiltered = renderView({ rows: [ready, notReady] });
+  assert.match(unfiltered, /Bea Ready/);
+  assert.match(unfiltered, /Ada Stuck/);
+
+  const filtered = renderView({ rows: [ready, notReady], filters: { readiness: "not-ready" } });
+  assert.match(filtered, /Ada Stuck/, "the not-ready row stays");
+  assert.doesNotMatch(filtered, /Bea Ready/, "the ready row must be filtered out");
 });

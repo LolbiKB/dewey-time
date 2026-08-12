@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import type { CalendarSession } from "@/hooks/useCalendarSession";
+import type { EnrollmentPayload } from "@/lib/enrollmentReport";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import type { CalendarEmployee, CalendarPayload, Day } from "@/types/calendar";
 import {
@@ -120,6 +121,50 @@ const COVERAGE = {
   counts: { active: 13, unassigned: 3, assigned: 10, truncated: false },
 } satisfies ScheduleCoveragePayload;
 
+/**
+ * Biometric-enrollment payload — the register's second feed.
+ *
+ * Needed even by tests that never look at a biometric column. Without a stub
+ * the route handler falls through to `message = {}`, and `{}` is not merely
+ * "feed unavailable": it is a payload whose required `counts` is missing, which
+ * is the partial-body case `registerFeedState` guards with `data?.counts?.…`.
+ *
+ * One row per bucket, plus a leaver who is absent from COVERAGE entirely —
+ * coverage returns Active employees only, so a leaver still holding a template
+ * exists in this feed alone, and that row is the security finding the register
+ * exists to surface. Employee ids match COVERAGE so the two feeds join.
+ */
+function enrollmentPayload(): EnrollmentPayload {
+  return {
+    rows: [
+      { id: "EMP-001", employee_name: "Jane Doe", branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "OK", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: null },
+      { id: "EMP-002", employee_name: "Aaron Wells", branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "ENROLLED_NOT_PUNCHING", is_registered: true, fingerprint_count: 1, face_count: 0, days_since_relieving: null },
+      { id: "EMP-104", employee_name: "Marco Diaz", branch: "BRANCH-A", department: "Warehouse", status: "Active", bucket: "NEEDS_ENROLLMENT", is_registered: false, fingerprint_count: 0, face_count: 0, days_since_relieving: null },
+      { id: "EMP-900", employee_name: "Nora Vance", branch: "BRANCH-B", department: "Retail", status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: 42 },
+    ],
+    counts: {
+      reported: 4, needs_enrollment: 1, enrolled_not_punching: 1, ok: 1,
+      leaver_still_enrolled: 1, excluded_status: 0, truncated: false,
+    },
+    // Freshly stamped, in the site-local frame `parseFrappeDatetime` reads it
+    // back in. A fixed literal would age past STALE_AFTER_MINUTES (24h) and
+    // silently move every test onto the degraded path, where the biometric
+    // columns are suppressed — so the healthy path would stop being covered
+    // without a single assertion changing.
+    last_snapshot_at: frappeDatetime(new Date(Date.now() - 30 * 60_000)),
+    window_days: 30,
+  };
+}
+
+/** "YYYY-MM-DD HH:MM:SS", local — the frame Frappe sends and the app parses. */
+function frappeDatetime(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 export async function stubFrappe(page: Page): Promise<void> {
   // Skip the one-shot brand intro overlay so it never covers content under test.
   await page.addInitScript(() => {
@@ -165,6 +210,8 @@ export async function stubFrappe(page: Page): Promise<void> {
       } satisfies CalendarPayload;
     } else if (p.includes("get_schedule_coverage")) {
       message = COVERAGE;
+    } else if (p.includes("get_enrollment_report")) {
+      message = enrollmentPayload();
     } else if (p.includes("list_weekly_schedule_templates")) {
       // Envelope type is inline and unexported at services/schedule.ts's
       // `listScheduleTemplates`; the list is empty, so there is nothing to drift.

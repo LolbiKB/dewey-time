@@ -58,9 +58,9 @@ test("ScheduleImportPage uses dewey-ui's Page", () => {
   assert.ok(!src.includes("max-w-7xl"), "hand-rolled container should be gone");
 });
 
-test("ScheduleCoveragePage uses dewey-ui's Page", () => {
+test("CoverageRegisterPage uses dewey-ui's Page", () => {
   const src = readFileSync(
-    new URL("./schedule-coverage/ScheduleCoveragePage.tsx", import.meta.url),
+    new URL("./schedule-coverage/CoverageRegisterPage.tsx", import.meta.url),
     "utf8",
   );
   assert.ok(src.includes("<Page>"), "expected <Page> from @lolbikb/dewey-ui");

@@ -5,8 +5,7 @@ import { App } from "./ui/App";
 import { HrAppShell } from "./ui/HrAppShell";
 import { WeeklySchedulePage } from "./ui/WeeklySchedulePage";
 import { ScheduleImportPage } from "./ui/schedule-import/ScheduleImportPage";
-import { ScheduleCoveragePage } from "./ui/schedule-coverage/ScheduleCoveragePage";
-import { BiometricEnrollmentPage } from "./ui/schedule-coverage/BiometricEnrollmentPage";
+import { CoverageRegisterPage } from "@/ui/schedule-coverage/CoverageRegisterPage";
 import { FlagQueuePage } from "./ui/FlagQueuePage";
 import { DeweyTimeIntro } from "./brand/DeweyTimeIntro";
 import "./index.css";
@@ -28,8 +27,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="/hr-attendance" element={<App />} />
                 <Route path="/hr-schedule" element={<WeeklySchedulePage />} />
                 <Route path="/hr-schedule/import" element={<ScheduleImportPage />} />
-                <Route path="/hr-schedule/coverage" element={<ScheduleCoveragePage />} />
-                <Route path="/hr-schedule/coverage/biometrics" element={<BiometricEnrollmentPage />} />
+                <Route path="/hr-schedule/coverage" element={<CoverageRegisterPage />} />
+                {/* The biometrics half is now columns in the register above, not
+                    a second page. Redirected rather than dropped: the catch-all
+                    would send a bookmark to /hr-attendance, silently losing the
+                    surface it asked for. */}
+                <Route
+                  path="/hr-schedule/coverage/biometrics"
+                  element={<Navigate to="/hr-schedule/coverage" replace />}
+                />
                 <Route path="/hr-flags" element={<FlagQueuePage />} />
               </Route>
               <Route path="*" element={<Navigate to="/hr-attendance" replace />} />

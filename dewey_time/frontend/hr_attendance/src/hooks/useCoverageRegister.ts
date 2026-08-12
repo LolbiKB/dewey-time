@@ -28,9 +28,9 @@ export type CoverageRegister = {
  * The two queries' options, exported (not inlined in the hook) so a plain
  * node:test — there is no jsdom/React Testing Library in this suite, so the
  * hook itself cannot be rendered — can pin the queryKey -> queryFn pairing
- * directly. Both keys are `readonly string[]`, so a swap between the two
- * calls typechecks; it would silently collide this query's cache entry with
- * useScheduleCoverage's under the wrong queryFn.
+ * directly. Both keys are `readonly string[]`, so swapping them between the
+ * two useQuery calls below typechecks silently, and each feed would then be
+ * cached under the other's key with the wrong queryFn.
  */
 export const coverageQueryOptions = {
   queryKey: queryKeys.coverage.all,

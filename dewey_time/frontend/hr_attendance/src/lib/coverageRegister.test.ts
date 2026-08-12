@@ -298,6 +298,29 @@ test("severity order when filtered to problems, name order otherwise", () => {
   );
 });
 
+test("an explicit sort wins over severity order, even while filtered to not-ready", () => {
+  // Severity ordering is gated on `!filters.sort`, so it only runs while the
+  // reader has expressed no preference of their own. That makes the page's
+  // INITIAL filter state load-bearing: seeding it with `sort: "name"` rather
+  // than leaving `sort` undefined would retire severity ordering altogether
+  // and nothing above would notice, because every case there passes no sort.
+  // Pin the other half of the gate so the two cannot drift apart.
+  const rows = [
+    row({ id: "WORST", employee_name: "Ana", biometric: "still_enrolled", weekly_minutes: 2400 }),
+    row({ id: "MILDER", employee_name: "Ben", schedule: "missing", weekly_minutes: 600 }),
+  ];
+  assert.deepEqual(
+    sortRegisterRows(rows, { readiness: "not-ready" }).map((r) => r.id),
+    ["WORST", "MILDER"],
+    "no explicit sort — severity decides, worst first",
+  );
+  assert.deepEqual(
+    sortRegisterRows(rows, { readiness: "not-ready", sort: "hours" }).map((r) => r.id),
+    ["MILDER", "WORST"],
+    "an explicit sort must beat severity order, or the column headers lie",
+  );
+});
+
 test("sorting by hours puts unknown minutes last in both directions", () => {
   // Three rows, input order B, A, C (known-high, unknown, known-low), is
   // deliberate — brute-forced against all six permutations. This is the only
@@ -618,6 +641,54 @@ test("composeRegister suppresses a stale-but-once-seen bridge's facts before the
 });
 
 const HEALTHY_QUERY_STATE = { data: undefined, error: undefined, isLoading: false };
+
+/**
+ * A payload as it actually arrived, not as the type claims it must have.
+ *
+ * The cast is the subject of the test rather than a shortcut around it:
+ * `frappeCall<EnrollmentPayload>` performs this exact cast on every response,
+ * so the declared shape is a claim ABOUT the server, never a guarantee FROM
+ * it. This helper reproduces the one thing TypeScript cannot: a body that
+ * omits a required field.
+ */
+function asWireResponse<T>(body: object): T {
+  return body as T;
+}
+
+test("registerFeedState tolerates a payload that arrived without counts", () => {
+  // `counts` is required on both payload types, so `data?.counts.truncated`
+  // typechecks — and throws the moment a server answers `{}` or any other
+  // partial body. The optional chain on `counts` is therefore DELIBERATE and
+  // must not be deleted as dead code on the strength of the type: the type is
+  // a compile-time claim about a server response and constrains nothing at
+  // runtime.
+  //
+  // The cost of getting this wrong is not a blank column. An exception here
+  // escapes to the ErrorBoundary and takes the entire register down —
+  // including the schedule half, which may have answered perfectly — which
+  // destroys the "the two feeds fail independently" property that the whole
+  // two-query split and per-column suppression exist to provide. A partial
+  // payload must degrade, never crash.
+  const partialEnrollment = registerFeedState(
+    { data: coverage(), error: undefined, isLoading: false },
+    { data: asWireResponse<EnrollmentPayload>({}), error: undefined, isLoading: false },
+  );
+  assert.equal(partialEnrollment.truncated, false, "a countless enrollment body is not a truncation");
+
+  // Both sides need their own case: `||` short-circuits, so a coverage payload
+  // that is missing `counts` is the only thing that reaches the LEFT operand's
+  // optional chain. With one test only, dropping the other `?.` stays green.
+  const partialCoverage = registerFeedState(
+    { data: asWireResponse<ScheduleCoveragePayload>({}), error: undefined, isLoading: false },
+    { data: enrollment(), error: undefined, isLoading: false },
+  );
+  assert.equal(partialCoverage.truncated, false, "a countless coverage body is not a truncation");
+
+  // A partial body still carries the facts the rest of the state reads off the
+  // query, so the degradation has to stop at `truncated`.
+  assert.equal(partialEnrollment.bothFailed, false);
+  assert.equal(partialEnrollment.isLoading, false);
+});
 
 test("registerFeedState: bothFailed requires no leftover data, not just both feeds erroring", () => {
   // react-query's "error" reducer case spreads ...state and only overwrites

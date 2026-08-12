@@ -18,8 +18,8 @@ import { getEnrollmentReport } from "@/services/enrollment";
 
 test("the coverage query uses the coverage key and the coverage queryFn, not swapped with enrollment's", () => {
   // Both query keys are `readonly string[]`, so a swap between the two useQuery
-  // calls in the hook typechecks silently and would collide this cache entry
-  // with useScheduleCoverage's under the wrong queryFn.
+  // calls in the hook typechecks silently, and each feed would then be cached
+  // under the other's key with the wrong queryFn.
   assert.deepEqual(coverageQueryOptions.queryKey, queryKeys.coverage.all);
   assert.equal(coverageQueryOptions.queryFn, getScheduleCoverage);
 });

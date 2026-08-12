@@ -366,7 +366,16 @@ export function registerFeedState(
   enrollment: FeedQueryState<EnrollmentPayload>,
 ): RegisterFeedState {
   return {
-    truncated: Boolean(coverage.data?.counts.truncated || enrollment.data?.counts.truncated),
+    // `?.` on `counts` as well as on `data`, on BOTH sides, and deliberately so
+    // — it is not dead code just because `counts` is required on the payload
+    // types. Those types are a compile-time claim about what the server sends;
+    // `frappeCall` casts the response to them without checking, so a partial
+    // body (`{}` is what an unmatched endpoint returns) reaches here intact and
+    // `data?.counts.truncated` throws on it. That exception escapes to the
+    // ErrorBoundary and takes the whole register down, schedule half included —
+    // destroying the independent-failure property the two-query split and the
+    // per-column suppression exist to provide. A partial payload must degrade.
+    truncated: Boolean(coverage.data?.counts?.truncated || enrollment.data?.counts?.truncated),
     // OR, deliberately: the default retry policy (count < 2, 1s/2s backoff)
     // means a single-feed outage can still be retrying for ~3s after the
     // healthy feed has already answered. AND would drop isLoading the moment
