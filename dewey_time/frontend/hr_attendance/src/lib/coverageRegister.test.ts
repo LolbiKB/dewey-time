@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  columnIdForSort, composeRegister, feedHealth, filterRegisterRows, isNotReady, joinRegisterRows,
-  registerAlert, registerFacets, registerFeedState, sortFromColumnId, SORT_COLUMN_IDS,
-  sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
+  applyFilterChange, columnIdForSort, composeRegister, feedHealth, filterRegisterRows, isNotReady,
+  joinRegisterRows, paginateRegisterRows, registerAlert, registerFacets, registerFeedState,
+  REGISTER_PAGE_SIZE, sortFromColumnId, SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts,
+  visibleColumnIds,
   type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import { toRegisterCsv } from "@/lib/registerCsv";
@@ -105,6 +106,52 @@ test("an employee only in the coverage feed keeps null biometric, never 'none'",
   assert.equal(rows[0].status, null, "status is a biometric-feed fact; never defaulted to Active");
 });
 
+test("the photo comes from the coverage feed, and only from there", () => {
+  // `image` is on CoverageEmployee and was being dropped on the floor by the
+  // join. The enrolment payload has no image field at all, so a row only the
+  // bridge vouches for has no photo to show — null, not a borrowed one.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance", branch: "DIU",
+                   image: "/files/sok.jpg", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [
+        { id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+          status: "Active", bucket: "OK", is_registered: true,
+          fingerprint_count: 2, face_count: 0, days_since_relieving: null },
+        { id: "E9", employee_name: "Ly Vanna", branch: "PM", department: "Teaching",
+          status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+          fingerprint_count: 1, face_count: 0, days_since_relieving: 12 },
+      ],
+    }),
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  assert.equal(byId.get("E1")?.image, "/files/sok.jpg", "the join must stop dropping it");
+  assert.equal(
+    byId.get("E9")?.image,
+    null,
+    "an enrolment-only row has no photo — that feed does not carry one",
+  );
+});
+
+test("an employee coverage returned with no photo gets null, not undefined", () => {
+  // `image` is optional on the wire and absent for most of the roster. The row
+  // type is `string | null`, and EmployeeAvatar branches on falsiness — but a
+  // row carrying `undefined` where every other absent fact is `null` is the
+  // kind of inconsistency the CSV and JSON.stringify checks read differently.
+  const rows = joinRegisterRows(
+    coverage({
+      unassigned: [{ id: "E2", employee_name: "Chan Sophea", department: "Ops", branch: "DIU" }],
+      counts: { active: 1, unassigned: 1, assigned: 0, truncated: false },
+    }),
+    enrollment(),
+  );
+  assert.equal(rows[0].image, null);
+  assert.ok("image" in rows[0], "the field must exist on every row, not only on photographed ones");
+});
+
 test("branch comes from coverage so it survives a missing biometric feed", () => {
   const rows = joinRegisterRows(
     coverage({
@@ -193,6 +240,8 @@ test("ENROLLED_NOT_PUNCHING stays distinct from OK", () => {
 
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  // No photo is the common case, and the one the row has to stay readable in.
+  image: null,
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // Both feeds know this employee — the ordinary row. Override it to build the
@@ -341,7 +390,10 @@ test("each sortable column id maps to its own sort key", () => {
   // answer, which is exactly what swapping two entries looks like.
   assert.deepEqual(sortFromColumnId("employee", false), { sort: "name", order: "asc" });
   assert.deepEqual(sortFromColumnId("weekly_minutes", false), { sort: "hours", order: "asc" });
-  assert.deepEqual(sortFromColumnId("fingerprint_count", false), { sort: "prints", order: "asc" });
+  // "prints" belongs to the FUSED biometric column now. The print count is
+  // evidence for the biometric state rather than a fact of its own, so it lost
+  // its column and kept its sort.
+  assert.deepEqual(sortFromColumnId("biometric", false), { sort: "prints", order: "asc" });
 });
 
 test("desc carries through to order, and only to order", () => {
@@ -354,7 +406,11 @@ test("a column id nothing sorts by yields null, never a wrong sort", () => {
   // silently reorder the register AND — since severity ordering is gated on
   // `!filters.sort` — retire "worst first" for the not-ready view at the same
   // time, from a click on a header that is not supposed to sort at all.
-  for (const id of ["branch", "department", "status", "schedule", "biometric", "action", "hours", ""]) {
+  // "fingerprint_count" is in this list deliberately: it used to BE a column
+  // and used to resolve to `prints`. A stale sort in a bookmarked URL, or a
+  // half-finished rename, must leave the register unsorted rather than sorting
+  // by a column that no longer exists.
+  for (const id of ["branch", "department", "status", "schedule", "fingerprint_count", "action", "hours", ""]) {
     assert.equal(sortFromColumnId(id, false), null, `${id} must not resolve to a sort`);
   }
 });
@@ -362,7 +418,7 @@ test("a column id nothing sorts by yields null, never a wrong sort", () => {
 test("columnIdForSort names the column the table should show as sorted", () => {
   assert.equal(columnIdForSort("name"), "employee");
   assert.equal(columnIdForSort("hours"), "weekly_minutes");
-  assert.equal(columnIdForSort("prints"), "fingerprint_count");
+  assert.equal(columnIdForSort("prints"), "biometric", "the fused column carries the prints sort");
 });
 
 test("columnIdForSort translates, rather than passing the sort key through", () => {
@@ -508,6 +564,178 @@ test("sortRegisterRows does not mutate the caller's array", () => {
   assert.deepEqual(rows.map((r) => r.id), originalOrder);
 });
 
+// ---------------------------------------------------------------------------
+// paginateRegisterRows — the slice, and the pager's reading of it
+// ---------------------------------------------------------------------------
+
+/** `n` rows, ids E001.. in order, so a slice can be named rather than counted. */
+function roster(n: number): RegisterRow[] {
+  return Array.from({ length: n }, (_, i) =>
+    row({ id: `E${String(i + 1).padStart(3, "0")}`, employee_name: `Person ${i + 1}` }),
+  );
+}
+
+test("a page is the slice the reader is on, never the whole list", () => {
+  // GenericDataTable sets `manualPagination` and never slices `data` — it
+  // renders exactly the array it is handed. Returning everything here is what
+  // shipped, and it put all 503 rows in one scrolling frame.
+  const { rows: got, meta } = paginateRegisterRows(roster(7), { page: 2, limit: 3 });
+  assert.deepEqual(got.map((r) => r.id), ["E004", "E005", "E006"]);
+  assert.deepEqual(meta, {
+    // The FILTERED count, not the roster: the footer reads "Showing
+    // {data.length} of {meta.total}", so the second number has to be the size
+    // of the set the first is a page of.
+    total: 7,
+    page: 2,
+    limit: 3,
+    totalPages: 3,
+    hasNext: true,
+    hasPrev: true,
+  });
+});
+
+test("the last page is the remainder, and nothing claims to follow it", () => {
+  const { rows: got, meta } = paginateRegisterRows(roster(7), { page: 3, limit: 3 });
+  assert.deepEqual(got.map((r) => r.id), ["E007"], "one row, not a padded page of three");
+  assert.equal(meta.hasNext, false, "there is no page 4");
+  assert.equal(meta.hasPrev, true);
+});
+
+test("the page is clamped to the last one that exists, and meta reports the clamp", () => {
+  // Narrow 503 rows down to 3 while sitting on page 8 and page 8 has stopped
+  // existing. Unclamped, the slice starts past the end and the table renders
+  // empty under a pager still reading "Page 8" — so the reader cannot tell
+  // their filter from a broken register. The clamp has to reach `meta.page`
+  // too, or the number under the table disagrees with the rows in it.
+  const { rows: got, meta } = paginateRegisterRows(roster(3), { page: 8, limit: 2 });
+  assert.deepEqual(got.map((r) => r.id), ["E003"], "the last page, not an empty one");
+  assert.equal(meta.page, 2, "the pager is told where it actually landed");
+  assert.equal(meta.totalPages, 2);
+  assert.equal(meta.hasNext, false, "nothing follows the last page, however it was reached");
+  assert.equal(meta.hasPrev, true);
+});
+
+test("a page below the first is the first, not a negative slice", () => {
+  // `rows.slice(-4, ...)` counts from the END of the array, so an unclamped
+  // page 0 would quietly serve the last rows of the roster as the first page.
+  const { rows: got, meta } = paginateRegisterRows(roster(5), { page: 0, limit: 2 });
+  assert.deepEqual(got.map((r) => r.id), ["E001", "E002"]);
+  assert.equal(meta.page, 1);
+  assert.equal(meta.hasPrev, false);
+});
+
+test("an empty result is page 1 of 1, never page 0 of 0", () => {
+  const { rows: got, meta } = paginateRegisterRows([], { page: 4, limit: 10 });
+  assert.deepEqual(got, []);
+  assert.equal(meta.total, 0);
+  assert.equal(meta.page, 1, "\"Page 0\" is not a place the reader can be");
+  assert.equal(meta.totalPages, 1, "nor is \"of 0\"");
+  assert.equal(meta.hasNext, false);
+  assert.equal(meta.hasPrev, false);
+});
+
+test("asking for no page is the first page, at the default size", () => {
+  const { rows: got, meta } = paginateRegisterRows(roster(120), {});
+  assert.equal(meta.page, 1);
+  assert.equal(meta.limit, REGISTER_PAGE_SIZE);
+  assert.equal(got.length, REGISTER_PAGE_SIZE, "a default that does not slice is not a default");
+  assert.equal(meta.totalPages, Math.ceil(120 / REGISTER_PAGE_SIZE));
+  assert.equal(meta.hasNext, true);
+});
+
+test("the default page size is one the page-size control can actually display", () => {
+  // GenericDataTable's "Rows per page" is a raw `<select value={filters.limit
+  // || 10}>` whose only options are these five. A default outside the list
+  // either leaves the control reading 10 beside a table showing something else
+  // (with `limit` unset) or, written into `limit`, matches no option at all —
+  // `selectedIndex: -1`, and the select renders blank. 25 was the first choice
+  // for this register and is unreachable for precisely that reason.
+  assert.ok(
+    [10, 20, 30, 40, 50].includes(REGISTER_PAGE_SIZE),
+    `${REGISTER_PAGE_SIZE} is not one of the sizes the control can show`,
+  );
+});
+
+test("a page size that is not a size falls back to the default, not to an infinite pager", () => {
+  // Unreachable through the control, which offers five fixed sizes — but
+  // `limit` is a plain number on a plain filters object, and `ceil(n / 0)` is
+  // Infinity, which the pager would render as "Page 1 of Infinity" above a
+  // permanently empty slice.
+  for (const limit of [0, -5]) {
+    const { rows: got, meta } = paginateRegisterRows(roster(3), { limit });
+    assert.equal(meta.limit, REGISTER_PAGE_SIZE, `limit: ${limit} must not be taken literally`);
+    assert.equal(meta.totalPages, 1);
+    assert.equal(got.length, 3);
+  }
+});
+
+test("a page that is not a number is the first page, not an empty one", () => {
+  // The other end of the guard above. `Math.max(1, NaN)` is NaN, so a NaN page
+  // would pass straight through into `meta.page`, empty the slice, and leave
+  // the footer reading "Page NaN of 2" with both arrows dead — `NaN < 2` and
+  // `NaN > 1` are both false, so hasNext and hasPrev would BOTH be false and
+  // the reader would have no way off the page at all.
+  const { rows: got, meta } = paginateRegisterRows(roster(3), { page: Number.NaN, limit: 2 });
+  assert.equal(meta.page, 1);
+  assert.deepEqual(got.map((r) => r.id), ["E001", "E002"]);
+  assert.equal(meta.hasNext, true, "and the way forward is still open");
+  assert.equal(meta.hasPrev, false);
+});
+
+test("paginateRegisterRows does not mutate the array it was given", () => {
+  const rows = roster(5);
+  const before = rows.map((r) => r.id);
+  paginateRegisterRows(rows, { page: 2, limit: 2 });
+  assert.deepEqual(rows.map((r) => r.id), before);
+  assert.equal(rows.length, 5, "the caller still holds every filtered row — the CSV reads them");
+});
+
+// ---------------------------------------------------------------------------
+// applyFilterChange — narrowing starts over
+// ---------------------------------------------------------------------------
+
+test("a filter change returns to page 1 and leaves every other filter standing", () => {
+  // Dropping the reset leaves the reader on page 8 of a set that may now have
+  // two pages; dropping the spread wipes the search, sort and facets the way
+  // `onFiltersChange({ branch })` would.
+  assert.deepEqual(
+    applyFilterChange(
+      { search: "ada", branch: ["DIU"], sort: "hours", order: "desc", page: 8, limit: 20 },
+      { status: "Left" },
+    ),
+    {
+      search: "ada", branch: ["DIU"], sort: "hours", order: "desc",
+      status: "Left", page: 1, limit: 20,
+    },
+  );
+});
+
+test("the page size survives a filter change — it is a preference, not a filter", () => {
+  assert.equal(applyFilterChange({ limit: 10, page: 3 }, { search: "ada" }).limit, 10);
+});
+
+test("clearing a filter starts over too, and the cleared field goes out as undefined", () => {
+  // `[]` and `undefined` are both "no filter"; neither may be mistaken for a
+  // change too small to reset the page.
+  assert.deepEqual(
+    applyFilterChange({ status: "Left", page: 5 }, { status: undefined }),
+    { status: undefined, page: 1 },
+  );
+  assert.deepEqual(
+    applyFilterChange({ branch: ["DIU"], page: 5 }, { branch: [] }),
+    { branch: [], page: 1 },
+  );
+});
+
+test("applyFilterChange does not mutate the filters it was given", () => {
+  // The page holds these in useState and INITIAL_REGISTER_FILTERS is frozen —
+  // an in-place write would throw there and silently corrupt state everywhere
+  // else.
+  const held: RegisterFilters = { search: "ada", page: 4 };
+  applyFilterChange(held, { status: "Left" });
+  assert.deepEqual(held, { search: "ada", page: 4 });
+});
+
 const HEALTHY = { schedule: true, biometric: true };
 
 test("the alert counts problems and reads as a problem", () => {
@@ -602,7 +830,6 @@ test("a dead biometric feed hides the biometric columns AND status", () => {
   // Showing "Active" for all 241 would assert what the data cannot support.
   const hidden = visibleColumnIds({ schedule: true, biometric: false });
   assert.ok(!hidden.includes("biometric"));
-  assert.ok(!hidden.includes("fingerprint_count"));
   assert.ok(!hidden.includes("status"));
   assert.ok(hidden.includes("branch"), "branch is an always-on column and survives even when biometric is down");
   assert.ok(hidden.includes("schedule"));
@@ -629,7 +856,11 @@ test("visibleColumnIds returns the full column set when both feeds are healthy",
     [
       "employee", "branch", "department", "action",
       "schedule", "weekly_minutes",
-      "biometric", "fingerprint_count", "status",
+      // No "fingerprint_count": the print count was fused into the biometric
+      // cell and has no column of its own. It is STILL exported — the CSV is
+      // keyed off feed health, not off this list, which is the whole reason
+      // that indirection exists.
+      "biometric", "status",
     ],
   );
 });
@@ -688,7 +919,8 @@ test("feed health reflects the schedule feed independently of biometric health",
 });
 
 test("suppressUnusableFacts nulls exactly the biometric fields when that feed is unhealthy", () => {
-  const input = [row({ biometric: "none", fingerprint_count: 3, status: "Active", days_since_relieving: 5 })];
+  const input = [row({ biometric: "none", fingerprint_count: 3, status: "Active",
+                       days_since_relieving: 5, image: "/files/sok.jpg" })];
   const [got] = suppressUnusableFacts(input, { schedule: true, biometric: false });
   assert.equal(got.biometric, null);
   assert.equal(got.fingerprint_count, null);
@@ -696,13 +928,18 @@ test("suppressUnusableFacts nulls exactly the biometric fields when that feed is
   assert.equal(got.days_since_relieving, null);
   assert.equal(got.schedule, "assigned", "schedule facts survive a biometric-only outage");
   assert.equal(got.weekly_minutes, 2400, "schedule facts survive a biometric-only outage");
+  assert.equal(got.image, "/files/sok.jpg", "and so does the photo — it is a schedule fact");
 });
 
 test("suppressUnusableFacts nulls exactly the schedule fields when that feed is unhealthy", () => {
-  const input = [row({ schedule: "missing", weekly_minutes: 1800 })];
+  const input = [row({ schedule: "missing", weekly_minutes: 1800, image: "/files/sok.jpg" })];
   const [got] = suppressUnusableFacts(input, { schedule: false, biometric: true });
   assert.equal(got.schedule, null);
   assert.equal(got.weekly_minutes, null);
+  // The photo is a schedule-feed fact like the other two: coverage is the only
+  // feed that carries one, so a downed coverage service cannot vouch for it
+  // either. Leaving it would put a face beside a row of em dashes.
+  assert.equal(got.image, null);
   assert.equal(got.biometric, "enrolled", "biometric facts survive a schedule-only outage");
   assert.equal(got.status, "Active", "biometric facts survive a schedule-only outage");
 });

@@ -1,3 +1,5 @@
+import type { BaseTableMeta } from "@lolbikb/dewey-ui";
+
 import type {
   CoverageAssignedEmployee,
   CoverageEmployee,
@@ -19,6 +21,17 @@ import {
 export type RegisterRow = {
   id: string;
   employee_name: string;
+  /**
+   * Schedule-feed fact — the employee's photo URL, or null for the many who
+   * have none.
+   *
+   * A schedule fact because that is the only feed that carries one: the
+   * enrolment payload has an `is_registered` and a `face_count` but no image,
+   * so a row the bridge alone vouches for has no photo to show and must say so
+   * with null rather than borrow one. It follows the schedule feed's
+   * provenance and suppression like `schedule` and `weekly_minutes` do.
+   */
+  image: string | null;
   branch: string | null;
   department: string | null;
   /** Biometric-feed fact. Coverage filters status:Active, so it cannot supply this. */
@@ -116,6 +129,7 @@ export function joinRegisterRows(
     byId.set(emp.id, {
       id: emp.id,
       employee_name: emp.employee_name || emp.id,
+      image: emp.image ?? null,
       branch: emp.branch ?? null,
       department: emp.department ?? null,
       status: null,
@@ -139,6 +153,9 @@ export function joinRegisterRows(
       const merged: RegisterRow = existing ?? {
         id: row.id,
         employee_name: row.employee_name || row.id,
+        // The enrolment feed carries no photo, so a row only it knows about
+        // has none — not a borrowed one, and not a guessed URL.
+        image: null,
         branch: row.branch ?? null,
         department: row.department ?? null,
         status: null,
@@ -178,7 +195,59 @@ export type RegisterFilters = {
   readiness?: "not-ready";
   sort?: "name" | "hours" | "prints";
   order?: "asc" | "desc";
+  /**
+   * Which page, 1-based. Absent is the first page.
+   *
+   * The one field a control may change WITHOUT starting over — see
+   * `applyFilterChange`. Everything else here narrows the list, and a page
+   * number counted against a list that no longer exists is not a place.
+   */
+  page?: number;
+  /** Rows per page. Absent means `REGISTER_PAGE_SIZE`. */
+  limit?: number;
 };
+
+/**
+ * Rows per page, and what the "Rows per page" control opens on.
+ *
+ * MUST stay inside GenericDataTable's own option list — [10, 20, 30, 40, 50].
+ * That control is a raw `<select value={filters.limit || 10}>` over exactly
+ * those five, so a size the list does not contain is not merely unusual: left
+ * out of `limit` it leaves the control reading 10 beside a table showing
+ * something else, and written into `limit` it matches no option at all, which
+ * sets `selectedIndex` to -1 and renders the select BLANK. 25 was the first
+ * choice for this register and is unreachable for exactly that reason.
+ *
+ * 50 of the five, because the behaviour being replaced was "every row on one
+ * page": this is the gentlest step away from it — 11 pages over a 503-employee
+ * roster rather than 26 — and this reader narrows far more often than they
+ * page, which makes every page turn pure cost.
+ */
+export const REGISTER_PAGE_SIZE = 50;
+
+/**
+ * A filter change, and back to the first page with it.
+ *
+ * Every control on this page narrows the list, and a page number only means
+ * anything against the list it was counted from: narrow 503 rows to 3 while
+ * sitting on page 8 and page 8 has stopped existing. `paginateRegisterRows`
+ * clamps rather than showing an empty table, but a clamp is a rescue, not an
+ * answer — the reader asked for "everyone in DIU" and would be handed the last
+ * page of them.
+ *
+ * Applied by the controls that NARROW — the facets, the bar's own search box
+ * and the alert dot — rather than by the state setter they share, because the
+ * one write that must not reset the page is a page change itself.
+ * GenericDataTable already stamps `page: 1` on its own search, sort and
+ * page-size writes and an explicit page on its pager buttons, so its side of
+ * the boundary needs nothing from here.
+ */
+export function applyFilterChange(
+  filters: RegisterFilters,
+  change: Partial<RegisterFilters>,
+): RegisterFilters {
+  return { ...filters, ...change, page: 1 };
+}
 
 /**
  * Can this person be tracked today?
@@ -274,6 +343,63 @@ export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters):
 }
 
 /**
+ * One page of the register, and the pager's reading of where that page sits.
+ *
+ * Composed LAST — `paginate(sort(filter(rows)))`. GenericDataTable is told
+ * `manualPagination` and never slices `data`: it renders whatever array it is
+ * handed and takes every number under it from `meta`. Given the whole list and
+ * a hardcoded one-page meta — which is what shipped — all 503 rows drew into a
+ * single scrolling frame, the pager read "Page 1 of 1" and every button was
+ * dead, because they are `disabled: !meta?.hasNext`.
+ *
+ * `meta.total` is the FILTERED count, not the roster. The footer reads
+ * "Showing {data.length} of {meta.total}", so the second number has to be the
+ * size of the set the first is a page of, or the two do not describe the same
+ * thing. The roster total moved to the search placeholder.
+ *
+ * The page is CLAMPED to the last one that exists, and `meta.page` reports the
+ * clamp so the pager and the slice agree about where the reader is. An empty
+ * result is page 1 of 1 — never page 0, and never "Page 1 of 0".
+ *
+ * The alert count, the CSV and the roster figure all keep reading the UNPAGED
+ * rows: a reader on page 2 still needs the whole-roster truth, and a file that
+ * quietly held one page of a filtered set would be indistinguishable from one
+ * that held all of it.
+ */
+export function paginateRegisterRows(
+  rows: RegisterRow[],
+  filters: RegisterFilters,
+): { rows: RegisterRow[]; meta: BaseTableMeta } {
+  // A non-positive size is not a smaller page, it is no instruction at all —
+  // and `ceil(n / 0)` is Infinity, which the pager would render as "Page 1 of
+  // Infinity" above a permanently empty slice.
+  const requested = filters.limit ?? REGISTER_PAGE_SIZE;
+  const limit = requested > 0 ? requested : REGISTER_PAGE_SIZE;
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  // `Number.isFinite` for the same reason `limit` rejects a non-positive size
+  // two lines up: `Math.max(1, NaN)` is NaN, so a NaN page would reach
+  // `meta.page` intact, empty the slice, and leave the footer reading "Page NaN
+  // of 2" with BOTH arrows dead — `NaN < totalPages` and `NaN > 1` are each
+  // false, so hasNext and hasPrev would both be false and there would be no way
+  // off the page at all. Unreachable through the pager, which only ever writes
+  // integers, but guarding one end of this and not the other reads as an
+  // oversight rather than a decision.
+  const requestedPage = filters.page ?? 1;
+  const page = Number.isFinite(requestedPage)
+    ? Math.min(Math.max(1, requestedPage), totalPages)
+    : 1;
+  const start = (page - 1) * limit;
+
+  return {
+    rows: rows.slice(start, start + limit),
+    meta: { total, page, limit, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
+  };
+}
+
+/**
  * Which table column each sort key belongs to.
  *
  * Exhaustive over the sort union by type, so a fourth key cannot be added
@@ -283,7 +409,11 @@ export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters):
 export const SORT_COLUMN_IDS: Record<NonNullable<RegisterFilters["sort"]>, string> = {
   name: "employee",
   hours: "weekly_minutes",
-  prints: "fingerprint_count",
+  // "prints" sorts the FUSED biometric column: the print count is evidence for
+  // the biometric state rather than a fact of its own, so it lost its column
+  // and kept its sort. The header says so out loud — a column labelled
+  // "Biometric" that orders by print count is otherwise a surprise.
+  prints: "biometric",
 };
 
 /**
@@ -304,7 +434,7 @@ export function sortFromColumnId(
       return { sort: "name", order };
     case "weekly_minutes":
       return { sort: "hours", order };
-    case "fingerprint_count":
+    case "biometric":
       return { sort: "prints", order };
     default:
       return null;
@@ -337,9 +467,17 @@ export type RegisterAlert = {
   label: string;
 };
 
-/** Column ids that survive when a feed is unavailable. */
+/**
+ * Column ids that survive when a feed is unavailable.
+ *
+ * `fingerprint_count` is NOT here, and has no column at all: the print count is
+ * evidence for the biometric state rather than an independent fact, so it was
+ * fused into the biometric cell and the column it cost was given back. It is
+ * still exported to the CSV — see CSV_FIELDS, which is keyed off feed health
+ * rather than off this list for exactly that reason.
+ */
 const SCHEDULE_COLUMNS = ["schedule", "weekly_minutes"];
-const BIOMETRIC_COLUMNS = ["biometric", "fingerprint_count", "status"];
+const BIOMETRIC_COLUMNS = ["biometric", "status"];
 const ALWAYS = ["employee", "branch", "department", "action"];
 
 export function feedHealth(
@@ -417,44 +555,55 @@ export function visibleColumnIds(feeds: FeedHealth): string[] {
   ];
 }
 
+/** Which feed vouches for a CSV field — or neither, for the two the join owns. */
+type CsvFeed = keyof FeedHealth | "always";
+
 type CsvField = {
-  /** The table column this field belongs to; it is exported only when that column is. */
-  column: string;
+  /** The feed this field's value comes from; exported only while that feed is healthy. */
+  feed: CsvFeed;
   header: string;
   value: (row: RegisterRow) => string | number | null;
 };
 
 /**
- * The exportable fields, in the order the table shows their columns.
+ * The exportable fields, in the order a reader expects to meet them.
  *
- * Keyed by column so the export obeys visibleColumnIds: writing a column the
- * page is hiding would put a fact the reader was refused into a file that
- * outlives the outage. `action` is a control, not a fact, so it has no field.
+ * Keyed by FEED, not by table column — and that is a deliberate change, not a
+ * convenience. The file must still drop everything a downed feed cannot vouch
+ * for, because writing a fact the page is refusing to show puts it into a
+ * document that outlives the outage. But the table and the file no longer have
+ * the same columns: the print count was fused into the biometric cell to save a
+ * column, and a spreadsheet has no width pressure and does want a numeric
+ * column to sort and total. Deriving this list from `visibleColumnIds` would
+ * have silently dropped Fingerprints from every export the moment that fusion
+ * landed. Feed health is what the suppression rule was always really about.
  *
- * Two fields may share a column where the cell renders two facts. The employee
- * cell shows a name over an id, and jamming them into one CSV field would make
- * neither sortable in a spreadsheet. The leaver day count is drawn inside the
- * biometric cell, so it travels with that column and disappears with it.
+ * Several fields may share a feed, and two of them are drawn as one cell: the
+ * employee cell shows a name over an id, and jamming those into one field would
+ * make neither sortable in a spreadsheet. `action` is a control rather than a
+ * fact, so it has no field here at all.
  */
 const CSV_FIELDS: CsvField[] = [
-  { column: "employee", header: "Employee ID", value: (row) => row.id },
-  { column: "employee", header: "Name", value: (row) => row.employee_name },
-  { column: "branch", header: "Branch", value: (row) => row.branch },
-  { column: "department", header: "Department", value: (row) => row.department },
-  { column: "status", header: "Employment status", value: (row) => row.status },
+  { feed: "always", header: "Employee ID", value: (row) => row.id },
+  { feed: "always", header: "Name", value: (row) => row.employee_name },
+  { feed: "always", header: "Branch", value: (row) => row.branch },
+  { feed: "always", header: "Department", value: (row) => row.department },
+  { feed: "biometric", header: "Employment status", value: (row) => row.status },
   {
-    column: "schedule",
+    feed: "schedule",
     header: "Schedule",
     value: (row) => (row.schedule === null ? null : SCHEDULE_LABELS[row.schedule]),
   },
-  { column: "weekly_minutes", header: "Weekly minutes", value: (row) => row.weekly_minutes },
+  { feed: "schedule", header: "Weekly minutes", value: (row) => row.weekly_minutes },
   {
-    column: "biometric",
+    feed: "biometric",
     header: "Biometric",
     value: (row) => (row.biometric === null ? null : BIOMETRIC_LABELS[row.biometric]),
   },
-  { column: "fingerprint_count", header: "Fingerprints", value: (row) => row.fingerprint_count },
-  { column: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
+  // No biometric COLUMN any more — the count lives inside the biometric badge
+  // on screen. It keeps its own field here on purpose; see the note above.
+  { feed: "biometric", header: "Fingerprints", value: (row) => row.fingerprint_count },
+  { feed: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
 ];
 
 /**
@@ -468,8 +617,7 @@ const CSV_FIELDS: CsvField[] = [
  * recoverable — nothing downstream can tell the two apart afterwards.
  */
 export function registerCsvRows(rows: RegisterRow[], feeds: FeedHealth): string[][] {
-  const visible = new Set(visibleColumnIds(feeds));
-  const fields = CSV_FIELDS.filter((field) => visible.has(field.column));
+  const fields = CSV_FIELDS.filter((field) => field.feed === "always" || feeds[field.feed]);
 
   return [
     fields.map((field) => field.header),
@@ -520,7 +668,7 @@ export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): R
     .filter((row) => hasHealthySource(row, feeds))
     .map((row) => ({
       ...row,
-      ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null }),
+      ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null, image: null }),
       ...(feeds.biometric
         ? {}
         : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),

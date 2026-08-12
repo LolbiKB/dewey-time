@@ -21,7 +21,13 @@ export function downloadCsv(csv: string) {
 }
 
 export type RegisterExportButtonProps = {
-  /** The filtered, sorted rows on screen — not the roster behind them. */
+  /**
+   * Every row the reader's filters admit — filtered and sorted, but NOT paged.
+   *
+   * Narrower than the roster and wider than the screen. The table shows one
+   * page of these; the file holds all of them, because a reader who narrowed to
+   * 80 findings asked about 80 findings, not about the 50 that happened to fit.
+   */
   rows: RegisterRow[];
   feeds: FeedHealth;
   truncated: boolean;
@@ -39,12 +45,13 @@ export type RegisterExportButtonProps = {
 };
 
 /**
- * Export what the reader is looking at.
+ * Export what the reader asked for.
  *
- * `rows` is the filtered, sorted set the table is rendering, and the accessible
- * name counts that same array — so a wiring change that exported the whole
- * roster instead moves the label with it. A file that silently disagreed with
- * the screen it came from is indistinguishable from one that agrees, once it
+ * `rows` is the filtered, sorted set BEHIND the table — every row the filters
+ * admit, not the page of them on screen — and the accessible name counts that
+ * same array, so a wiring change that exported the whole roster or only the
+ * visible page moves the label with it. A file that silently disagreed with
+ * the question it came from is indistinguishable from one that agrees, once it
  * has been mailed to somebody.
  *
  * Disabled on a truncated roster, WITH the reason in the accessible name: a

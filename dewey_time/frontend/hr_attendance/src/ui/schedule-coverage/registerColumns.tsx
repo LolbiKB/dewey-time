@@ -4,6 +4,8 @@ import { Badge, Button } from "@lolbikb/dewey-ui";
 import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from "lucide-react";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { BIOMETRIC_LABELS, SCHEDULE_LABELS, type RegisterRow } from "@/lib/coverageRegister";
+import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
+import type { CalendarEmployee } from "@/types/calendar";
 
 /**
  * Only a positive statement of absence is destructive. "Enrolled, not punching"
@@ -26,14 +28,25 @@ const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondar
  * told just the next action, they cannot tell an ascending column from an
  * unsorted one, and on a register whose default order is severity "unsorted" is
  * a meaningful state rather than an absence.
+ *
+ * `by` names what the column orders on, for the one column where that is not
+ * its own label: "Biometric" sorts by fingerprint count, which is a surprise
+ * worth stating rather than leaving the reader to infer from the result. It is
+ * said exactly ONCE — in the state half when the column is already sorted, and
+ * in the action half when it is not, because the unsorted state is where the
+ * reader most needs to know what a press will do and is also the state the
+ * register opens in. Repeating it in both halves reads as two different sorts.
  */
 function sortActionLabel(
   label: string,
   current: SortDirection | false,
   next: SortDirection | false,
+  by?: string,
 ): string {
-  const state = current === false ? "not sorted" : `sorted ${direction(current)}`;
-  const action = next === false ? "clear the sort" : `sort ${direction(next)}`;
+  const on = by ? ` by ${by}` : "";
+  const state = current === false ? "not sorted" : `sorted${on} ${direction(current)}`;
+  const action =
+    next === false ? "clear the sort" : `sort${current === false ? on : ""} ${direction(next)}`;
   return `${label}, ${state} — press to ${action}`;
 }
 
@@ -58,7 +71,7 @@ function direction(sort: SortDirection): string {
  * sorts anyway, so any later header-state or a11y logic keyed off it is
  * silently wrong.
  */
-function sortableHeader(label: string) {
+function sortableHeader(label: string, by?: string) {
   return function SortableHeader({ column }: HeaderContext<RegisterRow, unknown>) {
     const sorted = column.getIsSorted();
     const Arrow = sorted === "asc" ? ArrowUpIcon : sorted === "desc" ? ArrowDownIcon : ArrowUpDownIcon;
@@ -69,12 +82,33 @@ function sortableHeader(label: string) {
         size="sm"
         className="-ml-2 h-8 px-2 font-medium"
         onClick={column.getToggleSortingHandler()}
-        aria-label={sortActionLabel(label, sorted, column.getNextSortingOrder())}
+        aria-label={sortActionLabel(label, sorted, column.getNextSortingOrder(), by)}
       >
         {label}
         <Arrow className="size-3.5 opacity-60" aria-hidden="true" />
       </Button>
     );
+  };
+}
+
+/**
+ * A register row as `EmployeeAvatar` needs to see it.
+ *
+ * A real `CalendarEmployee`, built from what the row actually holds — not a
+ * cast. The avatar's contract is that type, and every field it reads is one
+ * this row can honestly supply: `employee_name` is the name it draws initials
+ * from, `image` is the photo, and `label` is only ever a FALLBACK inside
+ * `employeeShortName` for the case where `employee_name` is empty — which
+ * `joinRegisterRows` already rules out by seeding `employee_name || id`.
+ *
+ * The same literal FlagQueueList builds for the same component.
+ */
+function avatarEmployee(row: RegisterRow): CalendarEmployee {
+  return {
+    id: row.id,
+    label: row.employee_name,
+    employee_name: row.employee_name,
+    image: row.image,
   };
 }
 
@@ -118,9 +152,38 @@ export function registerColumns(
       accessorFn: (row) => row.employee_name,
       header: sortableHeader("Employee"),
       cell: ({ row }) => (
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate font-medium">{row.original.employee_name}</span>
-          <span className="truncate text-xs text-muted-foreground">{row.original.id}</span>
+        <span className="flex min-w-0 items-center gap-2.5">
+          {/* aria-hidden, on the same rule FlagQueueList's rows follow: the
+              avatar says nothing the cell does not already say in words, its
+              photo is alt="", and EmployeeAvatar's loading ring is a
+              role="status" live region whose delay timer starts at MOUNT — so
+              a full page of rows would queue a page of "Loading"
+              announcements for decoration.
+
+              `contents` so the avatar itself stays the flex item; the wrapper
+              is here for the accessibility tree, not for layout. */}
+          <span aria-hidden="true" className="contents">
+            {/* size-9 is exactly the two text lines beside it (20px + 16px),
+                so the photo spans the cell without making the row taller —
+                TableCell's py-2 is doing the rest. */}
+            <EmployeeAvatar
+              employee={avatarEmployee(row.original)}
+              fallbackId={row.original.id}
+              className="size-9"
+            />
+          </span>
+          <span className="flex min-w-0 flex-col">
+            {/* `data-slot`, this codebase's stable-hook convention (dewey-ui
+                marks its own parts the same way), because the avatar's
+                initials are TEXT: the cell's first line is now "NV", not "Nora
+                Vance", so the e2e can no longer read the name by counting
+                lines. A hook survives the cell gaining another layer; a line
+                index does not. */}
+            <span data-slot="employee-name" className="truncate font-medium">
+              {row.original.employee_name}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">{row.original.id}</span>
+          </span>
         </span>
       ),
     },
@@ -169,15 +232,40 @@ export function registerColumns(
       },
     },
     {
+      // The state and its evidence in ONE column. The print count is not an
+      // independent fact — it is what the biometric state is inferred from —
+      // and as its own column it cost width the register does not have at 503
+      // rows. The CSV still carries it as a field of its own: a spreadsheet has
+      // no width pressure and wants a number it can total, which is why
+      // CSV_FIELDS is keyed off feed health rather than off this column list.
       id: "biometric",
-      header: "Biometric",
+      ...SORTABLE,
+      // Sorts by the COUNT, which is where the retired Prints column's sort
+      // went. Named in the header's accessible name, because a column labelled
+      // "Biometric" ordering by print count is otherwise a surprise.
+      accessorFn: (row) => row.fingerprint_count,
+      header: sortableHeader("Biometric", "fingerprint count"),
       cell: ({ row }) => {
         const value = row.original.biometric;
         if (value === null) return "—";
         const days = row.original.days_since_relieving;
+        const count = row.original.fingerprint_count;
         return (
           <span className="flex items-center gap-1.5">
             <Badge variant={BIOMETRIC_VARIANT[value]}>{BIOMETRIC_LABELS[value]}</Badge>
+            {/* No count beside "No fingerprint": zero is precisely what that
+                label already says, and printing "0" next to it reads as a
+                second, weaker claim about the same fact. Gated on the state as
+                well as on the number, so an inconsistent payload — `none` with
+                a non-zero count — still shows the label alone rather than
+                contradicting itself in one cell.
+
+                Above zero only, everywhere else. A count is corroboration for
+                the badge; where there is none to give, the badge stands on its
+                own rather than trailing a "0" that reads as a finding. */}
+            {value !== "none" && count !== null && count > 0 ? (
+              <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+            ) : null}
             {value === "still_enrolled" && days !== null ? (
               <span className="text-xs tabular-nums text-destructive">
                 {days} {days === 1 ? "day" : "days"}
@@ -186,14 +274,6 @@ export function registerColumns(
           </span>
         );
       },
-    },
-    {
-      id: "fingerprint_count",
-      ...SORTABLE,
-      accessorFn: (row) => row.fingerprint_count,
-      header: sortableHeader("Prints"),
-      cell: ({ row }) =>
-        row.original.fingerprint_count === null ? "—" : row.original.fingerprint_count,
     },
     {
       id: "action",
