@@ -110,6 +110,29 @@ class TestInvalidateCoverageCache(unittest.TestCase):
         coverage_api.invalidate_coverage_cache(doc=object(), method="on_update")
 
 
+class TestEmployeeBranchField(unittest.TestCase):
+    def test_branch_reaches_the_payload_so_site_filtering_survives_a_biometric_outage(self):
+        """Branch must come from the SCHEDULE feed, not the enrollment feed.
+
+        Sourced from enrollment, a biometric outage would take branch with it and
+        the register would lose site filtering at exactly the moment the reader
+        needs to know what is still knowable.
+        """
+        from dewey_time.attendance_engine import coverage_api as mod
+
+        row = {
+            "id": "HR-EMP-0001",
+            "employee_name": "Sok Dara",
+            "department": "Finance",
+            "employment_type": "Full-time",
+            "title": "Analyst",
+            "image": None,
+            "branch": "DIU",
+        }
+        self.assertEqual(mod._employee_base(row)["branch"], "DIU")
+        self.assertIn("branch", mod._EMPLOYEE_FIELDS)
+
+
 class TestCoverageTruncationFlag(unittest.TestCase):
     def test_not_truncated_below_the_limit(self):
         from dewey_time.attendance_engine import coverage_api

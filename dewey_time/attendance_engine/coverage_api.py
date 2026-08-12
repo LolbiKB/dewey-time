@@ -30,7 +30,17 @@ _CACHE_TTL_SECONDS = 120
 COVERAGE_EMPLOYEE_LIMIT = 2000
 
 # Keys copied verbatim from the calendar employee rows into the coverage payload.
-_EMPLOYEE_FIELDS = ("id", "employee_name", "department", "employment_type", "title", "image")
+# `branch` is here so the register can filter by site even when the biometric
+# feed is down -- branch is a property of the employee, not of their enrolment.
+_EMPLOYEE_FIELDS = (
+    "id",
+    "employee_name",
+    "department",
+    "employment_type",
+    "title",
+    "image",
+    "branch",
+)
 
 
 def _employee_base(row: dict) -> dict:
