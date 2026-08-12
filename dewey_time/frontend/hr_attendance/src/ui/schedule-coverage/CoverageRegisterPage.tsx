@@ -199,6 +199,32 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
           <FailureBlock title="Coverage didn’t load" onRetry={props.onRetry} className="min-h-0" />
         ) : (
           <GenericDataTable
+            // Remounted when the search box changes owner, and ONLY for that.
+            //
+            // GenericDataTable seeds its debounced copy of `filters.search`
+            // once at mount and never resyncs it from props. Cross the
+            // breakpoint with a search active and that copy is stranded: on
+            // the way down `registerTableFilters` blanks what it is compared
+            // against, and its input is hidden by then so nothing can move it
+            // back into agreement. `filters` is a fresh object every render,
+            // so its write-back effect re-fired every render —
+            // onFiltersChange -> setFilters -> render — until React gave up
+            // with "Maximum update depth exceeded" and the top-level
+            // ErrorBoundary replaced the WHOLE app. On the way up the same
+            // stranded `""` echoed back through the boundary and silently
+            // erased a search the reader had typed on the phone.
+            //
+            // A remount re-seeds that copy from the filters in force at the
+            // moment of the flip, which settles both directions. It is not a
+            // substitute for the blanking below: typing while narrow never
+            // crosses the breakpoint, so nothing remounts, and without the
+            // blanking the same disagreement returns on the first keystroke.
+            //
+            // The cost is the primitive's internal column-visibility and
+            // row-selection state, discarded at the crossing. Neither survives
+            // the crossing meaningfully anyway — the column toggle is hidden
+            // below 768, and this table selects no rows.
+            key={narrow ? "narrow" : "wide"}
             columns={shownColumns}
             data={data}
             meta={meta}

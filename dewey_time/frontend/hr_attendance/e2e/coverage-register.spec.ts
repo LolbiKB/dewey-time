@@ -309,6 +309,103 @@ test("the export button hands over the rows on screen as a file", async ({ page 
 });
 
 /**
+ * Crossing the 768 breakpoint with a search already typed.
+ *
+ * The register hands its search box between two owners at that width, and each
+ * direction of the handoff had its own defect — both invisible to every test
+ * above, because every one of them loads fresh at a fixed width and nothing
+ * exercised a live resize.
+ *
+ * Wide -> narrow took the WHOLE SPA down. GenericDataTable seeds its
+ * `debouncedSearch` once at mount and never resyncs it from props, so after
+ * the boundary blanks `search` the two disagree permanently — its input is
+ * hidden by then, so nothing can move its copy — and because `filters` is a
+ * fresh object every render its write-back effect re-fired on every render:
+ * onFiltersChange -> setFilters -> render -> repeat, "Maximum update depth
+ * exceeded", and the top-level ErrorBoundary replacing the entire app until a
+ * reload.
+ *
+ * Narrow -> wide lost the reader's text: the same frozen `""` echoed back
+ * through the boundary and overwrote the real search, so the desktop box came
+ * up empty over an unfiltered table.
+ *
+ * Both are closed by remounting the table at the breakpoint — see the `key` in
+ * CoverageRegisterPage.
+ */
+const LAPTOP = { width: 1280, height: 900 };
+const PHONE = { width: 375, height: 812 };
+
+/** The search box, under the one name both owners give it. */
+const SEARCH_BOX = "Search by name or employee ID\u2026";
+
+/**
+ * Everything the page logs as an error, for the duration of the test.
+ *
+ * The crash announced itself here and nowhere else — React logs "Maximum
+ * update depth exceeded" to the console and the ErrorBoundary swallows the
+ * throw — so an assertion has to be listening or a runaway render loop is a
+ * test that passes.
+ */
+function consoleErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("pageerror", (error) => errors.push(String(error)));
+  return errors;
+}
+
+test("a search typed on a laptop survives the phone breakpoint", async ({ page }) => {
+  const errors = consoleErrors(page);
+  await stubFrappe(page);
+  await page.setViewportSize(LAPTOP);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  // GenericDataTable's own box, above the breakpoint. Typed and left to settle
+  // past its 300ms debounce — an unsettled search never reaches the state the
+  // handoff then disagrees about.
+  await page.getByRole("textbox", { name: SEARCH_BOX }).fill("Nora");
+  await expect(bodyRows(page)).toHaveCount(1);
+
+  await page.setViewportSize(PHONE);
+
+  // The register is still on screen at all. Before the fix the whole SPA was
+  // replaced by the ErrorBoundary's "Something went wrong", recoverable only
+  // by reloading.
+  await expect(page.getByRole("heading", { name: "Coverage" })).toBeVisible();
+  await expect(page.getByText("Something went wrong")).toHaveCount(0);
+
+  // And the handoff kept the reader's work: the bar's box holds the text and
+  // the table is still narrowed to it.
+  await expect(page.getByRole("textbox", { name: SEARCH_BOX })).toHaveValue("Nora");
+  await expect(bodyRows(page)).toHaveCount(1);
+
+  expect(errors, "the page logged an error while crossing the breakpoint").toEqual([]);
+});
+
+test("a search typed on a phone survives going back to a laptop", async ({ page }) => {
+  const errors = consoleErrors(page);
+  await stubFrappe(page);
+  await page.setViewportSize(PHONE);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  await page.getByRole("textbox", { name: SEARCH_BOX }).fill("Nora");
+  await expect(bodyRows(page)).toHaveCount(1);
+
+  await page.setViewportSize(LAPTOP);
+
+  // The desktop box takes the search over, rather than coming up empty over a
+  // table that has quietly snapped back to all fourteen.
+  await expect(page.getByRole("textbox", { name: SEARCH_BOX })).toHaveValue("Nora");
+  await expect(bodyRows(page)).toHaveCount(1);
+  await expect(page.getByText("Something went wrong")).toHaveCount(0);
+
+  expect(errors, "the page logged an error while crossing the breakpoint").toEqual([]);
+});
+
+/**
  * Phone widths — 375 (the narrowest this app is expected on) and 412 (the
  * Pixel 7 the `mobile` project runs, and the shape a phone actually gets).
  *
