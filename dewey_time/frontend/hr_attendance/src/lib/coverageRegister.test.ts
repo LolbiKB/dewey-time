@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   filterRegisterRows, isNotReady, joinRegisterRows, sortRegisterRows,
-  type RegisterRow,
+  type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import type { EnrollmentPayload } from "@/lib/enrollmentReport";
@@ -218,37 +218,81 @@ test("filters compose — problems AND one branch", () => {
   assert.deepEqual(got.map((r) => r.id), ["A"]);
 });
 
+test("department, status, schedule, and biometric filters each exclude the non-matching row", () => {
+  // Table-driven so each of the four equality predicates gets its own
+  // matched/unmatched pair — the brief's own test list never exercised any
+  // of these individually, and deleting any one line left the suite green.
+  const cases: { name: string; filters: RegisterFilters; keep: Partial<RegisterRow>; drop: Partial<RegisterRow> }[] = [
+    { name: "department", filters: { department: ["Finance"] },
+      keep: { department: "Finance" }, drop: { department: "Ops" } },
+    { name: "status", filters: { status: "Active" },
+      keep: { status: "Active" }, drop: { status: "Left" } },
+    { name: "schedule", filters: { schedule: "assigned" },
+      keep: { schedule: "assigned" }, drop: { schedule: "missing" } },
+    { name: "biometric", filters: { biometric: "enrolled" },
+      keep: { biometric: "enrolled" }, drop: { biometric: "none" } },
+  ];
+
+  for (const { name, filters, keep, drop } of cases) {
+    const rows = [row({ id: "KEEP", ...keep }), row({ id: "DROP", ...drop })];
+    assert.deepEqual(
+      filterRegisterRows(rows, filters).map((r) => r.id),
+      ["KEEP"],
+      `the ${name} filter must drop the non-matching row`,
+    );
+  }
+});
+
+test("a branch filter excludes a row with no branch fact; an empty branch list filters nothing", () => {
+  const rows = [row({ id: "DIU", branch: "DIU" }), row({ id: "UNKNOWN", branch: null })];
+  // Absent data is never rendered as a fact: a row with no branch fact cannot
+  // satisfy "is in this branch", so `?? ""` must exclude it, not default it in.
+  assert.deepEqual(
+    filterRegisterRows(rows, { branch: ["DIU"] }).map((r) => r.id),
+    ["DIU"],
+  );
+  // An empty selection is "no branch filter applied", not "match nothing" —
+  // the `?.length` guard is what tells the two apart.
+  assert.deepEqual(
+    filterRegisterRows(rows, { branch: [] }).map((r) => r.id),
+    ["DIU", "UNKNOWN"],
+  );
+});
+
 test("severity order when filtered to problems, name order otherwise", () => {
-  // Names are deliberately NOT alphabetical in severity order (Zed is worst,
-  // Amy is least severe) so that severity ordering and name ordering produce
-  // different row sequences — a fixture where they coincide can't tell the
-  // two code paths apart.
+  // Four ranks, four rows, names deliberately NOT in severity order (nor even
+  // close to it) so alphabetical sort and severity sort cannot coincide by
+  // luck — a fixture where they coincide can't tell the two code paths apart.
+  // The fourth row's biometric is `enrolled_not_punching` specifically:
+  // severity() must fall through to the same "no finding" rank as a fully
+  // ready row for it, and nothing else in this file pins that fall-through.
   const rows = [
-    row({ id: "S", employee_name: "Amy", schedule: "missing", biometric: "enrolled" }),
-    row({ id: "L", employee_name: "Zed", biometric: "still_enrolled", status: "Left" }),
-    row({ id: "N", employee_name: "Moe", biometric: "none" }),
+    row({ id: "L", employee_name: "Nora", biometric: "still_enrolled", status: "Left" }),
+    row({ id: "N", employee_name: "Wendy", biometric: "none" }),
+    row({ id: "S", employee_name: "Zed", schedule: "missing", biometric: "enrolled" }),
+    row({ id: "P", employee_name: "Amy", biometric: "enrolled_not_punching" }),
   ];
   assert.deepEqual(
     sortRegisterRows(rows, { readiness: "not-ready" }).map((r) => r.id),
-    ["L", "N", "S"],
-    "leaver, then no-template, then no-schedule — not alphabetical order",
+    ["L", "N", "S", "P"],
+    "leaver, then no-template, then no-schedule, then not-a-finding — not alphabetical order",
   );
   assert.deepEqual(
     sortRegisterRows(rows, {}).map((r) => r.employee_name),
-    ["Amy", "Moe", "Zed"],
+    ["Amy", "Nora", "Wendy", "Zed"],
   );
 });
 
 test("sorting by hours puts unknown minutes last in both directions", () => {
-  // Three rows, input order C, B, A (known-high, known-low, unknown), is
-  // deliberate. With only one known value, or with the unknown row listed
-  // first, V8's sort can resolve the whole array from the single surviving
-  // null guard and never actually exercise the removed one — this exact
-  // fixture is what turns red when `if (av === null) return 1` is deleted.
+  // Three rows, input order B, A, C (known-high, unknown, known-low), is
+  // deliberate — brute-forced against all six permutations. This is the only
+  // order that exercises BOTH null guards: dropping `if (av === null)
+  // return 1` and flipping `if (bv === null) return -1` to `return 1` each
+  // turn this test red only with this ordering, not e.g. C, A, B.
   const rows = [
-    row({ id: "C", weekly_minutes: 1200 }),
     row({ id: "B", weekly_minutes: 2400 }),
     row({ id: "A", weekly_minutes: null }),
+    row({ id: "C", weekly_minutes: 1200 }),
   ];
   assert.deepEqual(
     sortRegisterRows(rows, { sort: "hours", order: "asc" }).map((r) => r.id),
@@ -258,4 +302,33 @@ test("sorting by hours puts unknown minutes last in both directions", () => {
     sortRegisterRows(rows, { sort: "hours", order: "desc" }).map((r) => r.id),
     ["B", "C", "A"],
   );
+});
+
+test("sorting by prints uses fingerprint_count, not weekly_minutes", () => {
+  // weekly_minutes and fingerprint_count are inversely ordered on purpose: if
+  // the "prints" branch ever read the wrong key, this fixture flips the
+  // result instead of leaving it coincidentally correct.
+  const rows = [
+    row({ id: "X", weekly_minutes: 100, fingerprint_count: 5 }),
+    row({ id: "Y", weekly_minutes: 900, fingerprint_count: 1 }),
+  ];
+  assert.deepEqual(
+    sortRegisterRows(rows, { sort: "prints", order: "asc" }).map((r) => r.id),
+    ["Y", "X"],
+  );
+});
+
+test("sorting by name honors order: desc", () => {
+  const rows = [row({ id: "A", employee_name: "Amy" }), row({ id: "Z", employee_name: "Zed" })];
+  assert.deepEqual(
+    sortRegisterRows(rows, { sort: "name", order: "desc" }).map((r) => r.id),
+    ["Z", "A"],
+  );
+});
+
+test("sortRegisterRows does not mutate the caller's array", () => {
+  const rows = [row({ id: "Z", employee_name: "Zed" }), row({ id: "A", employee_name: "Amy" })];
+  const originalOrder = rows.map((r) => r.id);
+  sortRegisterRows(rows, {});
+  assert.deepEqual(rows.map((r) => r.id), originalOrder);
 });
