@@ -23,7 +23,13 @@ const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondar
   still_enrolled: "destructive",
 };
 
-/** Ids MUST match visibleColumnIds() — a mismatch hides a column permanently. */
+/**
+ * Ids MUST match visibleColumnIds() — a mismatch hides a column permanently.
+ *
+ * Callers must memoize the result (e.g. `useMemo`): this allocates a new
+ * array and new per-row closures on every call, and TanStack resets column
+ * state whenever the `columns` reference changes.
+ */
 export function registerColumns(
   onOpen: (row: RegisterRow) => void,
   onAddSchedule: (row: RegisterRow) => void,
@@ -68,10 +74,18 @@ export function registerColumns(
     {
       id: "weekly_minutes",
       header: "Hrs/wk",
-      cell: ({ row }) =>
-        row.original.weekly_minutes === null
-          ? "—"
-          : formatScheduleDuration(row.original.weekly_minutes),
+      cell: ({ row }) => {
+        const minutes = row.original.weekly_minutes;
+        if (minutes === null) return "—";
+        // formatScheduleDuration treats <= 0 as "nothing to show" and returns
+        // "—" — right for that shared helper's other callers, wrong here: a
+        // real 0-minute assigned schedule is itself a coverage problem and
+        // must not read identically to a feed that never reported the fact
+        // at all. Handled here rather than in the shared helper, which other
+        // pages depend on for the null case.
+        if (minutes === 0) return "0h";
+        return formatScheduleDuration(minutes);
+      },
     },
     {
       id: "biometric",
@@ -103,18 +117,30 @@ export function registerColumns(
       header: "",
       // Empty unless the row has a problem. A button on every row is noise, and
       // it is what made the old Needs list read as a to-do list.
+      //
+      // Biometric problems are checked FIRST, matching severity()'s ordering
+      // in coverageRegister.ts (still_enrolled/none outrank a missing
+      // schedule). Coverage filters status:Active live while the enrollment
+      // snapshot can lag by up to STALE_AFTER_MINUTES, so a row with BOTH
+      // schedule:"missing" and biometric:"still_enrolled" is the ordinary
+      // shape of a recent leaver, not an edge case — it is "the security
+      // finding this page exists to show" (joinRegisterRows's doc comment).
+      // That row must resolve to Open, the path to revocation, never to
+      // "Add schedule", which would offer a shift to someone who has left.
+      // If severity()'s ranking ever changes, this ordering needs to move
+      // with it.
       cell: ({ row }) => {
-        if (row.original.schedule === "missing") {
-          return (
-            <Button size="sm" variant="outline" onClick={() => onAddSchedule(row.original)}>
-              Add schedule
-            </Button>
-          );
-        }
         if (row.original.biometric === "none" || row.original.biometric === "still_enrolled") {
           return (
             <Button size="sm" variant="ghost" onClick={() => onOpen(row.original)}>
               Open
+            </Button>
+          );
+        }
+        if (row.original.schedule === "missing") {
+          return (
+            <Button size="sm" variant="outline" onClick={() => onAddSchedule(row.original)}>
+              Add schedule
             </Button>
           );
         }
