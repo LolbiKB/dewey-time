@@ -91,9 +91,9 @@ registerAlert(rows: RegisterRow[], feeds: FeedHealth):
 | Column | Type | Filter | Source |
 |---|---|---|---|
 | Employee (name + ID) | text | global search (name, employee ID) | both |
-| Branch | enum | multi-select | coverage |
+| Branch | enum | multi-select | coverage *(after the one-line addition below)* |
 | Department | enum | multi-select | coverage |
-| Status | enum `Active` / `Left` | select, **no default** | coverage |
+| Status | enum `Active` / `Left` | select, **no default** | enrollment only — see below |
 | Schedule | enum `Assigned` / `Missing` | select | coverage |
 | Hrs/wk | number | sort only | coverage |
 | Biometric | enum `Enrolled` / `None` / `Still enrolled` | select | enrollment |
@@ -119,6 +119,34 @@ wanted, it is a deliberate addition, not an assumption.
 **Prints** is `fingerprint_count`. `face_count` is carried in the payload and
 remains unsurfaced — no device in this fleet enrols faces today (all 238
 templates are fingerprints).
+
+### Where Branch and Status actually come from
+
+The first draft of this spec sourced both from the coverage payload. Neither is
+there: `coverage_api.py:33` copies
+`("id", "employee_name", "department", "employment_type", "title", "image")`
+from calendar employee rows, and the upstream query
+(`hr_calendar.py:345`) selects no `branch` and no `status`.
+
+**Branch: add it.** Two lines — `branch` into `_list_calendar_employee_rows`'s
+`fields` list and into `_EMPLOYEE_FIELDS`. This is the one backend change this
+plan makes, and it earns its place: branch is an attribute of an active
+employee, entirely orthogonal to biometrics, so sourcing it from the schedule
+feed is what lets site filtering survive a biometric outage. Without it the
+"feeds fail independently" property that justifies the client-side join does not
+hold.
+
+**Status: do not add it.** `hr_calendar.py:349` filters `{"status": "Active"}`,
+so every coverage row is Active by construction — the field would be a constant,
+not information, and leavers never enter that payload at all. Status therefore
+comes from the enrollment feed, and the consequence is stated plainly rather
+than engineered around:
+
+> **When the biometric feed is down, leavers are invisible.**
+> "Left but still enrolled" is a biometric fact with no second source. A Status
+> column reading `Active` for all 241 would assert something the data cannot
+> support — worse than showing nothing. The feed-down notice must say that
+> leaver detection is unavailable, not merely that enrolment counts are.
 
 The action column is **empty unless the row has a problem** — "Add schedule" for
 a missing assignment, "Open" for anything else. A button on every row is noise,
@@ -184,7 +212,7 @@ fact.**
 
 | Condition | Behaviour |
 |---|---|
-| Biometric feed never reported, or stale (`> STALE_AFTER_MINUTES`, currently 24h — reuse the existing constant in `enrollmentReport.ts`, do not redefine it) | Biometric + Prints columns **removed**; notice above the table; dot amber with a partial count |
+| Biometric feed never reported, or stale (`> STALE_AFTER_MINUTES`, currently 24h — reuse the existing constant in `enrollmentReport.ts`, do not redefine it) | Biometric, Prints **and Status** columns **removed**; notice states that enrolment *and leaver detection* are unavailable; dot amber with a partial count |
 | Schedule fetch fails | Schedule + Hrs/wk removed; same treatment; biometric data still usable |
 | Both fail | `FailureBlock` with retry — there is nothing to show |
 | Roster truncated | Explicit notice; CSV export disabled (as today) |
@@ -233,5 +261,10 @@ the hours *distribution* is a real cost of this design — **confirmed acceptabl
 2026-08-12: nobody reads that spread today.** It is deferred rather than dropped
 so the dashboard has a starting point.
 
-Also out of scope: any change to `get_enrollment_report` or
-`get_schedule_coverage`; row grouping; server-side pagination.
+Also out of scope: row grouping; server-side pagination; any change to
+`get_enrollment_report`.
+
+**One backend change is in scope**, and only this one: adding `branch` to
+`_list_calendar_employee_rows`'s field list and to `coverage_api._EMPLOYEE_FIELDS`,
+for the reason given under "Where Branch and Status actually come from". No
+other server behaviour changes.
