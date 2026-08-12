@@ -494,6 +494,22 @@ const PENDING_ALERT: RegisterAlert = {
   label: "0 need attention · schedules and biometrics unavailable",
 };
 
+/**
+ * The text of PageHeader's description line.
+ *
+ * Anchored on `data-slot="page-header"` — dewey-ui's own stable hook, the same
+ * one e2e/page-insets.spec.ts selects on — and on the element structure around
+ * it, never on the utility classes PageHeader happens to style that <p> with
+ * today. A restyle in the shared package is not a behaviour change here and
+ * must not turn into red tests.
+ */
+function headerDescription(html: string): string {
+  const start = html.indexOf('data-slot="page-header"');
+  assert.notEqual(start, -1, "expected a PageHeader");
+  const region = html.slice(start, html.indexOf('data-slot="section"', start));
+  return region.match(/<\/h1>\s*<p[^>]*>(.*?)<\/p>/)?.[1] ?? "";
+}
+
 function renderView(over: Partial<CoverageRegisterViewProps> = {}): string {
   return renderToStaticMarkup(
     <CoverageRegisterView
@@ -537,9 +553,9 @@ test("an ordinary page load does not flash an outage", () => {
   // document: GenericDataTable's footer legitimately reads "Showing 0 of 0"
   // beside its spinner, and a bare /0 employees/ search would either collide
   // with that or — with a one-row fixture — never be able to fail at all.
-  assert.match(
-    html,
-    /<p class="text-sm text-muted-foreground">Loading…<\/p>/,
+  assert.equal(
+    headerDescription(html),
+    "Loading…",
     "the header must say it is loading, not report a roster size it does not have",
   );
   // Direction: the gate must be on `isLoading`, not on the page as a whole.
@@ -547,10 +563,11 @@ test("an ordinary page load does not flash an outage", () => {
 });
 
 test("the header names the roster size, and says employee once at one", () => {
-  const one = renderView({ rows: [BASE_ROW] });
-  assert.match(one, /<p class="text-sm text-muted-foreground">1 employee<\/p>/);
-  const two = renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] });
-  assert.match(two, /<p class="text-sm text-muted-foreground">2 employees<\/p>/);
+  assert.equal(headerDescription(renderView({ rows: [BASE_ROW] })), "1 employee");
+  assert.equal(
+    headerDescription(renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] })),
+    "2 employees",
+  );
 });
 
 test("the alert dot is the header's action once the feeds have answered", () => {
@@ -608,6 +625,26 @@ test("a partial roster says so", () => {
   assert.match(html, /roster is partial/);
 });
 
+test("the truncated notice waits for the feeds, and stands down on a total failure", () => {
+  // Both halves of this gate were previously unreachable: the only assertion
+  // that a truncation notice was ABSENT ran against the default
+  // `truncated: false`, where no gate has to do anything for it to hold. Each
+  // case here sets `truncated: true` so the gate itself is what is under test.
+  const loading = renderView({ truncated: true, isLoading: true, rows: [] });
+  assert.doesNotMatch(
+    loading,
+    /roster is partial/,
+    "nothing is known about the roster's completeness until the feeds answer",
+  );
+
+  // Same rule as the biometric strip: notice.tsx forbids reporting one failure
+  // as both a banner and a replaced region, and "some employees are not shown"
+  // is a strange way to describe a page that loaded nobody at all.
+  const failed = renderView({ truncated: true, bothFailed: true, rows: [] });
+  assert.doesNotMatch(failed, /roster is partial/, "one failure, reported once");
+  assert.match(failed, /Coverage didn’t load/, "the failure itself must still be reported");
+});
+
 test("when both feeds fail the table is replaced, not banner-stacked", () => {
   // notice.tsx's own rule: a page that shows both a banner and a replaced
   // region reports one failure twice. The biometric strip also ends with
@@ -642,6 +679,15 @@ test("the footer counts the real roster, never zero", () => {
   assert.doesNotMatch(html, /Loading\.\.\./, "the pager must not be stuck reporting a load");
 });
 
+/** Which of two names the rendered table puts first. */
+function orderOf(html: string, first: string, second: string): [number, number] {
+  const a = html.indexOf(first);
+  const b = html.indexOf(second);
+  assert.ok(a !== -1, `expected ${first} in the table`);
+  assert.ok(b !== -1, `expected ${second} in the table`);
+  return [a, b];
+}
+
 test("the view filters and sorts through lib, so the not-ready filter reaches the table", () => {
   // The rows the table receives must be filterRegisterRows + sortRegisterRows
   // of what came in, not the raw list — otherwise clicking the alert dot
@@ -657,4 +703,40 @@ test("the view filters and sorts through lib, so the not-ready filter reaches th
   const filtered = renderView({ rows: [ready, notReady], filters: { readiness: "not-ready" } });
   assert.match(filtered, /Ada Stuck/, "the not-ready row stays");
   assert.doesNotMatch(filtered, /Bea Ready/, "the ready row must be filtered out");
+});
+
+test("the view SORTS as well as filters — default order is by name, not input order", () => {
+  // Membership alone cannot tell sortRegisterRows from a bare
+  // filterRegisterRows: with both rows passing the filter, dropping the sort
+  // leaves exactly the same two rows in the HTML and only their ORDER moves.
+  // Input order is deliberately the reverse of name order, so the assertion
+  // fails the moment the sort call goes.
+  const zoe = { ...BASE_ROW, id: "Z", employee_name: "Zoe Last" };
+  const ana = { ...BASE_ROW, id: "A", employee_name: "Ana First" };
+  const [zoeAt, anaAt] = orderOf(renderView({ rows: [zoe, ana] }), "Zoe Last", "Ana First");
+  assert.ok(anaAt < zoeAt, "the default order is alphabetical by name, not the order the feed sent");
+});
+
+test("severity order reaches the table, not just the alert count", () => {
+  // While filtered to not-ready and with no explicit sort, sortRegisterRows
+  // ranks worst first: a leaver still holding a template outranks a merely
+  // missing schedule. Input order is again reversed, and name order would ALSO
+  // put "Ana" first — so the fixture is chosen so that severity and
+  // alphabetical disagree, and only severity produces this result.
+  const missingSchedule: RegisterRow = {
+    ...BASE_ROW, id: "SCHED", employee_name: "Ana Schedule", schedule: "missing",
+  };
+  const leaver: RegisterRow = {
+    ...BASE_ROW, id: "LEAVER", employee_name: "Zoe Leaver",
+    biometric: "still_enrolled", status: "Left", days_since_relieving: 42,
+  };
+  const html = renderView({
+    rows: [missingSchedule, leaver],
+    filters: { readiness: "not-ready" },
+  });
+  const [leaverAt, schedAt] = orderOf(html, "Zoe Leaver", "Ana Schedule");
+  assert.ok(
+    leaverAt < schedAt,
+    "the leaver still holding a template must sort above a missing schedule, and alphabetically would not",
+  );
 });

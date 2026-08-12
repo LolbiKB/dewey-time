@@ -76,16 +76,21 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
   // (`meta?.total || 0`) and its pager reads a permanent "Loading...". There is
   // one page: every row is already in hand, and the table is told
   // `manualPagination`, so nothing slices `data`.
+  //
+  // `limit` is the page SIZE, and one page holds the lot. It is not the
+  // filtered count — GenericDataTable takes its page size from `filters.limit`
+  // and never reads this field, so naming it after the filtered row count
+  // would only mislead whoever reads it next.
   const meta = useMemo(
     () => ({
       total: rows.length,
       page: 1,
-      limit: data.length,
+      limit: rows.length,
       totalPages: 1,
       hasNext: false,
       hasPrev: false,
     }),
-    [rows.length, data.length],
+    [rows.length],
   );
 
   // Everything below is withheld until the feeds have actually answered.

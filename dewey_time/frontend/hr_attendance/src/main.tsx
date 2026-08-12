@@ -5,7 +5,7 @@ import { App } from "./ui/App";
 import { HrAppShell } from "./ui/HrAppShell";
 import { WeeklySchedulePage } from "./ui/WeeklySchedulePage";
 import { ScheduleImportPage } from "./ui/schedule-import/ScheduleImportPage";
-import { CoverageRegisterPage } from "@/ui/schedule-coverage/CoverageRegisterPage";
+import { CoverageRegisterPage } from "./ui/schedule-coverage/CoverageRegisterPage";
 import { FlagQueuePage } from "./ui/FlagQueuePage";
 import { DeweyTimeIntro } from "./brand/DeweyTimeIntro";
 import "./index.css";
