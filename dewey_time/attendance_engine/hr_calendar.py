@@ -409,6 +409,7 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
                 "image": row.get("image"),
                 "title": row.get("designation"),
                 "department": row.get("department"),
+                "branch": row.get("branch"),
                 "company": row.get("company"),
                 "employment_type": employment_type,
                 "is_full_time": is_full_time_employment(employment_type),

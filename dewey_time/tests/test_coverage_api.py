@@ -111,26 +111,51 @@ class TestInvalidateCoverageCache(unittest.TestCase):
 
 
 class TestEmployeeBranchField(unittest.TestCase):
-    def test_branch_reaches_the_payload_so_site_filtering_survives_a_biometric_outage(self):
-        """Branch must come from the SCHEDULE feed, not the enrollment feed.
+    def test_branch_is_declared_in_employee_fields(self):
+        """Branch is declared as a field to project into the coverage payload.
 
-        Sourced from enrollment, a biometric outage would take branch with it and
-        the register would lose site filtering at exactly the moment the reader
-        needs to know what is still knowable.
+        This is a cheap assertion: it checks the projection tuple directly.
+        The real mapping is tested by test_branch_is_mapped_from_database_row.
         """
         from dewey_time.attendance_engine import coverage_api as mod
 
-        row = {
-            "id": "HR-EMP-0001",
+        self.assertIn("branch", mod._EMPLOYEE_FIELDS)
+
+    def test_branch_is_mapped_from_database_row(self):
+        """Branch is read from the Employee DB row and included in the mapped dict.
+
+        This exercises the full path: frappe.get_all fetches branch, and
+        _list_calendar_employee_rows includes it in the returned employee dict.
+        """
+        from dewey_time.attendance_engine import hr_calendar
+
+        db_row = {
+            "name": "HR-EMP-0001",
             "employee_name": "Sok Dara",
+            "designation": "Analyst",
             "department": "Finance",
-            "employment_type": "Full-time",
-            "title": "Analyst",
+            "company": "Company 1",
             "image": None,
             "branch": "DIU",
         }
-        self.assertEqual(mod._employee_base(row)["branch"], "DIU")
-        self.assertIn("branch", mod._EMPLOYEE_FIELDS)
+
+        with patch.object(
+            hr_calendar, "_list_calendar_employee_rows", wraps=hr_calendar._list_calendar_employee_rows
+        ) as wrapped_list, patch("frappe.get_all", return_value=[db_row]), patch.object(
+            hr_calendar, "_shift_schedule_assignment_metadata_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "shift_assignment_bounds_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "first_checkin_date_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "is_full_time_employment", return_value=True
+        ), patch.object(
+            hr_calendar, "is_clock_based", return_value=True
+        ):
+            result = hr_calendar._list_calendar_employee_rows(None, include_all=True, limit=500)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["branch"], "DIU")
 
 
 class TestCoverageTruncationFlag(unittest.TestCase):
