@@ -8,6 +8,7 @@ import { UserService } from '@/services/user-service'
 import { useEffect, useMemo } from 'react'
 import { isDeviceOnline } from '@/lib/device-status'
 import { DEVICE_PUBLIC_COLUMNS, BIOMETRIC_METADATA_COLUMNS } from '@/lib/column-allowlists'
+import { fetchAllPages } from '@/lib/fetch-all-pages'
 
 export interface DeviceFilters {
   page?: number
@@ -175,16 +176,30 @@ export function useSyncStatus(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['sync-status', 'all'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('user_device_sync_status')
-    .select(`
-          *,
-          users!inner(id, name, pin, photo_storage_path, user_biometrics(type, finger_id)),
-          devices!inner(serial_number, name, location)
-        `)
-      
-      if (error) throw error
-      return data || []
+      // PAGINATED. An unbounded select() is capped at 1000 rows by PostgREST
+      // with no error and no flag, and this table holds users x devices rows —
+      // 1056 at four terminals, so 56 were being dropped on every load. The
+      // device dialog filters this set client-side, which is why it showed
+      // "Users (244)" for a terminal holding 264 while the server-side summary
+      // still said 117 + 147. See lib/fetch-all-pages.ts.
+      //
+      // Ordered by the primary key, which pagination REQUIRES: without a
+      // deterministic order PostgREST may return rows differently per request,
+      // and consecutive ranges then skip and duplicate instead of tiling.
+      return await fetchAllPages(async (from, to) => {
+        const { data, error } = await supabase
+          .from('user_device_sync_status')
+          .select(`
+            *,
+            users!inner(id, name, pin, photo_storage_path, user_biometrics(type, finger_id)),
+            devices!inner(serial_number, name, location)
+          `)
+          .order('id', { ascending: true })
+          .range(from, to)
+
+        if (error) throw error
+        return data || []
+      })
     },
 staleTime: 30000, // 30 seconds - rely on realtime
     ...options,

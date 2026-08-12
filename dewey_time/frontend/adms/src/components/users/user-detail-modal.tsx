@@ -47,6 +47,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { signalText, signalDot, signalBorder, signalAlert } from '@/lib/signal'
+import { describeStaleCommand, isFingerprintTemplatePush } from '@/lib/stale-command-label'
 import {
   buildComponentSyncOptions,
   getComponentSyncStatus,
@@ -113,12 +114,9 @@ function isStaleCommand(c: { status: string; created_at: string }) {
   return age >= COMMAND_FRESHNESS_MS && (c.status === 'pending' || c.status === 'sent')
 }
 
-/** Orphan QUERY rows after a newer recovery succeeded should not show "Retrying". */
-function isFingerprintTemplatePush(cmd: string | undefined): boolean {
-  if (!cmd) return false
-  const body = cmd.replace(/^C:\d+:/, '')
-  return body.includes('DATA UPDATE') && (body.includes('FINGERTMP') || body.includes('FACE'))
-}
+/* isFingerprintTemplatePush moved to lib/stale-command-label.ts, beside the
+ * label logic that is its main consumer, so both can be unit-tested without a
+ * DOM (this package renders with renderToStaticMarkup only). */
 
 function isStaleCommandForDisplay(
   c: {
@@ -302,10 +300,7 @@ function DeviceCard({
           {staleCommands.length > 0 && (
             <p className={cn("text-[11px] mb-2", signalText.attention)}>
               {staleCommands[0].command_type} #{staleCommands[0].id}:{' '}
-              {staleCommands[0].error_message ||
-                (isFingerprintTemplatePush(staleCommands[0].command)
-                  ? 'pushing template to device'
-                  : 'waiting for device ACK')}
+              {describeStaleCommand(staleCommands[0])}
             </p>
           )}
           <div className="grid grid-cols-4 gap-2 text-xs">
