@@ -1344,10 +1344,17 @@ test("the page gates on hrStaff like its siblings", () => {
   assert.ok(pageSource.includes("Navigate"));
 });
 
-test("the page holds no derivation of its own", () => {
+test("the page holds no ROW derivation of its own", () => {
   // All logic lives in lib/ as pure tested functions. A second site would drift.
-  assert.ok(!pageSource.includes(".filter("), "filtering belongs in filterRegisterRows");
+  // Assert delegation rather than banning `.filter(` outright: the page
+  // legitimately filters the COLUMN list by visibility. What must never appear
+  // is row derivation.
+  assert.ok(pageSource.includes("filterRegisterRows"), "rows come from filterRegisterRows");
+  assert.ok(pageSource.includes("sortRegisterRows"), "rows come from sortRegisterRows");
+  assert.ok(!pageSource.includes("rows.filter("), "row filtering belongs in filterRegisterRows");
   assert.ok(!pageSource.includes(".sort("), "sorting belongs in sortRegisterRows");
+  assert.ok(!pageSource.includes("localeCompare"), "name ordering belongs in sortRegisterRows");
+  assert.ok(!pageSource.includes("isNotReady"), "readiness belongs in coverageRegister.ts");
 });
 ```
 
@@ -1536,9 +1543,9 @@ switcher are deleted rather than repaired — which removes the 16px nav jump
 outright, since it came from the biometrics page being the only routed page
 without dewey-ui's <Page>.
 
-The page holds no derivation: filtering, sorting and column visibility all come
-from lib/ as pure tested functions, and a test pins that the page contains no
-.filter( or .sort( of its own.
+The page holds no row derivation: filtering, sorting and column visibility all
+come from lib/ as pure tested functions, and a test pins that the page delegates
+to them and contains no row filtering, sorting or readiness logic of its own.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01U57KAfPhiYScJgmrzYjK9A"
