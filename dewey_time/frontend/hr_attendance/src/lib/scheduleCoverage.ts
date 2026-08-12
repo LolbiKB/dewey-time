@@ -9,6 +9,7 @@ export type CoverageEmployee = {
   id: string;
   employee_name: string;
   department?: string | null;
+  branch?: string | null;
   employment_type?: string | null;
   title?: string | null;
   image?: string | null;

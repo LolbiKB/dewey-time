@@ -3,7 +3,7 @@ import type {
   CoverageEmployee,
   ScheduleCoveragePayload,
 } from "@/lib/scheduleCoverage";
-import type { EnrollmentPayload, EnrollmentRow } from "@/lib/enrollmentReport";
+import { isFeedConnected, type EnrollmentPayload, type EnrollmentRow } from "@/lib/enrollmentReport";
 
 /**
  * One row per employee, joined from the two coverage feeds.
@@ -22,17 +22,33 @@ export type RegisterRow = {
   status: string | null;
   schedule: "assigned" | "missing" | null;
   weekly_minutes: number | null;
-  biometric: "enrolled" | "none" | "still_enrolled" | null;
+  biometric: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled" | null;
   fingerprint_count: number | null;
   days_since_relieving: number | null;
 };
 
 export type FeedHealth = { schedule: boolean; biometric: boolean };
 
-function biometricOf(row: EnrollmentRow): RegisterRow["biometric"] {
-  if (row.bucket === "LEAVER_STILL_ENROLLED") return "still_enrolled";
-  if (row.bucket === "NEEDS_ENROLLMENT") return "none";
-  return "enrolled";
+/**
+ * One register value per enrollment bucket — exhaustive, so a fifth bucket is a
+ * compile error rather than something that silently renders as "Enrolled".
+ *
+ * ENROLLED_NOT_PUNCHING stays distinct. The register replaces the biometrics
+ * page, which showed it as its own bucket, and the Global Constraint that drops
+ * the Punches 30d column rests on this column carrying the zero/non-zero
+ * distinction. It is NOT a readiness problem — see isNotReady in Task 3.
+ */
+function biometricOf(row: EnrollmentRow): NonNullable<RegisterRow["biometric"]> {
+  switch (row.bucket) {
+    case "LEAVER_STILL_ENROLLED":
+      return "still_enrolled";
+    case "NEEDS_ENROLLMENT":
+      return "none";
+    case "ENROLLED_NOT_PUNCHING":
+      return "enrolled_not_punching";
+    case "OK":
+      return "enrolled";
+  }
 }
 
 /**
@@ -40,6 +56,12 @@ function biometricOf(row: EnrollmentRow): RegisterRow["biometric"] {
  * returns Active employees only, so a leaver still holding a template exists in
  * the enrollment feed alone — and that row is the security finding this page
  * exists to show.
+ *
+ * The enrollment merge is skipped entirely when the bridge has never reported
+ * (`isFeedConnected` false): with no snapshot, every row would compute as
+ * `NEEDS_ENROLLMENT` and mint `biometric: "none"` for the whole roster, which
+ * is not a fact the bridge has actually told us. See enrollmentReport.ts's
+ * `isFeedConnected` doc comment for the same failure mode on the source page.
  */
 export function joinRegisterRows(
   coverage: ScheduleCoveragePayload | undefined,
@@ -51,7 +73,7 @@ export function joinRegisterRows(
     byId.set(emp.id, {
       id: emp.id,
       employee_name: emp.employee_name || emp.id,
-      branch: (emp as CoverageEmployee & { branch?: string | null }).branch ?? null,
+      branch: emp.branch ?? null,
       department: emp.department ?? null,
       status: null,
       schedule,
@@ -67,30 +89,32 @@ export function joinRegisterRows(
     seed(emp, "assigned", (emp as CoverageAssignedEmployee).weekly_minutes);
   }
 
-  for (const row of enrollment?.rows ?? []) {
-    const existing = byId.get(row.id);
-    const merged: RegisterRow = existing ?? {
-      id: row.id,
-      employee_name: row.employee_name || row.id,
-      branch: row.branch ?? null,
-      department: row.department ?? null,
-      status: null,
-      // Coverage never returned this person, so no schedule fact is known.
-      schedule: null,
-      weekly_minutes: null,
-      biometric: null,
-      fingerprint_count: null,
-      days_since_relieving: null,
-    };
-    merged.status = row.status ?? null;
-    merged.biometric = biometricOf(row);
-    merged.fingerprint_count = row.fingerprint_count;
-    merged.days_since_relieving = row.days_since_relieving;
-    // Coverage is authoritative for branch/department when it has the employee;
-    // fall back to the enrollment copy for rows coverage never returned.
-    merged.branch = merged.branch ?? row.branch ?? null;
-    merged.department = merged.department ?? row.department ?? null;
-    byId.set(row.id, merged);
+  if (isFeedConnected(enrollment)) {
+    for (const row of enrollment?.rows ?? []) {
+      const existing = byId.get(row.id);
+      const merged: RegisterRow = existing ?? {
+        id: row.id,
+        employee_name: row.employee_name || row.id,
+        branch: row.branch ?? null,
+        department: row.department ?? null,
+        status: null,
+        // Coverage never returned this person, so no schedule fact is known.
+        schedule: null,
+        weekly_minutes: null,
+        biometric: null,
+        fingerprint_count: null,
+        days_since_relieving: null,
+      };
+      merged.status = row.status ?? null;
+      merged.biometric = biometricOf(row);
+      merged.fingerprint_count = row.fingerprint_count;
+      merged.days_since_relieving = row.days_since_relieving;
+      // Coverage is authoritative for branch/department when it has the employee;
+      // fall back to the enrollment copy for rows coverage never returned.
+      merged.branch = merged.branch ?? row.branch ?? null;
+      merged.department = merged.department ?? row.department ?? null;
+      byId.set(row.id, merged);
+    }
   }
 
   return [...byId.values()].sort((a, b) => a.employee_name.localeCompare(b.employee_name));
