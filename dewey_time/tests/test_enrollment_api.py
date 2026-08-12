@@ -152,6 +152,98 @@ class BuildPayloadTest(unittest.TestCase):
             self.assertEqual(mod._last_snapshot_at(), "2026-08-11 09:14:03")
 
 
+class _Column:
+    """A qb column that records the one comparison the aggregate makes.
+
+    A bare MagicMock cannot stand in here: MagicMock's ordering methods return
+    NotImplemented, so `checkin.time >= since` raises TypeError instead of
+    producing a predicate.
+    """
+
+    def __init__(self, name):
+        self.name = name
+
+    def __ge__(self, other):
+        return ("ge", self.name, other)
+
+
+class _FakeTable:
+    def __init__(self):
+        object.__setattr__(self, "_cols", {})
+
+    def __getattr__(self, name):
+        cols = object.__getattribute__(self, "_cols")
+        if name not in cols:
+            cols[name] = _Column(name)
+        return cols[name]
+
+
+class CheckinCountsTest(unittest.TestCase):
+    """The aggregate itself -- the one function every other test here patches
+    away.
+
+    That blanket patching is exactly how `fields=["count(name) as n"]` took the
+    whole report down while all sixteen tests stayed green: Frappe v16 rejects
+    SQL functions written as strings in SELECT, `_checkin_counts` is called
+    unconditionally, and no test ever executed its body. These do.
+    """
+
+    def _run(self, rows, *, since="2026-07-12 00:00:00"):
+        query = MagicMock(name="query")
+        query.select.return_value = query
+        query.where.return_value = query
+        query.groupby.return_value = query
+        query.run.return_value = rows
+
+        table = _FakeTable()
+        qb = MagicMock(name="qb")
+        qb.DocType.return_value = table
+        qb.from_.return_value = query
+
+        with patch.object(mod.frappe, "qb", qb), patch.object(
+            mod.frappe, "get_all"
+        ) as get_all, patch.object(mod, "Count") as count:
+            result = mod._checkin_counts(since)
+
+        return result, {
+            "qb": qb,
+            "query": query,
+            "table": table,
+            "get_all": get_all,
+            "count": count,
+        }
+
+    def test_the_aggregate_returns_one_count_per_employee(self):
+        result, _ = self._run([{"employee": "E1", "n": 3}, {"employee": "E2", "n": 1}])
+        self.assertEqual(result, {"E1": 3, "E2": 1})
+
+    def test_an_empty_result_is_an_empty_map_not_a_crash(self):
+        result, _ = self._run([])
+        self.assertEqual(result, {})
+
+    def test_the_count_is_built_by_the_query_builder_never_a_select_string(self):
+        """The regression pin for the v16 rejection.
+
+        Reverting the body to `frappe.get_all(..., fields=["count(name) as n"])`
+        leaves every other test in this file green, because they all patch
+        _checkin_counts wholesale. These two assertions are the only thing in
+        the suite that notices.
+        """
+        _, spy = self._run([])
+        spy["qb"].from_.assert_called_once_with(spy["table"])
+        spy["get_all"].assert_not_called()
+        spy["count"].assert_called_once_with(spy["table"].name)
+        spy["query"].run.assert_called_once_with(as_dict=True)
+
+    def test_the_window_bound_reaches_the_query(self):
+        """Without this the aggregate would silently count the whole history,
+        and every ENROLLED_NOT_PUNCHING row would become OK."""
+        since = "2026-07-12 00:00:00"
+        _, spy = self._run([], since=since)
+        spy["query"].where.assert_called_once_with(("ge", "time", since))
+        spy["query"].groupby.assert_called_once_with(spy["table"].employee)
+
+
 class SeamTest(unittest.TestCase):
     def test_enrollment_status_answers_for_one_employee(self):
         """The seam a future onboarding checklist calls, without the page."""

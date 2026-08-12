@@ -109,6 +109,18 @@ test("export is enabled when the roster is complete", () => {
   assert.doesNotMatch(markup(payload()), /\sdisabled=""/);
 });
 
+test("the group-by control names where it goes, not where it is", () => {
+  // It shipped as an identity ternary: "Group by branch" while already grouped
+  // by branch, and clicking it grouped by department -- it said one thing and
+  // did the opposite. A static render only ever sees the default state, so the
+  // toggle itself is untestable here; what IS testable is that the default
+  // label names the OTHER axis. That single assertion is what the fix left
+  // unpinned.
+  const html = markup(payload());
+  assert.match(html, /Group by department/);
+  assert.doesNotMatch(html, /Group by branch/);
+});
+
 test("employees excluded by status are footnoted, not hidden", () => {
   const html = markup(payload({
     counts: { reported: 1, needs_enrollment: 1, enrolled_not_punching: 0, ok: 0,
