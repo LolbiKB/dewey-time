@@ -11,6 +11,7 @@ redesign.
 from __future__ import annotations
 
 import frappe
+from frappe.query_builder.functions import Count
 from frappe.utils import add_days, getdate
 
 from dewey_time.attendance_engine.enrollment import ENROLLMENT_DOCTYPE, SETTINGS_DOCTYPE
@@ -69,19 +70,44 @@ def _register_rows() -> list[dict]:
 
 
 def _checkin_counts(since) -> dict:
-    """One aggregate for the whole roster -- never a query per employee."""
-    rows = frappe.get_all(
-        "Employee Checkin",
-        filters={"time": [">=", since]},
-        fields=["employee", "count(name) as n"],
-        group_by="employee",
-        limit_page_length=0,
-    )
+    """One aggregate for the whole roster -- never a query per employee.
+
+    Built with frappe.qb rather than `fields=["count(name) as n"]`. Frappe v16
+    rejects SQL functions written as strings in SELECT ("SQL functions are not
+    allowed as strings in SELECT: count(name) as n"), so the string form threw
+    on every call and took the whole report down with it. No mocked test could
+    see that -- get_all is a MagicMock -- and this idiom has no precedent
+    elsewhere in the app. Caught on a real bench.
+    """
+    checkin = frappe.qb.DocType("Employee Checkin")
+    rows = (
+        frappe.qb.from_(checkin)
+        .select(checkin.employee, Count(checkin.name).as_("n"))
+        .where(checkin.time >= since)
+        .groupby(checkin.employee)
+    ).run(as_dict=True)
     return {row["employee"]: row["n"] for row in rows}
 
 
+#: A Single Datetime that was set and later cleared reads back as this, not
+#: as None -- and it is TRUTHY.
+_ZERO_DATETIME_PREFIX = "0001-01-01"
+
+
 def _last_snapshot_at():
-    return frappe.db.get_single_value(SETTINGS_DOCTYPE, "last_enrollment_snapshot_at")
+    """The freshness marker, or None when the bridge has never reported.
+
+    Normalising the zero datetime is load-bearing, not tidiness. Clearing a
+    Single's Datetime stores 0001-01-01 00:00:00 rather than NULL, and the
+    client's feed gate is a truthiness check -- so a cleared marker would sail
+    through it and render the entire roster as unenrolled, which is exactly the
+    plumbing-failure-as-data misreading the gate exists to prevent. Observed on
+    a real bench.
+    """
+    value = frappe.db.get_single_value(SETTINGS_DOCTYPE, "last_enrollment_snapshot_at")
+    if not value or str(value).startswith(_ZERO_DATETIME_PREFIX):
+        return None
+    return value
 
 
 def _build_enrollment_payload() -> dict:

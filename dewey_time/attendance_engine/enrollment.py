@@ -47,6 +47,10 @@ def upsert_enrollment_row(
     leaves the row's docname at the old id. Assuming they still match would
     miss the row and insert a second one, which violates unique:1 on
     `employee` and wedges every subsequent snapshot, forever.
+
+    The two paths use different write calls on purpose -- see the insert()
+    branch below, which the mocked test suite cannot distinguish from save()
+    but a real bench can.
     """
     employee = (employee or "").strip()
     if not employee:
@@ -67,13 +71,18 @@ def upsert_enrollment_row(
     existing = frappe.db.get_value(ENROLLMENT_DOCTYPE, {"employee": employee}, "name")
     if existing:
         doc = frappe.get_doc(ENROLLMENT_DOCTYPE, existing)
+        for field, value in values.items():
+            setattr(doc, field, value)
+        doc.save(ignore_permissions=True)
     else:
-        doc = frappe.get_doc({"doctype": ENROLLMENT_DOCTYPE, "name": employee})
+        # insert(), not save(): a dict-constructed doc carrying an explicit
+        # `name` is treated as an existing row, so save() takes the UPDATE path
+        # and check_if_latest raises DoesNotExistError on the first write.
+        # autoname is field:employee, so insert() derives the name itself and
+        # `name` must NOT be passed here.
+        doc = frappe.get_doc({"doctype": ENROLLMENT_DOCTYPE, **values})
+        doc.insert(ignore_permissions=True)
 
-    for field, value in values.items():
-        setattr(doc, field, value)
-
-    doc.save(ignore_permissions=True)
     return doc.name
 
 

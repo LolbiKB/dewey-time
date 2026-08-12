@@ -117,13 +117,39 @@ class BuildPayloadTest(unittest.TestCase):
             return []
 
         with patch.object(mod.frappe, "get_all", side_effect=_get_all), patch.object(
+            mod, "_checkin_counts", return_value={}
+        ) as checkin_counts, patch.object(
             mod.frappe.db, "get_single_value", return_value="2026-08-11 09:14:03"
         ), patch.object(mod, "_today", return_value=date(2026, 8, 11)):
             mod._build_enrollment_payload()
 
-        self.assertEqual(
-            calls, ["Employee", mod.ENROLLMENT_DOCTYPE, "Employee Checkin"]
-        )
+        # Two get_all calls plus ONE aggregate, for 50 employees. The aggregate
+        # is counted separately because it is built with frappe.qb rather than
+        # get_all -- Frappe v16 rejects `count(name) as n` as a SELECT string.
+        self.assertEqual(calls, ["Employee", mod.ENROLLMENT_DOCTYPE])
+        checkin_counts.assert_called_once()
+
+    def test_a_cleared_snapshot_marker_reads_as_never_reported(self):
+        """Clearing a Single's Datetime stores 0001-01-01, not NULL, and that
+        is TRUTHY. The client's feed gate is a truthiness check, so without
+        normalising it a cleared marker would render the whole roster as
+        unenrolled -- the exact plumbing-failure-as-data misreading the gate
+        exists to prevent. Observed on a real bench.
+        """
+        from datetime import datetime
+
+        for cleared in (datetime(1, 1, 1, 0, 0), "0001-01-01 00:00:00", None, ""):
+            with self.subTest(cleared=cleared):
+                with patch.object(
+                    mod.frappe.db, "get_single_value", return_value=cleared
+                ):
+                    self.assertIsNone(mod._last_snapshot_at())
+
+    def test_a_real_snapshot_marker_survives_normalisation(self):
+        with patch.object(
+            mod.frappe.db, "get_single_value", return_value="2026-08-11 09:14:03"
+        ):
+            self.assertEqual(mod._last_snapshot_at(), "2026-08-11 09:14:03")
 
 
 class SeamTest(unittest.TestCase):

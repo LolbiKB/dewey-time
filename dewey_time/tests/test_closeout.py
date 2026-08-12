@@ -95,6 +95,16 @@ def _install_frappe_mock():
     # stub keeps every caller that is not testing the comparison itself green.
     password_mod.get_decrypted_password = MagicMock(return_value="SECRET")
 
+    # enrollment_api builds its check-in aggregate with frappe.qb, because
+    # Frappe v16 rejects SQL functions written as strings in SELECT. The mock
+    # only has to make the IMPORT resolve -- every test patches _checkin_counts
+    # wholesale, and the query itself is proven on a real bench instead.
+    qb_functions_mod = ModuleType("frappe.query_builder.functions")
+    qb_functions_mod.Count = MagicMock(name="Count")
+    query_builder_mod = ModuleType("frappe.query_builder")
+    query_builder_mod.functions = qb_functions_mod
+    frappe.qb = MagicMock(name="qb")
+
     model_mod = ModuleType("frappe.model.document")
 
     class Document:
@@ -107,6 +117,8 @@ def _install_frappe_mock():
 
     model_mod.Document = Document
 
+    sys.modules["frappe.query_builder"] = query_builder_mod
+    sys.modules["frappe.query_builder.functions"] = qb_functions_mod
     sys.modules["frappe"] = frappe
     sys.modules["frappe.utils"] = utils_mod
     sys.modules["frappe.utils.password"] = password_mod

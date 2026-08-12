@@ -33,13 +33,25 @@ class UpsertTest(unittest.TestCase):
                 bridge_env="prod",
             )
 
-        get_doc.assert_called_once_with(
-            {"doctype": mod.ENROLLMENT_DOCTYPE, "name": "HR-EMP-0042"}
-        )
-        self.assertEqual(doc.employee, "HR-EMP-0042")
-        self.assertEqual(doc.fingerprint_count, 2)
+        # The values ride in the construction dict, and the row is INSERTed.
+        # `name` is deliberately absent: autoname is field:employee, and a
+        # dict-constructed doc that carries a name is treated as an existing
+        # row, so save() would take the UPDATE path and check_if_latest would
+        # raise DoesNotExistError on the very first write. Verified against a
+        # real bench -- the mocked suite cannot see it, which is how it shipped.
+        get_doc.assert_called_once_with({
+                "doctype": mod.ENROLLMENT_DOCTYPE,
+                "employee": "HR-EMP-0042",
+                "pin": "1042",
+                "is_registered": 1,
+                "fingerprint_count": 2,
+                "face_count": 0,
+                "synced_at": "2026-08-11 09:14:03",
+                "bridge_env": "prod",
+            })
         self.assertEqual(name, "HR-EMP-0042")
-        doc.save.assert_called_once()
+        doc.insert.assert_called_once_with(ignore_permissions=True)
+        doc.save.assert_not_called()
 
     def test_an_existing_row_is_loaded_not_recreated(self):
         doc = MagicMock()
@@ -95,7 +107,7 @@ class UpsertTest(unittest.TestCase):
         doc = MagicMock()
         with patch.object(mod.frappe.db, "get_value", return_value=None), patch.object(
             mod.frappe, "get_doc", return_value=doc
-        ):
+        ) as get_doc:
             mod.upsert_enrollment_row(
                 employee="HR-EMP-0042",
                 pin="1042",
@@ -105,7 +117,7 @@ class UpsertTest(unittest.TestCase):
                 synced_at="2026-08-11 09:14:03",
                 bridge_env="prod",
             )
-        self.assertIs(doc.is_registered, 1)
+        self.assertIs(get_doc.call_args.args[0]["is_registered"], 1)
 
     def test_a_blank_employee_id_is_rejected(self):
         """The bridge sends frappe_employee_id straight through from Supabase;
@@ -134,23 +146,41 @@ class UpsertTest(unittest.TestCase):
                 fingerprint_count=1, face_count=0,
                 synced_at="2026-08-11 09:14:03", bridge_env="prod",
             )
-        get_doc.assert_called_once_with(
-            {"doctype": mod.ENROLLMENT_DOCTYPE, "name": "HR-EMP-0042"}
-        )
+        self.assertEqual(get_doc.call_args.args[0]["employee"], "HR-EMP-0042")
 
     def test_a_malformed_count_does_not_abort_the_row(self):
         """One bad value from the bridge must not take down the whole snapshot."""
         doc = MagicMock()
         with patch.object(mod.frappe.db, "get_value", return_value=None), patch.object(
             mod.frappe, "get_doc", return_value=doc
-        ):
+        ) as get_doc:
             mod.upsert_enrollment_row(
                 employee="HR-EMP-0042", pin="1042", is_registered=True,
                 fingerprint_count="abc", face_count=None,
                 synced_at="2026-08-11 09:14:03", bridge_env="prod",
             )
-        self.assertEqual(doc.fingerprint_count, 0)
-        self.assertEqual(doc.face_count, 0)
+        values = get_doc.call_args.args[0]
+        self.assertEqual(values["fingerprint_count"], 0)
+        self.assertEqual(values["face_count"], 0)
+
+    def test_an_existing_row_is_saved_never_inserted(self):
+        """The other half of the insert/save split.
+
+        These two branches are not interchangeable in Frappe and the mocks
+        cannot tell them apart by outcome, so the branch CHOICE is what gets
+        pinned -- once in each direction.
+        """
+        doc = MagicMock()
+        with patch.object(
+            mod.frappe.db, "get_value", return_value="HR-EMP-0042"
+        ), patch.object(mod.frappe, "get_doc", return_value=doc):
+            mod.upsert_enrollment_row(
+                employee="HR-EMP-0042", pin="1042", is_registered=True,
+                fingerprint_count=1, face_count=0,
+                synced_at="2026-08-11 09:14:03", bridge_env="prod",
+            )
+        doc.save.assert_called_once_with(ignore_permissions=True)
+        doc.insert.assert_not_called()
 
 
 def _user(emp, registered=True, fp=1):
