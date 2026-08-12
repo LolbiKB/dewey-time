@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { registerCsvRows, type FeedHealth, type RegisterRow } from "@/lib/coverageRegister";
+import {
+  registerCsvRows, visibleColumnIds, type FeedHealth, type RegisterRow,
+} from "@/lib/coverageRegister";
 import { toRegisterCsv } from "@/lib/registerCsv";
 
 const HEALTHY: FeedHealth = { schedule: true, biometric: true };
 
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  image: null,
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // Both feeds know this employee — the ordinary row. Override it to build the
@@ -48,6 +51,35 @@ test("a data row is pinned whole, in the header's order", () => {
     csv.split("\n")[1],
     "E1,Sok Dara,DIU,Finance,Left,Assigned,2400,Still enrolled,2,42",
   );
+});
+
+test("the file is keyed off FEED HEALTH, not off the table's visible columns", () => {
+  // The two used to be the same list, and are not any more. The print count was
+  // fused into the biometric cell to buy back a column, so there is no
+  // `fingerprint_count` column to derive a "Fingerprints" field from — a CSV
+  // still keyed off `visibleColumnIds` would have dropped the field silently
+  // the moment that fusion landed, and nothing in the file would have said so.
+  //
+  // A spreadsheet has no width pressure and does want a number it can sort and
+  // total, so the field stays. Both halves of the claim are pinned here,
+  // because either alone is satisfiable by the wrong implementation.
+  assert.ok(
+    !visibleColumnIds(HEALTHY).includes("fingerprint_count"),
+    "there is no prints column — if one comes back, this test has stopped meaning anything",
+  );
+  assert.ok(
+    headers(toRegisterCsv([row()], HEALTHY)).includes("Fingerprints"),
+    "and the file exports it anyway, because the biometric FEED is healthy",
+  );
+
+  // The other direction: feed health still governs. A hidden feed removes all
+  // THREE of its fields, the column-less one included — exporting a fact the
+  // page is refusing to show would put it in a document that outlives the
+  // outage.
+  const hidden = headers(toRegisterCsv([row()], { schedule: true, biometric: false }));
+  for (const gone of ["Biometric", "Fingerprints", "Employment status", "Days since leaving"]) {
+    assert.ok(!hidden.includes(gone), `${gone} belongs to the biometric feed and must go with it`);
+  }
 });
 
 test("a downed biometric feed takes its fields out of the file, exactly as it takes its columns", () => {

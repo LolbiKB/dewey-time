@@ -11,6 +11,7 @@ import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
 import {
   paginateRegisterRows,
   REGISTER_PAGE_SIZE,
+  suppressUnusableFacts,
   visibleColumnIds,
 } from "@/lib/coverageRegister";
 import type {
@@ -49,6 +50,8 @@ const noop = () => {};
 const BASE_ROW: RegisterRow = {
   id: "EMP-0001",
   employee_name: "Amara Okafor",
+  // No photo is the common case; the tests that need one override it.
+  image: null,
   branch: "Lagos",
   department: "Ops",
   status: "Active",
@@ -372,8 +375,8 @@ test("every column id is one visibleColumnIds knows about", () => {
 // registerColumns — sortable headers
 // ---------------------------------------------------------------------------
 
-const SORTABLE_IDS = ["employee", "weekly_minutes", "fingerprint_count"];
-const DISPLAY_IDS = ["branch", "department", "status", "schedule", "biometric", "action"];
+const SORTABLE_IDS = ["employee", "weekly_minutes", "biometric"];
+const DISPLAY_IDS = ["branch", "department", "status", "schedule", "action"];
 
 /**
  * The arrow glyphs, matched to the end of the lucide class name. Without the
@@ -427,6 +430,40 @@ test("the accessible name says which way the column is sorted NOW, not only what
   assert.match(descending, /aria-label="Hrs\/wk, sorted descending — press to clear the sort"/);
 });
 
+test("the fused column says out loud that it sorts by fingerprint count", () => {
+  // A column labelled "Biometric" that orders by print count is a surprise, and
+  // the arrow cannot explain itself: it is aria-hidden, and dewey-ui's
+  // TableHead takes no aria-sort from a columnDef, so this name is the only
+  // place the fact exists at all.
+  //
+  // Said exactly once per state. Unsorted — the state the register opens in —
+  // it goes in the ACTION half, which is where a reader deciding whether to
+  // press needs it; once sorted it moves to the state half and the action stops
+  // repeating it, because "sorted by fingerprint count ascending — press to
+  // sort by fingerprint count descending" reads as two different sorts.
+  assert.match(
+    renderHeader("biometric").html,
+    /aria-label="Biometric, not sorted — press to sort by fingerprint count ascending"/,
+  );
+  assert.match(
+    renderHeader("biometric", [{ id: "biometric", desc: false }]).html,
+    /aria-label="Biometric, sorted by fingerprint count ascending — press to sort descending"/,
+  );
+  assert.match(
+    renderHeader("biometric", [{ id: "biometric", desc: true }]).html,
+    /aria-label="Biometric, sorted by fingerprint count descending — press to clear the sort"/,
+  );
+});
+
+test("a column that sorts by its own label does not explain itself", () => {
+  // Direction for the test above: appending "by ..." unconditionally would
+  // give every header a clause, and "Hrs/wk, sorted by weekly hours ascending"
+  // is noise that says nothing the label did not.
+  for (const html of [renderHeader("employee").html, renderHeader("weekly_minutes").html]) {
+    assert.doesNotMatch(html, /sorted by|sort by/, "only the fused column needs the clause");
+  }
+});
+
 test("a display column's header is plain text, with nothing to press", () => {
   for (const id of DISPLAY_IDS) {
     assert.doesNotMatch(renderHeader(id).html, /<button/, `${id} must not offer a sort`);
@@ -440,9 +477,7 @@ test("pressing Hrs/wk asks for its own column, ascending first", () => {
   assert.deepEqual(renderHeader("weekly_minutes").press(), [
     { id: "weekly_minutes", desc: false },
   ]);
-  assert.deepEqual(renderHeader("fingerprint_count").press(), [
-    { id: "fingerprint_count", desc: false },
-  ]);
+  assert.deepEqual(renderHeader("biometric").press(), [{ id: "biometric", desc: false }]);
   assert.deepEqual(renderHeader("employee").press(), [{ id: "employee", desc: false }]);
 });
 
@@ -501,6 +536,63 @@ test("the biometric column shows the right label and variant for each of the fou
   }
 });
 
+test("the fused biometric cell shows the count as corroboration, above zero only", () => {
+  // The print count is evidence for the state, not a fact beside it, so it
+  // rides in the same cell — in muted tabular figures, subordinate to the badge
+  // that carries the finding.
+  const enrolled = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 2 });
+  assert.match(enrolled.html.biometric, />Enrolled</);
+  assert.match(enrolled.html.biometric, /tabular-nums[^"]*"[^>]*>2</, "the count, in tabular figures");
+  assert.match(enrolled.html.biometric, /text-muted-foreground/, "muted — it corroborates, it does not shout");
+
+  const notPunching = renderRow({
+    ...BASE_ROW, biometric: "enrolled_not_punching", fingerprint_count: 1,
+  });
+  assert.match(notPunching.html.biometric, />Enrolled, not punching</);
+  assert.match(notPunching.html.biometric, />1</);
+});
+
+test("a zero count is not printed beside the badge — an absent one is not printed either", () => {
+  // Above zero only. A trailing "0" reads as a finding of its own next to a
+  // badge that is not reporting one, and an em dash where a count would be is
+  // the same rendered non-fact the rest of this page refuses.
+  const zero = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 0 });
+  assert.match(zero.html.biometric, />Enrolled</);
+  assert.doesNotMatch(zero.html.biometric, />0</, "no zero beside the badge");
+
+  const unknown = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: null });
+  assert.match(unknown.html.biometric, />Enrolled</);
+  assert.doesNotMatch(unknown.html.biometric, /—/, "and no em dash inside the cell either");
+});
+
+test("\"No fingerprint\" carries no count, even when the payload sends one", () => {
+  // Zero is exactly what the label already says, so printing it is a second
+  // and weaker claim about the same fact. The gate is on the STATE as well as
+  // the number: an inconsistent payload — `none` with a non-zero count — must
+  // show the label alone rather than contradict itself inside one cell, and a
+  // count-only gate would print "3" beside "No fingerprint".
+  const consistent = renderRow({ ...BASE_ROW, biometric: "none", fingerprint_count: 0 });
+  assert.match(consistent.html.biometric, />No fingerprint</);
+  assert.doesNotMatch(consistent.html.biometric, />0</);
+
+  const contradictory = renderRow({ ...BASE_ROW, biometric: "none", fingerprint_count: 3 });
+  assert.match(contradictory.html.biometric, />No fingerprint</);
+  assert.doesNotMatch(contradictory.html.biometric, />3</, "the label is the claim; no count may argue with it");
+});
+
+test("a still-enrolled leaver shows the count AND the leaver age, told apart by tone", () => {
+  // Two numbers in one cell, and they mean different things: how many templates
+  // this person still holds, and how long they have held them since leaving.
+  // The age is destructive because it is the finding; the count is muted
+  // because it is the evidence.
+  const { html } = renderRow({
+    ...BASE_ROW, biometric: "still_enrolled", fingerprint_count: 2, days_since_relieving: 42,
+  });
+  assert.match(html.biometric, />Still enrolled</);
+  assert.match(html.biometric, /text-muted-foreground[^"]*"[^>]*>2</, "the count is the muted one");
+  assert.match(html.biometric, /text-destructive[^"]*"[^>]*>42 days</, "the leaver age is the loud one");
+});
+
 test("a still-enrolled leaver's day count is singular at 1 and plural otherwise", () => {
   const singular = renderRow({ ...BASE_ROW, biometric: "still_enrolled", days_since_relieving: 1 }).html.biometric;
   const plural = renderRow({ ...BASE_ROW, biometric: "still_enrolled", days_since_relieving: 42 }).html.biometric;
@@ -536,6 +628,70 @@ test("the employee cell shows the name and id, not the branch", () => {
   assert.doesNotMatch(html.employee, />Lagos</, "the employee cell must not render the branch");
 });
 
+test("the employee name carries the hook the e2e reads it by", () => {
+  // The avatar's initials are text, so the cell's first line is "AO" rather
+  // than the name. e2e/coverage-register.spec.ts stopped counting lines and
+  // reads this slot instead; renaming it would leave that suite asserting
+  // against an empty list, which several of its tests would survive.
+  const { html } = renderRow(BASE_ROW);
+  assert.match(html.employee, /data-slot="employee-name"[^>]*>Amara Okafor</);
+});
+
+test("the employee cell carries the face the coverage feed sent", () => {
+  const { html } = renderRow({ ...BASE_ROW, image: "/files/amara.jpg" });
+  assert.match(html.employee, /<img[^>]*src="\/files\/amara.jpg"/, "the photo must reach the row");
+  // EmployeeAvatar, not a hand-rolled <img> or shadcn's plain Avatar: the
+  // layered initials-under-photo is what stops a face flashing empty, painting
+  // in half-drawn, or landing as a broken-image icon on a 404.
+  // components/ui/avatar.tsx says as much at the top of the file.
+  assert.match(html.employee, /data-slot="avatar"/);
+  assert.match(html.employee, /alt=""/, "the photo is decoration; the name is beside it in words");
+  // The two-line name block survives beside it — the avatar is an addition,
+  // not a replacement.
+  assert.match(html.employee, />Amara Okafor</);
+  assert.match(html.employee, />EMP-0001</);
+});
+
+test("a row with no photo still reads — that is the common case, not the edge", () => {
+  // Most of this roster has no image. The avatar has to fall back to initials
+  // rather than leaving an empty circle where a face would be, and there must
+  // be no <img> at all: `alt=""` on a missing src renders as nothing, which is
+  // exactly the blank the layering exists to prevent.
+  const { html } = renderRow({ ...BASE_ROW, image: null });
+  assert.doesNotMatch(html.employee, /<img/, "no photo means no image element");
+  assert.match(html.employee, />AO</, "the initials stand in for Amara Okafor");
+  assert.match(html.employee, />Amara Okafor</);
+});
+
+test("the avatar is decoration, and says nothing a screen reader has to hear twice", () => {
+  // The name and the id are already text in this cell. EmployeeAvatar's
+  // loading ring is a role="status" live region whose delay timer starts at
+  // MOUNT, so an unhidden avatar on every row of a 50-row page would queue 50
+  // "Loading" announcements for a photo that is alt="". FlagQueueList hides
+  // its row avatars for the same reason.
+  const { html } = renderRow({ ...BASE_ROW, image: "/files/amara.jpg" });
+  const wrapper = html.employee.match(/<span aria-hidden="true" class="contents">/);
+  assert.ok(wrapper, "the avatar must be wrapped as decoration");
+  assert.ok(
+    html.employee.indexOf('aria-hidden="true"') < html.employee.indexOf("data-slot=\"avatar\""),
+    "the hidden wrapper must be OUTSIDE the avatar, or the ring stays exposed",
+  );
+});
+
+test("a suppressed schedule feed takes the photo with it, and the row still reads", () => {
+  // `image` is a schedule-feed fact, so a downed coverage service blanks it
+  // exactly as it blanks the schedule and the weekly minutes. The cell must
+  // not then be a hole: initials are a real avatar, and the name is still
+  // beside them.
+  const [suppressed] = suppressUnusableFacts(
+    [{ ...BASE_ROW, image: "/files/amara.jpg" }],
+    { schedule: false, biometric: true },
+  );
+  const { html } = renderRow(suppressed);
+  assert.doesNotMatch(html.employee, /<img/, "a feed that cannot vouch for the photo must not show one");
+  assert.match(html.employee, />AO</);
+});
+
 test("weekly_minutes renders the formatted duration, 0h for a real zero, and an em dash only when unknown", () => {
   const formatted = renderRow({ ...BASE_ROW, weekly_minutes: 130 }).html.weekly_minutes;
   const zero = renderRow({ ...BASE_ROW, weekly_minutes: 0 }).html.weekly_minutes;
@@ -550,16 +706,10 @@ test("weekly_minutes renders the formatted duration, 0h for a real zero, and an 
   assert.equal(unknown, "—");
 });
 
-test("a null branch, department, and fingerprint_count render as an em dash, never a plausible default", () => {
-  const { html } = renderRow({
-    ...BASE_ROW,
-    branch: null,
-    department: null,
-    fingerprint_count: null,
-  });
+test("a null branch and department render as an em dash, never a plausible default", () => {
+  const { html } = renderRow({ ...BASE_ROW, branch: null, department: null });
   assert.equal(html.branch, "—");
   assert.equal(html.department, "—");
-  assert.equal(html.fingerprint_count, "—");
 });
 
 test("a null schedule and null biometric render as an em dash, not a badge", () => {
@@ -909,9 +1059,13 @@ test("a healthy pair of feeds shows every column", () => {
   // Without this the test above passes just as well against a table that never
   // renders any column at all.
   const html = renderView();
-  for (const header of ["Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric", "Prints"]) {
+  for (const header of ["Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric"]) {
     assert.ok(html.includes(`>${header}<`), `expected the ${header} column`);
   }
+  // And exactly SEVEN of them. Prints was fused into Biometric, so a Prints
+  // column reappearing — or any other column quietly arriving — is a change to
+  // the register's shape that has to be made on purpose.
+  assert.doesNotMatch(html, />Prints</, "the print count lives inside the biometric cell now");
   assert.doesNotMatch(html, /Biometric feed unavailable/, "no outage banner on a healthy load");
 });
 
@@ -925,8 +1079,9 @@ test("a downed SCHEDULE feed says so too, and takes its columns with it", () => 
   assert.doesNotMatch(html, />Schedule</, "the Schedule column must be gone, not empty");
   assert.doesNotMatch(html, />Hrs\/wk</, "the Hrs/wk column must be gone, not empty");
   // The biometric half is unaffected — that is the claim this banner makes.
+  // "Biometric" is the fused column, so the print count travels inside it.
   assert.match(html, />Biometric</, "the biometric columns must survive a schedule outage");
-  assert.match(html, />Prints</);
+  assert.match(html, />Status</);
 });
 
 test("with both feeds down the notice names both, and promises nothing about either", () => {
@@ -1651,7 +1806,7 @@ test("the rest of the reader's filters survive a sort", () => {
       search: "ada",
       branch: ["DIU"],
       readiness: "not-ready",
-      sort: "fingerprint_count",
+      sort: "biometric",
       order: "asc",
     }),
     { search: "ada", branch: ["DIU"], readiness: "not-ready", sort: "prints", order: "asc" },

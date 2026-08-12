@@ -45,11 +45,17 @@ function bodyRows(page: Page) {
   return page.locator("tbody tr");
 }
 
-/** The name line of each row's employee cell, in the order the table shows them. */
+/**
+ * The name from each row's employee cell, in the order the table shows them.
+ *
+ * Read off `data-slot="employee-name"` rather than by splitting the cell's
+ * text: the cell now stacks a name over an employee id BESIDE an avatar, and
+ * the avatar's initials are text too, so the first line of the cell is "NV",
+ * not "Nora Vance". The hook survives the cell gaining another layer.
+ */
 async function employeeNames(page: Page): Promise<string[]> {
-  const cells = await page.locator("tbody tr td:first-child").allInnerTexts();
-  // The cell stacks the name over the employee id; the first line is the name.
-  return cells.map((text) => text.split("\n")[0].trim());
+  const names = await page.locator('tbody tr [data-slot="employee-name"]').allInnerTexts();
+  return names.map((text) => text.trim());
 }
 
 /** The alert dot, whichever of its three things it is currently saying. */

@@ -21,6 +21,17 @@ import {
 export type RegisterRow = {
   id: string;
   employee_name: string;
+  /**
+   * Schedule-feed fact — the employee's photo URL, or null for the many who
+   * have none.
+   *
+   * A schedule fact because that is the only feed that carries one: the
+   * enrolment payload has an `is_registered` and a `face_count` but no image,
+   * so a row the bridge alone vouches for has no photo to show and must say so
+   * with null rather than borrow one. It follows the schedule feed's
+   * provenance and suppression like `schedule` and `weekly_minutes` do.
+   */
+  image: string | null;
   branch: string | null;
   department: string | null;
   /** Biometric-feed fact. Coverage filters status:Active, so it cannot supply this. */
@@ -118,6 +129,7 @@ export function joinRegisterRows(
     byId.set(emp.id, {
       id: emp.id,
       employee_name: emp.employee_name || emp.id,
+      image: emp.image ?? null,
       branch: emp.branch ?? null,
       department: emp.department ?? null,
       status: null,
@@ -141,6 +153,9 @@ export function joinRegisterRows(
       const merged: RegisterRow = existing ?? {
         id: row.id,
         employee_name: row.employee_name || row.id,
+        // The enrolment feed carries no photo, so a row only it knows about
+        // has none — not a borrowed one, and not a guessed URL.
+        image: null,
         branch: row.branch ?? null,
         department: row.department ?? null,
         status: null,
@@ -382,7 +397,11 @@ export function paginateRegisterRows(
 export const SORT_COLUMN_IDS: Record<NonNullable<RegisterFilters["sort"]>, string> = {
   name: "employee",
   hours: "weekly_minutes",
-  prints: "fingerprint_count",
+  // "prints" sorts the FUSED biometric column: the print count is evidence for
+  // the biometric state rather than a fact of its own, so it lost its column
+  // and kept its sort. The header says so out loud — a column labelled
+  // "Biometric" that orders by print count is otherwise a surprise.
+  prints: "biometric",
 };
 
 /**
@@ -403,7 +422,7 @@ export function sortFromColumnId(
       return { sort: "name", order };
     case "weekly_minutes":
       return { sort: "hours", order };
-    case "fingerprint_count":
+    case "biometric":
       return { sort: "prints", order };
     default:
       return null;
@@ -436,9 +455,17 @@ export type RegisterAlert = {
   label: string;
 };
 
-/** Column ids that survive when a feed is unavailable. */
+/**
+ * Column ids that survive when a feed is unavailable.
+ *
+ * `fingerprint_count` is NOT here, and has no column at all: the print count is
+ * evidence for the biometric state rather than an independent fact, so it was
+ * fused into the biometric cell and the column it cost was given back. It is
+ * still exported to the CSV — see CSV_FIELDS, which is keyed off feed health
+ * rather than off this list for exactly that reason.
+ */
 const SCHEDULE_COLUMNS = ["schedule", "weekly_minutes"];
-const BIOMETRIC_COLUMNS = ["biometric", "fingerprint_count", "status"];
+const BIOMETRIC_COLUMNS = ["biometric", "status"];
 const ALWAYS = ["employee", "branch", "department", "action"];
 
 export function feedHealth(
@@ -516,44 +543,55 @@ export function visibleColumnIds(feeds: FeedHealth): string[] {
   ];
 }
 
+/** Which feed vouches for a CSV field — or neither, for the two the join owns. */
+type CsvFeed = keyof FeedHealth | "always";
+
 type CsvField = {
-  /** The table column this field belongs to; it is exported only when that column is. */
-  column: string;
+  /** The feed this field's value comes from; exported only while that feed is healthy. */
+  feed: CsvFeed;
   header: string;
   value: (row: RegisterRow) => string | number | null;
 };
 
 /**
- * The exportable fields, in the order the table shows their columns.
+ * The exportable fields, in the order a reader expects to meet them.
  *
- * Keyed by column so the export obeys visibleColumnIds: writing a column the
- * page is hiding would put a fact the reader was refused into a file that
- * outlives the outage. `action` is a control, not a fact, so it has no field.
+ * Keyed by FEED, not by table column — and that is a deliberate change, not a
+ * convenience. The file must still drop everything a downed feed cannot vouch
+ * for, because writing a fact the page is refusing to show puts it into a
+ * document that outlives the outage. But the table and the file no longer have
+ * the same columns: the print count was fused into the biometric cell to save a
+ * column, and a spreadsheet has no width pressure and does want a numeric
+ * column to sort and total. Deriving this list from `visibleColumnIds` would
+ * have silently dropped Fingerprints from every export the moment that fusion
+ * landed. Feed health is what the suppression rule was always really about.
  *
- * Two fields may share a column where the cell renders two facts. The employee
- * cell shows a name over an id, and jamming them into one CSV field would make
- * neither sortable in a spreadsheet. The leaver day count is drawn inside the
- * biometric cell, so it travels with that column and disappears with it.
+ * Several fields may share a feed, and two of them are drawn as one cell: the
+ * employee cell shows a name over an id, and jamming those into one field would
+ * make neither sortable in a spreadsheet. `action` is a control rather than a
+ * fact, so it has no field here at all.
  */
 const CSV_FIELDS: CsvField[] = [
-  { column: "employee", header: "Employee ID", value: (row) => row.id },
-  { column: "employee", header: "Name", value: (row) => row.employee_name },
-  { column: "branch", header: "Branch", value: (row) => row.branch },
-  { column: "department", header: "Department", value: (row) => row.department },
-  { column: "status", header: "Employment status", value: (row) => row.status },
+  { feed: "always", header: "Employee ID", value: (row) => row.id },
+  { feed: "always", header: "Name", value: (row) => row.employee_name },
+  { feed: "always", header: "Branch", value: (row) => row.branch },
+  { feed: "always", header: "Department", value: (row) => row.department },
+  { feed: "biometric", header: "Employment status", value: (row) => row.status },
   {
-    column: "schedule",
+    feed: "schedule",
     header: "Schedule",
     value: (row) => (row.schedule === null ? null : SCHEDULE_LABELS[row.schedule]),
   },
-  { column: "weekly_minutes", header: "Weekly minutes", value: (row) => row.weekly_minutes },
+  { feed: "schedule", header: "Weekly minutes", value: (row) => row.weekly_minutes },
   {
-    column: "biometric",
+    feed: "biometric",
     header: "Biometric",
     value: (row) => (row.biometric === null ? null : BIOMETRIC_LABELS[row.biometric]),
   },
-  { column: "fingerprint_count", header: "Fingerprints", value: (row) => row.fingerprint_count },
-  { column: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
+  // No biometric COLUMN any more — the count lives inside the biometric badge
+  // on screen. It keeps its own field here on purpose; see the note above.
+  { feed: "biometric", header: "Fingerprints", value: (row) => row.fingerprint_count },
+  { feed: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
 ];
 
 /**
@@ -567,8 +605,7 @@ const CSV_FIELDS: CsvField[] = [
  * recoverable — nothing downstream can tell the two apart afterwards.
  */
 export function registerCsvRows(rows: RegisterRow[], feeds: FeedHealth): string[][] {
-  const visible = new Set(visibleColumnIds(feeds));
-  const fields = CSV_FIELDS.filter((field) => visible.has(field.column));
+  const fields = CSV_FIELDS.filter((field) => field.feed === "always" || feeds[field.feed]);
 
   return [
     fields.map((field) => field.header),
@@ -619,7 +656,7 @@ export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): R
     .filter((row) => hasHealthySource(row, feeds))
     .map((row) => ({
       ...row,
-      ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null }),
+      ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null, image: null }),
       ...(feeds.biometric
         ? {}
         : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),

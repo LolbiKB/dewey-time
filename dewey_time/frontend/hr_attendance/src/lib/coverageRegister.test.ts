@@ -106,6 +106,52 @@ test("an employee only in the coverage feed keeps null biometric, never 'none'",
   assert.equal(rows[0].status, null, "status is a biometric-feed fact; never defaulted to Active");
 });
 
+test("the photo comes from the coverage feed, and only from there", () => {
+  // `image` is on CoverageEmployee and was being dropped on the floor by the
+  // join. The enrolment payload has no image field at all, so a row only the
+  // bridge vouches for has no photo to show — null, not a borrowed one.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance", branch: "DIU",
+                   image: "/files/sok.jpg", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [
+        { id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+          status: "Active", bucket: "OK", is_registered: true,
+          fingerprint_count: 2, face_count: 0, days_since_relieving: null },
+        { id: "E9", employee_name: "Ly Vanna", branch: "PM", department: "Teaching",
+          status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+          fingerprint_count: 1, face_count: 0, days_since_relieving: 12 },
+      ],
+    }),
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  assert.equal(byId.get("E1")?.image, "/files/sok.jpg", "the join must stop dropping it");
+  assert.equal(
+    byId.get("E9")?.image,
+    null,
+    "an enrolment-only row has no photo — that feed does not carry one",
+  );
+});
+
+test("an employee coverage returned with no photo gets null, not undefined", () => {
+  // `image` is optional on the wire and absent for most of the roster. The row
+  // type is `string | null`, and EmployeeAvatar branches on falsiness — but a
+  // row carrying `undefined` where every other absent fact is `null` is the
+  // kind of inconsistency the CSV and JSON.stringify checks read differently.
+  const rows = joinRegisterRows(
+    coverage({
+      unassigned: [{ id: "E2", employee_name: "Chan Sophea", department: "Ops", branch: "DIU" }],
+      counts: { active: 1, unassigned: 1, assigned: 0, truncated: false },
+    }),
+    enrollment(),
+  );
+  assert.equal(rows[0].image, null);
+  assert.ok("image" in rows[0], "the field must exist on every row, not only on photographed ones");
+});
+
 test("branch comes from coverage so it survives a missing biometric feed", () => {
   const rows = joinRegisterRows(
     coverage({
@@ -194,6 +240,8 @@ test("ENROLLED_NOT_PUNCHING stays distinct from OK", () => {
 
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  // No photo is the common case, and the one the row has to stay readable in.
+  image: null,
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // Both feeds know this employee — the ordinary row. Override it to build the
@@ -342,7 +390,10 @@ test("each sortable column id maps to its own sort key", () => {
   // answer, which is exactly what swapping two entries looks like.
   assert.deepEqual(sortFromColumnId("employee", false), { sort: "name", order: "asc" });
   assert.deepEqual(sortFromColumnId("weekly_minutes", false), { sort: "hours", order: "asc" });
-  assert.deepEqual(sortFromColumnId("fingerprint_count", false), { sort: "prints", order: "asc" });
+  // "prints" belongs to the FUSED biometric column now. The print count is
+  // evidence for the biometric state rather than a fact of its own, so it lost
+  // its column and kept its sort.
+  assert.deepEqual(sortFromColumnId("biometric", false), { sort: "prints", order: "asc" });
 });
 
 test("desc carries through to order, and only to order", () => {
@@ -355,7 +406,11 @@ test("a column id nothing sorts by yields null, never a wrong sort", () => {
   // silently reorder the register AND — since severity ordering is gated on
   // `!filters.sort` — retire "worst first" for the not-ready view at the same
   // time, from a click on a header that is not supposed to sort at all.
-  for (const id of ["branch", "department", "status", "schedule", "biometric", "action", "hours", ""]) {
+  // "fingerprint_count" is in this list deliberately: it used to BE a column
+  // and used to resolve to `prints`. A stale sort in a bookmarked URL, or a
+  // half-finished rename, must leave the register unsorted rather than sorting
+  // by a column that no longer exists.
+  for (const id of ["branch", "department", "status", "schedule", "fingerprint_count", "action", "hours", ""]) {
     assert.equal(sortFromColumnId(id, false), null, `${id} must not resolve to a sort`);
   }
 });
@@ -363,7 +418,7 @@ test("a column id nothing sorts by yields null, never a wrong sort", () => {
 test("columnIdForSort names the column the table should show as sorted", () => {
   assert.equal(columnIdForSort("name"), "employee");
   assert.equal(columnIdForSort("hours"), "weekly_minutes");
-  assert.equal(columnIdForSort("prints"), "fingerprint_count");
+  assert.equal(columnIdForSort("prints"), "biometric", "the fused column carries the prints sort");
 });
 
 test("columnIdForSort translates, rather than passing the sort key through", () => {
@@ -762,7 +817,6 @@ test("a dead biometric feed hides the biometric columns AND status", () => {
   // Showing "Active" for all 241 would assert what the data cannot support.
   const hidden = visibleColumnIds({ schedule: true, biometric: false });
   assert.ok(!hidden.includes("biometric"));
-  assert.ok(!hidden.includes("fingerprint_count"));
   assert.ok(!hidden.includes("status"));
   assert.ok(hidden.includes("branch"), "branch is an always-on column and survives even when biometric is down");
   assert.ok(hidden.includes("schedule"));
@@ -789,7 +843,11 @@ test("visibleColumnIds returns the full column set when both feeds are healthy",
     [
       "employee", "branch", "department", "action",
       "schedule", "weekly_minutes",
-      "biometric", "fingerprint_count", "status",
+      // No "fingerprint_count": the print count was fused into the biometric
+      // cell and has no column of its own. It is STILL exported — the CSV is
+      // keyed off feed health, not off this list, which is the whole reason
+      // that indirection exists.
+      "biometric", "status",
     ],
   );
 });
@@ -848,7 +906,8 @@ test("feed health reflects the schedule feed independently of biometric health",
 });
 
 test("suppressUnusableFacts nulls exactly the biometric fields when that feed is unhealthy", () => {
-  const input = [row({ biometric: "none", fingerprint_count: 3, status: "Active", days_since_relieving: 5 })];
+  const input = [row({ biometric: "none", fingerprint_count: 3, status: "Active",
+                       days_since_relieving: 5, image: "/files/sok.jpg" })];
   const [got] = suppressUnusableFacts(input, { schedule: true, biometric: false });
   assert.equal(got.biometric, null);
   assert.equal(got.fingerprint_count, null);
@@ -856,13 +915,18 @@ test("suppressUnusableFacts nulls exactly the biometric fields when that feed is
   assert.equal(got.days_since_relieving, null);
   assert.equal(got.schedule, "assigned", "schedule facts survive a biometric-only outage");
   assert.equal(got.weekly_minutes, 2400, "schedule facts survive a biometric-only outage");
+  assert.equal(got.image, "/files/sok.jpg", "and so does the photo — it is a schedule fact");
 });
 
 test("suppressUnusableFacts nulls exactly the schedule fields when that feed is unhealthy", () => {
-  const input = [row({ schedule: "missing", weekly_minutes: 1800 })];
+  const input = [row({ schedule: "missing", weekly_minutes: 1800, image: "/files/sok.jpg" })];
   const [got] = suppressUnusableFacts(input, { schedule: false, biometric: true });
   assert.equal(got.schedule, null);
   assert.equal(got.weekly_minutes, null);
+  // The photo is a schedule-feed fact like the other two: coverage is the only
+  // feed that carries one, so a downed coverage service cannot vouch for it
+  // either. Leaving it would put a face beside a row of em dashes.
+  assert.equal(got.image, null);
   assert.equal(got.biometric, "enrolled", "biometric facts survive a schedule-only outage");
   assert.equal(got.status, "Active", "biometric facts survive a schedule-only outage");
 });
