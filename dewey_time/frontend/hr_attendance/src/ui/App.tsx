@@ -269,9 +269,21 @@ export function App() {
           {/* No PageHeader here, unlike the other three routes — this is the one
               screen that never had a heading to convert. Its nav tab already
               reads "Attendance" (top strip on desktop, bottom bar on phone), so
-              a title would only duplicate that label while taking ~40px off the
-              week grid on the viewport that can least afford it. An sr-only
-              heading was considered and declined. */}
+              a visible title would only duplicate that label while taking ~40px
+              off the week grid on the viewport that can least afford it.
+
+              An sr-only heading was declined here once, on those same two
+              grounds. Both were wrong for THIS form of it. The 40px is a cost
+              of a visible title, and `sr-only` is absolutely positioned, so it
+              is not a flex item and measures zero — the register's identical
+              heading was checked in a browser at 0px. And a nav tab is not a
+              heading: it does not appear in a screen reader's heading list, so
+              a reader pressing H on this route got nothing at all and had no
+              answer to "where am I". /hr-schedule/coverage now carries the same
+              sr-only h1 for the same reason; this route converges on it rather
+              than being the one page with no heading. */}
+          <h1 className="sr-only">Attendance</h1>
+
           {isBootstrapping ? (
             <AttendanceHeaderSkeleton />
           ) : (

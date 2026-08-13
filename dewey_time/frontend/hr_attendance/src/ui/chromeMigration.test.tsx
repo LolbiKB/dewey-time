@@ -231,16 +231,76 @@ test("schedule/maintenance write hooks invalidate schedule, calendar, and covera
 // exists to stop relying on.
 
 // /hr-attendance is the one route that never had a heading to convert, so —
-// unlike the other three — it gets no PageHeader. Its nav tab already reads
-// "Attendance" at every viewport, and a title costs ~40px above the week grid
-// on the phone. An sr-only heading was considered and declined. Pin both the
-// Section adoption and the absence of a title so neither drifts back.
-test("App renders Section inside Page and adds no page title of its own", () => {
+// unlike the other three — it gets no PageHeader: its nav tab already reads
+// "Attendance" at every viewport, and a VISIBLE title costs ~40px above the
+// week grid on the phone.
+//
+// This test used to pin `!src.includes("<h1")`, recording that an sr-only
+// heading had been "considered and declined". That was wrong, and it is now
+// inverted deliberately rather than quietly relaxed. Neither reason survives
+// contact with the sr-only form: `sr-only` is absolutely positioned, so it is
+// not a flex item and measures zero — the register's identical heading was
+// checked in a browser at 0px, with removal moving nothing — and a nav tab is
+// not a heading, so it never appears in a screen reader's heading list. A
+// reader pressing H on this route got nothing and had no answer to "where am
+// I". Every routed page now carries a heading; only this one keeps it silent.
+test("App renders Section inside Page, with a heading that costs no pixels", () => {
   const src = source("App.tsx");
   // The name says "inside Page", so assert Page too — the Section check alone
   // would stay green with <Page> deleted, under a name claiming otherwise.
   assert.ok(src.includes("<Page"), "expected <Page> from @lolbikb/dewey-ui");
   assert.ok(src.includes("<Section"), "expected <Section> from @lolbikb/dewey-ui");
   assert.ok(!src.includes("<PageHeader"), "/hr-attendance must not render a PageHeader");
-  assert.ok(!src.includes("<h1"), "/hr-attendance must not hand-roll a page title either");
+  // Direction, not presence: an `<h1>` WITHOUT `sr-only` is the ~40px
+  // regression the missing PageHeader exists to avoid, so a bare h1 must fail
+  // just as surely as no h1 at all — but for its own stated reason, so this
+  // one goes first. The other order reports "no heading" for a page that has
+  // one, sending the next reader after the wrong thing.
+  assert.ok(
+    !/<h1(?![^>]*\bsr-only\b)/.test(src),
+    "/hr-attendance must not render a VISIBLE h1 — that is the ~40px the week grid cannot spare",
+  );
+  // assert.ok on a tested regex, not assert.match: match prints its subject,
+  // and the subject here is the whole 6KB file.
+  assert.ok(
+    /<h1 className="sr-only">/.test(src),
+    "/hr-attendance must carry an sr-only h1 — a route with no heading has no answer to 'where am I'",
+  );
+});
+
+// Every routed page carries a heading, visible or silent. Pinned as a CLASS
+// rather than per file: asking each page separately is exactly what let
+// /hr-attendance sit headingless for as long as it did, because nothing ever
+// put the question to all of them at once.
+//
+// Two legitimate shapes, hence the either/or. dewey-ui's `PageHeader` renders
+// the `<h1>` itself, so a page using it has no literal `<h1>` in its own
+// source; /hr-attendance has no PageHeader and supplies its own `sr-only` one.
+// Matching on source text is the only tool available here — there is no jsdom
+// in this app — so this cannot count rendered headings, only prove each page
+// takes one of the two routes to having one.
+test("every routed page has a heading — via PageHeader, or its own sr-only h1", () => {
+  const { pages } = routedElements();
+  assert.ok(pages.length >= 4, `expected the router scan to find pages, got ${pages.length}`);
+
+  for (const { name, url } of pages) {
+    const src = withoutComments(readFileSync(url, "utf8"));
+    // The bare-visible-h1 case is checked FIRST so the message names the real
+    // cause. Checked the other way round, a page with a hand-rolled visible
+    // <h1> trips the "no heading at all" assertion — which is false, and sends
+    // the next reader looking for a missing heading rather than a misplaced
+    // one.
+    assert.ok(
+      !/<h1(?![^>]*\bsr-only\b)/.test(src),
+      `${name} hand-rolls a visible <h1> — that belongs to <PageHeader>`,
+    );
+    const viaPageHeader = src.includes("<PageHeader");
+    const viaSrOnly = /<h1 className="sr-only">/.test(src);
+    assert.ok(
+      viaPageHeader || viaSrOnly,
+      `${name} renders no heading at all — a route with none has no answer to "where am I" ` +
+        `for anyone navigating by heading. Use <PageHeader>, or an sr-only <h1> if the ` +
+        `pixels genuinely cannot be spared.`,
+    );
+  }
 });
