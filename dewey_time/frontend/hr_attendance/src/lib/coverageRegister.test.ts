@@ -1375,3 +1375,46 @@ test("the enrolment feed can supply a Khmer name for a row coverage never return
   );
   assert.equal(rows[0].khmer_name, "លី");
 });
+
+test("khmer_name precedence: coverage wins when both feeds report the same employee with different Khmer names", () => {
+  // A different name, not a blank one -- a blank enrolment record would pass
+  // this test even with the precedence guard deleted outright. Only a second,
+  // DIFFERENT name fails loudly if coverage's is overwritten rather than kept.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance",
+                   branch: "DIU", weekly_minutes: 2400,
+                   custom_khmer_last_name: "ចាន់", custom_khmer_first_name: "សុភា" }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, face_count: 0, days_since_relieving: null,
+               custom_khmer_last_name: "សុខ", custom_khmer_first_name: "ដារា" }],
+    }),
+  );
+  assert.equal(rows[0].khmer_name, "ចាន់ សុភា");
+});
+
+test("the enrolment feed fills khmer_name for a row coverage DID return but had no Khmer name for", () => {
+  // The fill branch, distinct from the leaver test above: that row takes the
+  // CREATE path (coverage never returned E9 at all), so it cannot tell the
+  // create line and the fill line apart. Here coverage seeds the row -- with
+  // neither Khmer field -- so the merge has to run the fill branch to pick up
+  // the enrolment feed's name.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance",
+                   branch: "DIU", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, face_count: 0, days_since_relieving: null,
+               custom_khmer_last_name: "លី", custom_khmer_first_name: null }],
+    }),
+  );
+  assert.equal(rows[0].khmer_name, "លី");
+});

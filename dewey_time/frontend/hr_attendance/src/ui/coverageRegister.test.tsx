@@ -50,6 +50,7 @@ const noop = () => {};
 const BASE_ROW: RegisterRow = {
   id: "EMP-0001",
   employee_name: "Amara Okafor",
+  // No Khmer name is the common case; the tests that need one override it.
   khmer_name: null,
   // No photo is the common case; the tests that need one override it.
   image: null,

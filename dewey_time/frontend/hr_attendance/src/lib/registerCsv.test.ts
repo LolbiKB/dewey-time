@@ -10,6 +10,7 @@ const HEALTHY: FeedHealth = { schedule: true, biometric: true };
 
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  // No Khmer name is the common case for these fixtures.
   khmer_name: null,
   image: null,
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
