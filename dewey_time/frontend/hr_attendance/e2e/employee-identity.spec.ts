@@ -22,14 +22,19 @@ import { longKhmerCoveragePayload, stubFrappe } from "./fixtures";
  * They are pinned rather than papered over. A test that records the wrong
  * number is worse than no test, because the number then gets quoted.
  *
- * ON THE EXACT PIXEL PINS. The heights (33/37 and 53/54) are exact because they
- * ARE the finding — a tolerance there would let the very drift they exist to
- * catch through. They were taken on macOS/Chromium, identical on both Playwright
- * projects, and a runner with different font rasterisation may need them
- * re-measured; that is a deliberate trade, not an oversight. Everything else is
- * asserted as the PROPERTY that matters — above this rung, below that threshold,
- * wide enough for that line — with the measured number kept in the comment. The
+ * ON PIXELS AND PLATFORMS. Nothing here pins an absolute pixel height any more.
+ * An earlier version pinned the line-box and row heights exactly (33/37 and
+ * 53/54) on the argument that the numbers WERE the finding and a tolerance would
+ * let the drift through. They were macOS/Chromium numbers, and CI's Linux runner
+ * measured 0px of Khmer line-box growth where macOS measures 4 — so the pin
+ * failed there as a false regression while the behaviour was identical. The
+ * lesson is the one this file already applies everywhere else: assert the
+ * PROPERTY that matters — above this rung, below that threshold, never shorter,
+ * at most this much taller — and keep the measured number in the comment. The
  * crossing test brackets 1320/1340 rather than probing 1330 for the same reason.
+ * Where a measurement really is platform-specific, the vacuity guards are what
+ * keep the test honest: both populations must be non-empty before any
+ * comparison between them means anything.
  *
  * The last test is the odd one out and belongs here anyway: the day inspector's
  * header draws a person WITHOUT an identity stack, so `stacks()` walks straight
@@ -322,28 +327,49 @@ test("the register turns its Khmer name on at a 1330 viewport, not at 1536", asy
   ]);
 });
 
-test("a Khmer name costs 4px of line box, and one pixel of register row", async ({ page }) => {
+test("a Khmer name costs a few pixels of line box at most, and the table absorbs it", async ({
+  page,
+}) => {
   // The design recorded this as free — "Khmer at 14px sits inside the same line
-  // box as Latin at 14px, so this costs no row height". It is not free, and the
-  // number was almost certainly taken from a fallback face. Kantumruy Pro's
-  // ascent and descent exceed the Latin face's, so line one's line box is the
-  // union of two differently proportioned inline boxes and grows even though
-  // both carry the same font-size and the same `leading-tight`.
+  // box as Latin at 14px, so this costs no row height" — and that number came
+  // from a fallback face. It is not reliably free: where Kantumruy Pro's ascent
+  // and descent exceed the Latin face's, line one's line box is the union of two
+  // differently proportioned inline boxes and grows even though both carry the
+  // same font-size and the same `leading-tight`.
   //
-  // 4px, and the extra is what draws Khmer's stacked coeng subscripts, so
-  // flattening it by fixing line one's height would clip them: this is a cost
-  // to know about, not a bug to close. Measured on the register just past the
-  // threshold, the one place that shows both kinds of row side by side.
+  // HOW MUCH is a property of the platform's font stack and rasterisation, not
+  // of this code. Measured: 4px on macOS/Chromium, 0px on the Linux CI runner
+  // with the same fonts loaded. An earlier version of this test pinned the
+  // macOS numbers exactly (37/33, and [53,54] rows) and failed on CI as a false
+  // regression — which is the failure mode the file header warns about, arriving
+  // in the one test that had no bracket.
+  //
+  // So the assertions are the invariants rather than the pixels: a Khmer row is
+  // never SHORTER, never more than a few pixels taller, and the table's other
+  // cells absorb nearly all of it. The extra, where it exists, is what draws
+  // Khmer's stacked coeng subscripts — a cost to know about, not a bug to close,
+  // and flattening line one to a fixed height would clip them.
+  //
+  // Measured on the register just past the threshold, the one place that shows
+  // both kinds of row side by side.
   await stubFrappe(page);
   const register = await registerAt(page, 1340);
 
   const withKhmer = [...new Set(register.filter((s) => s.showsKhmer).map((s) => s.height))];
   const without = [...new Set(register.filter((s) => !s.showsKhmer).map((s) => s.height))];
-  expect(withKhmer, "no row showed a Khmer name — the measurement is vacuous").toEqual([37]);
-  expect(without, "no row lacked a Khmer name — the measurement is vacuous").toEqual([33]);
+  // The vacuity guards are the load-bearing half: with either population empty
+  // the comparison below is trivially true and this test would pass on a page
+  // showing no Khmer at all.
+  expect(withKhmer, "no row showed a Khmer name — the measurement is vacuous").toHaveLength(1);
+  expect(without, "no row lacked a Khmer name — the measurement is vacuous").toHaveLength(1);
+
+  const cost = withKhmer[0] - without[0];
+  expect(cost, `a Khmer line box must not be shorter (${withKhmer[0]} vs ${without[0]})`).toBeGreaterThanOrEqual(0);
+  expect(cost, `a Khmer line box grew ${cost}px, which is more than a subscript needs`).toBeLessThanOrEqual(6);
 
   // What it costs the table, which is the number that actually matters: the
-  // other cells absorb most of it, so 503 register rows come out 1px apart.
+  // other cells absorb almost all of it, so 503 register rows differ by at most
+  // a pixel — one uniform height where the line box did not grow at all.
   const rowHeights = await page.evaluate(() => [
     ...new Set(
       [...document.querySelectorAll("tbody tr")].map((el) =>
@@ -351,7 +377,12 @@ test("a Khmer name costs 4px of line box, and one pixel of register row", async 
       ),
     ),
   ]);
-  expect(rowHeights.sort((a, b) => a - b)).toEqual([53, 54]);
+  rowHeights.sort((a, b) => a - b);
+  expect(rowHeights.length, `register rows take ${rowHeights.length} distinct heights`).toBeLessThanOrEqual(2);
+  expect(
+    rowHeights[rowHeights.length - 1] - rowHeights[0],
+    `register rows span ${rowHeights[0]}–${rowHeights[rowHeights.length - 1]}px`,
+  ).toBeLessThanOrEqual(1);
 });
 
 test("typing a Khmer name narrows the register to that one person", async ({ page }) => {

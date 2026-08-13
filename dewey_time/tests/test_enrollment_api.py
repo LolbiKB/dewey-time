@@ -77,7 +77,15 @@ class BuildPayloadTest(unittest.TestCase):
         actually asked for.
         """
         get_all = MagicMock(return_value=[])
-        with patch.object(mod.frappe, "get_all", get_all):
+        # has_column is patched TRUE rather than left to the frappe mock's
+        # truthy default. Under `bench run-tests` frappe is real, so the default
+        # is whatever the CI site's schema happens to say -- and it said False,
+        # failing this test there while it passed locally. What this test is for
+        # is "given the column exists, is it selected"; the column-absent branch
+        # is the sibling test's job. Neither should depend on site state.
+        with patch.object(mod.frappe, "get_all", get_all), patch.object(
+            mod.frappe.db, "has_column", return_value=True
+        ):
             mod._list_employees()
         fields = get_all.call_args.kwargs["fields"]
         self.assertIn("custom_khmer_last_name", fields)
