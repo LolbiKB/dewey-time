@@ -6,18 +6,50 @@ import { Command, CommandGroup, CommandList } from "@/components/ui/command";
 import type { CalendarEmployee } from "@/types/calendar";
 
 import { EmployeeOption } from "./EmployeePicker";
+import { ScheduleEmployeeOption } from "./ScheduleEmployeePicker";
 
 // list_calendar_employees sorts employees with shift coverage first, so clock-based
 // employees land at the bottom of the list. The chip is what tells HR they are
 // clock-based rather than missing an import.
 const ADA: CalendarEmployee = { id: "HR-EMP-00001", label: "Ada Lovelace" };
 
-function renderRow(employee: CalendarEmployee): string {
+// CommandItem needs a Command/CommandList/CommandGroup ancestor to render at
+// all, so both option rows are rendered through this harness rather than bare.
+function renderRow(
+  employee: CalendarEmployee,
+  opts?: { selected?: boolean; onSelect?: () => void },
+): string {
   return renderToStaticMarkup(
     <Command>
       <CommandList>
         <CommandGroup>
-          <EmployeeOption employee={employee} selected={false} onSelect={() => {}} />
+          <EmployeeOption
+            employee={employee}
+            selected={opts?.selected ?? false}
+            onSelect={opts?.onSelect ?? (() => {})}
+          />
+        </CommandGroup>
+      </CommandList>
+    </Command>,
+  );
+}
+
+// ScheduleEmployeePicker's list row is only reachable outside Radix's portal
+// via this exported component — anything left inline inside PopoverContent
+// server-renders to nothing at all.
+function renderScheduleRow(
+  employee: CalendarEmployee,
+  opts?: { selected?: boolean; onSelect?: () => void },
+): string {
+  return renderToStaticMarkup(
+    <Command>
+      <CommandList>
+        <CommandGroup>
+          <ScheduleEmployeeOption
+            employee={employee}
+            selected={opts?.selected ?? false}
+            onSelect={opts?.onSelect ?? (() => {})}
+          />
         </CommandGroup>
       </CommandList>
     </Command>,
@@ -35,4 +67,27 @@ test("a scheduled employee's picker row has no Clock chip", () => {
 
 test("the picker Clock chip is neutral, never destructive", () => {
   assert.doesNotMatch(renderRow({ ...ADA, is_clock_based: true }), /destructive/);
+});
+
+test("the picker option shows the Khmer name and the employee id", () => {
+  const html = renderRow({
+    id: "EMP-0088", label: "EMP-0088 · Sophea Chan", employee_name: "Sophea Chan",
+    department: "Retail", title: "Barista",
+    custom_khmer_last_name: "ចាន់", custom_khmer_first_name: "សុភា",
+  });
+  assert.match(html, /ចាន់ សុភា/, "the Khmer name reaches the option");
+  assert.match(html, /EMP-0088/);
+  assert.ok(html.indexOf("Sophea Chan") < html.indexOf("ចាន់ សុភា"), "English leads");
+});
+
+test("the weekly-schedule picker puts employment type ahead of department", () => {
+  // isWeeklyScheduleEligible gates the wizard on employment type, so it is the
+  // fact that says whether this person can be picked at all. Under a shared
+  // global priority it would eventually be the one that fell off the end.
+  const html = renderScheduleRow({
+    id: "EMP-1", label: "EMP-1 · Jonas Berg", employee_name: "Jonas Berg",
+    department: "Warehouse", employment_type: "Full-time",
+    custom_khmer_last_name: null, custom_khmer_first_name: null,
+  });
+  assert.ok(html.indexOf("Full-time") < html.indexOf("Warehouse"));
 });

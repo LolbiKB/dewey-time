@@ -14,15 +14,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
   employeeCommandFilter,
   employeeDisplayName,
-  employeePickerSubtitle,
   employeeSearchHaystack,
-  roleLine,
+  khmerName,
 } from "@/lib/employeeCard";
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
 import { AppTooltip } from "@/ui/AppTooltip";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
+import { EmployeeIdentity, type TailFact } from "@/ui/EmployeeIdentity";
 import { WeeklyScheduleSummary } from "@/ui/WeeklyScheduleSummary";
 
 export type EmployeePickerProps = {
@@ -48,7 +48,13 @@ export function EmployeePicker(props: EmployeePickerProps) {
   const disabled = !props.employees.length || props.isLoading;
 
   const name = employeeDisplayName(selected, props.value);
-  const subtitle = employeePickerSubtitle(selected);
+  const khmer = khmerName(selected?.custom_khmer_last_name, selected?.custom_khmer_first_name);
+  // Department first: between two people with one name, where they work
+  // separates them more often than what they are called.
+  const tail: TailFact[] = [
+    selected?.department ? { label: selected.department } : null,
+    selected?.title ? { label: selected.title } : null,
+  ].filter((fact): fact is TailFact => fact !== null);
 
   if (props.readOnly) {
     return (
@@ -59,11 +65,17 @@ export function EmployeePicker(props: EmployeePickerProps) {
           props.className
         )}
       >
-        <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />
-        <span className="min-w-0 flex-1 text-left leading-snug">
-          <span className="block truncate text-base font-semibold">{name}</span>
-          <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>
-        </span>
+        <EmployeeIdentity
+          className="min-w-0 flex-1"
+          englishName={name}
+          employeeId={props.value ?? ""}
+          khmerName={khmer}
+          avatar={
+            <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />
+          }
+          tail={tail}
+          nameClassName="text-base"
+        />
         {props.isLoading ? (
           <Loader2Icon className="size-4 shrink-0 animate-spin opacity-60" />
         ) : null}
@@ -89,11 +101,17 @@ export function EmployeePicker(props: EmployeePickerProps) {
             disabled={disabled}
             className="h-auto min-h-14 min-w-0 flex-1 justify-start gap-3 rounded-none border-0 px-3 py-2 font-normal shadow-none hover:bg-muted/50"
           >
-            <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />
-            <span className="min-w-0 flex-1 text-left leading-snug">
-              <span className="block truncate text-base font-semibold">{name}</span>
-              <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>
-            </span>
+            <EmployeeIdentity
+              className="min-w-0 flex-1"
+              englishName={name}
+              employeeId={props.value ?? ""}
+              khmerName={khmer}
+              avatar={
+                <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />
+              }
+              tail={tail}
+              nameClassName="text-base"
+            />
             {props.isLoading ? (
               <Loader2Icon className="size-4 shrink-0 animate-spin opacity-60" />
             ) : (
@@ -182,7 +200,6 @@ export function EmployeeOption(props: {
   onSelect: () => void;
 }) {
   const { employee } = props;
-  const meta = roleLine(employee);
 
   return (
     <CommandItem
@@ -190,15 +207,21 @@ export function EmployeeOption(props: {
       onSelect={props.onSelect}
       className="gap-2 py-2"
     >
-      <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {employeeDisplayName(employee)}
-        </span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {[employee.id, meta].filter(Boolean).join(" · ")}
-        </span>
-      </span>
+      <EmployeeIdentity
+        className="min-w-0 flex-1"
+        englishName={employeeDisplayName(employee, employee.id)}
+        employeeId={employee.id}
+        khmerName={khmerName(employee.custom_khmer_last_name, employee.custom_khmer_first_name)}
+        avatar={
+          <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
+        }
+        // Department first: between two people with one name, where they work
+        // separates them more often than what they are called.
+        tail={[
+          employee.department ? { label: employee.department } : null,
+          employee.title ? { label: employee.title } : null,
+        ].filter((fact): fact is TailFact => fact !== null)}
+      />
       {employee.is_clock_based ? (
         // Clock-based employees have no shift coverage, so the list sorts them to
         // the bottom. Without this they read as "schedule failed to import".
