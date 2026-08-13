@@ -360,13 +360,33 @@ export function DayInspectorHeader(props: DayInspectorHeaderProps) {
           <SheetTitle>
             {props.inspectingDate ? format(parseDateKey(props.inspectingDate), "EEE, MMM d") : "Day"}
           </SheetTitle>
+          {/*
+            `min-w-0 truncate` and `shrink-0`, both measured rather than reasoned
+            about. A flex item's automatic minimum size is its MIN-CONTENT, so
+            without them the name span refuses to shrink past its longest word
+            and the row spends the shortfall in whichever way the text allows:
+
+              - a name WITH spaces wraps, and the header grows from 20px to 40px
+                — at 375 and at 1280 alike, since this sheet is 384px wide on a
+                laptop — with "Day inspector" itself split into "Day"/"inspector"
+                once it is squeezed under its own 88px;
+              - a name with NO break opportunity cannot wrap, so the row
+                overflows by 99px at 375 and 91px at 1280, putting the trailing
+                label 83px past the right edge of a SheetContent that is
+                `overflow-hidden` — it is not truncated, it is gone.
+
+            Dropping stripMiddleName is what made this reachable: it is the same
+            three-part name everywhere else on this branch, on the one surface
+            with no identity stack for employee-identity.spec.ts's walk to find.
+            Both cases are measured there.
+          */}
           <SheetDescription asChild>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="text-foreground">
+              <span className="min-w-0 truncate text-foreground">
                 {props.employeeLabel ?? props.employeeId ?? "Employee"}
               </span>
               <Separator orientation="vertical" className="h-4" />
-              <span>Day inspector</span>
+              <span className="shrink-0">Day inspector</span>
             </div>
           </SheetDescription>
         </>

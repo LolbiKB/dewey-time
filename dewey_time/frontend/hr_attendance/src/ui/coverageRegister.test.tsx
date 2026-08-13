@@ -50,6 +50,8 @@ const noop = () => {};
 const BASE_ROW: RegisterRow = {
   id: "EMP-0001",
   employee_name: "Amara Okafor",
+  // No Khmer name is the common case; the tests that need one override it.
+  khmer_name: null,
   // No photo is the common case; the tests that need one override it.
   image: null,
   branch: "Lagos",
@@ -82,7 +84,7 @@ function renderRow(
   row: RegisterRow,
   onOpen: (row: RegisterRow) => void = noop,
   onAddSchedule: (row: RegisterRow) => void = noop,
-): { html: Record<string, string>; elements: Record<string, ReactNode> } {
+): { html: Record<string, string>; elements: Record<string, ReactNode>; markup: string } {
   const elements: Record<string, ReactNode> = {};
   function Harness() {
     const table = useReactTable({
@@ -115,7 +117,24 @@ function renderRow(
   for (const match of fullHtml.matchAll(/<td data-col="([^"]+)">(.*?)<\/td>/g)) {
     html[match[1]] = match[2];
   }
-  return { html, elements };
+  return { html, elements, markup: fullHtml };
+}
+
+/**
+ * The employee cell alone, `<td>` and all.
+ *
+ * `renderRow` hands the cells back keyed by column id with their wrappers
+ * stripped, which is what almost every assertion here wants. A claim that a
+ * fact is NOT in this cell wants the opposite: without the cell's own closing
+ * tag to slice on, "the department is not in the identity block" quietly
+ * becomes "the department is not in the first few characters of it".
+ */
+function renderRegisterCell(row: RegisterRow): { markup: string } {
+  const cell = /<td data-col="employee">.*?<\/td>/.exec(renderRow(row).markup);
+  assert.ok(cell, "the register has no employee column");
+  // `markup`, the same name renderRow gives a raw HTML string, rather than
+  // `html`, which in this file means the per-column record.
+  return { markup: cell[0] };
 }
 
 /** Narrows a rendered node to its `onClick`, without an `as any`/`as unknown as` cast. */
@@ -637,6 +656,37 @@ test("the employee name carries the hook the e2e reads it by", () => {
   assert.match(html.employee, /data-slot="employee-name"[^>]*>Amara Okafor</);
 });
 
+test("the register's employee cell carries the Khmer name in the markup", () => {
+  // Present in the DOM but hidden by the container query at the register's
+  // 139px and 90px stacks -- e2e proves the hiding. This proves the cell is
+  // not the thing that dropped it, so widening the column later is enough.
+  const { markup } = renderRegisterCell({ ...BASE_ROW, khmer_name: "ចាន់ សុភា" });
+  assert.match(markup, /ចាន់ សុភា/);
+  assert.match(markup, /data-slot="employee-name"/, "the e2e hook survives");
+});
+
+test("the register declares an empty tail — Branch and Dept are its own columns", () => {
+  // A tail here would print facts the table already has in dedicated, sortable
+  // columns, and eat the width the ID needs. `renderRegisterCell` is already
+  // scoped to the one cell, so this is the whole of it.
+  const { markup } = renderRegisterCell({ ...BASE_ROW, department: "Retail", branch: "DIU" });
+  assert.doesNotMatch(markup, /Retail/, "department belongs to its own column");
+  assert.doesNotMatch(markup, /DIU/, "and so does branch");
+});
+
+test("the employee cell declares the width floor its query container cannot", () => {
+  // `container-type: inline-size` computes the identity block's min- and
+  // max-content contributions as if it had no contents, and this table is
+  // auto-layout, so with no floor the column is sized by its header instead of
+  // its names: measured at 193px against 361px before the conversion, and at
+  // 375 every name in the fixture clipped to 39px of text.
+  //
+  // The width itself is only measurable in a browser, so what is pinned here is
+  // that a floor is DECLARED. Deleting it is how this regresses.
+  const { markup } = renderRegisterCell(BASE_ROW);
+  assert.match(markup, /min-w-\[185px\]/);
+});
+
 test("the employee cell carries the face the coverage feed sent", () => {
   const { html } = renderRow({ ...BASE_ROW, image: "/files/amara.jpg" });
   assert.match(html.employee, /<img[^>]*src="\/files\/amara.jpg"/, "the photo must reach the row");
@@ -952,7 +1002,7 @@ test("an ordinary page load does not flash an outage", () => {
   // does not have.
   assert.equal(
     searchBoxName(html),
-    "Search by name or employee ID…",
+    "Search by name, Khmer name, or employee ID…",
     "the box must claim no roster size it does not have",
   );
   assert.doesNotMatch(html, /Search 0 employees/);
@@ -964,10 +1014,10 @@ test("the search box names the roster size, and says employee once at one", () =
   // Where "Coverage · N employees" went. It costs no vertical space here, and
   // it is derived from the UNFILTERED rows — see the facet test below for the
   // same rule on the facet options.
-  assert.equal(searchBoxName(renderView({ rows: [BASE_ROW] })), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(renderView({ rows: [BASE_ROW] })), "Search 1 employee by name, Khmer name, or ID…");
   assert.equal(
     searchBoxName(renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] })),
-    "Search 2 employees by name or ID…",
+    "Search 2 employees by name, Khmer name, or ID…",
   );
 });
 
@@ -978,7 +1028,7 @@ test("the roster count in the search box does not follow the filters down", () =
   const two = [BASE_ROW, { ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing" as const }];
   assert.equal(
     searchBoxName(renderView({ rows: two, filters: { readiness: "not-ready" } })),
-    "Search 2 employees by name or ID…",
+    "Search 2 employees by name, Khmer name, or ID…",
   );
 });
 
@@ -988,7 +1038,7 @@ test("the placeholder is the same wording on both sides of the breakpoint", () =
   // same name on a phone, and one e2e locator has to match both.
   const wide = renderView({ rows: [BASE_ROW] });
   const narrow = renderView({ rows: [BASE_ROW], narrow: true });
-  assert.equal(searchBoxName(wide), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(wide), "Search 1 employee by name, Khmer name, or ID…");
   assert.equal(searchBoxName(narrow), searchBoxName(wide));
 });
 
@@ -1133,8 +1183,8 @@ test("a failed load counts nobody, rather than counting nobody aloud", () => {
   assert.match(failed, /Coverage didn’t load/, "the failure itself must still be reported");
 
   // The two states either side of it still speak.
-  assert.equal(searchBoxName(renderView({ isLoading: true, rows: [] })), "Search by name or employee ID…");
-  assert.equal(searchBoxName(renderView()), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(renderView({ isLoading: true, rows: [] })), "Search by name, Khmer name, or employee ID…");
+  assert.equal(searchBoxName(renderView()), "Search 1 employee by name, Khmer name, or ID…");
 });
 
 test("a partial roster says so", () => {
@@ -1461,12 +1511,12 @@ test("the bar holds no search box unless it is asked to", () => {
 });
 
 test("the search placeholder counts the roster, is silent when there is none, and says employee once at one", () => {
-  assert.equal(registerSearchPlaceholder(503), "Search 503 employees by name or ID…");
-  assert.equal(registerSearchPlaceholder(1), "Search 1 employee by name or ID…");
+  assert.equal(registerSearchPlaceholder(503), "Search 503 employees by name, Khmer name, or ID…");
+  assert.equal(registerSearchPlaceholder(1), "Search 1 employee by name, Khmer name, or ID…");
   // Zero is not a roster size, it is the absence of one — during a load, and
   // after a failure that left the page holding nothing. A box reading "Search 0
   // employees…" states as a count the very thing the page does not know.
-  assert.equal(registerSearchPlaceholder(0), "Search by name or employee ID…");
+  assert.equal(registerSearchPlaceholder(0), "Search by name, Khmer name, or employee ID…");
   assert.doesNotMatch(registerSearchPlaceholder(0), /\d/, "no count may survive into the silent form");
 });
 

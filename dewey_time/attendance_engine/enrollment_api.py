@@ -26,7 +26,15 @@ from dewey_time.attendance_engine.enrollment_buckets import (
 )
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 
-_CACHE_KEY = "enrollment_report:v1"
+# The version suffix is tied to the SHAPE of the cached payload, not to this
+# module's behaviour: bump it whenever a field is added, renamed or removed
+# anywhere in what get_enrollment_report returns. A deploy does not clear
+# Redis, so for the whole TTL afterwards a key written by the OLD code can
+# still answer a request from the NEW frontend; a new prefix simply cannot be
+# hit by pre-deploy entries.
+#
+# v2: rows gained custom_khmer_last_name / custom_khmer_first_name.
+_CACHE_KEY = "enrollment_report:v2"
 _CACHE_TTL_SECONDS = 120
 
 #: Matches COVERAGE_EMPLOYEE_LIMIT: this is meant to be an exhaustive roster.
@@ -52,10 +60,18 @@ def _today():
 
 
 def _list_employees() -> list[dict]:
+    fields = ["name", "employee_name", "status", "branch", "department", "relieving_date"]
+    # Installed by dewey_time.setup.custom_fields, but a site mid-migration may
+    # not have them yet -- and an unknown column makes frappe.get_all raise,
+    # taking the whole enrollment register down rather than losing one
+    # optional fact.
+    for khmer_field in ("custom_khmer_last_name", "custom_khmer_first_name"):
+        if frappe.db.has_column("Employee", khmer_field):
+            fields.append(khmer_field)
     return frappe.get_all(
         "Employee",
         filters={"status": ["in", list(REPORTED_STATUSES) + ["Inactive", "Suspended"]]},
-        fields=["name", "employee_name", "status", "branch", "department", "relieving_date"],
+        fields=fields,
         limit_page_length=ENROLLMENT_EMPLOYEE_LIMIT,
         order_by="employee_name asc",
     )
@@ -164,6 +180,11 @@ def _build_enrollment_payload() -> dict:
             {
                 "id": employee["name"],
                 "employee_name": employee.get("employee_name"),
+                # Emitted, not merely selected. A field in the SELECT list that
+                # the output dict drops is a production no-op returning None
+                # forever. `.get` because the SELECT above is conditional.
+                "custom_khmer_last_name": employee.get("custom_khmer_last_name"),
+                "custom_khmer_first_name": employee.get("custom_khmer_first_name"),
                 "branch": employee.get("branch"),
                 "department": employee.get("department"),
                 "status": employee.get("status"),

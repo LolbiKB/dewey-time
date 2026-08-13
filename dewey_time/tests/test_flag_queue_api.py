@@ -446,7 +446,13 @@ class TestQueueInputs(unittest.TestCase):
         self.assertEqual(flags[0]["attendance_date"], "2026-08-03")
         self.assertEqual(
             kwargs["employees_by_id"]["HR-EMP-00000"],
-            {"employee_name": "Name HR-EMP-00000", "branch": "BR-A", "image": None},
+            {
+                "employee_name": "Name HR-EMP-00000",
+                "custom_khmer_last_name": None,
+                "custom_khmer_first_name": None,
+                "branch": "BR-A",
+                "image": None,
+            },
         )
 
     def test_only_auto_flags_reach_the_queue(self):
@@ -556,6 +562,18 @@ class TestEmployeePhoto(unittest.TestCase):
             fields = h.recorder.kwargs_for("Employee")[0]["fields"]
         self.assertIn("image", fields)
 
+    def test_the_khmer_fields_are_selected(self):
+        # _Recorder.__call__ ignores the fields kwarg and returns the canned
+        # row regardless of what was actually asked for, so a fixture whose
+        # Employee row carries Khmer keys would survive whatever
+        # _employees_by_id selected. This is the only test here that
+        # inspects the SELECT itself rather than what came back from it.
+        with _harness(_roster(2)) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            fields = h.recorder.kwargs_for("Employee")[0]["fields"]
+        self.assertIn("custom_khmer_last_name", fields)
+        self.assertIn("custom_khmer_first_name", fields)
+
     def test_the_photo_reaches_build_queue_on_the_employee_meta(self):
         rows = _roster(1)
         rows["Employee"] = [{**_employee_row("HR-EMP-00000"), "image": "/files/sokheng.jpg"}]
@@ -569,6 +587,90 @@ class TestEmployeePhoto(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             employees = h.build.call_args.kwargs["employees_by_id"]
         self.assertIsNone(employees["HR-EMP-00000"]["image"])
+
+    def test_the_khmer_name_fields_reach_build_queue_on_the_employee_meta(self):
+        """Emitted, not merely selected: a field in the SELECT list that the
+        output dict drops is a production no-op that returns None forever --
+        exactly what `branch` did in hr_calendar.py until it was caught in
+        review.
+        """
+        rows = _roster(1)
+        rows["Employee"] = [
+            {
+                **_employee_row("HR-EMP-00000"),
+                "custom_khmer_last_name": "ចាន់",
+                "custom_khmer_first_name": "សុភា",
+            }
+        ]
+        with _harness(rows) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            employees = h.build.call_args.kwargs["employees_by_id"]
+        self.assertEqual(employees["HR-EMP-00000"]["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(employees["HR-EMP-00000"]["custom_khmer_first_name"], "សុភា")
+
+    def test_a_site_mid_migration_without_the_khmer_columns_still_builds_the_queue(self):
+        """has_column is a truthy MagicMock by default in _harness, so every
+        other test in this file only exercises the column-present branch.
+        Force the column-absent branch the guard exists for -- a site mid
+        custom_fields migration -- and prove the SELECT omits the missing
+        columns (asking for them raises on a real site) while the queue
+        still assembles, with the Khmer fields simply None in the meta.
+        """
+        with _harness(_roster(1)) as h, patch.object(
+            flag_queue_api.frappe.db,
+            "has_column",
+            side_effect=lambda _dt, col: not col.startswith("custom_khmer"),
+        ):
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            fields = h.recorder.kwargs_for("Employee")[0]["fields"]
+            employees = h.build.call_args.kwargs["employees_by_id"]
+        self.assertNotIn("custom_khmer_last_name", fields)
+        self.assertNotIn("custom_khmer_first_name", fields)
+        self.assertIsNone(employees["HR-EMP-00000"]["custom_khmer_last_name"])
+        self.assertIsNone(employees["HR-EMP-00000"]["custom_khmer_first_name"])
+
+
+class TestKhmerNameFieldsReachTheAssembledPerson(unittest.TestCase):
+    """test_the_khmer_name_fields_reach_build_queue_on_the_employee_meta above
+    proves the fields reach the `employees_by_id` map handed to build_queue --
+    it cannot fail if flag_grouping._person then drops them while rebuilding
+    the assembled Person dict, which is exactly the gap review caught.
+
+    This calls flag_grouping.build_queue directly, not through _harness (whose
+    `build` is a stub for flag_queue_api's own tests), so the real _person
+    dict-rebuild runs end to end. Modelled on
+    test_flag_grouping.test_unknown_employee_row_still_yields_a_person, the
+    established shape for asserting on an assembled Person.
+    """
+
+    def test_the_khmer_name_fields_reach_the_assembled_person(self):
+        flag = {
+            "flag_identity": "AUTO-hr-emp-00000-2026-08-03-late-start",
+            "employee": "HR-EMP-00000",
+            "attendance_date": "2026-08-03",
+            "flag_code": "LATE_START",
+            "severity": "WARNING",
+            "day_closed": 1,
+            "evidence": {"minutes": 12},
+        }
+        employees_by_id = {
+            "HR-EMP-00000": {
+                "employee_name": "Name HR-EMP-00000",
+                "custom_khmer_last_name": "ចាន់",
+                "custom_khmer_first_name": "សុភា",
+                "branch": "BR-A",
+                "image": None,
+            }
+        }
+        payload = flag_grouping.build_queue(
+            flags=[flag],
+            decisions_by_identity={},
+            employees_by_id=employees_by_id,
+            outage_branch_dates=set(),
+        )
+        person = payload["entries"][0]
+        self.assertEqual(person["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(person["custom_khmer_first_name"], "សុភា")
 
 
 class TestOutageDatesInPayload(unittest.TestCase):
@@ -781,8 +883,8 @@ class TestIncludeDecided(unittest.TestCase):
             [key for key, _ttl in cache.set_calls],
             [
                 # The default key is unchanged — the suffix is only ever added.
-                "flag_queue:v4:2026-08-01:2026-08-07:all",
-                "flag_queue:v4:2026-08-01:2026-08-07:all:decided",
+                "flag_queue:v5:2026-08-01:2026-08-07:all",
+                "flag_queue:v5:2026-08-01:2026-08-07:all:decided",
             ],
         )
 
@@ -799,11 +901,11 @@ class TestQueueCache(unittest.TestCase):
     def test_cache_key_and_ttl_match_the_contract(self):
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
-            self.assertEqual(h.cache.set_calls, [("flag_queue:v4:2026-08-01:2026-08-07:all", 60)])
+            self.assertEqual(h.cache.set_calls, [("flag_queue:v5:2026-08-01:2026-08-07:all", 60)])
 
         with _harness(_roster(1)) as h:
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07", tier="act")
-            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v4:2026-08-01:2026-08-07:act")
+            self.assertEqual(h.cache.set_calls[0][0], "flag_queue:v5:2026-08-01:2026-08-07:act")
 
     def test_a_different_range_is_a_different_cache_entry(self):
         cache = _FakeCache()
@@ -819,7 +921,7 @@ class TestQueueCache(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             self.assertEqual(len(cache.store), 1)
             flag_queue_api.invalidate_flag_queue_cache()
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v4"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v5"])
         self.assertEqual(cache.store, {})
 
     def test_invalidate_accepts_doc_event_args(self):
@@ -827,7 +929,7 @@ class TestQueueCache(unittest.TestCase):
         with _harness(cache=cache):
             # Frappe doc_events call handlers as (doc, method); must not raise.
             flag_queue_api.invalidate_flag_queue_cache(doc=object(), method="on_update")
-        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v4"])
+        self.assertEqual(cache.deleted_prefixes, ["flag_queue:v5"])
 
 
 class TestDriverDateShapes(unittest.TestCase):
@@ -1344,13 +1446,13 @@ class TestFlagGroupingAgreesWithRolloutOnLive(unittest.TestCase):
 
 
 class TestQueueCachePrefix(unittest.TestCase):
-    def test_the_prefix_is_v4(self):
+    def test_the_prefix_is_v5(self):
         # flag_queue_api.py:40-53: a deploy does not clear Redis, so a payload-shape
         # change without a new prefix means old keys answering new callers for a
         # full TTL. This assertion is the enforcement of that comment.
         from dewey_time.attendance_engine.flag_queue_api import _QUEUE_CACHE_PREFIX
 
-        self.assertEqual(_QUEUE_CACHE_PREFIX, "flag_queue:v4")
+        self.assertEqual(_QUEUE_CACHE_PREFIX, "flag_queue:v5")
 
 
 if __name__ == "__main__":

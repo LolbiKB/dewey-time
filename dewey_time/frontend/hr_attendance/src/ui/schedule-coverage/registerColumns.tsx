@@ -5,6 +5,7 @@ import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from "lucide-react";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { BIOMETRIC_LABELS, SCHEDULE_LABELS, type RegisterRow } from "@/lib/coverageRegister";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
+import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import type { CalendarEmployee } from "@/types/calendar";
 
 /**
@@ -98,7 +99,7 @@ function sortableHeader(label: string, by?: string) {
  * cast. The avatar's contract is that type, and every field it reads is one
  * this row can honestly supply: `employee_name` is the name it draws initials
  * from, `image` is the photo, and `label` is only ever a FALLBACK inside
- * `employeeShortName` for the case where `employee_name` is empty — which
+ * `employeeDisplayName` for the case where `employee_name` is empty — which
  * `joinRegisterRows` already rules out by seeding `employee_name || id`.
  *
  * The same literal FlagQueueList builds for the same component.
@@ -152,39 +153,63 @@ export function registerColumns(
       accessorFn: (row) => row.employee_name,
       header: sortableHeader("Employee"),
       cell: ({ row }) => (
-        <span className="flex min-w-0 items-center gap-2.5">
-          {/* aria-hidden, on the same rule FlagQueueList's rows follow: the
-              avatar says nothing the cell does not already say in words, its
-              photo is alt="", and EmployeeAvatar's loading ring is a
-              role="status" live region whose delay timer starts at MOUNT — so
-              a full page of rows would queue a page of "Loading"
-              announcements for decoration.
-
-              `contents` so the avatar itself stays the flex item; the wrapper
-              is here for the accessibility tree, not for layout. */}
-          <span aria-hidden="true" className="contents">
-            {/* size-9 is exactly the two text lines beside it (20px + 16px),
-                so the photo spans the cell without making the row taller —
-                TableCell's py-2 is doing the rest. */}
-            <EmployeeAvatar
-              employee={avatarEmployee(row.original)}
-              fallbackId={row.original.id}
-              className="size-9"
-            />
-          </span>
-          <span className="flex min-w-0 flex-col">
-            {/* `data-slot`, this codebase's stable-hook convention (dewey-ui
-                marks its own parts the same way), because the avatar's
-                initials are TEXT: the cell's first line is now "NV", not "Nora
-                Vance", so the e2e can no longer read the name by counting
-                lines. A hook survives the cell gaining another layer; a line
-                index does not. */}
-            <span data-slot="employee-name" className="truncate font-medium">
-              {row.original.employee_name}
+        <EmployeeIdentity
+          // The floor the query container took away, and this column cannot do
+          // without: `container-type: inline-size` computes the block's min-
+          // and max-content contributions AS IF IT HAD NO CONTENTS, and this
+          // table is auto-layout — dewey-ui renders a bare `w-full` <table> and
+          // reads no TanStack `size`, so a column with no intrinsic width is
+          // sized by its header. Measured: the cell fell from 361px to 193px at
+          // a 1280 content area, and at 375 every name in the fixture clipped
+          // to 39px of text.
+          //
+          // 185 = 36px avatar + 10px gap + 139px of text, which is the stack
+          // width the spec measured this cell at. Deliberately under 200 — that
+          // is where the Khmer name switches on, and this cell's recorded trade
+          // is that it shows none at either viewport.
+          //
+          // A floor and not a cap, so the column can widen the names as the
+          // register grows — which means the trade above holds at 375 and 1280
+          // and stops holding above them. Measured since: the stack is 139px at
+          // 375, 190px at 1280, and reaches 200px at a 1330 viewport, where the
+          // Khmer name duly appears. 1330 is an ordinary laptop rather than an
+          // exotic monitor, so treat this cell as showing Khmer on most desks.
+          // e2e/employee-identity.spec.ts pins the crossing, so moving this
+          // floor, the avatar or the threshold moves a test rather than
+          // surprising someone.
+          className="min-w-[185px]"
+          englishName={row.original.employee_name}
+          employeeId={row.original.id}
+          // Already composed at the join by joinRegisterRows, family name
+          // first — not recomposed from the two raw fields here, which is how
+          // one surface starts naming a different person than the others.
+          khmerName={row.original.khmer_name}
+          // The avatar keeps its aria-hidden `contents` wrapper: the cell says
+          // everything the photo does in words, the photo is alt="", and
+          // EmployeeAvatar's loading ring is a role="status" live region whose
+          // timer starts at mount — a page of rows would queue a page of
+          // "Loading" announcements for decoration.
+          avatar={
+            <span aria-hidden="true" className="contents">
+              {/* size-9 is exactly the two text lines beside it (20px + 16px),
+                  so the photo spans the cell without making the row taller —
+                  TableCell's py-2 is doing the rest. */}
+              <EmployeeAvatar
+                employee={avatarEmployee(row.original)}
+                fallbackId={row.original.id}
+                className="size-9"
+              />
             </span>
-            <span className="truncate text-xs text-muted-foreground">{row.original.id}</span>
-          </span>
-        </span>
+          }
+          // No tail. Branch, Dept and Status are the register's own columns.
+          nameClassName="font-medium"
+          // `data-slot`, this codebase's stable-hook convention (dewey-ui marks
+          // its own parts the same way), because the avatar's initials are
+          // TEXT: the cell's first line is "NV", not "Nora Vance", so the e2e
+          // cannot read the name by counting lines. A hook survives the cell
+          // gaining another layer; a line index does not.
+          nameSlot="employee-name"
+        />
       ),
     },
     { id: "branch", header: "Branch", cell: ({ row }) => row.original.branch ?? "—" },

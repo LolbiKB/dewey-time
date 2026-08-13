@@ -74,10 +74,16 @@ const BIOMETRIC_OPTIONS: { value: NonNullable<RegisterFilters["biometric"]>; lab
  * left the page with nothing, the roster size is not zero, it is unknown. At
  * zero this falls back to the wording that claims nothing — which is what the
  * box said before it counted anything.
+ *
+ * It names the Khmer name because the box searches it — `employeeSearchHaystack`
+ * carries it and the register filters on it — and an undiscoverable search field
+ * is one nobody types into. This is the only affordance saying so: the column
+ * shows a Khmer name only past 200px of stack, so on a phone the reader cannot
+ * even infer it from what is on screen.
  */
 export function registerSearchPlaceholder(rosterSize: number): string {
-  if (rosterSize <= 0) return "Search by name or employee ID…";
-  return `Search ${rosterSize} ${rosterSize === 1 ? "employee" : "employees"} by name or ID…`;
+  if (rosterSize <= 0) return "Search by name, Khmer name, or employee ID…";
+  return `Search ${rosterSize} ${rosterSize === 1 ? "employee" : "employees"} by name, Khmer name, or ID…`;
 }
 
 /** What the box waits before it narrows the table. dewey-ui's own toolbar uses the same. */

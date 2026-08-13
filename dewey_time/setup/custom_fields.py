@@ -16,6 +16,17 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 CUSTOM_FIELDS = {
+    # Added on prod through the Frappe UI, so they are absent from every fresh
+    # site -- CI's `bench new-site` included. Declared here so the app installs
+    # the schema it reads. Positions match the prod export: inside the identity
+    # block, between last_name and employee_name.
+    "Employee": [
+        {"fieldname": "custom_khmer_last_name", "label": "Khmer Last Name",
+         "fieldtype": "Data", "insert_after": "last_name", "in_global_search": 1},
+        {"fieldname": "custom_khmer_first_name", "label": "Khmer First Name",
+         "fieldtype": "Data", "insert_after": "custom_khmer_last_name",
+         "in_global_search": 1},
+    ],
     "Employee Checkin": [
         {"fieldname": "custom_device_branch", "label": "Device Branch",
          "fieldtype": "Link", "options": "Branch", "read_only": 1},

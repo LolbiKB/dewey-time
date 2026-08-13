@@ -33,6 +33,26 @@ class TestCustomFields(unittest.TestCase):
         cf.make_custom_fields()
         cf.create_custom_fields.assert_called_once_with(cf.CUSTOM_FIELDS, ignore_validate=True)
 
+    def test_employee_khmer_name_fields_are_installed(self):
+        # These were added through the Frappe UI, so they exist on prod and on
+        # NO freshly created site. CI builds its site with `bench new-site`; a
+        # query selecting them would pass locally against a prod restore and
+        # fail there. The app has to install what it reads.
+        emp = {f["fieldname"]: f for f in cf.CUSTOM_FIELDS["Employee"]}
+        self.assertEqual(
+            set(emp), {"custom_khmer_first_name", "custom_khmer_last_name"}
+        )
+        for fieldname in emp:
+            self.assertEqual(emp[fieldname]["fieldtype"], "Data")
+            # Most of the roster has both; a handful have neither. A required
+            # field would make those records unsaveable.
+            self.assertNotEqual(emp[fieldname].get("reqd"), 1)
+        # Matches the prod docfield export: HR search by these already.
+        self.assertEqual(emp["custom_khmer_last_name"]["in_global_search"], 1)
+        self.assertEqual(emp["custom_khmer_first_name"]["in_global_search"], 1)
+        self.assertEqual(emp["custom_khmer_last_name"]["label"], "Khmer Last Name")
+        self.assertEqual(emp["custom_khmer_first_name"]["label"], "Khmer First Name")
+
 
 if __name__ == "__main__":
     unittest.main()

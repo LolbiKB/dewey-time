@@ -22,7 +22,16 @@ from dewey_time.attendance_engine.hr_calendar import (
 )
 from dewey_time.attendance_engine.schedule_resolver import week_pattern_from_ssas
 
-_CACHE_KEY = "schedule_coverage:v1"
+# The version suffix is tied to the SHAPE of the cached payload, not to this
+# module's behaviour: bump it whenever a field is added, renamed or removed
+# anywhere in what get_schedule_coverage returns. A deploy does not clear
+# Redis, so for the whole TTL afterwards a key written by the OLD code can
+# still answer a request from the NEW frontend; a new prefix simply cannot be
+# hit by pre-deploy entries.
+#
+# v2: employee rows (both assigned and unassigned) gained
+# custom_khmer_last_name / custom_khmer_first_name.
+_CACHE_KEY = "schedule_coverage:v2"
 _CACHE_TTL_SECONDS = 120
 
 # Upper bound on active employees scanned for coverage. Higher than the calendar
@@ -40,6 +49,8 @@ _EMPLOYEE_FIELDS = (
     "title",
     "image",
     "branch",
+    "custom_khmer_last_name",
+    "custom_khmer_first_name",
 )
 
 

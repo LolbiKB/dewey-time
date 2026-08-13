@@ -101,7 +101,7 @@ class TestInvalidateCoverageCache(unittest.TestCase):
 
         frappe.cache.return_value.delete_value.reset_mock()
         coverage_api.invalidate_coverage_cache()
-        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v1")
+        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v2")
 
     def test_invalidate_accepts_doc_event_args(self):
         from dewey_time.attendance_engine import coverage_api
@@ -179,6 +179,83 @@ class TestCoverageTruncationFlag(unittest.TestCase):
         ), patch.object(coverage_api, "COVERAGE_EMPLOYEE_LIMIT", 3):
             payload = coverage_api._build_coverage_payload()
         self.assertTrue(payload["counts"]["truncated"])
+
+
+class TestEmployeeKhmerNameFields(unittest.TestCase):
+    def test_khmer_fields_reach_the_coverage_payload(self):
+        """Khmer fields are declared for projection and survive coverage's dict copy.
+
+        This is a cheap assertion: the tuple check confirms the fields are
+        declared for projection, and _employee_base is exercised on a
+        hand-built dict that already carries both keys -- it does not reach
+        hr_calendar._list_calendar_employee_rows, so it cannot catch a field
+        that is SELECTed but dropped by that function's output dict. The real
+        mapping -- SELECT through to the emitted row -- is tested by
+        test_khmer_fields_are_mapped_from_database_row.
+        """
+        # The trap this guards: a field added to the SELECT list and then
+        # dropped by the explicit output dict is a production no-op that yields
+        # None forever. `branch` shipped exactly that way in hr_calendar.py.
+        # Asserting on the emitted payload -- not on the fields list -- is what
+        # makes the mapping load-bearing.
+        from dewey_time.attendance_engine import coverage_api
+        self.assertIn("custom_khmer_first_name", coverage_api._EMPLOYEE_FIELDS)
+        self.assertIn("custom_khmer_last_name", coverage_api._EMPLOYEE_FIELDS)
+        row = {
+            "id": "EMP-1", "employee_name": "Sophea Chan", "department": "Retail",
+            "employment_type": "Full-time", "title": "Barista", "image": None,
+            "branch": "BRANCH-A",
+            "custom_khmer_first_name": "សុភា", "custom_khmer_last_name": "ចាន់",
+        }
+        base = coverage_api._employee_base(row)
+        self.assertEqual(base["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(base["custom_khmer_first_name"], "សុភា")
+
+    def test_khmer_fields_are_mapped_from_database_row(self):
+        """Khmer fields are read from the Employee DB row and included in the emitted dict.
+
+        This exercises the full path: frappe.get_all fetches the Khmer
+        columns, and _list_calendar_employee_rows includes them in the
+        returned employee dict. Unlike test_khmer_fields_reach_the_coverage_payload
+        above (which hand-builds a dict that already has the keys),
+        this test would catch the exact bug it guards against: deleting the
+        two emitted lines in hr_calendar.py leaves the SELECT untouched but
+        makes this test fail, because the real function -- not a synthetic
+        dict -- is what is called here. That is what happened to `branch` in
+        this same file until it was caught in review.
+        """
+        from dewey_time.attendance_engine import hr_calendar
+
+        db_row = {
+            "name": "HR-EMP-0002",
+            "employee_name": "Sok Dara",
+            "designation": "Analyst",
+            "department": "Finance",
+            "company": "Company 1",
+            "image": None,
+            "branch": "DIU",
+            "custom_khmer_last_name": "ចាន់",
+            "custom_khmer_first_name": "សុភា",
+        }
+
+        with patch("frappe.get_all", return_value=[db_row]), patch(
+            "frappe.db.has_column", return_value=True
+        ), patch.object(
+            hr_calendar, "_shift_schedule_assignment_metadata_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "shift_assignment_bounds_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "first_checkin_date_by_employee", return_value={}
+        ), patch.object(
+            hr_calendar, "is_full_time_employment", return_value=True
+        ), patch.object(
+            hr_calendar, "is_clock_based", return_value=True
+        ):
+            result = hr_calendar._list_calendar_employee_rows(None, include_all=True, limit=500)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(result[0]["custom_khmer_first_name"], "សុភា")
 
 
 if __name__ == "__main__":

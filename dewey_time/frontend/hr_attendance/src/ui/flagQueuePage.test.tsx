@@ -88,6 +88,12 @@ function makePerson(args: {
   entryKey?: string;
   /** Employee.image, or absent for the many employees who have no photo. */
   image?: string | null;
+  /**
+   * The two raw Khmer fields, unordered on the wire — absent for the many
+   * employees who have none, and for a site whose columns predate them.
+   */
+  khmerLast?: string | null;
+  khmerFirst?: string | null;
   alsoCount?: number;
   alsoOutlierCount?: number;
 }): QueuePerson {
@@ -99,6 +105,8 @@ function makePerson(args: {
     employee_name: args.name,
     employee_branch: "Phnom Penh HQ",
     employee_image: args.image ?? null,
+    custom_khmer_last_name: args.khmerLast ?? null,
+    custom_khmer_first_name: args.khmerFirst ?? null,
     attendance_date: top?.attendance_date ?? DATE,
     dates: [...new Set(args.flags.map((f) => f.attendance_date))].sort(),
     rank: args.rank,
@@ -397,11 +405,45 @@ function slotText(html: string, marker: string): string {
   return html.slice(open, html.indexOf("<", open));
 }
 
-/** The two slots of a list row: the bold headline and the line under it. */
+/** The two slots of a GROUP row: the bold headline and the line under it. */
 const TITLE_SLOT = "text-sm font-medium text-foreground";
 const SUBLINE_SLOT = "text-xs text-muted-foreground tabular-nums";
-/** A person row's sub-line is its own slot — a group's carries `tabular-nums`. */
-const PERSON_SUBLINE_SLOT = "block truncate text-xs text-muted-foreground";
+/**
+ * A person row's headline, which is now EmployeeIdentity's line one.
+ *
+ * The old slot was the row's own `text-sm font-medium text-foreground`, shared
+ * with a group's headline; a person's name comes out of the shared component
+ * instead, so it is told apart from a group's by `font-semibold leading-tight`.
+ * Still the headline slot, still asserted rather than searched for, so a name
+ * rendered into the line below it still fails.
+ */
+const PERSON_NAME_SLOT = "block truncate text-sm font-semibold leading-tight";
+
+/**
+ * The caller facts EmployeeIdentity puts on line two beside the employee id, in
+ * order, with the decorative separator dropped.
+ *
+ * Replaces `slotText(html, "block truncate text-xs text-muted-foreground")`,
+ * which read a person row's sub-line when it was one span holding one string.
+ * The finding is a tail fact now, and a tail fact carries an `aria-hidden`
+ * separator on the side facing the id — so "the text up to the first tag" is
+ * empty for a fact that follows it, and slotText would report a passing empty
+ * string. Keyed on `mx-1 opacity-40`, the separator only a tail fact carries:
+ * the Khmer name's wrapper is a hidden `@min-[…]` span too, and matching it as
+ * a fact would make a name read as one.
+ *
+ * Both sides of the id are matched, because the queue's facts LEAD it — the
+ * separator trails the label there. Matching only the trailing shape would have
+ * turned the whole sub-line into a silently empty list.
+ */
+function tailFacts(html: string): string[] {
+  const separator = '<span aria-hidden="true" class="mx-1 opacity-40">·<\\/span>';
+  const fact = new RegExp(
+    `<span class="hidden @min-\\[\\d+px\\]:inline[^"]*">(?:${separator}([^<]*)|([^<]*)${separator})<\\/span>`,
+    "g",
+  );
+  return [...html.matchAll(fact)].map((match) => match[1] ?? match[2]);
+}
 
 function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisionPanelProps {
   return {
@@ -1393,6 +1435,41 @@ test("a multi-day entry's header names the range, not just the headline day", ()
   );
 });
 
+// The panel's header is the seventh surface that draws a person, and the only
+// one whose payload carries no facts to put beside the id: QueuePerson has no
+// department and no title. The one fact it does carry — the branch — is on the
+// line below already, so the tail is EMPTY on purpose. A future reader adding
+// `tail={[{ label: person.employee_branch }]}` would print it twice, and this
+// is what would tell them.
+test("the person panel names them once, with their id, and the branch only once", () => {
+  const person: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00014",
+      name: "Sophea Chan",
+      khmerLast: "ចាន់",
+      khmerFirst: "សុភា",
+      rank: 132,
+      tier: "act",
+      flags: [
+        makeFlag({ identity: "id-gap-sophea", code: "MISSING_TIME", rank: 132, tier: "act" }),
+      ],
+    }),
+  };
+  const header = panelHeader(
+    renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry: person })} />)
+  );
+
+  assert.match(header, /Sophea Chan/);
+  assert.match(header, /ចាន់ សុភា/, "the Khmer name reaches the panel too");
+  assert.match(header, /HR-EMP-00014/, "and the id the shared block always states");
+  assert.equal(
+    header.split("Phnom Penh HQ").length - 1,
+    1,
+    "the branch is on the date line, and nowhere else",
+  );
+});
+
 test("a single-day entry's header still names one day", () => {
   const header = panelHeader(
     renderToStaticMarkup(<FlagDecisionPanel {...panelProps({ entry: outlierPersonEntry() })} />)
@@ -1461,18 +1538,95 @@ test("a person row leads with their photo and states the finding with its day", 
     <FlagQueueList entries={[missingTimePerson()]} {...listProps()} />
   );
   assert.match(html, /<img[^>]+src="\/files\/sokheng\.jpg"/);
-  assert.equal(slotText(html, TITLE_SLOT), "Sokheng Hon");
-  assert.equal(slotText(html, PERSON_SUBLINE_SLOT), "Missing 3h 12m · Thu 6 Aug");
+  assert.equal(slotText(html, PERSON_NAME_SLOT), "Sokheng Hon");
+  // TWO facts, not one string. The identity block's ladder can only drop the
+  // day whole — rather than cut it mid-word on a phone — if the day is a fact
+  // of its own; measured, that is the difference between "Thu 6 Aug" and "Th".
+  assert.deepEqual(tailFacts(html), ["Missing 3h 12m", "Thu 6 Aug"]);
+  // And the employee id, which the shared identity block always states on line
+  // two. The queue never showed one before — a deliberate consequence of the
+  // one-component rule, not a stray addition, so it is pinned here.
+  assert.match(html, /class="tabular-nums">HR-EMP-00011</);
+  // LAST, behind both facts. Line two truncates from its end, so the id is the
+  // queue's chosen sacrifice: at 375 it drew "EMP-002·Missing 3h 1" when it led,
+  // and "3h 1" reads as a smaller number rather than as a cut one.
+  assert.ok(
+    html.indexOf("HR-EMP-00011") > html.indexOf("Thu 6 Aug"),
+    "the finding and its day both lead the employee id",
+  );
+  // The day is SPOKEN even at the widths that do not draw it. Below 170px of
+  // container the ladder drops it from the screen entirely, so the row's label
+  // is the only place it survives — which is why personSubline was kept when
+  // the drawn line split into two facts. Pinned as an exact substring because
+  // this fixture's date is static: swapping the label's source from the joined
+  // sub-line to the finding alone would mute the day at every width and leave
+  // every other assertion in this file green.
+  assert.match(
+    rowWith(html, "Sokheng Hon"),
+    /aria-label="[^"]*Missing 3h 12m · Thu 6 Aug/,
+    "the day is spoken even at widths that drop it from the screen",
+  );
+});
+
+// A sighted reader sees the pair on line one; a screen-reader user has to hear
+// it in the same order, which is why the label states the Khmer name directly
+// behind the English one rather than at the end of the sentence.
+test("a person row carries the Khmer name on the line and in the spoken label", () => {
+  const person: PersonEntry = {
+    kind: "person",
+    ...makePerson({
+      employee: "HR-EMP-00014",
+      name: "Sophea Chan",
+      khmerLast: "ចាន់",
+      khmerFirst: "សុភា",
+      rank: 132,
+      tier: "act",
+      flags: [
+        makeFlag({ identity: "id-gap-sophea", code: "MISSING_TIME", rank: 132, tier: "act" }),
+      ],
+    }),
+  };
+  const row = rowWith(
+    renderToStaticMarkup(<FlagQueueList entries={[person]} {...listProps()} />),
+    "Sophea Chan",
+  );
+
+  // Family name FIRST: composed by khmerName() from the two raw fields, not
+  // read off custom_khmer_first_name, which would name a different person.
+  assert.equal(slotText(row, PERSON_NAME_SLOT), "Sophea Chan", "the English name still leads");
+  assert.match(row, /ចាន់ សុភា/, "and the Khmer name is on the same line");
+  assert.match(
+    row,
+    /aria-label="Sophea Chan\. ចាន់ សុភា\./,
+    "the label says both, in the order the line shows them",
+  );
+});
+
+test("a person with no Khmer name on file gets no dangling separator", () => {
+  // Most of this roster has none, and the queue is where a bare middot after
+  // every name would be most visible.
+  const row = rowWith(
+    renderToStaticMarkup(<FlagQueueList entries={[missingTimePerson()]} {...listProps()} />),
+    "Sokheng Hon",
+  );
+  assert.match(row, /aria-label="Sokheng Hon\. Missing 3h/, "nothing empty between the two");
+  assert.doesNotMatch(row, /font-khmer/, "and no empty Khmer span on the line");
 });
 
 test("a person with several days of one code gets no single date", () => {
   // "4 late starts · worst 31 min" — naming one day would be wrong for the
   // other three.
   const html = renderToStaticMarkup(<FlagQueueList entries={[repeatPerson()]} {...listProps()} />);
-  assert.equal(slotText(html, PERSON_SUBLINE_SLOT), "4 late starts · worst 31 min");
+  assert.deepEqual(tailFacts(html), ["4 late starts · worst 31 min"]);
   // Nowhere in the row, not merely out of the sub-line: a date pushed into the
-  // title slot instead would be just as wrong.
-  assert.equal(/· \w{3} \d+ \w{3}/.test(html), false);
+  // title slot instead would be just as wrong. Matched bare rather than behind
+  // a separator, because the day is its own fact now and would carry its
+  // separator in a sibling element where `· Thu 6 Aug` never appears as text.
+  // Scoped to the row, not the whole document: bare, this pattern matches any
+  // three-letter word / number / three-letter word anywhere in the render, so
+  // an unrelated future label would fail it a long way from the day it exists
+  // to catch, and the failure message would point at the wrong thing.
+  assert.equal(/\b\w{3} \d{1,2} \w{3}\b/.test(rowWith(html, "4 late starts")), false);
 });
 
 test("a person with no photo still leads with an avatar, not a gap", () => {

@@ -55,6 +55,76 @@ class BuildPayloadTest(unittest.TestCase):
         self.assertEqual(row["branch"], "DIU")
         self.assertEqual(row["department"], "Finance")
 
+    def test_the_khmer_name_fields_reach_the_enrollment_row(self):
+        """Emitted, not merely selected: a field in the SELECT list that the
+        output dict drops is a production no-op that returns None forever --
+        exactly what `branch` did in hr_calendar.py until it was caught in
+        review.
+        """
+        employee = _emp("E1")
+        employee["custom_khmer_last_name"] = "ចាន់"
+        employee["custom_khmer_first_name"] = "សុភា"
+        payload = self._build([employee], [], {})
+        row = payload["rows"][0]
+        self.assertEqual(row["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(row["custom_khmer_first_name"], "សុភា")
+
+    def test_the_khmer_fields_are_selected(self):
+        """`_build` above patches out `_list_employees` entirely, so the SELECT
+        it builds -- fields.append(...) behind the has_column guard -- never
+        runs in the test above. Deleting that guarded-append loop would still
+        pass it. Call the real function and inspect what frappe.get_all was
+        actually asked for.
+        """
+        get_all = MagicMock(return_value=[])
+        # has_column is patched TRUE rather than left to the frappe mock's
+        # truthy default. Under `bench run-tests` frappe is real, so the default
+        # is whatever the CI site's schema happens to say -- and it said False,
+        # failing this test there while it passed locally. What this test is for
+        # is "given the column exists, is it selected"; the column-absent branch
+        # is the sibling test's job. Neither should depend on site state.
+        with patch.object(mod.frappe, "get_all", get_all), patch.object(
+            mod.frappe.db, "has_column", return_value=True
+        ):
+            mod._list_employees()
+        fields = get_all.call_args.kwargs["fields"]
+        self.assertIn("custom_khmer_last_name", fields)
+        self.assertIn("custom_khmer_first_name", fields)
+
+    def test_a_site_mid_migration_without_the_khmer_columns_still_builds_the_register(self):
+        """has_column is a truthy MagicMock by default in this mock, so every
+        other test in this file only exercises the column-present branch.
+        Force the column-absent branch the guard exists for -- a site mid
+        custom_fields migration -- and prove frappe.get_all is never asked
+        for the missing columns (which raises on a real site) while the
+        register still builds, with the Khmer fields simply absent rather
+        than the whole page 500ing.
+        """
+        def _has_column(_doctype, column):
+            return not column.startswith("custom_khmer")
+
+        def _get_all(doctype, **kwargs):
+            if doctype == "Employee":
+                self.assertNotIn("custom_khmer_last_name", kwargs["fields"])
+                self.assertNotIn("custom_khmer_first_name", kwargs["fields"])
+                # A real row from a DB without these columns simply has no
+                # such keys -- not the keys present with a None value.
+                return [_emp("E1")]
+            return []
+
+        with patch.object(
+            mod.frappe.db, "has_column", side_effect=_has_column
+        ), patch.object(mod.frappe, "get_all", side_effect=_get_all), patch.object(
+            mod, "_checkin_counts", return_value={}
+        ), patch.object(
+            mod.frappe.db, "get_single_value", return_value=None
+        ), patch.object(mod, "_today", return_value=date(2026, 8, 11)):
+            payload = mod._build_enrollment_payload()
+
+        row = payload["rows"][0]
+        self.assertIsNone(row["custom_khmer_last_name"])
+        self.assertIsNone(row["custom_khmer_first_name"])
+
     def test_a_leaver_with_a_live_template_reports_days_since(self):
         payload = self._build(
             [_emp("E1", status="Left", relieving=date(2026, 8, 1))], [_reg("E1")], {"E1": 400}
@@ -299,6 +369,28 @@ class SeamTest(unittest.TestCase):
         ):
             status = mod.enrollment_status("E1")
         self.assertIsNone(status["last_snapshot_at"])
+
+
+class TestEnrollmentCacheKey(unittest.TestCase):
+    def test_the_key_is_v2(self):
+        # enrollment_api.py:29-37: a deploy does not clear Redis, so for a whole
+        # TTL after one a key written by the old code can still answer the new
+        # frontend. The comment there says to bump the suffix whenever a field
+        # is added, renamed or removed anywhere in the payload -- v2 is the
+        # Khmer name fields arriving on every row -- and this is what turns that
+        # instruction into something a change has to walk past. The queue's
+        # prefix has the same pin in test_flag_queue_api.TestQueueCachePrefix,
+        # and coverage's is pinned by its invalidate test.
+        self.assertEqual(mod._CACHE_KEY, "enrollment_report:v2")
+
+    def test_invalidate_deletes_that_exact_key(self):
+        # The pin above is a literal in a test; this is the literal actually
+        # reaching Redis. Wired to the register's doc events in hooks.py, so a
+        # key that no longer matches leaves a stale report until the TTL.
+        cache = MagicMock()
+        with patch.object(mod.frappe, "cache", cache):
+            mod.invalidate_enrollment_cache()
+        cache.return_value.delete_value.assert_called_once_with("enrollment_report:v2")
 
 
 class PermissionTest(unittest.TestCase):

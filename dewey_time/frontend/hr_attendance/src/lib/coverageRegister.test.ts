@@ -240,6 +240,9 @@ test("ENROLLED_NOT_PUNCHING stays distinct from OK", () => {
 
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  // No Khmer name is the common case for these fixtures — only the tests
+  // dedicated to khmer_name itself override it.
+  khmer_name: null,
   // No photo is the common case, and the one the row has to stay readable in.
   image: null,
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
@@ -275,6 +278,20 @@ test("search matches name and employee id, case-insensitively", () => {
   assert.equal(filterRegisterRows(rows, { search: "sok" }).length, 1);
   assert.equal(filterRegisterRows(rows, { search: "0117" })[0].employee_name, "Chan Sophea");
   assert.equal(filterRegisterRows(rows, { search: "   " }).length, 2);
+});
+
+test("the register's search matches a Khmer name", () => {
+  const rows = [
+    row({ id: "E1", employee_name: "Sophea Chan", khmer_name: "ចាន់ សុភា" }),
+    row({ id: "E2", employee_name: "Dara Sok", khmer_name: "សុខ ដារា" }),
+  ];
+  assert.deepEqual(filterRegisterRows(rows, { search: "សុភា" }).map((r) => r.id), ["E1"]);
+  // And the English path is untouched.
+  assert.deepEqual(filterRegisterRows(rows, { search: "dara" }).map((r) => r.id), ["E2"]);
+  // The `?? ""` guard: a row with no Khmer name (row()'s default) must not
+  // match the literal string "null" a regression to `${row.khmer_name}`
+  // would coerce it into.
+  assert.deepEqual(filterRegisterRows([row({ id: "E3" })], { search: "null" }), []);
 });
 
 test("filters compose — problems AND one branch", () => {
@@ -1322,4 +1339,96 @@ test("registerCsvColumns names what each downed feed takes away", () => {
   assert.deepEqual(registerCsvColumns({ schedule: false, biometric: true }).omitted, [
     "Schedule", "Weekly minutes",
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// khmer_name — composed once at the join
+// ---------------------------------------------------------------------------
+
+test("the join composes the Khmer name once, family name first", () => {
+  // Composed at the join rather than at each cell: the register, the CSV and
+  // the search all read one row, and three call sites composing separately is
+  // how the surfaces drifted the first time.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sophea Chan", department: "Retail",
+                   branch: "DIU", weekly_minutes: 2400,
+                   custom_khmer_last_name: "ចាន់", custom_khmer_first_name: "សុភា" }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment(),
+  );
+  assert.equal(rows[0].khmer_name, "ចាន់ សុភា");
+});
+
+test("an employee with no Khmer name gets null, not an empty string", () => {
+  // Empty string is truthy enough to render a bare separator; null is the one
+  // value every consumer here already treats as "no fact".
+  const rows = joinRegisterRows(
+    coverage({
+      unassigned: [{ id: "E2", employee_name: "Derek Hale", department: "Ops", branch: "DIU" }],
+      counts: { active: 1, unassigned: 1, assigned: 0, truncated: false },
+    }),
+    enrollment(),
+  );
+  assert.equal(rows[0].khmer_name, null);
+});
+
+test("the enrolment feed can supply a Khmer name for a row coverage never returned", () => {
+  // A leaver still holding a template exists in the enrolment feed alone --
+  // the security finding the register exists for. Their Khmer name has to come
+  // from that side or the row shows less than the roster knows.
+  const rows = joinRegisterRows(
+    coverage(),
+    enrollment({
+      rows: [{ id: "E9", employee_name: "Vanna Ly", branch: "PM", department: "Teaching",
+               status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+               fingerprint_count: 1, face_count: 0, days_since_relieving: 12,
+               custom_khmer_last_name: "លី", custom_khmer_first_name: null }],
+    }),
+  );
+  assert.equal(rows[0].khmer_name, "លី");
+});
+
+test("khmer_name precedence: coverage wins when both feeds report the same employee with different Khmer names", () => {
+  // A different name, not a blank one -- a blank enrolment record would pass
+  // this test even with the precedence guard deleted outright. Only a second,
+  // DIFFERENT name fails loudly if coverage's is overwritten rather than kept.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance",
+                   branch: "DIU", weekly_minutes: 2400,
+                   custom_khmer_last_name: "ចាន់", custom_khmer_first_name: "សុភា" }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, face_count: 0, days_since_relieving: null,
+               custom_khmer_last_name: "សុខ", custom_khmer_first_name: "ដារា" }],
+    }),
+  );
+  assert.equal(rows[0].khmer_name, "ចាន់ សុភា");
+});
+
+test("the enrolment feed fills khmer_name for a row coverage DID return but had no Khmer name for", () => {
+  // The fill branch, distinct from the leaver test above: that row takes the
+  // CREATE path (coverage never returned E9 at all), so it cannot tell the
+  // create line and the fill line apart. Here coverage seeds the row -- with
+  // neither Khmer field -- so the merge has to run the fill branch to pick up
+  // the enrolment feed's name.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Sok Dara", department: "Finance",
+                   branch: "DIU", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, face_count: 0, days_since_relieving: null,
+               custom_khmer_last_name: "លី", custom_khmer_first_name: null }],
+    }),
+  );
+  assert.equal(rows[0].khmer_name, "លី");
 });

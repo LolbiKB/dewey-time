@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import type { ParsedRow, RowApplyStatus } from "@/types/scheduleImport";
 import { summarizeWeekPattern } from "@/types/schedule";
+import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import { SHAPE_LABELS } from "@/ui/schedule-import/constants";
 import { formatShiftSummary, formatWorkDays } from "@/ui/schedule-import/format";
 import { IssueBadge } from "@/ui/schedule-import/IssueBadge";
@@ -58,14 +59,34 @@ export function PreviewRow(props: {
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                <span className="font-medium leading-snug">
-                  {row.employee_name ?? row.id_card ?? "—"}
-                </span>
-                {row.id_card && row.employee_name ? (
-                  <span className="truncate text-xs text-muted-foreground">{row.id_card}</span>
-                ) : null}
-              </div>
+              <EmployeeIdentity
+                // Whatever identifies this line of the spreadsheet leads: the
+                // matched employee's name, or the ID card it was looked up by.
+                //
+                // `||`, not the `??` this chain used to be written with. Both
+                // fields arrive from a parsed spreadsheet cell, where "missing"
+                // is the EMPTY STRING and not null — the shape the guard this
+                // replaces was written against, `row.id_card &&
+                // row.employee_name` — so under `??` the em dash was
+                // unreachable and a garbage line rendered a blank name.
+                englishName={row.employee_name || row.id_card || "—"}
+                // …and the ID card takes line two only when it is not already
+                // line one. An empty id renders a zero-height second line
+                // (measured), so an unmatched row reads exactly as it does
+                // today — one line — rather than gaining a blank one.
+                employeeId={row.employee_name ? row.id_card : ""}
+                // A parsed spreadsheet row is not an Employee record: the
+                // upload carries an ID card and a name, and the backend's
+                // parse contract has no Khmer columns to match against. Stated
+                // rather than left undefined, which is what the required prop
+                // is for.
+                khmerName={null}
+                // No tail: row number, work days and shift are the surface's
+                // own line below, and they describe the SCHEDULE being
+                // imported rather than the person. No avatar either — there
+                // may be no employee behind this row at all, and initials drawn
+                // from an ID card are not a face.
+              />
               <p className="mt-0.5 text-xs text-muted-foreground">
                 <span className="tabular-nums">Row {row.row_number}</span>
                 {" · "}
