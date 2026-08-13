@@ -288,6 +288,10 @@ test("the register's search matches a Khmer name", () => {
   assert.deepEqual(filterRegisterRows(rows, { search: "សុភា" }).map((r) => r.id), ["E1"]);
   // And the English path is untouched.
   assert.deepEqual(filterRegisterRows(rows, { search: "dara" }).map((r) => r.id), ["E2"]);
+  // The `?? ""` guard: a row with no Khmer name (row()'s default) must not
+  // match the literal string "null" a regression to `${row.khmer_name}`
+  // would coerce it into.
+  assert.deepEqual(filterRegisterRows([row({ id: "E3" })], { search: "null" }), []);
 });
 
 test("filters compose — problems AND one branch", () => {

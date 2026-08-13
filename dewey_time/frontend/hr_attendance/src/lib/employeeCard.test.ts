@@ -164,10 +164,27 @@ test("the picker haystack includes the Khmer name", () => {
   assert.match(haystack, /ចាន់ សុភា/);
 });
 
+// Built through the same haystack() helper every other employeeCommandFilter
+// test uses, so this pins the matcher-plus-haystack pairing, not just the
+// matcher in isolation.
+const KHMER_HAYSTACK = haystack({
+  id: "EMP-1",
+  employee_name: "Sophea Chan",
+  label: "EMP-1 · Sophea Chan",
+  custom_khmer_last_name: "ចាន់",
+  custom_khmer_first_name: "សុភា",
+});
+
 test("a Khmer query matches inside a name with no word boundary", () => {
   // Khmer has no inter-word spaces. `សុភា` is the given name inside
   // `ចាន់ សុភា`, and no boundary-aware matcher would find it. This test fails
   // if someone "optimises" employeeCommandFilter into a word-boundary match.
-  assert.equal(employeeCommandFilter("ចាន់ សុភា EMP-1", "សុភា"), 1);
-  assert.equal(employeeCommandFilter("ចាន់ សុភា EMP-1", "ដារា"), 0);
+  assert.equal(employeeCommandFilter(KHMER_HAYSTACK, "សុភា"), 1);
+  assert.equal(employeeCommandFilter(KHMER_HAYSTACK, "ដារា"), 0);
+  // Khmer routinely arrives with no space at all; this is the case a
+  // split-on-whitespace matcher cannot find. Literal, not through haystack():
+  // khmerName always joins with a space, so no real haystack produces this
+  // shape — it is the synthetic case that closes the gap a split-and-compare
+  // matcher would otherwise sail through undetected.
+  assert.equal(employeeCommandFilter("ចាន់សុភា EMP-1", "សុភា"), 1);
 });
