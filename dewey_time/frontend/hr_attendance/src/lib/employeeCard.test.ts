@@ -155,3 +155,19 @@ test("employeeDisplayName shows the name as recorded, middle name and all", () =
   };
   assert.equal(employeeDisplayName(employee), "Ana Maria Cruz");
 });
+
+test("the picker haystack includes the Khmer name", () => {
+  const haystack = employeeSearchHaystack({
+    id: "EMP-1", label: "EMP-1 · Sophea Chan", employee_name: "Sophea Chan",
+    custom_khmer_last_name: "ចាន់", custom_khmer_first_name: "សុភា",
+  });
+  assert.match(haystack, /ចាន់ សុភា/);
+});
+
+test("a Khmer query matches inside a name with no word boundary", () => {
+  // Khmer has no inter-word spaces. `សុភា` is the given name inside
+  // `ចាន់ សុភា`, and no boundary-aware matcher would find it. This test fails
+  // if someone "optimises" employeeCommandFilter into a word-boundary match.
+  assert.equal(employeeCommandFilter("ចាន់ សុភា EMP-1", "សុភា"), 1);
+  assert.equal(employeeCommandFilter("ចាន់ សុភា EMP-1", "ដារា"), 0);
+});

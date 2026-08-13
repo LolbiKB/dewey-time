@@ -318,7 +318,12 @@ export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters
   const needle = (filters.search ?? "").trim().toLowerCase();
 
   return rows.filter((row) => {
-    if (needle && !`${row.employee_name} ${row.id}`.toLowerCase().includes(needle)) return false;
+    // The Khmer name joins the haystack rather than getting its own branch:
+    // one `includes` over one string is what makes a query of `សុភា` match
+    // inside `ចាន់ សុភា`, where Khmer's lack of inter-word spaces means there
+    // is no token boundary to anchor to.
+    if (needle && !`${row.employee_name} ${row.id} ${row.khmer_name ?? ""}`
+      .toLowerCase().includes(needle)) return false;
     if (filters.branch?.length && !filters.branch.includes(row.branch ?? "")) return false;
     if (filters.department?.length && !filters.department.includes(row.department ?? "")) return false;
     if (filters.status && row.status !== filters.status) return false;

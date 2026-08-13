@@ -280,6 +280,16 @@ test("search matches name and employee id, case-insensitively", () => {
   assert.equal(filterRegisterRows(rows, { search: "   " }).length, 2);
 });
 
+test("the register's search matches a Khmer name", () => {
+  const rows = [
+    row({ id: "E1", employee_name: "Sophea Chan", khmer_name: "ចាន់ សុភា" }),
+    row({ id: "E2", employee_name: "Dara Sok", khmer_name: "សុខ ដារា" }),
+  ];
+  assert.deepEqual(filterRegisterRows(rows, { search: "សុភា" }).map((r) => r.id), ["E1"]);
+  // And the English path is untouched.
+  assert.deepEqual(filterRegisterRows(rows, { search: "dara" }).map((r) => r.id), ["E2"]);
+});
+
 test("filters compose — problems AND one branch", () => {
   const rows = [
     row({ id: "A", employee_name: "A", branch: "DIU", schedule: "missing" }),

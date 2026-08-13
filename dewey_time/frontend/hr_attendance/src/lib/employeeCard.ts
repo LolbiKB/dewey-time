@@ -126,12 +126,14 @@ export function employeeSearchHaystack(employee: CalendarEmployee): string {
   const haystack = [
     employee.id,
     employee.employee_name,
-    employeeDisplayName(employee),
     employee.label,
     employee.employment_type,
     employee.title,
     employee.department,
     employee.company,
+    // ERPNext marks both Khmer fields in_global_search, so HR already expects
+    // to find people by them.
+    khmerName(employee.custom_khmer_last_name, employee.custom_khmer_first_name),
   ]
     .filter((part) => part != null && String(part).trim())
     .join(" ");
