@@ -20,6 +20,15 @@ import { longKhmerCoveragePayload, stubFrappe } from "./fixtures";
  *
  * They are pinned rather than papered over. A test that records the wrong
  * number is worse than no test, because the number then gets quoted.
+ *
+ * ON THE EXACT PIXEL PINS. The heights (33/37 and 53/54) are exact because they
+ * ARE the finding — a tolerance there would let the very drift they exist to
+ * catch through. They were taken on macOS/Chromium, identical on both Playwright
+ * projects, and a runner with different font rasterisation may need them
+ * re-measured; that is a deliberate trade, not an oversight. Everything else is
+ * asserted as the PROPERTY that matters — above this rung, below that threshold,
+ * wide enough for that line — with the measured number kept in the comment. The
+ * crossing test brackets 1320/1340 rather than probing 1330 for the same reason.
  */
 
 /**
@@ -75,6 +84,8 @@ type Stack = {
   name: string;
   facts: string;
   clipped: ("name" | "facts")[];
+  /** Child line boxes. "Never a third line" is a plan constraint; this sees it. */
+  lines: number;
 };
 
 async function stacks(page: Page): Promise<Stack[]> {
@@ -106,8 +117,62 @@ async function stacks(page: Page): Promise<Stack[]> {
           overflows(0) ? ["name"] : [],
           overflows(1) ? ["facts"] : [],
         ),
+        lines: el.children.length,
       };
     }),
+  );
+}
+
+/**
+ * The text a person can actually READ on one line of one stack.
+ *
+ * `innerText` returns the whole DOM string no matter what `text-overflow` does
+ * with it, so `expect(facts).toContain("Missing 3h 12m")` proves the tail ladder
+ * rendered the fact and says nothing about whether anyone can see it. This walks
+ * the line's text nodes a character at a time with a `Range` and returns the
+ * widest prefix that fits — less the width of the ellipsis, which the browser
+ * reserves inside the content box and which therefore eats a character of its
+ * own. What comes back is what is painted.
+ */
+async function drawnText(page: Page, stackIndex: number, lineIndex: number): Promise<string> {
+  return page.evaluate(
+    ([si, li]) => {
+      const stack = document.querySelectorAll<HTMLElement>(".\\@container")[si];
+      const line = stack.children[li] as HTMLElement;
+
+      const probe = document.createElement("span");
+      probe.textContent = "…";
+      probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre";
+      line.appendChild(probe);
+      const ellipsis = probe.getBoundingClientRect().width;
+      probe.remove();
+
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      const nodes: Text[] = [];
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        // Skip text inside a span the container query switched off: it has no
+        // box, so it is not part of what is drawn.
+        const parent = (node as Text).parentElement;
+        if (parent && parent.getClientRects().length > 0) nodes.push(node as Text);
+      }
+
+      const overflowing = line.scrollWidth > line.clientWidth + 1;
+      const limit =
+        line.getBoundingClientRect().left + line.clientWidth - (overflowing ? ellipsis : 0);
+      const range = document.createRange();
+      let drawn = "";
+      for (const text of nodes) {
+        for (let i = 1; i <= text.data.length; i++) {
+          range.setStart(text, i - 1);
+          range.setEnd(text, i);
+          if (range.getBoundingClientRect().right > limit) return drawn;
+          drawn += text.data[i - 1];
+        }
+      }
+      return drawn;
+    },
+    [stackIndex, lineIndex] as const,
   );
 }
 
@@ -151,21 +216,35 @@ test("a name line is never clipped, and line two only where measured", async ({ 
       await expect(page.locator(".\\@container").first()).toBeVisible();
       const found = await stacks(page);
       expect(found.length, `${route} @${width}: no identity blocks found`).toBeGreaterThan(0);
-      for (const s of found) {
+      found.forEach((s, index) => {
         expect(
           s.clipped,
           `${route} @${width}: name clipped at stack ${s.width}px — "${s.name}"`,
         ).not.toContain("name");
-        if (s.clipped.includes("facts")) factOverflows.push(`${route} @${width}`);
-      }
+        // "Never a third line, and the order never changes with width" is a hard
+        // constraint of the design, and this walk is the only thing in the repo
+        // that can see the box. Until now a third line would have shown up only
+        // indirectly, as a register row that got taller.
+        expect(s.lines, `${route} @${width}: stack has ${s.lines} lines, not two`).toBe(2);
+        // Keyed by stack, not just by route and width. Keyed by the pair alone,
+        // a SECOND overflowing stack on the same route at the same width would
+        // de-dupe into the first and this pin would not notice — which is not
+        // what "fails on a new overflow anywhere" means.
+        if (s.clipped.includes("facts")) {
+          factOverflows.push(`${route} @${width} #${index} ${s.width}px "${s.name}"`);
+        }
+      });
     }
   }
 
-  // 210px of "EMP-002 · Missing 3h 12m · Thu 6 Aug" into a 139px stack at 375
-  // and a 176px one at 412. The tail ladder's first rung is 120px — "the id
-  // plus one fact" — and it was measured against a picker's department name,
-  // not against a 26-character finding. See the dedicated test below.
-  expect([...new Set(factOverflows)].sort()).toEqual(["/hr-flags @375", "/hr-flags @412"]);
+  // 210px of "EMP-002 · Missing 3h 12m · <date>" into a 139px stack at 375 and a
+  // 176px one at 412. The tail ladder's first rung is 120px — "the id plus one
+  // fact" — and it was measured against a picker's department name, not against
+  // a 26-character finding. See the dedicated test below.
+  expect(factOverflows.sort()).toEqual([
+    '/hr-flags @375 #0 139px "Aaron Wells"',
+    '/hr-flags @412 #0 176px "Aaron Wells"',
+  ]);
 });
 
 test("the Khmer name appears above 200px of stack and not below it", async ({ page }) => {
@@ -267,6 +346,13 @@ test("typing a Khmer name narrows the register to that one person", async ({ pag
 
   await page.getByRole("textbox", { name: /^Search 14 employees/ }).fill(LONGEST_KHMER);
   await expect(page.locator("tbody tr")).toHaveCount(1);
+  // Reading a Khmer name at 1280, where the threshold test two above insists
+  // every register stack hides one. Both are true and neither is stale: the
+  // Employee column is AUTO-LAYOUT, so it takes what the other columns leave,
+  // and one row leaves far more than fourteen — 190px there, past 200 here.
+  // Paging the register from 14 rows to 10 does the same thing, which is what
+  // broke coverage-register.spec.ts:237 and why its `employeeNames()` now drops
+  // the Khmer half before comparing an order.
   await expect(page.locator('tbody tr [data-slot="employee-name"]')).toHaveText(
     `Aaron Wells·${LONGEST_KHMER}`,
   );
@@ -297,36 +383,67 @@ test("a Khmer query narrows an open picker, non-Latin data-value and all", async
   await expect(page.getByText("No employees match your search.")).toBeVisible();
 });
 
-test("the flag queue's finding survives a phone, truncated but never dropped", async ({ page }) => {
+test("the flag queue's finding loses its own number on a 375 phone", async ({ page }) => {
   // The finding is why the row exists, and it is now the first tail fact —
   // which `TAIL_VISIBILITY[0]` hides below 120px of container. Two implementers
   // called that theoretical at real viewports without being able to measure a
   // container width. Measured: the queue's stack is 139px at 375, so the fact
-  // clears the rung and is RENDERED — and then overflows, needing 210px.
+  // clears the 120px rung and IS rendered — and then overflows, needing 210px.
+  // The vanishing everyone worried about is not what happens.
   //
-  // So it is truncated rather than dropped, the part that survives is the part
-  // that matters ("Missing 3h 12m" leads), and the whole of it is in the row's
-  // aria-label at every width. Pinned, because the alternative reading — that
-  // the fact vanishes — would call for a different fix entirely.
+  // What happens is worse than the "truncated but the useful part survives"
+  // this test used to claim. The id leads the line, not the finding, so at 375
+  // the drawn text is "EMP-002·Missing 3h 1" and the ellipsis takes a character
+  // of that: the DURATION IS CUT MID-NUMBER, and "3h 1" is not a shorter truth
+  // about "3h 12m" — it reads as a different number. At 412 (a Pixel 7) the
+  // duration survives whole and only the date goes.
+  //
+  // Asserted as the property rather than as the literal prefix, because the
+  // prefix is a rasterisation result; the measured strings are in the comments
+  // above and below. `innerText` cannot see any of this — it returns the whole
+  // DOM string whatever `text-overflow` paints — so this reads the drawn box.
   await stubFrappe(page);
   const label = "Aaron Wells. ហេង សុវណ្ណារី. Missing 3h 12m";
+  const row = page.getByRole("button", { name: /Aaron Wells/ });
 
   await page.setViewportSize({ width: 375, height: 900 });
   await page.goto("/hr-flags");
-  const row = page.getByRole("button", { name: /Aaron Wells/ });
   await expect(row).toBeVisible();
   const phone = (await stacks(page))[0];
-  expect(phone.width, "the queue's stack on a phone").toBe(139);
+  // 139px. Stated as the two bounds that mean something rather than as the
+  // number: clear of the tail ladder's first rung, short of the Khmer threshold.
+  expect(phone.width, "the queue's stack on a phone clears the 120px rung").toBeGreaterThan(120);
+  expect(phone.width, "…and is still short of the Khmer threshold").toBeLessThan(200);
   expect(phone.facts, "the finding is rendered, not hidden").toContain("Missing 3h 12m");
   expect(phone.clipped, "…and does not fit").toContain("facts");
+
+  const drawn375 = await drawnText(page, 0, 1);
+  expect(drawn375, "the kind of finding survives").toContain("Missing 3h");
+  expect(drawn375, "its number does not — measured: EMP-002·Missing 3h 1").not.toContain(
+    "3h 12m",
+  );
+
+  // The whole of it is in the row's spoken label at every width, so a screen
+  // reader is told what the screen cannot fit.
   expect(await row.getAttribute("aria-label")).toContain(label);
+
+  await page.setViewportSize({ width: 412, height: 900 });
+  await page.goto("/hr-flags");
+  await expect(row).toBeVisible();
+  // 176px, drawn as "EMP-002·Missing 3h 12m · Th" — 37px more of stack is the
+  // difference between a duration and a mangled one.
+  expect(await drawnText(page, 0, 1), "at 412 the duration survives whole").toContain(
+    "Missing 3h 12m",
+  );
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/hr-flags");
   await expect(row).toBeVisible();
   const desktop = (await stacks(page))[0];
-  expect(desktop.width, "the queue's stack on a laptop").toBe(284);
-  expect(desktop.clipped, "which is room enough for all of it").toEqual([]);
+  // 284px against the 210px the line needs.
+  expect(desktop.width, "the queue's stack on a laptop has room for the line").toBeGreaterThan(210);
+  expect(desktop.clipped, "…and uses it").toEqual([]);
+  expect(await drawnText(page, 0, 1)).toBe(desktop.facts);
   expect(await row.getAttribute("aria-label")).toContain(label);
 });
 

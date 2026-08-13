@@ -209,9 +209,10 @@ function daysAgo(back: number): string {
  * cut from the payload's own range, so a fixed literal would age out of the
  * fortnight the page requested and stop being a queue row at all.
  *
- * One person, one MISSING_TIME flag of 192 minutes — `personSubline` renders
- * that as "Missing 3h 12m · <that day>", which is the row's whole reason for
- * existing and the first fact `EmployeeIdentity`'s tail ladder can hide.
+ * One person, one MISSING_TIME flag of 192 minutes, dated seven days back —
+ * `personSubline` renders that as "Missing 3h 12m · <that weekday>", which is
+ * the row's whole reason for existing and the first fact `EmployeeIdentity`'s
+ * tail ladder can hide.
  */
 function flagQueuePayload(): QueuePayload {
   const flagged = daysAgo(7);
