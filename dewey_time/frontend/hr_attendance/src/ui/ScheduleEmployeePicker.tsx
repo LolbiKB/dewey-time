@@ -41,6 +41,29 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
   const [open, setOpen] = useState(false);
   const disabled = !props.employees.length || props.isLoading;
 
+  // EmployeeIdentity always renders a second line, so with nothing selected
+  // the id slot carries the same "Choose an employee" prompt
+  // scheduleEmployeeSubtitle used to put there, rather than going blank —
+  // mirroring EmployeePicker's trigger. Keyed off `selected`, not
+  // `props.value`: an id that names no employee in the current list (still
+  // loading, filtered out) should read the same as no id at all, not repeat
+  // the bare id employeeDisplayName already fell back to on line one. The
+  // employment-type tail fact is dropped for the same reason when nothing is
+  // selected — it would otherwise carry that same prompt a second time.
+  const employeeIdLine = selected ? selected.id : "Choose an employee";
+  // Employment type FIRST: isWeeklyScheduleEligible gates this wizard on it,
+  // so it is the fact that says whether this person can be picked at all. It
+  // must never be the one that falls off the end.
+  const tail: TailFact[] = selected
+    ? [
+        {
+          label: scheduleEmployeeSubtitle(selected),
+          tone: isWeeklyScheduleEligible(selected.employment_type) ? "normal" : "warning",
+        },
+        selected.department ? { label: selected.department } : null,
+      ].filter((fact): fact is TailFact => fact !== null)
+    : [];
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -59,7 +82,7 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
           <EmployeeIdentity
             className="min-w-0 flex-1"
             englishName={employeeDisplayName(selected, props.value)}
-            employeeId={props.value ?? ""}
+            employeeId={employeeIdLine}
             khmerName={khmerName(selected?.custom_khmer_last_name, selected?.custom_khmer_first_name)}
             avatar={
               <EmployeeAvatar
@@ -68,20 +91,7 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
                 className={props.compact ? "size-6" : "size-8"}
               />
             }
-            nameClassName={cn(props.compact && "text-sm")}
-            // Employment type FIRST: isWeeklyScheduleEligible gates this wizard on
-            // it, so it is the fact that says whether this person can be picked at
-            // all. It must never be the one that falls off the end.
-            tail={[
-              {
-                label: scheduleEmployeeSubtitle(selected),
-                tone:
-                  selected && !isWeeklyScheduleEligible(selected.employment_type)
-                    ? "warning"
-                    : "normal",
-              },
-              selected?.department ? { label: selected.department } : null,
-            ].filter((fact): fact is TailFact => fact !== null)}
+            tail={tail}
           />
           {props.isLoading ? (
             <Loader2Icon className="size-4 shrink-0 animate-spin opacity-60" />

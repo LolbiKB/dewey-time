@@ -8,6 +8,14 @@ export type TailFact = { label: string; tone?: "normal" | "warning" };
 export type EmployeeIdentityProps = {
   /** `employee_name` as ERPNext records it. Never shortened here. */
   englishName: string;
+  /**
+   * The employee ID, rendered `tabular-nums`.
+   *
+   * It is the only slot on line two that is always rendered — `tail` facts
+   * hide below their width threshold, this does not — so a caller with
+   * nothing selected may pass placeholder text (e.g. "Choose an employee")
+   * here instead of an id. That is intentional, not a misuse of the prop.
+   */
   employeeId: string;
   /**
    * Composed by `khmerName()`, never the two raw fields.
@@ -73,13 +81,18 @@ export function EmployeeIdentity(props: EmployeeIdentityProps) {
   const tail = props.tail ?? [];
 
   return (
-    <div className={cn("flex min-w-0 items-center gap-2.5", props.className)}>
+    // `<span>`, not `<div>`: both pickers place this inside a `<button>`, whose
+    // content model is phrasing content only. The Tailwind utilities carry the
+    // display (`flex` below, `block` on the lines inside), so layout is
+    // unaffected — `container-type` blockifies the query container the same
+    // way a flex item already blockifies this root.
+    <span className={cn("flex min-w-0 items-center gap-2.5", props.className)}>
       {props.avatar}
 
       {/* The query container. `min-w-0` so flex can shrink it below its content,
           and `flex-1` so it takes the width the row has left — which is exactly
           the width the thresholds were measured against. */}
-      <div className="@container min-w-0 flex-1">
+      <span className="@container block min-w-0 flex-1">
         <span
           data-slot={props.nameSlot}
           className={cn(
@@ -123,8 +136,8 @@ export function EmployeeIdentity(props: EmployeeIdentityProps) {
             </span>
           ))}
         </span>
-      </div>
-    </div>
+      </span>
+    </span>
   );
 }
 
