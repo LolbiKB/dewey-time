@@ -181,5 +181,26 @@ class TestCoverageTruncationFlag(unittest.TestCase):
         self.assertTrue(payload["counts"]["truncated"])
 
 
+class TestEmployeeKhmerNameFields(unittest.TestCase):
+    def test_khmer_fields_reach_the_coverage_payload(self):
+        # The trap this guards: a field added to the SELECT list and then
+        # dropped by the explicit output dict is a production no-op that yields
+        # None forever. `branch` shipped exactly that way in hr_calendar.py.
+        # Asserting on the emitted payload -- not on the fields list -- is what
+        # makes the mapping load-bearing.
+        from dewey_time.attendance_engine import coverage_api
+        self.assertIn("custom_khmer_first_name", coverage_api._EMPLOYEE_FIELDS)
+        self.assertIn("custom_khmer_last_name", coverage_api._EMPLOYEE_FIELDS)
+        row = {
+            "id": "EMP-1", "employee_name": "Sophea Chan", "department": "Retail",
+            "employment_type": "Full-time", "title": "Barista", "image": None,
+            "branch": "BRANCH-A",
+            "custom_khmer_first_name": "សុភា", "custom_khmer_last_name": "ចាន់",
+        }
+        base = coverage_api._employee_base(row)
+        self.assertEqual(base["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(base["custom_khmer_first_name"], "សុភា")
+
+
 if __name__ == "__main__":
     unittest.main()

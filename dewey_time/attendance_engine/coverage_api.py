@@ -40,6 +40,8 @@ _EMPLOYEE_FIELDS = (
     "title",
     "image",
     "branch",
+    "custom_khmer_last_name",
+    "custom_khmer_first_name",
 )
 
 

@@ -345,6 +345,12 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
     fields = ["name", "employee_name", "designation", "department", "company", "image", "branch"]
     if frappe.db.has_column("Employee", "employment_type"):
         fields.append("employment_type")
+    # Installed by dewey_time.setup.custom_fields, but a site mid-migration may
+    # not have them yet -- and an unknown column makes frappe.get_all raise,
+    # taking the whole picker down rather than losing one optional fact.
+    for khmer_field in ("custom_khmer_last_name", "custom_khmer_first_name"):
+        if frappe.db.has_column("Employee", khmer_field):
+            fields.append(khmer_field)
 
     filters: dict = {"status": "Active"}
     if employee_ids is not None:
@@ -406,6 +412,12 @@ def _list_calendar_employee_rows(employee_ids: list[str] | None, *, include_all:
                 "id": emp_id,
                 "label": f"{emp_id} · {display_name}",
                 "employee_name": display_name,
+                # Emitted, not merely selected. A field in the SELECT list that
+                # the output dict drops is a production no-op returning None
+                # forever -- which is what `branch` did here until it was caught
+                # in review. `.get` because the SELECT above is conditional.
+                "custom_khmer_last_name": row.get("custom_khmer_last_name"),
+                "custom_khmer_first_name": row.get("custom_khmer_first_name"),
                 "image": row.get("image"),
                 "title": row.get("designation"),
                 "department": row.get("department"),
