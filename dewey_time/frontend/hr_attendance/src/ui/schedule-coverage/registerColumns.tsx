@@ -167,6 +167,16 @@ export function registerColumns(
           // width the spec measured this cell at. Deliberately under 200 — that
           // is where the Khmer name switches on, and this cell's recorded trade
           // is that it shows none at either viewport.
+          //
+          // A floor and not a cap, so the column can widen the names as the
+          // register grows — which means the trade above holds at 375 and 1280
+          // and stops holding above them. Measured since: the stack is 139px at
+          // 375, 190px at 1280, and reaches 200px at a 1330 viewport, where the
+          // Khmer name duly appears. 1330 is an ordinary laptop rather than an
+          // exotic monitor, so treat this cell as showing Khmer on most desks.
+          // e2e/employee-identity.spec.ts pins the crossing, so moving this
+          // floor, the avatar or the threshold moves a test rather than
+          // surprising someone.
           className="min-w-[185px]"
           englishName={row.original.employee_name}
           employeeId={row.original.id}

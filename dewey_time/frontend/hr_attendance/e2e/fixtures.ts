@@ -4,6 +4,7 @@ import type { CalendarSession } from "@/hooks/useCalendarSession";
 import type { EnrollmentPayload } from "@/lib/enrollmentReport";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import type { CalendarEmployee, CalendarPayload, Day } from "@/types/calendar";
+import type { QueuePayload } from "@/types/flags";
 import {
   WEEKDAYS,
   type ApplyScheduleResult,
@@ -81,10 +82,43 @@ function buildDays(start: string, end: string) {
   return days;
 }
 
+/**
+ * Khmer names across the fixtures, in four deliberate shapes.
+ *
+ * Neither ERPNext field is required and neither is populated for everyone, so
+ * all four are real: the longest pair anyone measured, a typical pair, one
+ * field only, and nobody at all. They are keyed by employee id and spread into
+ * every feed that carries the two raw columns, so one person reads the same way
+ * on the register, in a picker and in the flag queue — the drift this whole
+ * change exists to remove would otherwise be reintroduced by the fixtures.
+ *
+ * The fifth entry is not a fifth shape but a fifth SOURCE; see it below.
+ *
+ * Deliberately un-annotated, so the keys stay literal: `KHMER["EMP-XXX"]` for
+ * an employee who is not in here is then a type error rather than an undefined
+ * spread that silently drops the Khmer name from one feed.
+ */
+const KHMER = {
+  // Longest pair measured — 194px on one line at 14px semibold, the case every
+  // threshold was set from.
+  "EMP-002": { custom_khmer_last_name: "ហេង", custom_khmer_first_name: "សុវណ្ណារី" },
+  // Typical pair.
+  "EMP-001": { custom_khmer_last_name: "ចាន់", custom_khmer_first_name: "សុភា" },
+  // One field only — rare, but neither field is required.
+  "EMP-104": { custom_khmer_last_name: "លី", custom_khmer_first_name: null },
+  // None at all — the handful. Must not look broken.
+  "EMP-005": { custom_khmer_last_name: null, custom_khmer_first_name: null },
+  // The leaver, who exists in the enrolment feed alone. Coverage returns Active
+  // employees only, so this is the one row whose Khmer name can only have come
+  // from the second feed — the join branch nothing in a browser had exercised.
+  "EMP-900": { custom_khmer_last_name: "សុខ", custom_khmer_first_name: "ដារា" },
+} satisfies Record<string, { custom_khmer_last_name: string | null; custom_khmer_first_name: string | null }>;
+
 const EMPLOYEE = {
   id: "EMP-001",
   label: "EMP-001 · Jane Doe",
   employee_name: "Jane Doe",
+  ...KHMER["EMP-001"],
   title: "Cashier",
   department: "Retail",
   company: "DIS",
@@ -102,15 +136,15 @@ const EMPLOYEE = {
 // employees spread across weekly-hours buckets (incl. one unresolvable 0-minute row).
 const COVERAGE = {
   unassigned: [
-    { id: "EMP-104", employee_name: "Marco Diaz", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null },
+    { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null },
     { id: "EMP-118", employee_name: "Priya Nair", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null },
     { id: "EMP-131", employee_name: "Tom O'Brien", department: "Retail", employment_type: "", title: "Sales Associate", image: null },
   ],
   assigned: [
-    { id: "EMP-001", employee_name: "Jane Doe", department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
-    { id: "EMP-002", employee_name: "Aaron Wells", department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
+    { id: "EMP-001", employee_name: "Jane Doe", ...KHMER["EMP-001"], department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
+    { id: "EMP-002", employee_name: "Aaron Wells", ...KHMER["EMP-002"], department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
     { id: "EMP-003", employee_name: "Bianca Cruz", department: "Warehouse", employment_type: "Full-time", title: "Lead", image: null, weekly_minutes: 2400 },
-    { id: "EMP-005", employee_name: "Derek Hale", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 2400 },
+    { id: "EMP-005", employee_name: "Derek Hale", ...KHMER["EMP-005"], department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 2400 },
     { id: "EMP-007", employee_name: "Elena Park", department: "Retail", employment_type: "Full-time", title: "Supervisor", image: null, weekly_minutes: 2250 },
     { id: "EMP-009", employee_name: "Farid Khan", department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2250 },
     { id: "EMP-011", employee_name: "Grace Lin", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null, weekly_minutes: 1200 },
@@ -137,10 +171,10 @@ const COVERAGE = {
 function enrollmentPayload(): EnrollmentPayload {
   return {
     rows: [
-      { id: "EMP-001", employee_name: "Jane Doe", branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "OK", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: null },
-      { id: "EMP-002", employee_name: "Aaron Wells", branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "ENROLLED_NOT_PUNCHING", is_registered: true, fingerprint_count: 1, face_count: 0, days_since_relieving: null },
-      { id: "EMP-104", employee_name: "Marco Diaz", branch: "BRANCH-A", department: "Warehouse", status: "Active", bucket: "NEEDS_ENROLLMENT", is_registered: false, fingerprint_count: 0, face_count: 0, days_since_relieving: null },
-      { id: "EMP-900", employee_name: "Nora Vance", branch: "BRANCH-B", department: "Retail", status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: 42 },
+      { id: "EMP-001", employee_name: "Jane Doe", ...KHMER["EMP-001"], branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "OK", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: null },
+      { id: "EMP-002", employee_name: "Aaron Wells", ...KHMER["EMP-002"], branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "ENROLLED_NOT_PUNCHING", is_registered: true, fingerprint_count: 1, face_count: 0, days_since_relieving: null },
+      { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], branch: "BRANCH-A", department: "Warehouse", status: "Active", bucket: "NEEDS_ENROLLMENT", is_registered: false, fingerprint_count: 0, face_count: 0, days_since_relieving: null },
+      { id: "EMP-900", employee_name: "Nora Vance", ...KHMER["EMP-900"], branch: "BRANCH-B", department: "Retail", status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: 42 },
     ],
     counts: {
       reported: 4, needs_enrollment: 1, enrolled_not_punching: 1, ok: 1,
@@ -154,6 +188,87 @@ function enrollmentPayload(): EnrollmentPayload {
     last_snapshot_at: frappeDatetime(new Date(Date.now() - 30 * 60_000)),
     window_days: 30,
   };
+}
+
+/** `back` days before today, as the "YYYY-MM-DD" key every payload uses. */
+function daysAgo(back: number): string {
+  const now = new Date();
+  return ymd(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() - back)));
+}
+
+/**
+ * The flag queue, holding exactly one thing to decide.
+ *
+ * There was no `get_flag_queue` branch here at all until now, so the endpoint
+ * fell through to `message = {}` and every spec that opened /hr-flags without
+ * bringing its own payload got "Nothing needs a decision" — the queue's rows
+ * had never been rendered, let alone measured, by anything outside flags.spec.
+ *
+ * Dates are relative to today for the same reason `buildDays` generates the
+ * calendar: `FlagQueuePage` asks for the last 14 days and the strip's window is
+ * cut from the payload's own range, so a fixed literal would age out of the
+ * fortnight the page requested and stop being a queue row at all.
+ *
+ * One person, one MISSING_TIME flag of 192 minutes — `personSubline` renders
+ * that as "Missing 3h 12m · <that day>", which is the row's whole reason for
+ * existing and the first fact `EmployeeIdentity`'s tail ladder can hide.
+ */
+function flagQueuePayload(): QueuePayload {
+  const flagged = daysAgo(7);
+  return {
+    entries: [
+      {
+        kind: "person",
+        entry_key: "p:EMP-002",
+        employee: "EMP-002",
+        employee_name: "Aaron Wells",
+        employee_branch: "BRANCH-A",
+        employee_image: null,
+        // The longest measured pair, on the surface with the least room for
+        // it: a queue row spends its line on an avatar, the person, and — when
+        // `also_count` is non-zero, which it is not here — a cross-reference
+        // badge taking a quarter of what is left.
+        ...KHMER["EMP-002"],
+        attendance_date: flagged,
+        dates: [flagged],
+        rank: 120,
+        tier: "act",
+        flags: [
+          {
+            flag_identity: `AUTO-EMP-002-${flagged}-missing_time`,
+            flag_code: "MISSING_TIME",
+            attendance_date: flagged,
+            severity: "CRITICAL",
+            day_closed: 1,
+            evidence: { minutes: 192 },
+            rank: 120,
+            tier: "act",
+            decision_state: "undecided",
+            decision: null,
+          },
+        ],
+        undecided_count: 1,
+        also_count: 0,
+        also_outlier_count: 0,
+      },
+    ],
+    counts: { open: 1, needs_re_review: 0, decided: 0, people: 1, rows: 1, open_capped: false },
+    orphans: { orphaned_flag_gone: 0, orphaned_evidence_changed: 0 },
+    alerts: [],
+    outage_dates: [],
+    // No pilot windows configured, so the banner stays silent and the one flag
+    // above is live work rather than a testing-phase rehearsal.
+    rollout: {
+      phases_configured: false,
+      range_phase: "LIVE",
+      testing_flag_count: 0,
+      total_flag_count: 1,
+      windows: [],
+    },
+    truncated: false,
+    start_date: daysAgo(13),
+    end_date: daysAgo(0),
+  } satisfies QueuePayload;
 }
 
 /** "YYYY-MM-DD HH:MM:SS", local — the frame Frappe sends and the app parses. */
@@ -180,6 +295,38 @@ export function readyCoveragePayload(): ScheduleCoveragePayload {
     unassigned: [],
     assigned: COVERAGE.assigned,
     counts: { active: 10, unassigned: 0, assigned: 10, truncated: false },
+  } satisfies ScheduleCoveragePayload;
+}
+
+/**
+ * The residual the 200px threshold narrows but cannot rule out.
+ *
+ * `EmployeeIdentity`'s threshold is ONE global worst case, not a per-name
+ * calculation: the longest pair anyone measured needs 194px, so the Khmer name
+ * switches on at 200. A pair longer than that, in a container barely past 200,
+ * therefore turns the Khmer name on and then meets line one's `truncate` — and
+ * Khmer has no inter-word spaces, so the ellipsis lands mid-cluster. The
+ * component's docstring admits this; nothing had ever measured it.
+ *
+ * A VARIANT rather than an edit to COVERAGE, for the same reason
+ * `readyCoveragePayload` is one: every other spec's no-clipping guarantee is
+ * about names inside the measured range, and putting this person on the shared
+ * roster would quietly turn that guarantee into "except this one".
+ */
+export function longKhmerCoveragePayload(): ScheduleCoveragePayload {
+  return {
+    unassigned: COVERAGE.unassigned,
+    assigned: COVERAGE.assigned.map((row) =>
+      row.id === "EMP-003"
+        ? {
+            ...row,
+            employee_name: "Chandravaddhana Sovannarith",
+            custom_khmer_last_name: "ចន្ទ្រាវឌ្ឍនា",
+            custom_khmer_first_name: "សុវណ្ណារិទ្ធិ",
+          }
+        : row,
+    ),
+    counts: COVERAGE.counts,
   } satisfies ScheduleCoveragePayload;
 }
 
@@ -282,6 +429,8 @@ export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}
       message = overrides.coverage ?? COVERAGE;
     } else if (p.includes("get_enrollment_report")) {
       message = overrides.enrollment ?? enrollmentPayload();
+    } else if (p.includes("get_flag_queue")) {
+      message = flagQueuePayload();
     } else if (p.includes("list_weekly_schedule_templates")) {
       // Envelope type is inline and unexported at services/schedule.ts's
       // `listScheduleTemplates`; the list is empty, so there is nothing to drift.

@@ -46,16 +46,25 @@ function bodyRows(page: Page) {
 }
 
 /**
- * The name from each row's employee cell, in the order the table shows them.
+ * The English name from each row's employee cell, in the order the table shows
+ * them.
  *
  * Read off `data-slot="employee-name"` rather than by splitting the cell's
  * text: the cell now stacks a name over an employee id BESIDE an avatar, and
  * the avatar's initials are text too, so the first line of the cell is "NV",
  * not "Nora Vance". The hook survives the cell gaining another layer.
+ *
+ * The Khmer name is dropped at the separator, because every caller here is
+ * asserting an ORDER and none of them is asserting the identity composition —
+ * that belongs to employee-identity.spec.ts, which measures it. Line one reads
+ * "Nora Vance·សុខ ដារា" whenever the column clears 200px, and the column is
+ * auto-layout: paging the register from 14 rows to 10 widens it enough to cross
+ * that at a 1280 viewport, so an order assertion written against the whole line
+ * would depend on the page size two clicks earlier.
  */
 async function employeeNames(page: Page): Promise<string[]> {
   const names = await page.locator('tbody tr [data-slot="employee-name"]').allInnerTexts();
-  return names.map((text) => text.trim());
+  return names.map((text) => text.split("·")[0].trim());
 }
 
 /** The alert dot, whichever of its three things it is currently saying. */

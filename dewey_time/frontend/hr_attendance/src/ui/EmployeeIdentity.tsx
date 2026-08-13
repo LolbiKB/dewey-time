@@ -104,9 +104,19 @@ export function EmployeeIdentity(props: EmployeeIdentityProps) {
           {props.khmerName ? (
             // One span for separator and name together, so hiding it cannot
             // leave a bare middot behind. Same font-size and weight as the
-            // English name: measured, Khmer at 14px sits inside the same line
-            // box as Latin at 14px, so this costs no row height — and at 11px
-            // its stacked subscripts start compressing into each other.
+            // English name — at 11px Khmer's stacked subscripts start
+            // compressing into each other.
+            //
+            // This is NOT free of row height, as this comment claimed until it
+            // was measured in a browser (e2e/employee-identity.spec.ts, which
+            // pins the numbers). Kantumruy Pro's ascent and descent exceed the
+            // Latin face's, so line one's line box is the union of two
+            // differently proportioned inline boxes and grows 4px even though
+            // both spans carry the same font-size and the same `leading-tight`:
+            // 33px to 37px for this stack, 53px to 54px for a register row.
+            // The extra is what draws the coeng subscripts, so flattening it
+            // with a fixed height on line one — whose `truncate` already sets
+            // `overflow: hidden` — would clip them.
             <span className="hidden @min-[200px]:inline">
               <span aria-hidden="true" className="mx-1.5 font-normal opacity-40">
                 ·
