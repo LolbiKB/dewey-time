@@ -98,7 +98,7 @@ function sortableHeader(label: string, by?: string) {
  * cast. The avatar's contract is that type, and every field it reads is one
  * this row can honestly supply: `employee_name` is the name it draws initials
  * from, `image` is the photo, and `label` is only ever a FALLBACK inside
- * `employeeShortName` for the case where `employee_name` is empty — which
+ * `employeeDisplayName` for the case where `employee_name` is empty — which
  * `joinRegisterRows` already rules out by seeding `employee_name || id`.
  *
  * The same literal FlagQueueList builds for the same component.

@@ -13,8 +13,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   employeeCommandFilter,
+  employeeDisplayName,
   employeeSearchHaystack,
-  employeeShortName,
   isWeeklyScheduleEligible,
   scheduleEmployeeSubtitle,
 } from "@/lib/employeeCard";
@@ -62,7 +62,7 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
             />
             <span className="min-w-0 truncate">
               <span className={cn("block truncate font-medium", props.compact && "text-sm")}>
-                {employeeShortName(selected, props.value)}
+                {employeeDisplayName(selected, props.value)}
               </span>
               <span
                 className={cn(
@@ -105,7 +105,7 @@ export function ScheduleEmployeePicker(props: ScheduleEmployeePickerProps) {
                     <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">
-                        {employeeShortName(employee, employee.id)}
+                        {employeeDisplayName(employee, employee.id)}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {scheduleEmployeeSubtitle(employee)}

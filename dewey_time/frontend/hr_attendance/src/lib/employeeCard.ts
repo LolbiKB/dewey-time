@@ -9,36 +9,60 @@ export type ScheduleStatus = {
   tone: "ok" | "warn" | "neutral";
 };
 
-export function stripMiddleName(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length <= 2) return fullName.trim();
-  return `${parts[0]} ${parts[parts.length - 1]}`;
+/**
+ * The employee's Khmer name, family name first, or null when there is none.
+ *
+ * `${last} ${first}` — ចាន់ សុភា, where ចាន់ is the family name. That is the
+ * order the vendored ADMS reference frontend already uses, and reversing it
+ * names a different person to a Khmer reader.
+ *
+ * Neither ERPNext field is required, so one-of-two is a real shape: a partial
+ * name is still a name and is shown. Whitespace-only is not — that is what a
+ * Data field holds after someone tabs through it, and rendering it would put a
+ * bare `·` separator on the line with nothing after it.
+ */
+export function khmerName(
+  last: string | null | undefined,
+  first: string | null | undefined,
+): string | null {
+  const parts = [last, first].map((part) => (part ?? "").trim()).filter(Boolean);
+  return parts.length ? parts.join(" ") : null;
 }
 
-export function employeeShortName(
+/**
+ * The employee's name exactly as ERPNext records it.
+ *
+ * Was `employeeShortName`, and it used to run `stripMiddleName`. The pickers
+ * stripped and the tables did not, so one person read two ways depending on
+ * where you were standing. One shared identity component means one rule, and
+ * this is it: show what is recorded and let truncation do any shortening. A
+ * silently shortened name and a visibly truncated one are different claims,
+ * and only the second one admits that something was left out.
+ */
+export function employeeDisplayName(
   employee: CalendarEmployee | null | undefined,
-  fallbackId?: string | null
+  fallbackId?: string | null,
 ): string {
   if (!employee) return fallbackId ?? "Select employee";
-  const raw =
+  return (
     employee.employee_name?.trim() ||
     employee.label.split("·").pop()?.trim() ||
-    employee.id;
-  return stripMiddleName(raw);
+    employee.id
+  );
 }
 
 export function employeeInitials(
   employee: CalendarEmployee | null | undefined,
   fallbackId?: string | null
 ): string {
-  const name = employeeShortName(employee, fallbackId);
+  const name = employeeDisplayName(employee, fallbackId);
   return (
     name
-      // Any run of whitespace, not one literal space. stripMiddleName normalises
-      // whitespace only on its three-or-more-part branch, so a two-part name
-      // separated by a double space or a non-breaking space arrived verbatim,
-      // split to ["Chan", "", "Dara"], and slice(0, 2) took ["Chan", ""] — one
-      // initial, the second silently swallowed rather than falling back.
+      // Any run of whitespace, not one literal space. employeeDisplayName only
+      // trims outer whitespace, so a two-part name separated by a double space
+      // or a non-breaking space arrives verbatim, and splitting on one literal
+      // space would give ["Chan", "", "Dara"], with slice(0, 2) taking
+      // ["Chan", ""] — one initial, the second silently swallowed.
       .split(/\s+/)
       .filter(Boolean)
       .slice(0, 2)
@@ -87,7 +111,7 @@ export function weeklyScheduleIneligibleMessage(
 ): string | null {
   if (!employee || isWeeklyScheduleEligible(employee.employment_type)) return null;
 
-  const name = employeeShortName(employee, employeeId);
+  const name = employeeDisplayName(employee, employeeId);
   const typeLabel = scheduleEmployeeSubtitle(employee);
 
   if (typeLabel === "Employment type not set") {
@@ -117,7 +141,7 @@ export function employeeSearchHaystack(employee: CalendarEmployee): string {
   const haystack = [
     employee.id,
     employee.employee_name,
-    employeeShortName(employee),
+    employeeDisplayName(employee),
     employee.label,
     employee.employment_type,
     employee.title,

@@ -3,7 +3,7 @@ import { CalendarRangeIcon } from "lucide-react";
 
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import {
-  employeeShortName,
+  employeeDisplayName,
   formatScheduleCoverage,
   shiftScheduleStatus,
 } from "@/lib/employeeCard";
@@ -78,7 +78,7 @@ export function WeeklyScheduleFacts(props: WeeklyScheduleFactsProps) {
     props.weekAssignedShiftDays,
     props.showWeekDetail
   );
-  const name = employeeShortName(props.employee, props.employee?.id ?? null);
+  const name = employeeDisplayName(props.employee, props.employee?.id ?? null);
   const rangeLabel = formatWeekRangeLabel(props.weekDates);
   const scheduleCoverage = props.employee ? formatScheduleCoverage(props.employee) : null;
   const assignmentId = props.employee?.shift_schedule_assignment ?? null;

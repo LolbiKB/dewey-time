@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
   employeeCommandFilter,
+  employeeDisplayName,
   employeeInitials,
   employeeSearchHaystack,
   isWeeklyScheduleEligible,
+  khmerName,
   weeklyScheduleIneligibleMessage,
 } from "@/lib/employeeCard";
 import type { CalendarEmployee } from "@/types/calendar";
@@ -99,9 +101,10 @@ test("employeeCommandFilter still finds ADMS Bridge by its own name/id", () => {
 });
 
 // A single initial where two are expected reads as a rendering bug, and it is:
-// stripMiddleName normalises whitespace only on its >=3-part branch, so a
-// two-part name joined by anything other than one ASCII space came through
-// verbatim and the empty split element ate the second initial.
+// employeeDisplayName only trims outer whitespace, so a two-part name joined
+// by anything other than one ASCII space came through verbatim and a naive
+// split on one literal space left an empty element that ate the second
+// initial.
 test("a name separated by more than one space still yields two initials", () => {
   assert.equal(employeeInitials({ employee_name: "Chan  Dara" } as CalendarEmployee), "CD");
   assert.equal(employeeInitials({ employee_name: "Chan Dara" } as CalendarEmployee), "CD");
@@ -118,4 +121,37 @@ test("an initial is a whole character, not half a surrogate pair", () => {
   const initials = employeeInitials({ employee_name: "\u{1D400}lice Ng" } as CalendarEmployee);
   assert.equal([...initials].length, 2);
   assert.equal(initials, "\u{1D400}N".toUpperCase());
+});
+
+test("khmerName puts the family name first, matching the ADMS convention", () => {
+  // `${last} ${first}` — ចាន់ is the family name. The vendored ADMS reference
+  // frontend composes it the same way; a reversed order is a different person's
+  // name to a Khmer reader, and nothing downstream could tell.
+  assert.equal(khmerName("ចាន់", "សុភា"), "ចាន់ សុភា");
+});
+
+test("khmerName keeps a half-filled pair rather than discarding it", () => {
+  // Neither field is required, so one-of-two is reachable. A partial name is
+  // still a name; treating it as absent would hide a fact the record holds.
+  assert.equal(khmerName("លី", null), "លី");
+  assert.equal(khmerName(null, "វណ្ណា"), "វណ្ណា");
+});
+
+test("khmerName is null when there is nothing to show", () => {
+  // Whitespace-only is the shape a Frappe Data field takes when someone tabs
+  // through it. Rendering it would put an empty `·` separator on the line.
+  assert.equal(khmerName(null, null), null);
+  assert.equal(khmerName(undefined, undefined), null);
+  assert.equal(khmerName("   ", "\t"), null);
+  assert.equal(khmerName("  ចាន់  ", "  សុភា "), "ចាន់ សុភា");
+});
+
+test("employeeDisplayName shows the name as recorded, middle name and all", () => {
+  // The pickers used to strip the middle name and the tables did not, so one
+  // person read two ways. A silently shortened name and a visibly truncated one
+  // are different claims and only the second admits something was left out.
+  const employee = {
+    id: "EMP-1", label: "EMP-1 · Ana Maria Cruz", employee_name: "Ana Maria Cruz",
+  };
+  assert.equal(employeeDisplayName(employee), "Ana Maria Cruz");
 });

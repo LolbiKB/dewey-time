@@ -26,7 +26,7 @@ import {
   earliestDayWithCheckins,
   pickEarliestDateKey,
 } from "@/lib/weekCalendar";
-import { employeeShortName } from "@/lib/employeeCard";
+import { employeeDisplayName } from "@/lib/employeeCard";
 import {
   AttendanceHeaderSkeleton,
   AttendancePageSkeleton,
@@ -305,7 +305,7 @@ export function App() {
                 onNextWeek={goNext}
                 onToday={goToday}
                 onRefresh={() => void refetchPage()}
-                employeeLabel={employeeShortName(selectedEmployee, employee)}
+                employeeLabel={employeeDisplayName(selectedEmployee, employee)}
                 canGoPrev={canGoPrev}
                 canGoNext={canGoNext}
                 calendarMinDate={calendarMinDate}
@@ -403,7 +403,7 @@ export function App() {
       <DayInspectorSheet
         inspectingDate={inspectingDate}
         employeeId={employee}
-        employeeLabel={employeeShortName(selectedEmployee, employee)}
+        employeeLabel={employeeDisplayName(selectedEmployee, employee)}
         inspectingDay={inspectingDay}
         alertsByDate={alertsByDate}
         syncByDate={syncByDate}

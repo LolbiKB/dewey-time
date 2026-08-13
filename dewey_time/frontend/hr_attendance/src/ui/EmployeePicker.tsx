@@ -13,9 +13,9 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   employeeCommandFilter,
+  employeeDisplayName,
   employeePickerSubtitle,
   employeeSearchHaystack,
-  employeeShortName,
   roleLine,
 } from "@/lib/employeeCard";
 import { cn } from "@/lib/utils";
@@ -47,7 +47,7 @@ export function EmployeePicker(props: EmployeePickerProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const disabled = !props.employees.length || props.isLoading;
 
-  const name = employeeShortName(selected, props.value);
+  const name = employeeDisplayName(selected, props.value);
   const subtitle = employeePickerSubtitle(selected);
 
   if (props.readOnly) {
@@ -193,7 +193,7 @@ export function EmployeeOption(props: {
       <EmployeeAvatar employee={employee} fallbackId={employee.id} className="size-8" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">
-          {employeeShortName(employee)}
+          {employeeDisplayName(employee)}
         </span>
         <span className="block truncate text-xs text-muted-foreground">
           {[employee.id, meta].filter(Boolean).join(" · ")}
