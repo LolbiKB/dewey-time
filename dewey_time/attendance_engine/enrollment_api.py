@@ -26,7 +26,15 @@ from dewey_time.attendance_engine.enrollment_buckets import (
 )
 from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 
-_CACHE_KEY = "enrollment_report:v1"
+# The version suffix is tied to the SHAPE of the cached payload, not to this
+# module's behaviour: bump it whenever a field is added, renamed or removed
+# anywhere in what get_enrollment_report returns. A deploy does not clear
+# Redis, so for the whole TTL afterwards a key written by the OLD code can
+# still answer a request from the NEW frontend; a new prefix simply cannot be
+# hit by pre-deploy entries.
+#
+# v2: rows gained custom_khmer_last_name / custom_khmer_first_name.
+_CACHE_KEY = "enrollment_report:v2"
 _CACHE_TTL_SECONDS = 120
 
 #: Matches COVERAGE_EMPLOYEE_LIMIT: this is meant to be an exhaustive roster.

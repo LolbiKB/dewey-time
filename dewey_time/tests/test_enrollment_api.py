@@ -69,6 +69,54 @@ class BuildPayloadTest(unittest.TestCase):
         self.assertEqual(row["custom_khmer_last_name"], "ចាន់")
         self.assertEqual(row["custom_khmer_first_name"], "សុភា")
 
+    def test_the_khmer_fields_are_selected(self):
+        """`_build` above patches out `_list_employees` entirely, so the SELECT
+        it builds -- fields.append(...) behind the has_column guard -- never
+        runs in the test above. Deleting that guarded-append loop would still
+        pass it. Call the real function and inspect what frappe.get_all was
+        actually asked for.
+        """
+        get_all = MagicMock(return_value=[])
+        with patch.object(mod.frappe, "get_all", get_all):
+            mod._list_employees()
+        fields = get_all.call_args.kwargs["fields"]
+        self.assertIn("custom_khmer_last_name", fields)
+        self.assertIn("custom_khmer_first_name", fields)
+
+    def test_a_site_mid_migration_without_the_khmer_columns_still_builds_the_register(self):
+        """has_column is a truthy MagicMock by default in this mock, so every
+        other test in this file only exercises the column-present branch.
+        Force the column-absent branch the guard exists for -- a site mid
+        custom_fields migration -- and prove frappe.get_all is never asked
+        for the missing columns (which raises on a real site) while the
+        register still builds, with the Khmer fields simply absent rather
+        than the whole page 500ing.
+        """
+        def _has_column(_doctype, column):
+            return not column.startswith("custom_khmer")
+
+        def _get_all(doctype, **kwargs):
+            if doctype == "Employee":
+                self.assertNotIn("custom_khmer_last_name", kwargs["fields"])
+                self.assertNotIn("custom_khmer_first_name", kwargs["fields"])
+                # A real row from a DB without these columns simply has no
+                # such keys -- not the keys present with a None value.
+                return [_emp("E1")]
+            return []
+
+        with patch.object(
+            mod.frappe.db, "has_column", side_effect=_has_column
+        ), patch.object(mod.frappe, "get_all", side_effect=_get_all), patch.object(
+            mod, "_checkin_counts", return_value={}
+        ), patch.object(
+            mod.frappe.db, "get_single_value", return_value=None
+        ), patch.object(mod, "_today", return_value=date(2026, 8, 11)):
+            payload = mod._build_enrollment_payload()
+
+        row = payload["rows"][0]
+        self.assertIsNone(row["custom_khmer_last_name"])
+        self.assertIsNone(row["custom_khmer_first_name"])
+
     def test_a_leaver_with_a_live_template_reports_days_since(self):
         payload = self._build(
             [_emp("E1", status="Left", relieving=date(2026, 8, 1))], [_reg("E1")], {"E1": 400}

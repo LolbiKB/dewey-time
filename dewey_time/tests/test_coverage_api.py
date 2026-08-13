@@ -101,7 +101,7 @@ class TestInvalidateCoverageCache(unittest.TestCase):
 
         frappe.cache.return_value.delete_value.reset_mock()
         coverage_api.invalidate_coverage_cache()
-        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v1")
+        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v2")
 
     def test_invalidate_accepts_doc_event_args(self):
         from dewey_time.attendance_engine import coverage_api

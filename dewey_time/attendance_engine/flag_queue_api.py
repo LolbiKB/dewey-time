@@ -56,7 +56,8 @@ _TIERS = frozenset({TIER_ACT, TIER_REVIEW, TIER_ROUTINE})
 # its pilot windows, plus pilot flag counts over the VISIBLE list -- the two
 # scopes are deliberately different, see _rollout_block); FlagOut (inside every
 # entry) gained rollout_phase.
-_QUEUE_CACHE_PREFIX = "flag_queue:v4"
+# v5: person entries gained custom_khmer_last_name / custom_khmer_first_name.
+_QUEUE_CACHE_PREFIX = "flag_queue:v5"
 
 # 60s, deliberately half of coverage_api's 120s (coverage_api.py:26). The invalidator
 # below is best-effort only: the engine deletes flags with raw frappe.db.delete()
