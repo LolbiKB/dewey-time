@@ -84,7 +84,7 @@ function renderRow(
   row: RegisterRow,
   onOpen: (row: RegisterRow) => void = noop,
   onAddSchedule: (row: RegisterRow) => void = noop,
-): { html: Record<string, string>; elements: Record<string, ReactNode> } {
+): { html: Record<string, string>; elements: Record<string, ReactNode>; markup: string } {
   const elements: Record<string, ReactNode> = {};
   function Harness() {
     const table = useReactTable({
@@ -117,7 +117,22 @@ function renderRow(
   for (const match of fullHtml.matchAll(/<td data-col="([^"]+)">(.*?)<\/td>/g)) {
     html[match[1]] = match[2];
   }
-  return { html, elements };
+  return { html, elements, markup: fullHtml };
+}
+
+/**
+ * The employee cell alone, `<td>` and all.
+ *
+ * `renderRow` hands the cells back keyed by column id with their wrappers
+ * stripped, which is what almost every assertion here wants. A claim that a
+ * fact is NOT in this cell wants the opposite: without the cell's own closing
+ * tag to slice on, "the department is not in the identity block" quietly
+ * becomes "the department is not in the first few characters of it".
+ */
+function renderRegisterCell(row: RegisterRow): { html: string } {
+  const cell = /<td data-col="employee">.*?<\/td>/.exec(renderRow(row).markup);
+  assert.ok(cell, "the register has no employee column");
+  return { html: cell[0] };
 }
 
 /** Narrows a rendered node to its `onClick`, without an `as any`/`as unknown as` cast. */
@@ -637,6 +652,23 @@ test("the employee name carries the hook the e2e reads it by", () => {
   // against an empty list, which several of its tests would survive.
   const { html } = renderRow(BASE_ROW);
   assert.match(html.employee, /data-slot="employee-name"[^>]*>Amara Okafor</);
+});
+
+test("the register's employee cell carries the Khmer name in the markup", () => {
+  // Present in the DOM but hidden by the container query at the register's
+  // 139px and 90px stacks -- e2e proves the hiding. This proves the cell is
+  // not the thing that dropped it, so widening the column later is enough.
+  const { html } = renderRegisterCell({ ...BASE_ROW, khmer_name: "ចាន់ សុភា" });
+  assert.match(html, /ចាន់ សុភា/);
+  assert.match(html, /data-slot="employee-name"/, "the e2e hook survives");
+});
+
+test("the register declares an empty tail — Branch and Dept are its own columns", () => {
+  // A tail here would print facts the table already has in dedicated, sortable
+  // columns, and eat the width the ID needs.
+  const { html } = renderRegisterCell({ ...BASE_ROW, department: "Retail", branch: "DIU" });
+  const cell = html.slice(0, html.indexOf("</td>") + 5);
+  assert.doesNotMatch(cell, /Retail/, "department belongs to its own column");
 });
 
 test("the employee cell carries the face the coverage feed sent", () => {

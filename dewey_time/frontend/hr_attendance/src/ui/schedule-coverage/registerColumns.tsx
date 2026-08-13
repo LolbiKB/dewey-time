@@ -5,6 +5,7 @@ import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from "lucide-react";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { BIOMETRIC_LABELS, SCHEDULE_LABELS, type RegisterRow } from "@/lib/coverageRegister";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
+import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import type { CalendarEmployee } from "@/types/calendar";
 
 /**
@@ -152,39 +153,39 @@ export function registerColumns(
       accessorFn: (row) => row.employee_name,
       header: sortableHeader("Employee"),
       cell: ({ row }) => (
-        <span className="flex min-w-0 items-center gap-2.5">
-          {/* aria-hidden, on the same rule FlagQueueList's rows follow: the
-              avatar says nothing the cell does not already say in words, its
-              photo is alt="", and EmployeeAvatar's loading ring is a
-              role="status" live region whose delay timer starts at MOUNT — so
-              a full page of rows would queue a page of "Loading"
-              announcements for decoration.
-
-              `contents` so the avatar itself stays the flex item; the wrapper
-              is here for the accessibility tree, not for layout. */}
-          <span aria-hidden="true" className="contents">
-            {/* size-9 is exactly the two text lines beside it (20px + 16px),
-                so the photo spans the cell without making the row taller —
-                TableCell's py-2 is doing the rest. */}
-            <EmployeeAvatar
-              employee={avatarEmployee(row.original)}
-              fallbackId={row.original.id}
-              className="size-9"
-            />
-          </span>
-          <span className="flex min-w-0 flex-col">
-            {/* `data-slot`, this codebase's stable-hook convention (dewey-ui
-                marks its own parts the same way), because the avatar's
-                initials are TEXT: the cell's first line is now "NV", not "Nora
-                Vance", so the e2e can no longer read the name by counting
-                lines. A hook survives the cell gaining another layer; a line
-                index does not. */}
-            <span data-slot="employee-name" className="truncate font-medium">
-              {row.original.employee_name}
+        <EmployeeIdentity
+          englishName={row.original.employee_name}
+          employeeId={row.original.id}
+          // Already composed at the join by joinRegisterRows, family name
+          // first — not recomposed from the two raw fields here, which is how
+          // one surface starts naming a different person than the others.
+          khmerName={row.original.khmer_name}
+          // The avatar keeps its aria-hidden `contents` wrapper: the cell says
+          // everything the photo does in words, the photo is alt="", and
+          // EmployeeAvatar's loading ring is a role="status" live region whose
+          // timer starts at mount — a page of rows would queue a page of
+          // "Loading" announcements for decoration.
+          avatar={
+            <span aria-hidden="true" className="contents">
+              {/* size-9 is exactly the two text lines beside it (20px + 16px),
+                  so the photo spans the cell without making the row taller —
+                  TableCell's py-2 is doing the rest. */}
+              <EmployeeAvatar
+                employee={avatarEmployee(row.original)}
+                fallbackId={row.original.id}
+                className="size-9"
+              />
             </span>
-            <span className="truncate text-xs text-muted-foreground">{row.original.id}</span>
-          </span>
-        </span>
+          }
+          // No tail. Branch, Dept and Status are the register's own columns.
+          nameClassName="font-medium"
+          // `data-slot`, this codebase's stable-hook convention (dewey-ui marks
+          // its own parts the same way), because the avatar's initials are
+          // TEXT: the cell's first line is "NV", not "Nora Vance", so the e2e
+          // cannot read the name by counting lines. A hook survives the cell
+          // gaining another layer; a line index does not.
+          nameSlot="employee-name"
+        />
       ),
     },
     { id: "branch", header: "Branch", cell: ({ row }) => row.original.branch ?? "—" },

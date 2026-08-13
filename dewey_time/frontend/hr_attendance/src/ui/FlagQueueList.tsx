@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNod
 
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { khmerName } from "@/lib/employeeCard";
 import {
   SHOW_AS_GROUP_LABEL,
   crossReferenceLabel,
@@ -16,6 +17,7 @@ import { buildEmployeeFlagIndex, buildStrip, type Strip } from "@/lib/flagStrip"
 import { cn } from "@/lib/utils";
 import type { QueueEntry, QueuePerson, Tier } from "@/types/flags";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
+import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import { FlagStrip } from "@/ui/FlagStrip";
 
 type GroupEntry = Extract<QueueEntry, { kind: "group" }>;
@@ -386,6 +388,13 @@ function PersonRow(props: {
   // thing left to do.
   const extra = Math.max(person.undecided_count - 1, 0);
   const crossReference = crossReferenceLabel(person);
+  // The finding, which personSubline itself allows to be empty for a code it
+  // has no wording for. Declared as a tail fact only when there is one: an
+  // empty fact renders as a separator with nothing after it.
+  const subline = personSubline(person);
+  // Composed once and spent twice — on the line and in the spoken label — so
+  // the two cannot come to name the person differently.
+  const khmer = khmerName(person.custom_khmer_last_name, person.custom_khmer_first_name);
 
   return (
     <RowButton
@@ -393,62 +402,72 @@ function PersonRow(props: {
       onSelect={props.onSelect}
       focusable={props.focusable}
       buttonRef={props.buttonRef}
-      // Name, finding, how many more flags, then the fortnight the strip draws.
-      // The strip and the avatar are aria-hidden decoration; without this the
-      // row's entire content is invisible to a screen reader.
+      // Name, Khmer name, finding, how many more flags, then the fortnight the
+      // strip draws. The strip and the avatar are aria-hidden decoration;
+      // without this the row's entire content is invisible to a screen reader.
+      // The Khmer name rides directly behind the English one so a screen reader
+      // hears the pair a sighted reader sees on line one.
       label={[
         person.employee_name,
+        khmer,
         crossReference,
-        personSubline(person),
+        subline,
         extra > 0 ? `${extra} more ${extra === 1 ? "flag" : "flags"}` : null,
         stripAriaLabel(props.strip),
       ]
         .filter(Boolean)
         .join(". ")}
     >
-      {/* 40px is a floor, not a preference. At 20px an avatar is decoration —
-          too small to recognise anyone — so if photos are to earn their space
-          the row cannot be denser than this. */}
-      {/* `contents` so the avatar itself stays the flex item — the wrapper is
-          here for the accessibility tree, not for layout. */}
-      <DecorativeAvatars className="contents">
-        <EmployeeAvatar
-          employee={{
-            id: person.employee,
-            label: person.employee_name,
-            employee_name: person.employee_name,
-            image: person.employee_image,
-          }}
-          fallbackId={person.employee}
-          className="size-10"
-        />
-      </DecorativeAvatars>
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-1.5">
-          {/* flex-[3_1_auto] against the badge's flex-[1_1_auto]: when the line
-              overflows, both give way and the name keeps roughly three quarters
-              of what is left. The badge used to be shrink-0, which made the name
-              the only shrinkable item on the row — so a 112px line spent 85px on
-              "also 1 elsewhere" and rendered the person as "B…". Whatever else a
-              triage row loses, it cannot lose whose row it is. */}
-          <span
-            className="min-w-0 flex-[3_1_auto] truncate text-sm font-medium text-foreground"
-            title={person.employee_name}
-          >
-            {person.employee_name}
+      {/* flex-[3_1_auto] against the badge's flex-[1_1_auto]: when the line
+          overflows, both give way and the person keeps roughly three quarters
+          of what is left — the face included, now that it sits inside the
+          identity block. The badge used to be shrink-0, which made the name the
+          only shrinkable item on the row — so a 112px line spent 85px on "also
+          1 elsewhere" and rendered the person as "B…". Whatever else a triage
+          row loses, it cannot lose whose row it is.
+
+          The wrapper carries the native tooltip a truncated name needs:
+          EmployeeIdentity takes no `title`, and scoping it here rather than to
+          the whole line stops a hover over the badge naming the person. */}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="min-w-0 flex-[3_1_auto]" title={person.employee_name}>
+          <EmployeeIdentity
+            englishName={person.employee_name}
+            employeeId={person.employee}
+            khmerName={khmer}
+            // 40px is a floor, not a preference. At 20px an avatar is
+            // decoration — too small to recognise anyone — so if photos are to
+            // earn their space the row cannot be denser than this.
+            //
+            // `contents` so the avatar itself stays the flex item — the wrapper
+            // is here for the accessibility tree, not for layout.
+            avatar={
+              <DecorativeAvatars className="contents">
+                <EmployeeAvatar
+                  employee={{
+                    id: person.employee,
+                    label: person.employee_name,
+                    employee_name: person.employee_name,
+                    image: person.employee_image,
+                  }}
+                  fallbackId={person.employee}
+                  className="size-10"
+                />
+              </DecorativeAvatars>
+            }
+            // The finding is this row's one caller fact, so it follows the
+            // employee id on line two rather than taking a line of its own.
+            tail={subline ? [{ label: subline }] : []}
+          />
+        </span>
+        {/* The safeguard, in every entry this person appears in: excusing the
+            pattern group without knowing about their other row is the whole
+            risk the per-flag invariant introduced. */}
+        {crossReference ? (
+          <span className="min-w-0 flex-[1_1_auto] truncate text-[11px] font-normal text-muted-foreground">
+            {crossReference}
           </span>
-          {/* The safeguard, in every entry this person appears in: excusing the
-              pattern group without knowing about their other row is the whole
-              risk the per-flag invariant introduced. */}
-          {crossReference ? (
-            <span className="min-w-0 flex-[1_1_auto] truncate text-[11px] font-normal text-muted-foreground">
-              {crossReference}
-            </span>
-          ) : null}
-        </span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {personSubline(person)}
-        </span>
+        ) : null}
       </span>
       {extra > 0 ? (
         <Badge variant="outline" className="shrink-0 rounded-md text-[11px] tabular-nums">

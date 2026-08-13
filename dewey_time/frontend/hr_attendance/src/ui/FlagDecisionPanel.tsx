@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import { khmerName } from "@/lib/employeeCard";
 import {
   decisionIsComplete,
   flagIdentities,
@@ -41,6 +42,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Flag } from "@/types/calendar";
 import type { FlagOut, QueueEntry, Reason } from "@/types/flags";
+import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import { FlagEvidenceTimeline } from "@/ui/FlagEvidenceTimeline";
 
 type GroupEntry = Extract<QueueEntry, { kind: "group" }>;
@@ -146,7 +148,16 @@ function PersonDecision(props: FlagDecisionPanelProps & { entry: PersonEntry }) 
         className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-3"
       >
         <header>
-          <div className="text-base font-semibold tracking-tight">{person.employee_name}</div>
+          <EmployeeIdentity
+            englishName={person.employee_name}
+            employeeId={person.employee}
+            khmerName={khmerName(person.custom_khmer_last_name, person.custom_khmer_first_name)}
+            // No tail, and no avatar. QueuePerson carries no department and no
+            // title — the two facts the pickers put beside an id — and the one
+            // fact it does carry, employee_branch, is on the date line below
+            // already. A tail here could only print that twice.
+            nameClassName="text-base tracking-tight"
+          />
           <div className="mt-1 text-sm text-muted-foreground">
             {/* An entry can span dates now — a pattern member holds several
                 mornings. Naming only the headline day would label the others
