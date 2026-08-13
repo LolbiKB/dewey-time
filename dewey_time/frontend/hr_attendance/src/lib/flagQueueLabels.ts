@@ -721,14 +721,34 @@ export function hiddenMemberLabel(count: number): string | null {
 }
 
 /**
- * The row's second line. A person row names the day; a member of a pattern group
- * does not, because naming one of four mornings would be wrong for the other
- * three. `dates.length === 1` is the honest test for which case this is.
+ * The day a person row names, or null where naming one would be wrong.
+ *
+ * A person row names the day; a member of a pattern group does not, because
+ * naming one of four mornings would be wrong for the other three.
+ * `dates.length === 1` is the honest test for which case this is. With no
+ * finding to date there is no day either — a bare "Thu 6 Aug" beside the
+ * employee id would read as a person who is in the queue for the sixth.
+ *
+ * Split out of `personSubline` because the row DRAWS the two halves as two
+ * separate facts: the identity block's width ladder can then drop the day whole
+ * on a narrow phone, where one joined string was cut mid-word instead.
+ */
+export function personDayLabel(person: QueuePerson): string | null {
+  if (!personHeadline(person) || person.dates.length !== 1) return null;
+  return format(parseDateKey(person.dates[0]), "EEE d MMM");
+}
+
+/**
+ * The row's second line, joined — what a screen reader is told.
+ *
+ * The two halves are drawn separately (see `personDayLabel`) and spoken
+ * together, both off this one rule, so the line and the label can never come to
+ * disagree about whether the day is nameable.
  */
 export function personSubline(person: QueuePerson): string {
   const headline = personHeadline(person);
-  if (!headline || person.dates.length !== 1) return headline;
-  return `${headline} · ${format(parseDateKey(person.dates[0]), "EEE d MMM")}`;
+  const day = personDayLabel(person);
+  return day ? `${headline} · ${day}` : headline;
 }
 
 /**

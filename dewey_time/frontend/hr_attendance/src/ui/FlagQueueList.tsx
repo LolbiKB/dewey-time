@@ -9,6 +9,8 @@ import {
   groupHeadline,
   groupSubline,
   hiddenMemberLabel,
+  personDayLabel,
+  personHeadline,
   personSubline,
   stripAriaLabel,
   tierLabel,
@@ -388,9 +390,19 @@ function PersonRow(props: {
   // thing left to do.
   const extra = Math.max(person.undecided_count - 1, 0);
   const crossReference = crossReferenceLabel(person);
-  // The finding, which personSubline itself allows to be empty for a code it
-  // has no wording for. Declared as a tail fact only when there is one: an
-  // empty fact renders as a separator with nothing after it.
+  // The two halves of line two, drawn as two facts and spoken as one string.
+  //
+  // Either may legitimately be absent — a code personHeadline has no wording
+  // for leaves the finding empty, and a person whose flags span several days
+  // has no single day to name — and each is declared as a fact only when there
+  // is one, because an empty fact renders as a separator with nothing after it.
+  //
+  // Two facts rather than the one joined `subline` because the identity block's
+  // width ladder gates each fact separately: on a phone the day is dropped
+  // WHOLE below its rung, where the joined string was instead cut wherever the
+  // pixels ran out. Measured at 375, that cut landed mid-duration.
+  const finding = personHeadline(person);
+  const day = personDayLabel(person);
   const subline = personSubline(person);
   // Composed once and spent twice — on the line and in the spoken label — so
   // the two cannot come to name the person differently.
@@ -462,9 +474,18 @@ function PersonRow(props: {
                 />
               </DecorativeAvatars>
             }
-            // The finding is this row's one caller fact, so it follows the
-            // employee id on line two rather than taking a line of its own.
-            tail={subline ? [{ label: subline }] : []}
+            // Both LEAD the employee id. Line two truncates from its end, so
+            // whatever sits last is what gives way — and on this surface the
+            // finding is why the row exists while the id is the incidental
+            // part. Measured at 375, with the id leading, line two drew
+            // "EMP-002·Missing 3h 1": "3h 1" does not read as a cut "3h 12m",
+            // it reads as a smaller number, on the screen HR uses to decide
+            // attendance. Leading, the finding is drawn whole and the id goes
+            // to "EMP-0…", which is legible AS truncated.
+            tail={[
+              ...(finding ? [{ label: finding, lead: true }] : []),
+              ...(day ? [{ label: day, lead: true }] : []),
+            ]}
           />
         </span>
         {/* The safeguard, in every entry this person appears in: excusing the

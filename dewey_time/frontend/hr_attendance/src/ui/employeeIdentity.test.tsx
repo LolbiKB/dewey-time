@@ -96,6 +96,74 @@ test("tail facts render in the order the caller gave them", () => {
   assert.ok(html.indexOf("Full-time") < html.indexOf("Retail"));
 });
 
+test("a fact follows the employee id unless it asks to lead", () => {
+  // The DEFAULT, pinned so the six surfaces that pass no `lead` cannot be moved
+  // by a change made for the seventh. Order and separator side both: a fact
+  // after the id opens with the separator, and one that led would close with it
+  // — a fact that kept its trailing separator on the wrong side of the id would
+  // still satisfy an order-only assertion and draw "· Full-time EMP-0088".
+  const html = renderToStaticMarkup(
+    <EmployeeIdentity {...BASE} tail={[{ label: "Full-time" }, { label: "Retail" }]} />,
+  );
+  assert.ok(html.indexOf("EMP-0088") < html.indexOf("Full-time"), "the id leads by default");
+  assert.match(html, /<span aria-hidden="true" class="mx-1 opacity-40">·<\/span>Full-time<\/span>/);
+  assert.match(html, /<span aria-hidden="true" class="mx-1 opacity-40">·<\/span>Retail<\/span>/);
+});
+
+test("a lead fact renders before the employee id, separator and all", () => {
+  // The flag queue's whole fix: line two truncates from its end, so the id has
+  // to go last for the finding to survive whole. The separator moves with the
+  // fact — it stays on the side facing the id — because a `hidden` fact that
+  // left its middot behind would draw "· EMP-0088".
+  const html = renderToStaticMarkup(
+    <EmployeeIdentity {...BASE} tail={[{ label: "Missing 3h 12m", lead: true }]} />,
+  );
+  assert.ok(html.indexOf("Missing 3h 12m") < html.indexOf("EMP-0088"), "the fact leads the id");
+  assert.match(html, /Missing 3h 12m<span aria-hidden="true" class="mx-1 opacity-40">·<\/span>/);
+  assert.equal((html.match(/·/g) ?? []).length, 2, "one separator per joined field, still");
+});
+
+test("lead facts keep the caller's order, and so do the ones behind the id", () => {
+  // A stable partition, not a sort. The queue names the finding before the day
+  // it happened, and a component that reversed either side would put the day
+  // first — which reads as a date-led row rather than a finding-led one.
+  const html = renderToStaticMarkup(
+    <EmployeeIdentity
+      {...BASE}
+      tail={[
+        { label: "Missing 3h 12m", lead: true },
+        { label: "Behind one" },
+        { label: "Thu 6 Aug", lead: true },
+        { label: "Behind two" },
+      ]}
+    />,
+  );
+  const order = ["Missing 3h 12m", "Thu 6 Aug", "EMP-0088", "Behind one", "Behind two"];
+  for (const text of order) assert.ok(html.includes(text), `"${text}" is in the markup`);
+  assert.deepEqual(
+    [...order].sort((a, b) => html.indexOf(a) - html.indexOf(b)),
+    order,
+  );
+});
+
+test("a lead fact keeps its own rung on the ladder", () => {
+  // Crossing the id changes WHERE a fact is drawn, never WHETHER it is. The
+  // queue leans on this: its day is the second fact, so it hides below 170px of
+  // container and is dropped whole rather than cut — which is the half of the
+  // fix that splitting one string into two facts buys.
+  const html = renderToStaticMarkup(
+    <EmployeeIdentity
+      {...BASE}
+      tail={[
+        { label: "Missing 3h 12m", lead: true },
+        { label: "Thu 6 Aug", lead: true },
+      ]}
+    />,
+  );
+  assert.ok(classesOn(html, "Missing 3h 12m").includes("@min-[120px]:inline"));
+  assert.ok(classesOn(html, "Thu 6 Aug").includes("@min-[170px]:inline"));
+});
+
 test("a warning-toned fact is visually distinct, not just differently worded", () => {
   // On the fact's OWN span: a tone class anywhere in the document would satisfy
   // a whole-markup match while colouring some other element entirely.

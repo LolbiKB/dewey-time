@@ -420,22 +420,29 @@ const SUBLINE_SLOT = "text-xs text-muted-foreground tabular-nums";
 const PERSON_NAME_SLOT = "block truncate text-sm font-semibold leading-tight";
 
 /**
- * The caller facts EmployeeIdentity puts after the employee id on line two, in
+ * The caller facts EmployeeIdentity puts on line two beside the employee id, in
  * order, with the decorative separator dropped.
  *
  * Replaces `slotText(html, "block truncate text-xs text-muted-foreground")`,
  * which read a person row's sub-line when it was one span holding one string.
- * The finding is a tail fact now, and a tail fact OPENS with an `aria-hidden`
- * separator — so "the text up to the first tag" is empty for every one of
- * them, and slotText would report a passing empty string. Keyed on `mx-1
- * opacity-40`, the separator only a tail fact carries: the Khmer name's
- * wrapper is a hidden `@min-[…]` span too, and matching it as a fact would
- * make a name read as one.
+ * The finding is a tail fact now, and a tail fact carries an `aria-hidden`
+ * separator on the side facing the id — so "the text up to the first tag" is
+ * empty for a fact that follows it, and slotText would report a passing empty
+ * string. Keyed on `mx-1 opacity-40`, the separator only a tail fact carries:
+ * the Khmer name's wrapper is a hidden `@min-[…]` span too, and matching it as
+ * a fact would make a name read as one.
+ *
+ * Both sides of the id are matched, because the queue's facts LEAD it — the
+ * separator trails the label there. Matching only the trailing shape would have
+ * turned the whole sub-line into a silently empty list.
  */
 function tailFacts(html: string): string[] {
-  const fact =
-    /<span class="hidden @min-\[\d+px\]:inline[^"]*"><span aria-hidden="true" class="mx-1 opacity-40">·<\/span>([^<]*)<\/span>/g;
-  return [...html.matchAll(fact)].map((match) => match[1]);
+  const separator = '<span aria-hidden="true" class="mx-1 opacity-40">·<\\/span>';
+  const fact = new RegExp(
+    `<span class="hidden @min-\\[\\d+px\\]:inline[^"]*">(?:${separator}([^<]*)|([^<]*)${separator})<\\/span>`,
+    "g",
+  );
+  return [...html.matchAll(fact)].map((match) => match[1] ?? match[2]);
 }
 
 function panelProps(overrides: Partial<FlagDecisionPanelProps> = {}): FlagDecisionPanelProps {
@@ -1532,11 +1539,21 @@ test("a person row leads with their photo and states the finding with its day", 
   );
   assert.match(html, /<img[^>]+src="\/files\/sokheng\.jpg"/);
   assert.equal(slotText(html, PERSON_NAME_SLOT), "Sokheng Hon");
-  assert.deepEqual(tailFacts(html), ["Missing 3h 12m · Thu 6 Aug"]);
-  // And the employee id, which the shared identity block always states first
-  // on line two. The queue never showed one before — a deliberate consequence
-  // of the one-component rule, not a stray addition, so it is pinned here.
+  // TWO facts, not one string. The identity block's ladder can only drop the
+  // day whole — rather than cut it mid-word on a phone — if the day is a fact
+  // of its own; measured, that is the difference between "Thu 6 Aug" and "Th".
+  assert.deepEqual(tailFacts(html), ["Missing 3h 12m", "Thu 6 Aug"]);
+  // And the employee id, which the shared identity block always states on line
+  // two. The queue never showed one before — a deliberate consequence of the
+  // one-component rule, not a stray addition, so it is pinned here.
   assert.match(html, /class="tabular-nums">HR-EMP-00011</);
+  // LAST, behind both facts. Line two truncates from its end, so the id is the
+  // queue's chosen sacrifice: at 375 it drew "EMP-002·Missing 3h 1" when it led,
+  // and "3h 1" reads as a smaller number rather than as a cut one.
+  assert.ok(
+    html.indexOf("HR-EMP-00011") > html.indexOf("Thu 6 Aug"),
+    "the finding and its day both lead the employee id",
+  );
 });
 
 // A sighted reader sees the pair on line one; a screen-reader user has to hear
@@ -1590,8 +1607,10 @@ test("a person with several days of one code gets no single date", () => {
   const html = renderToStaticMarkup(<FlagQueueList entries={[repeatPerson()]} {...listProps()} />);
   assert.deepEqual(tailFacts(html), ["4 late starts · worst 31 min"]);
   // Nowhere in the row, not merely out of the sub-line: a date pushed into the
-  // title slot instead would be just as wrong.
-  assert.equal(/· \w{3} \d+ \w{3}/.test(html), false);
+  // title slot instead would be just as wrong. Matched bare rather than behind
+  // a separator, because the day is its own fact now and would carry its
+  // separator in a sibling element where `· Thu 6 Aug` never appears as text.
+  assert.equal(/\b\w{3} \d{1,2} \w{3}\b/.test(html), false);
 });
 
 test("a person with no photo still leads with an avatar, not a gap", () => {

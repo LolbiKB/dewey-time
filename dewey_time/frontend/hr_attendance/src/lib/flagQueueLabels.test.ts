@@ -45,6 +45,7 @@ import {
   outcomeActionLabel,
   outcomeLabel,
   partialFailureMessage,
+  personDayLabel,
   personHeadline,
   personSubline,
   priorDecisionLabel,
@@ -840,6 +841,29 @@ test("a person's sub-line dates by the entry's days, and stays empty when there 
   });
   assert.equal(personSubline(oneDayTwoFlags), "2 late starts · worst 31 min · Thu 6 Aug");
   assert.equal(personSubline(person({ dates: ["2026-08-06"], flags: [] })), "");
+});
+
+// The queue's row DRAWS these two halves as two facts, so the identity block's
+// ladder can drop the day whole on a narrow phone instead of cutting it
+// mid-word; the joined string stays for the row's spoken label. Both come out
+// of one rule here, so the two can never disagree about whether a day is
+// nameable at all.
+test("a person's day is the same half of the sub-line, on its own", () => {
+  const oneDay = person({ dates: ["2026-08-06"], flags: [on(lateStart(31), "2026-08-06")] });
+  assert.equal(personDayLabel(oneDay), "Thu 6 Aug");
+  assert.equal(personSubline(oneDay), `${personHeadline(oneDay)} · ${personDayLabel(oneDay)}`);
+
+  const dates = ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"];
+  const spanning = person({
+    dates,
+    flags: [31, 12, 9, 15].map((minutes, i) => on(lateStart(minutes), dates[i])),
+  });
+  assert.equal(personDayLabel(spanning), null, "naming one of four mornings would be wrong");
+
+  // A dateless day rather than an empty fact: with no finding to date, the row
+  // would otherwise draw a bare day beside the employee id and read as a
+  // person who is in the queue for the sixth of August.
+  assert.equal(personDayLabel(person({ dates: ["2026-08-06"], flags: [] })), null);
 });
 
 test("the outage band headline names branches and people, never a device", () => {

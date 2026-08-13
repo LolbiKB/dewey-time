@@ -16,7 +16,8 @@ import { longKhmerCoveragePayload, stubFrappe } from "./fixtures";
  *   - the register's stack is 190px at 1280, not 185, and crosses the 200px
  *     threshold at a 1330 viewport rather than the ~1536 the plan assumed;
  *   - a Khmer name is NOT free of row height — it costs 4px of line box;
- *   - the flag queue's finding overflows line two on a phone.
+ *   - the flag queue's line two overflows on a phone, so the only question
+ *     there is WHICH of its three parts pays for it.
  *
  * They are pinned rather than papered over. A test that records the wrong
  * number is worse than no test, because the number then gets quoted.
@@ -47,6 +48,16 @@ const LONGEST_KHMER = "ហេង សុវណ្ណារី";
 
 /** Jane Doe's Khmer family name. Appears in none of her Latin fields. */
 const JANE_KHMER_FAMILY = "ចាន់";
+
+/**
+ * The flag queue fixture's line two, in the order the surface asks for.
+ *
+ * The DAY is deliberately not a literal: the fixture dates its flag seven days
+ * back from today, so "Thu 6 Aug" would be a test that goes red overnight. It
+ * is read off the widest render instead, where all of it is on screen.
+ */
+const QUEUE_FINDING = "Missing 3h 12m";
+const QUEUE_ID = "EMP-002";
 
 /** Every surface that draws a person and has a route of its own. */
 const ROUTES = ["/hr-attendance", "/hr-schedule/coverage", "/hr-flags"];
@@ -206,9 +217,9 @@ test("a name line is never clipped, and line two only where measured", async ({ 
   // on this fixture's roster may overflow.
   //
   // Line two is pinned as a SET rather than asserted empty, because it is not
-  // empty: the flag queue's finding overflows on a phone, measured below. A set
-  // fails both ways — on a new overflow anywhere, and on this one being fixed
-  // without the pin being updated to say so.
+  // empty: the flag queue's line two overflows on both phone widths, measured
+  // below. A set fails both ways — on a new overflow anywhere, and on one of
+  // these going away without the pin being updated to say so.
   //
   // Fifteen navigations, so the default 30s is not the budget this needs — the
   // same reason page-insets.spec.ts raises it for its own route-by-width walk.
@@ -244,10 +255,12 @@ test("a name line is never clipped, and line two only where measured", async ({ 
     }
   }
 
-  // 210px of "EMP-002 · Missing 3h 12m · <date>" into a 139px stack at 375 and a
-  // 176px one at 412. The tail ladder's first rung is 120px — "the id plus one
-  // fact" — and it was measured against a picker's department name, not against
-  // a 26-character finding. See the dedicated test below.
+  // The queue's line two is longer than the two phone widths can hold: 147px of
+  // "Missing 3h 12m · EMP-002" into a 139px stack at 375, and 212px of that plus
+  // the day into a 176px one at 412. The tail ladder's rungs are 120/170/230 and
+  // were measured against a picker's department name, not against a
+  // 26-character finding, so the queue outruns them. What matters is which part
+  // gives way, and the dedicated test below is what pins that.
   expect(factOverflows.sort()).toEqual([
     '/hr-flags @375 #0 139px "Aaron Wells"',
     '/hr-flags @412 #0 176px "Aaron Wells"',
@@ -390,68 +403,112 @@ test("a Khmer query narrows an open picker, non-Latin data-value and all", async
   await expect(page.getByText("No employees match your search.")).toBeVisible();
 });
 
-test("the flag queue's finding loses its own number on a 375 phone", async ({ page }) => {
-  // The finding is why the row exists, and it is now the first tail fact —
-  // which `TAIL_VISIBILITY[0]` hides below 120px of container. Two implementers
-  // called that theoretical at real viewports without being able to measure a
-  // container width. Measured: the queue's stack is 139px at 375, so the fact
-  // clears the 120px rung and IS rendered — and then overflows, needing 210px.
-  // The vanishing everyone worried about is not what happens.
+/** The queue's one row at one viewport: what line two holds, and what it draws. */
+type QueueLine = { stack: Stack; drawn: string; spoken: string };
+
+async function queueLineAt(page: Page, width: number): Promise<QueueLine> {
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto("/hr-flags");
+  const row = page.getByRole("button", { name: /Aaron Wells/ });
+  await expect(row).toBeVisible();
+  return {
+    stack: (await stacks(page))[0],
+    drawn: await drawnText(page, 0, 1),
+    spoken: (await row.getAttribute("aria-label")) ?? "",
+  };
+}
+
+test("the flag queue cuts its employee id, never the finding's number", async ({ page }) => {
+  // THE DEFECT THIS REPLACES. The queue used to pass its whole sub-line as one
+  // tail fact behind the employee id, so line two was
+  // "EMP-002 · Missing 3h 12m · Thu 6 Aug" — 212px of text. The stack is 139px
+  // at 375, so it overflowed and the drawn text was "EMP-002·Missing 3h 1".
+  // "3h 1" does not read as a cut "3h 12m"; it reads as a smaller number, on
+  // the screen HR uses to decide attendance.
   //
-  // What happens is worse than the "truncated but the useful part survives"
-  // this test used to claim. The id leads the line, not the finding, so at 375
-  // the drawn text is "EMP-002·Missing 3h 1" and the ellipsis takes a character
-  // of that: the DURATION IS CUT MID-NUMBER, and "3h 1" is not a shorter truth
-  // about "3h 12m" — it reads as a different number. At 412 (a Pixel 7) the
-  // duration survives whole and only the date goes.
+  // Two things fix it and this test pins both:
   //
-  // Asserted as the property rather than as the literal prefix, because the
-  // prefix is a rasterisation result; the measured strings are in the comments
-  // above and below. `innerText` cannot see any of this — it returns the whole
-  // DOM string whatever `text-overflow` paints — so this reads the drawn box.
+  //   - the sub-line is now TWO facts, so the day sits on the ladder's second
+  //     rung (170px) and is dropped WHOLE below it. As one string it was cut
+  //     mid-word, and a day cut mid-number — "Thu 1" for the sixteenth — is the
+  //     same misreading as the duration's.
+  //   - both facts LEAD the employee id. Line two truncates from its end, so
+  //     whatever sits last is what gives way; the finding is why the row exists
+  //     and the id is the incidental part, so the id goes last and pays.
+  //
+  // The load-bearing assertion is the general one in the loop: whatever is
+  // drawn is a prefix of the line, and everything the line loses is a suffix of
+  // the EMPLOYEE ID. Any character cut off anything else — the duration, the
+  // day — fails it, at any of the five widths, without needing a literal for
+  // the rasteriser to argue with. `innerText` cannot see any of this: it
+  // returns the whole DOM string whatever `text-overflow` paints.
+  test.setTimeout(120_000);
   await stubFrappe(page);
   const label = "Aaron Wells. ហេង សុវណ្ណារី. Missing 3h 12m";
-  const row = page.getByRole("button", { name: /Aaron Wells/ });
 
-  await page.setViewportSize({ width: 375, height: 900 });
-  await page.goto("/hr-flags");
-  await expect(row).toBeVisible();
-  const phone = (await stacks(page))[0];
-  // 139px. Stated as the two bounds that mean something rather than as the
-  // number: clear of the tail ladder's first rung, short of the Khmer threshold.
-  expect(phone.width, "the queue's stack on a phone clears the 120px rung").toBeGreaterThan(120);
-  expect(phone.width, "…and is still short of the Khmer threshold").toBeLessThan(200);
-  expect(phone.facts, "the finding is rendered, not hidden").toContain("Missing 3h 12m");
-  expect(phone.clipped, "…and does not fit").toContain("facts");
+  const byWidth = new Map<number, QueueLine>();
+  for (const width of WIDTHS) byWidth.set(width, await queueLineAt(page, width));
 
-  const drawn375 = await drawnText(page, 0, 1);
-  expect(drawn375, "the kind of finding survives").toContain("Missing 3h");
-  expect(drawn375, "its number does not — measured: EMP-002·Missing 3h 1").not.toContain(
-    "3h 12m",
+  // The day, read off the widest render rather than written down — see
+  // QUEUE_FINDING. 444px of stack against the 212px the whole line needs.
+  const widest = byWidth.get(1440)!;
+  expect(widest.stack.clipped, "1440 must show the whole line, or the day below is a guess").toEqual([]);
+  const day = widest.stack.facts.slice(QUEUE_FINDING.length, -QUEUE_ID.length).replaceAll("·", "");
+  expect(day, "the widest render did not hold a day between the finding and the id").toMatch(
+    /^\w{3} \d{1,2} \w{3}$/,
   );
 
-  // The whole of it is in the row's spoken label at every width, so a screen
-  // reader is told what the screen cannot fit.
-  expect(await row.getAttribute("aria-label")).toContain(label);
+  for (const width of WIDTHS) {
+    const { stack, drawn, spoken } = byWidth.get(width)!;
+    const at = `@${width} (${stack.width}px of stack, line "${stack.facts}")`;
+    expect(stack.lines, `${at}: never a third line`).toBe(2);
+    expect(stack.facts.startsWith(QUEUE_FINDING), `${at}: the finding must lead line two`).toBe(
+      true,
+    );
+    expect(stack.facts.endsWith(QUEUE_ID), `${at}: the id must be last, so it is what gives way`).toBe(
+      true,
+    );
+    expect(drawn, `${at}: the finding must be drawn whole`).toContain(QUEUE_FINDING);
+    expect(stack.facts.startsWith(drawn), `${at}: drawn "${drawn}" is not a prefix of the line`).toBe(
+      true,
+    );
+    // The whole fix, in one line: the id is the ONLY thing a narrow queue may
+    // cut into. A day dropped entirely leaves nothing here to account for,
+    // because it is not in `facts` either.
+    const lost = stack.facts.slice(drawn.length);
+    expect(QUEUE_ID.endsWith(lost), `${at}: cut "${lost}", which is not part of the id`).toBe(true);
+    // …and the whole of it is spoken at every width, so a screen reader is told
+    // what the screen cannot fit.
+    expect(spoken, `${at}: the spoken label must carry all of it`).toContain(label);
+  }
 
-  await page.setViewportSize({ width: 412, height: 900 });
-  await page.goto("/hr-flags");
-  await expect(row).toBeVisible();
-  // 176px, drawn as "EMP-002·Missing 3h 12m · Th" — 37px more of stack is the
-  // difference between a duration and a mangled one.
-  expect(await drawnText(page, 0, 1), "at 412 the duration survives whole").toContain(
-    "Missing 3h 12m",
+  // 139px, and the two bounds that mean something: clear of the tail ladder's
+  // first rung, short of the Khmer threshold. The day is below the second rung,
+  // so line two is 147px of finding-and-id into 139px and the id draws as
+  // "EMP-0…" — legible AS truncated, which "3h 1" was not.
+  const phone = byWidth.get(375)!;
+  expect(phone.stack.width, "the queue's stack on a phone clears the 120px rung").toBeGreaterThan(120);
+  expect(phone.stack.width, "…and is still short of the Khmer threshold").toBeLessThan(200);
+  expect(phone.stack.facts, "at 375 the day is dropped whole, not cut").toBe(
+    `${QUEUE_FINDING}·${QUEUE_ID}`,
   );
+  expect(phone.stack.clipped, "…and what is left still does not fit").toContain("facts");
+  expect(phone.drawn, "so the id starts to draw…").toContain("EMP-");
+  expect(phone.drawn, "…and is the thing that runs out of room").not.toContain(QUEUE_ID);
 
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/hr-flags");
-  await expect(row).toBeVisible();
-  const desktop = (await stacks(page))[0];
-  // 284px against the 210px the line needs.
-  expect(desktop.width, "the queue's stack on a laptop has room for the line").toBeGreaterThan(210);
-  expect(desktop.clipped, "…and uses it").toEqual([]);
-  expect(await drawnText(page, 0, 1)).toBe(desktop.facts);
-  expect(await row.getAttribute("aria-label")).toContain(label);
+  // 176px on a Pixel 7: past the 170px rung, so the day is back and whole, and
+  // the id is down to a letter or two. That is the trade, made deliberately.
+  const pixel = byWidth.get(412)!;
+  expect(pixel.stack.facts, "at 412 the day clears its rung").toBe(
+    `${QUEUE_FINDING}·${day}·${QUEUE_ID}`,
+  );
+  expect(pixel.drawn, "…and is drawn whole").toContain(day);
+
+  // 284px against the 212px the line needs, so a laptop cuts nothing at all.
+  const desktop = byWidth.get(1280)!;
+  expect(desktop.stack.width, "the queue's stack on a laptop has room for the line").toBeGreaterThan(212);
+  expect(desktop.stack.clipped, "…and uses it").toEqual([]);
+  expect(desktop.drawn).toBe(desktop.stack.facts);
 });
 
 test("a pair longer than the measured worst case still truncates", async ({ page }) => {
