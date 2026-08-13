@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  applyFilterChange, columnIdForSort, composeRegister, feedHealth, filterRegisterRows, isNotReady,
-  joinRegisterRows, paginateRegisterRows, registerAlert, registerFacets, registerFeedState,
-  REGISTER_PAGE_SIZE, sortFromColumnId, SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts,
-  visibleColumnIds,
+  applyFilterChange, columnIdForSort, composeRegister, describeRegisterFilters, feedHealth,
+  filterRegisterRows, isNotReady, joinRegisterRows, paginateRegisterRows, registerAlert,
+  registerCsvColumns, registerFacets, registerFeedState, REGISTER_PAGE_SIZE, sortFromColumnId,
+  SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
   type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import { toRegisterCsv } from "@/lib/registerCsv";
@@ -1251,4 +1251,75 @@ test("registerFeedState: isLoading is true while either feed is loading, false o
 
   const neitherLoading = registerFeedState(HEALTHY_QUERY_STATE, HEALTHY_QUERY_STATE);
   assert.equal(neitherLoading.isLoading, false);
+});
+
+// ---------------------------------------------------------------------------
+// describeRegisterFilters / registerCsvColumns — what the export confirmation
+// is built from.
+// ---------------------------------------------------------------------------
+
+test("describeRegisterFilters covers every clause filterRegisterRows acts on", () => {
+  // A clause the filter applies but this does not name is a narrowing that
+  // travels into the file invisibly — which is the exact failure the
+  // confirmation exists to stop. Pinned as a set, so a seventh filter added to
+  // filterRegisterRows without a clause here fails rather than being missed.
+  const labels = describeRegisterFilters({
+    readiness: "not-ready",
+    search: "nair",
+    branch: ["A"],
+    department: ["Ops"],
+    status: "Left",
+    schedule: "missing",
+    biometric: "none",
+  }).map((n) => n.label);
+
+  assert.deepEqual(labels, [
+    "Needs attention", "Search", "Branch", "Department", "Status", "Schedule", "Biometric",
+  ]);
+});
+
+test("describeRegisterFilters is silent about sort, page and size", () => {
+  // None of them changes WHO is in the file: the export takes every matching
+  // row, not the page on screen. Listing them would make the reader doubt a
+  // file that is complete.
+  assert.deepEqual(
+    describeRegisterFilters({ sort: "hours", order: "desc", page: 3, limit: 10 }),
+    [],
+  );
+});
+
+test("describeRegisterFilters trims the search, and drops one that is only spaces", () => {
+  assert.deepEqual(describeRegisterFilters({ search: "  nair  " }), [
+    { label: "Search", value: "“nair”" },
+  ]);
+  assert.deepEqual(describeRegisterFilters({ search: "   " }), []);
+});
+
+test("registerCsvColumns.included IS the file's header row", () => {
+  // Two readings of one list, and the whole value of the omitted half rests on
+  // them agreeing: a column named as missing while it is still being written
+  // is a worse lie than saying nothing at all.
+  for (const feeds of [
+    HEALTHY,
+    { schedule: true, biometric: false },
+    { schedule: false, biometric: true },
+    { schedule: false, biometric: false },
+  ]) {
+    const { included, omitted } = registerCsvColumns(feeds);
+    const header = toRegisterCsv([], feeds).split("\n")[0].split(",");
+    assert.deepEqual(included, header, `included must equal the header at ${JSON.stringify(feeds)}`);
+    for (const column of omitted) {
+      assert.ok(!header.includes(column), `${column} is named as omitted but is in the file`);
+    }
+  }
+});
+
+test("registerCsvColumns names what each downed feed takes away", () => {
+  assert.deepEqual(registerCsvColumns(HEALTHY).omitted, [], "nothing is lost while both are up");
+  assert.deepEqual(registerCsvColumns({ schedule: true, biometric: false }).omitted, [
+    "Employment status", "Biometric", "Fingerprints", "Days since leaving",
+  ]);
+  assert.deepEqual(registerCsvColumns({ schedule: false, biometric: true }).omitted, [
+    "Schedule", "Weekly minutes",
+  ]);
 });

@@ -313,6 +313,60 @@ export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters
   });
 }
 
+/** One clause of the reader's narrowing, named the way its control is. */
+export type RegisterNarrowing = { label: string; value: string };
+
+/**
+ * The filters in force, in the words the controls use.
+ *
+ * Exists for the export confirmation, and it is the whole point of that
+ * surface: the file holds the FILTERED rows, so a filter the reader has
+ * forgotten travels into a spreadsheet that looks like the whole roster and
+ * carries no banner to say otherwise. The number alone cannot say that — "80
+ * employees" reads as a fact about the workforce unless the narrowing that
+ * produced it is beside it.
+ *
+ * Every clause that `filterRegisterRows` acts on appears here, and nothing
+ * else. `sort`, `page` and `limit` are deliberately absent: none of them
+ * changes WHO is in the file — the export takes every matching row, not the
+ * page on screen.
+ *
+ * Ordered as the controls are met on screen, alert dot first.
+ *
+ * The labels are the CONTROLS' labels and the values are their option
+ * labels — `BIOMETRIC_LABELS` and `SCHEDULE_LABELS`, the same two records the
+ * facet menus, the table badges and the CSV read from — so a reader who picked
+ * "No fingerprint" is shown "No fingerprint" here rather than the wire value
+ * `none`.
+ *
+ * `search` is TRIMMED, and dropped when that leaves nothing, because
+ * filterRegisterRows trims before it matches: a box holding only spaces
+ * narrows nothing, and listing it as a narrowing would send the reader looking
+ * for rows it had removed.
+ */
+export function describeRegisterFilters(filters: RegisterFilters): RegisterNarrowing[] {
+  const out: RegisterNarrowing[] = [];
+  const search = (filters.search ?? "").trim();
+
+  if (filters.readiness === "not-ready") {
+    out.push({ label: "Needs attention", value: "Only employees with a problem" });
+  }
+  if (search) out.push({ label: "Search", value: `“${search}”` });
+  if (filters.branch?.length) out.push({ label: "Branch", value: filters.branch.join(", ") });
+  if (filters.department?.length) {
+    out.push({ label: "Department", value: filters.department.join(", ") });
+  }
+  if (filters.status) out.push({ label: "Status", value: filters.status });
+  if (filters.schedule) {
+    out.push({ label: "Schedule", value: SCHEDULE_LABELS[filters.schedule] });
+  }
+  if (filters.biometric) {
+    out.push({ label: "Biometric", value: BIOMETRIC_LABELS[filters.biometric] });
+  }
+
+  return out;
+}
+
 export function sortRegisterRows(rows: RegisterRow[], filters: RegisterFilters): RegisterRow[] {
   const out = [...rows];
   const dir = filters.order === "desc" ? -1 : 1;
@@ -616,8 +670,37 @@ const CSV_FIELDS: CsvField[] = [
  * one as the other is the page's central rule broken where it is least
  * recoverable — nothing downstream can tell the two apart afterwards.
  */
+/** Whether a downed feed has taken this field out of the file. */
+function isExportable(field: CsvField, feeds: FeedHealth): boolean {
+  return field.feed === "always" || feeds[field.feed];
+}
+
+/**
+ * The file's columns, and the ones a downed feed has taken out of it.
+ *
+ * Both halves, from the one list, so they cannot drift apart: a column named
+ * as omitted while it is still being written would be a worse lie than saying
+ * nothing.
+ *
+ * `omitted` is what the export confirmation shows. The suppression rule is
+ * right — a fact the page is refusing to display must not travel in a document
+ * that outlives the outage — but it is SILENT at the point it takes effect,
+ * and a spreadsheet with no Biometric column looks exactly like one from a
+ * build that never had it. The banner on the page says a feed is down; only
+ * this says what that did to the file.
+ */
+export function registerCsvColumns(feeds: FeedHealth): {
+  included: string[];
+  omitted: string[];
+} {
+  return {
+    included: CSV_FIELDS.filter((field) => isExportable(field, feeds)).map((f) => f.header),
+    omitted: CSV_FIELDS.filter((field) => !isExportable(field, feeds)).map((f) => f.header),
+  };
+}
+
 export function registerCsvRows(rows: RegisterRow[], feeds: FeedHealth): string[][] {
-  const fields = CSV_FIELDS.filter((field) => field.feed === "always" || feeds[field.feed]);
+  const fields = CSV_FIELDS.filter((field) => isExportable(field, feeds));
 
   return [
     fields.map((field) => field.header),

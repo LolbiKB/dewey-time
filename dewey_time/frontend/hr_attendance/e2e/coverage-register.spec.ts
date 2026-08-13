@@ -479,7 +479,17 @@ test("a facet popover opens, narrows the table, and clears back", async ({ page 
   await expect(branchA).toBeHidden();
 });
 
-test("the export button hands over the rows on screen as a file", async ({ page }) => {
+/**
+ * The export's confirmation, and the reader's way past it.
+ *
+ * Radix mounts it in a portal, so nothing in here exists until the trigger has
+ * really been pressed — which is the half `renderToStaticMarkup` cannot see.
+ */
+function exportDialog(page: Page) {
+  return page.getByRole("dialog", { name: "Export this register as CSV" });
+}
+
+test("the export confirms what the file holds before writing it", async ({ page }) => {
   await stubFrappe(page);
   await openRegister(page);
   await expect(bodyRows(page)).toHaveCount(ROSTER);
@@ -492,7 +502,36 @@ test("the export button hands over the rows on screen as a file", async ({ page 
   const button = page.getByRole("button", { name: `Export ${NOT_READY.length} employees as CSV` });
   await expect(button).toBeEnabled();
 
-  const [download] = await Promise.all([page.waitForEvent("download"), button.click()]);
+  // Pressing it writes nothing. That is the whole change: the file is the
+  // reader's second decision, taken while looking at what is in it.
+  await button.click();
+  const dialog = exportDialog(page);
+  await expect(dialog).toBeVisible();
+
+  // The wiring the unit suite is structurally blind to. Every assertion it
+  // makes about this surface renders it directly with props of its own, so a
+  // page that passed an empty `filters` or the wrong roster size would keep
+  // every one of them green while telling the reader the file was unfiltered.
+  await expect(dialog).toContainText(`${NOT_READY.length} employees`);
+  await expect(dialog).toContainText(`of ${ROSTER} on the register`);
+  await expect(dialog).toContainText("Narrowed by");
+  await expect(dialog).toContainText("Needs attention");
+  await expect(dialog).not.toContainText("No filters are on");
+
+  // Cancelling really cancels: no file, and the register untouched behind it.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(bodyRows(page)).toHaveCount(NOT_READY.length);
+
+  await button.click();
+  await expect(dialog).toBeVisible();
+
+  const confirm = dialog.getByRole("button", { name: `Export ${NOT_READY.length} employees` });
+  const [download] = await Promise.all([page.waitForEvent("download"), confirm.click()]);
+
+  // Answered, and gone. A confirmation still standing over a register the
+  // reader can no longer see invites a second file nobody decided on.
+  await expect(dialog).toBeHidden();
 
   expect(download.suggestedFilename()).toMatch(/^coverage-register-\d{4}-\d{2}-\d{2}\.csv$/);
 
@@ -727,5 +766,103 @@ test("on a phone the register's toolbar fits, whole and without overlaps", async
 
     expect(fit.offscreen, `@${width}: a toolbar control is off the screen`).toEqual([]);
     expect(fit.overlapping, `@${width}: toolbar controls are drawn over each other`).toEqual([]);
+  }
+});
+
+/**
+ * Keyboard focus, and the clip that was eating it.
+ *
+ * `Section grow` is `overflow-hidden` — load-bearing, it is what makes the
+ * table scroll inside the page rather than the page scroll under it. This route
+ * is the only one that puts focusable controls flush against all four of its
+ * edges: with no PageHeader the toolbar starts at the section's exact top, and
+ * the table fills the rest, so the pager sits on its exact bottom. Every one of
+ * those controls carries dewey-ui's `focus-visible:ring-3`, a box-shadow drawn
+ * OUTSIDE the border box, and every pixel of it that fell outside the section
+ * was being cut off — the search box's whole top edge on a laptop, and the alert
+ * dot's top and left, and Export's right, and all four pager buttons' bottoms.
+ *
+ * Measured rather than asserted as a class string, for the reason page-insets
+ * gives: twMerge, Tailwind's emit order and the negative margins that buy the
+ * room all sit between the JSX and the rendered box. The clip is the padding
+ * box, so `-m-1 p-1` moves the clip edge out without moving anything in it.
+ *
+ * The budget is read from the ring the browser actually computes, not
+ * hardcoded: a dewey-ui release that widened the ring would otherwise leave
+ * this passing against a headroom that had stopped being enough.
+ */
+type FocusRoom = {
+  ring: number;
+  controls: number;
+  tight: string[];
+};
+
+async function focusRoom(page: Page): Promise<FocusRoom> {
+  return page.evaluate(() => {
+    const section = document.querySelector('[data-slot="section"]');
+    if (!section) throw new Error("expected a Section on the register");
+    const clip = section.getBoundingClientRect();
+
+    // The ring's spread, off the control that has one: Chromium serialises it
+    // as "<color> 0px 0px 0px Npx".
+    const focusable = [...section.querySelectorAll<HTMLElement>("button, input, select")].filter(
+      (el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      },
+    );
+    const probe = focusable.find((el) => el.tagName === "INPUT") ?? focusable[0];
+    if (!probe) throw new Error("expected a focusable control in the register's Section");
+    probe.focus();
+    const spreads = [...getComputedStyle(probe).boxShadow.matchAll(/0px 0px 0px (\d+(?:\.\d+)?)px/g)]
+      .map((match) => Number(match[1]));
+    const ring = Math.max(0, ...spreads);
+    probe.blur();
+
+    const tight: string[] = [];
+    for (const el of focusable) {
+      // A control inside a scroller of its own is clipped by that scroller;
+      // a different problem, and not one padding on the Section can fix.
+      let inScroller = false;
+      let node: Element | null = el.parentElement;
+      while (node && node !== section) {
+        const s = getComputedStyle(node);
+        if (s.overflowX === "auto" || s.overflowY === "auto") inScroller = true;
+        node = node.parentElement;
+      }
+      if (inScroller) continue;
+
+      const r = el.getBoundingClientRect();
+      const name = (el.getAttribute("aria-label") ?? el.textContent ?? "?").trim().slice(0, 40);
+      for (const [side, gap] of [
+        ["top", r.top - clip.top],
+        ["left", r.left - clip.left],
+        ["right", clip.right - r.right],
+        ["bottom", clip.bottom - r.bottom],
+      ] as const) {
+        if (gap < ring) tight.push(`${name} — ${side} by ${(ring - gap).toFixed(1)}px`);
+      }
+    }
+
+    return { ring, controls: focusable.length, tight };
+  });
+}
+
+test("a focused control's ring is never clipped by the section that holds it", async ({ page }) => {
+  await stubFrappe(page);
+
+  for (const size of [LAPTOP, PHONE]) {
+    await page.setViewportSize(size);
+    await openRegister(page);
+    await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+    const room = await focusRoom(page);
+
+    // Preconditions. Without them this passes on a page with no focus ring to
+    // clip, and on one whose controls the walk never found.
+    expect(room.ring, `@${size.width}: no focus ring to make room for`).toBeGreaterThan(0);
+    expect(room.controls, `@${size.width}: found no controls to measure`).toBeGreaterThan(5);
+
+    expect(room.tight, `@${size.width}: a focus ring is cut off`).toEqual([]);
   }
 });
