@@ -36,6 +36,16 @@ def _scrub_specs() -> list[tuple[str, dict, str]]:
             "employee_name": "CONCAT('Employee ', name)",
             "first_name": "CONCAT('Employee ', name)",
             "last_name": "''",
+            # Real Khmer names. Kept as a deterministic, id-derived value rather
+            # than blanked, so "this employee has a Khmer name" survives the
+            # scrub and the register/picker rendering stays exercisable in the
+            # sandbox. The sandbox engine's baseline scrub touches no Employee
+            # column, so this file is the only thing standing between a prod
+            # restore and real names on a developer's laptop.
+            "custom_khmer_last_name": "CONCAT('ខ្មែរ', name)",
+            "custom_khmer_first_name": "CONCAT('នាម', name)",
+            # Same gap, same reason: a real chat id reaches a real person.
+            "custom_telegram_chat_id": "''",
             "personal_email": "CONCAT(name, '@example.test')",
             "company_email": "CONCAT(name, '@example.test')",
             "cell_number": "'000'",

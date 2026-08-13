@@ -33,6 +33,21 @@ class TestAnonymizeStatements(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             anonymize.run()
 
+    def test_khmer_names_and_telegram_id_are_scrubbed(self):
+        # The sandbox engine's baseline scrub covers NO Employee fields -- only
+        # User, Contact, Communication, Email Queue, Address and the logs -- so
+        # anything PII on Employee is this file's job alone. Both Khmer fields
+        # and the Telegram chat id were carried into every prod restore in the
+        # clear until this test existed.
+        specs = anonymize._scrub_specs()
+        employee = next(cols for dt, cols, _ in specs if dt == "Employee")
+        for column in ("custom_khmer_first_name", "custom_khmer_last_name",
+                       "custom_telegram_chat_id"):
+            self.assertIn(column, employee, f"{column} is unscrubbed PII")
+        # Deterministic and id-preserving, like first_name -- not NULL, which
+        # would make "has a Khmer name" untestable in the sandbox.
+        self.assertIn("name", employee["custom_khmer_last_name"])
+
 
 if __name__ == "__main__":
     unittest.main()
