@@ -32,8 +32,8 @@ import {
   type CoverageRegisterViewProps,
 } from "@/ui/schedule-coverage/CoverageRegisterPage";
 import {
-  RegisterExportButton,
-  type RegisterExportButtonProps,
+  RegisterExportConfirm,
+  RegisterExportSummary,
 } from "@/ui/schedule-coverage/RegisterExportButton";
 import {
   FacetFilter,
@@ -2018,47 +2018,189 @@ test("the export is disabled on a partial roster, and says why", () => {
   assert.doesNotMatch(usable, /\sdisabled=""/, "a complete roster must be exportable");
 });
 
+test("the toolbar's export opens a confirmation rather than downloading on press", () => {
+  // It is announced as what it does. A control named as a plain button that
+  // instead opens a surface is a small lie, and this one is pressed by someone
+  // who expects a file.
+  const button = exportButton(renderView({}));
+  assert.match(button, /aria-haspopup="dialog"/, "the trigger must say it opens a dialog");
+  assert.match(button, /aria-expanded="false"/, "…and whether that dialog is open");
+});
+
 // ---------------------------------------------------------------------------
-// RegisterExportButton — what pressing it actually writes
+// RegisterExportConfirm — what pressing the confirmation actually writes
 //
-// The button holds no hooks, so it can be called directly and its onClick
-// invoked. `download` is the seam for the one browser-only line: without it,
-// the call that decides the file's contents could not be reached at all.
+// The confirm button holds no hooks, so it can be called directly and its
+// onClick invoked. That matters more here than it did when the trigger owned
+// the download: the button now lives INSIDE a Radix dialog, which renders to a
+// portal resolved after mount, so under renderToStaticMarkup nothing in there
+// reaches the markup at all. `download` is the seam for the one browser-only
+// line; without it, the call that decides the file's contents could not be
+// reached by any test in this suite.
 // ---------------------------------------------------------------------------
 
-/** Presses the export button and returns the files it wrote. */
-function pressExport(over: Partial<RegisterExportButtonProps> = {}): string[] {
+/** Presses the confirmation and returns the files it wrote. */
+function pressExport(
+  over: Partial<Parameters<typeof RegisterExportConfirm>[0]> = {},
+): { written: string[]; closed: number } {
   const written: string[] = [];
-  const element = RegisterExportButton({
+  let closed = 0;
+  const element = RegisterExportConfirm({
     rows: [BASE_ROW],
     feeds: HEALTHY_FEEDS,
-    truncated: false,
     download: (csv) => written.push(csv),
+    onDone: () => {
+      closed += 1;
+    },
     ...over,
   });
   const onClick = onClickOf(element);
-  assert.ok(onClick, "the export must be a real button with a handler");
+  assert.ok(onClick, "the confirmation must be a real button with a handler");
   onClick();
-  return written;
+  return { written, closed };
 }
 
-test("pressing Export writes the rows the button was handed, and only those", () => {
+test("confirming the export writes the rows it was handed, and only those", () => {
   // The line that decides WHAT is exported. The row count in the accessible
   // name is a proxy for the props, not for this call: an export rewired to a
   // different array keeps the count and changes the file, and the file is the
   // thing that gets mailed to somebody.
   const ada = { ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck" };
-  const written = pressExport({ rows: [ada] });
+  const { written } = pressExport({ rows: [ada] });
   assert.equal(written.length, 1, "one press, one file");
   assert.equal(written[0], toRegisterCsv([ada], HEALTHY_FEEDS));
   assert.match(written[0], /Ada Stuck/);
   assert.doesNotMatch(written[0], /Amara Okafor/, "no row the button was not given");
 });
 
+test("confirming closes the dialog, so a second file needs a second decision", () => {
+  // A confirmation left open after it has been answered invites the reader to
+  // press it again over a register they can no longer see.
+  const { closed } = pressExport();
+  assert.equal(closed, 1, "the export must dismiss its own confirmation");
+});
+
 test("the file follows the feeds, so a suppressed column does not travel in it", () => {
   // Exporting a column the page refuses to show writes a fact the reader was
   // denied into a file that outlives the outage.
-  const written = pressExport({ feeds: { schedule: true, biometric: false } });
+  const { written } = pressExport({ feeds: { schedule: true, biometric: false } });
   assert.doesNotMatch(written[0], /Biometric/, "a hidden column must be gone from the file too");
   assert.match(written[0], /Schedule/, "the schedule half is unaffected");
+});
+
+test("the confirmation counts the file it is about to write", () => {
+  // Not the roster, and not the page: the button's own words have to be built
+  // from the same array it hands to the CSV, or a reader confirms one number
+  // and receives another.
+  const two = [BASE_ROW, { ...BASE_ROW, id: "SECOND", employee_name: "Bea Ready" }];
+  assert.match(renderToStaticMarkup(RegisterExportConfirm({
+    rows: two, feeds: HEALTHY_FEEDS, download: noop, onDone: noop,
+  })), /Export 2 employees/);
+  assert.match(renderToStaticMarkup(RegisterExportConfirm({
+    rows: [BASE_ROW], feeds: HEALTHY_FEEDS, download: noop, onDone: noop,
+  })), /Export 1 employee(?!s)/, "one row is not 1 employees");
+});
+
+// ---------------------------------------------------------------------------
+// RegisterExportSummary — what the confirmation says the file will hold
+//
+// Rendered directly, for the portal reason above.
+// ---------------------------------------------------------------------------
+
+function renderSummary(over: {
+  rows?: RegisterRow[];
+  rosterSize?: number;
+  feeds?: FeedHealth;
+  filters?: RegisterFilters;
+} = {}): string {
+  return renderToStaticMarkup(
+    <RegisterExportSummary
+      rows={over.rows ?? [BASE_ROW]}
+      rosterSize={over.rosterSize ?? 14}
+      feeds={over.feeds ?? HEALTHY_FEEDS}
+      filters={over.filters ?? {}}
+    />,
+  );
+}
+
+test("the confirmation reads out the count AND the roster it was cut from", () => {
+  // "1 employee" alone reads as a fact about the workforce. The denominator is
+  // what turns it into a fact about the filters.
+  const html = renderSummary({ rows: [BASE_ROW], rosterSize: 503 });
+  assert.match(html, /1 employee/);
+  assert.match(html, /of 503 on the register/);
+});
+
+test("an unfiltered export says so, rather than leaving the reader to infer it", () => {
+  const html = renderSummary({ filters: {} });
+  assert.match(html, /No filters are on/);
+  assert.doesNotMatch(html, /Narrowed by/, "there is nothing to list");
+});
+
+test("every filter in force is listed, in the words its control uses", () => {
+  // The point of the whole surface. A filter the reader has forgotten travels
+  // into a spreadsheet that looks like the whole roster, and nothing
+  // downstream can tell the two apart.
+  const html = renderSummary({
+    filters: {
+      readiness: "not-ready",
+      search: "  nair  ",
+      branch: ["BRANCH-A", "BRANCH-B"],
+      department: ["Ops"],
+      status: "Left",
+      schedule: "missing",
+      biometric: "none",
+    },
+  });
+  assert.match(html, /Narrowed by/);
+  assert.match(html, /Needs attention/);
+  assert.match(html, /nair/, "the search text, trimmed");
+  assert.match(html, /BRANCH-A, BRANCH-B/, "both branches, not just the first");
+  assert.match(html, /Ops/);
+  assert.match(html, /Left/);
+  // The option labels, not the wire values: a reader who picked "No
+  // fingerprint" must not be shown `none`.
+  assert.match(html, /Missing/);
+  assert.match(html, /No fingerprint/);
+  assert.doesNotMatch(html, />none</, "the wire value must not reach the reader");
+});
+
+test("a search of nothing but spaces is not listed as a narrowing", () => {
+  // filterRegisterRows trims before it matches, so such a box narrows nothing.
+  // Listing it would send the reader hunting for rows it had removed.
+  const html = renderSummary({ filters: { search: "   " } });
+  assert.match(html, /No filters are on/);
+  assert.doesNotMatch(html, /Narrowed by/);
+});
+
+test("a downed feed's missing columns are named in the confirmation", () => {
+  // The suppression rule is right and it is silent: a spreadsheet with no
+  // Biometric column looks exactly like one from a build that never had it.
+  const html = renderSummary({ feeds: { schedule: true, biometric: false } });
+  assert.match(html, /Employment status/);
+  assert.match(html, /Fingerprints/);
+  assert.match(html, /missing from this file/);
+  assert.match(html, /biometric feed is\s+unavailable/, "and which feed took them");
+  assert.doesNotMatch(html, /schedule feed/, "the healthy half must not be blamed");
+});
+
+test("a healthy pair of feeds raises no column warning at all", () => {
+  // The warning has to be able to be absent, or it says nothing when present.
+  assert.doesNotMatch(renderSummary({ feeds: HEALTHY_FEEDS }), /missing from this file/);
+});
+
+test("both feeds down names both, and every column they vouch for", () => {
+  const html = renderSummary({ feeds: { schedule: false, biometric: false } });
+  assert.match(html, /schedule and biometric feeds are\s+unavailable/);
+  assert.match(html, /Weekly minutes/);
+  assert.match(html, /Days since leaving/);
+});
+
+test("an export that would match nobody says so before it is confirmed", () => {
+  // Zero is the one result that looks the same as "nobody has a problem" once
+  // it is a file. The export is still offered — a header row is a usable
+  // template — but not silently.
+  const html = renderSummary({ rows: [], rosterSize: 14 });
+  assert.match(html, /0 employees/);
+  assert.match(html, /header row and nothing else/);
 });

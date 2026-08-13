@@ -189,7 +189,27 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
         </AttentionStrip>
       ) : null}
 
-      <Section grow>
+      {/* `-m-1 p-1` is room for a focus ring inside the clip, and nothing else.
+          It moves NOTHING: `overflow: hidden` clips at the PADDING box, so the
+          padding pushes the clip edge 4px outwards and the equal negative
+          margin puts the box back where it was.
+
+          `Section grow` is `overflow-hidden`, and this page is the only one
+          that puts focusable controls flush against all four of its edges —
+          measured, at 1280 and at 375. With no PageHeader above it the toolbar
+          starts at the section's exact top, and the table fills the rest, so
+          the pager sits on its exact bottom. Every control there carries
+          dewey-ui's `focus-visible:ring-3`, a 3px box-shadow OUTSIDE the border
+          box, and every pixel of it above the alert dot, the facets, the search
+          box, Columns and Export — and below the pager, and left of the dot,
+          and right of Export — was being cut off. Keyboard focus is the one
+          state with nowhere else to show itself: a half-drawn ring on the
+          control you are standing on is the reader losing their place.
+
+          4px, for a 3px ring, both smaller than the 20px page gutter the
+          horizontal half spends and the 16px page padding the vertical half
+          spends. The other four routes measured clean and take nothing. */}
+      <Section grow className="-m-1 p-1">
         {bothFailed ? (
           // min-h-0 because `Section grow` is an overflow-hidden clipper that
           // would otherwise cut the Retry button off on a short viewport.
@@ -221,6 +241,14 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             // row-selection state, discarded at the crossing. Neither survives
             // the crossing meaningfully anyway — the column toggle is hidden
             // below 768, and this table selects no rows.
+            //
+            // One more thing rides in `toolbarActions` and so goes with it: an
+            // OPEN export confirmation closes if the reader resizes across 768
+            // while deciding. Checked rather than assumed — Radix tears down
+            // cleanly, no overlay is stranded, the page stays usable, no error
+            // is logged and the dialog reopens from the narrow toolbar. No file
+            // is written either way, so the worst case is a decision to retake.
+            // It goes when this key does.
             key={narrow ? "narrow" : "wide"}
             columns={shownColumns}
             data={data}
@@ -301,9 +329,19 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
             // would otherwise get 50 of them in a file that says nothing about
             // the other 30, and nothing downstream could tell that file from a
             // complete one.
+            //
+            // `filters` and `rosterSize` are for the confirmation only — what
+            // narrowed the file, and what it was narrowed FROM. Nothing in the
+            // export applies them; `matching` is already the answer.
             toolbarActions={
               answered ? (
-                <RegisterExportButton rows={matching} feeds={feeds} truncated={props.truncated} />
+                <RegisterExportButton
+                  rows={matching}
+                  rosterSize={rows.length}
+                  feeds={feeds}
+                  filters={filters}
+                  truncated={props.truncated}
+                />
               ) : null
             }
             config={{
