@@ -401,6 +401,12 @@ function PersonRow(props: {
   // width ladder gates each fact separately: on a phone the day is dropped
   // WHOLE below its rung, where the joined string was instead cut wherever the
   // pixels ran out. Measured at 375, that cut landed mid-duration.
+  // personHeadline runs five times per row across these three calls. Pure and
+  // cheap, and the redundancy is exactly what buys the guarantee: the drawn
+  // line and the spoken label derive from one rule about whether a day is
+  // nameable, so they cannot come to disagree. Do not "optimise" it by having
+  // this row compose the joined string itself — that duplicates the join rule
+  // the split exists to keep singular.
   const finding = personHeadline(person);
   const day = personDayLabel(person);
   const subline = personSubline(person);

@@ -480,6 +480,13 @@ test("the flag queue cuts its employee id, never the finding's number", async ({
     // …and the whole of it is spoken at every width, so a screen reader is told
     // what the screen cannot fit.
     expect(spoken, `${at}: the spoken label must carry all of it`).toContain(label);
+    // The day especially. At 375 it is dropped from the screen entirely, so the
+    // label is the ONLY place it survives — which is the whole reason
+    // personSubline was kept rather than deleted when the line split in two.
+    // Without this, swapping the row's label from the joined sub-line to the
+    // finding alone would mute the day for screen readers at every width and
+    // leave the suite green.
+    expect(spoken, `${at}: the day must be spoken even where it is not drawn`).toContain(day);
   }
 
   // 139px, and the two bounds that mean something: clear of the tail ladder's

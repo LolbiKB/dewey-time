@@ -1554,6 +1554,18 @@ test("a person row leads with their photo and states the finding with its day", 
     html.indexOf("HR-EMP-00011") > html.indexOf("Thu 6 Aug"),
     "the finding and its day both lead the employee id",
   );
+  // The day is SPOKEN even at the widths that do not draw it. Below 170px of
+  // container the ladder drops it from the screen entirely, so the row's label
+  // is the only place it survives — which is why personSubline was kept when
+  // the drawn line split into two facts. Pinned as an exact substring because
+  // this fixture's date is static: swapping the label's source from the joined
+  // sub-line to the finding alone would mute the day at every width and leave
+  // every other assertion in this file green.
+  assert.match(
+    rowWith(html, "Sokheng Hon"),
+    /aria-label="[^"]*Missing 3h 12m · Thu 6 Aug/,
+    "the day is spoken even at widths that drop it from the screen",
+  );
 });
 
 // A sighted reader sees the pair on line one; a screen-reader user has to hear
@@ -1610,7 +1622,11 @@ test("a person with several days of one code gets no single date", () => {
   // title slot instead would be just as wrong. Matched bare rather than behind
   // a separator, because the day is its own fact now and would carry its
   // separator in a sibling element where `· Thu 6 Aug` never appears as text.
-  assert.equal(/\b\w{3} \d{1,2} \w{3}\b/.test(html), false);
+  // Scoped to the row, not the whole document: bare, this pattern matches any
+  // three-letter word / number / three-letter word anywhere in the render, so
+  // an unrelated future label would fail it a long way from the day it exists
+  // to catch, and the failure message would point at the wrong thing.
+  assert.equal(/\b\w{3} \d{1,2} \w{3}\b/.test(rowWith(html, "4 late starts")), false);
 });
 
 test("a person with no photo still leads with an avatar, not a gap", () => {

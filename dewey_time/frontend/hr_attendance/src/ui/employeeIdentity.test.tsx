@@ -144,6 +144,15 @@ test("lead facts keep the caller's order, and so do the ones behind the id", () 
     [...order].sort((a, b) => html.indexOf(a) - html.indexOf(b)),
     order,
   );
+
+  // And the rungs come from the CALLER'S index, not the position within either
+  // side of the partition. This is the only fixture where those two numbers
+  // differ, so it is the only place the invariant can be caught: re-index per
+  // partition and "Thu 6 Aug" drops to 170 while "Behind two" drops to 170 as
+  // well, both silently widening what a narrow container shows.
+  assert.ok(classesOn(html, "Thu 6 Aug").includes("@min-[230px]:inline"), "index 2 -> 230");
+  assert.ok(classesOn(html, "Behind one").includes("@min-[170px]:inline"), "index 1 -> 170");
+  assert.ok(classesOn(html, "Behind two").includes("@min-[230px]:inline"), "index 3 -> 230");
 });
 
 test("a lead fact keeps its own rung on the ladder", () => {

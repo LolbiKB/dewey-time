@@ -178,7 +178,10 @@ export function EmployeeIdentity(props: EmployeeIdentityProps) {
  *
  * The separator lives INSIDE the fact's span, on the side facing the ID, so a
  * fact the ladder hides cannot leave a bare middot behind at either end of the
- * line. `index` is the fact's position in the caller's array, not its position
+ * line. (Only a fact the LADDER hides — a lead fact beside an empty
+ * `employeeId` would still draw its trailing middot, which no caller does
+ * today and the prop's own contract steers away from.)
+ * `index` is the fact's position in the caller's array, not its position
  * on the line: a fact keeps its rung when it crosses the ID.
  */
 function Fact(props: { fact: TailFact; index: number; separator: "before" | "after" }) {
