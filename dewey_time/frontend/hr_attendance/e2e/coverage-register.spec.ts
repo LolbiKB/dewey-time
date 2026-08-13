@@ -38,7 +38,7 @@ const NOT_READY = ["Nora Vance", "Marco Diaz", "Priya Nair", "Tom O'Brien"];
  * page builds the name with could not notice the two disagreeing.
  */
 function rosterSearchBox(size: number): string {
-  return `Search ${size} employees by name or ID…`;
+  return `Search ${size} employees by name, Khmer name, or ID…`;
 }
 
 function bodyRows(page: Page) {

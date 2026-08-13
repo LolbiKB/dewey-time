@@ -1002,7 +1002,7 @@ test("an ordinary page load does not flash an outage", () => {
   // does not have.
   assert.equal(
     searchBoxName(html),
-    "Search by name or employee ID…",
+    "Search by name, Khmer name, or employee ID…",
     "the box must claim no roster size it does not have",
   );
   assert.doesNotMatch(html, /Search 0 employees/);
@@ -1014,10 +1014,10 @@ test("the search box names the roster size, and says employee once at one", () =
   // Where "Coverage · N employees" went. It costs no vertical space here, and
   // it is derived from the UNFILTERED rows — see the facet test below for the
   // same rule on the facet options.
-  assert.equal(searchBoxName(renderView({ rows: [BASE_ROW] })), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(renderView({ rows: [BASE_ROW] })), "Search 1 employee by name, Khmer name, or ID…");
   assert.equal(
     searchBoxName(renderView({ rows: [BASE_ROW, { ...BASE_ROW, id: "EMP-0002" }] })),
-    "Search 2 employees by name or ID…",
+    "Search 2 employees by name, Khmer name, or ID…",
   );
 });
 
@@ -1028,7 +1028,7 @@ test("the roster count in the search box does not follow the filters down", () =
   const two = [BASE_ROW, { ...BASE_ROW, id: "STUCK", employee_name: "Ada Stuck", schedule: "missing" as const }];
   assert.equal(
     searchBoxName(renderView({ rows: two, filters: { readiness: "not-ready" } })),
-    "Search 2 employees by name or ID…",
+    "Search 2 employees by name, Khmer name, or ID…",
   );
 });
 
@@ -1038,7 +1038,7 @@ test("the placeholder is the same wording on both sides of the breakpoint", () =
   // same name on a phone, and one e2e locator has to match both.
   const wide = renderView({ rows: [BASE_ROW] });
   const narrow = renderView({ rows: [BASE_ROW], narrow: true });
-  assert.equal(searchBoxName(wide), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(wide), "Search 1 employee by name, Khmer name, or ID…");
   assert.equal(searchBoxName(narrow), searchBoxName(wide));
 });
 
@@ -1183,8 +1183,8 @@ test("a failed load counts nobody, rather than counting nobody aloud", () => {
   assert.match(failed, /Coverage didn’t load/, "the failure itself must still be reported");
 
   // The two states either side of it still speak.
-  assert.equal(searchBoxName(renderView({ isLoading: true, rows: [] })), "Search by name or employee ID…");
-  assert.equal(searchBoxName(renderView()), "Search 1 employee by name or ID…");
+  assert.equal(searchBoxName(renderView({ isLoading: true, rows: [] })), "Search by name, Khmer name, or employee ID…");
+  assert.equal(searchBoxName(renderView()), "Search 1 employee by name, Khmer name, or ID…");
 });
 
 test("a partial roster says so", () => {
@@ -1511,12 +1511,12 @@ test("the bar holds no search box unless it is asked to", () => {
 });
 
 test("the search placeholder counts the roster, is silent when there is none, and says employee once at one", () => {
-  assert.equal(registerSearchPlaceholder(503), "Search 503 employees by name or ID…");
-  assert.equal(registerSearchPlaceholder(1), "Search 1 employee by name or ID…");
+  assert.equal(registerSearchPlaceholder(503), "Search 503 employees by name, Khmer name, or ID…");
+  assert.equal(registerSearchPlaceholder(1), "Search 1 employee by name, Khmer name, or ID…");
   // Zero is not a roster size, it is the absence of one — during a load, and
   // after a failure that left the page holding nothing. A box reading "Search 0
   // employees…" states as a count the very thing the page does not know.
-  assert.equal(registerSearchPlaceholder(0), "Search by name or employee ID…");
+  assert.equal(registerSearchPlaceholder(0), "Search by name, Khmer name, or employee ID…");
   assert.doesNotMatch(registerSearchPlaceholder(0), /\d/, "no count may survive into the silent form");
 });
 

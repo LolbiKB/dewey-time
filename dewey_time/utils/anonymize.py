@@ -46,6 +46,17 @@ def _scrub_specs() -> list[tuple[str, dict, str]]:
             "custom_khmer_first_name": "CASE WHEN custom_khmer_first_name IS NULL OR custom_khmer_first_name = '' THEN custom_khmer_first_name ELSE CONCAT('នាម', name) END",
             # Same gap, same reason: a real chat id reaches a real person. NULL
             # rather than '' (which would fail in strict mode if the column is Int).
+            #
+            # Unlike the two Khmer fields, THIS APP DOES NOT INSTALL THIS COLUMN
+            # -- setup/custom_fields.py owns the Khmer pair and knows nothing
+            # about a Telegram chat id, which arrives (if at all) from whatever
+            # installed the notifier on the site being restored. It is listed
+            # anyway because the specs describe what must never survive a
+            # restore, not what this app happens to create, and run() below
+            # intersects every spec with frappe.db.get_table_columns() before
+            # building the UPDATE: a column the schema does not have is dropped
+            # from the statement rather than raising. test_anonymize.py pins
+            # that intersection.
             "custom_telegram_chat_id": "NULL",
             "personal_email": "CONCAT(name, '@example.test')",
             "company_email": "CONCAT(name, '@example.test')",

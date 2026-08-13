@@ -29,6 +29,13 @@ import { longKhmerCoveragePayload, stubFrappe } from "./fixtures";
  * asserted as the PROPERTY that matters — above this rung, below that threshold,
  * wide enough for that line — with the measured number kept in the comment. The
  * crossing test brackets 1320/1340 rather than probing 1330 for the same reason.
+ *
+ * The last test is the odd one out and belongs here anyway: the day inspector's
+ * header draws a person WITHOUT an identity stack, so `stacks()` walks straight
+ * past it, which is exactly how the one surface this branch lengthened names on
+ * without measuring stayed unmeasured. Its numbers are differential — the same
+ * header with a short name — rather than absolute, so nothing there needs
+ * re-measuring on another rasteriser.
  */
 
 /**
@@ -478,4 +485,116 @@ test("a pair longer than the measured worst case still truncates", async ({ page
   // container and not a name that can never be drawn.
   const wide = await registerAt(page, 2560);
   expect(wide.find((s) => s.name.startsWith("Chandravaddhana"))!.clipped).toEqual([]);
+});
+
+/** What the day inspector's header line measures to, for one employee name. */
+type InspectorHeader = {
+  /** The row's own height. One line is 20px on this rasteriser, two are 40. */
+  height: number;
+  /** How far the row's content runs past the row. Non-zero is an overflow. */
+  overflow: number;
+  /** The trailing label's width. It wraps once squeezed under its one-line 88px. */
+  labelWidth: number;
+  /** The label's right edge relative to the sheet's, which is `overflow-hidden`. */
+  labelPastSheet: number;
+  /** Whether the name is ellipsized. Without this the rest could pass vacuously. */
+  nameTruncated: boolean;
+};
+
+/**
+ * Open the day inspector on an employee called `name`, and measure its header.
+ *
+ * The date button carries the day's gross total as its accessible name, which
+ * is how attendance.spec.ts opens the same sheet; both Playwright projects can
+ * click it, but the viewport is set explicitly here so the two widths mean the
+ * same thing on either.
+ */
+async function inspectorHeader(page: Page, width: number, name: string): Promise<InspectorHeader> {
+  // Each name is a fresh stub, and Playwright dispatches handlers
+  // last-registered-first, so the old one would only ever be shadowed — dropped
+  // instead, or the test leaves six dead handlers behind it.
+  await page.unroute("**/api/method/**");
+  await stubFrappe(page, { employeeName: name });
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto("/hr-attendance");
+  await page.getByRole("button", { name: /8h 54m/ }).first().click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet.getByText("Day inspector")).toBeVisible();
+  // The sheet SLIDES IN. `toBeVisible` is satisfied by a box, not by a resting
+  // one, so without this every horizontal reading below is a frame of the
+  // animation — the measurement that found this bug first read the sheet while
+  // it was still a full 384px off the right of the screen.
+  await page.waitForFunction(() => {
+    const el = document.querySelector<HTMLElement>('[role="dialog"]');
+    return !!el && el.getBoundingClientRect().right <= window.innerWidth + 1;
+  });
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+
+  return page.evaluate(() => {
+    const sheetEl = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const label = [...sheetEl.querySelectorAll<HTMLElement>("span")].find(
+      (span) => span.textContent?.trim() === "Day inspector",
+    )!;
+    const row = label.parentElement!;
+    const nameSpan = row.firstElementChild as HTMLElement;
+    const right = (el: HTMLElement) => el.getBoundingClientRect().right;
+    return {
+      height: Math.round(row.getBoundingClientRect().height),
+      overflow: row.scrollWidth - row.clientWidth,
+      labelWidth: Math.round(label.getBoundingClientRect().width),
+      labelPastSheet: Math.round(right(label) - right(sheetEl)),
+      nameTruncated: nameSpan.scrollWidth > nameSpan.clientWidth + 1,
+    };
+  });
+}
+
+test("the day inspector's header holds one line whatever the name is", async ({ page }) => {
+  // The surface this branch changed and nobody looked at. It draws the
+  // employee's name with no identity stack around it, so the `stacks()` walk
+  // above cannot see it, and its file is in no task's list.
+  //
+  // MEASURED BEFORE THE FIX, at 375 and at 1280 (the sheet is 384px wide on a
+  // laptop, so the two are nearly the same box):
+  //
+  //   - a three-part name does NOT overflow. A flex item's automatic minimum
+  //     size is its min-content, so the row hit its limit and the text WRAPPED:
+  //     the name below needs 281px on one line against the 238px the row had at
+  //     375, so the header went 20px → 40px and "Day inspector" was squeezed
+  //     under its own 88px and broke into "Day" / "inspector". Not the overflow
+  //     that was expected, and worse than one to read.
+  //   - a name with no space in it has no min-content to wrap at, and that one
+  //     did overflow: 99px at 375, 91px at 1280, putting the label 83px beyond
+  //     an `overflow-hidden` SheetContent. Not truncated — absent.
+  //
+  // Both are asserted DIFFERENTIALLY against the same header holding a short
+  // name, so the only pinned number is the difference: zero.
+  test.setTimeout(120_000);
+  const LONG_NAMES = [
+    // 40 characters over three parts. Longer than anyone on the roster, and the
+    // point is that it is only reachable at all because this branch stopped
+    // stripping the middle one.
+    "Chandravaddhana Sovannarith Ratanakvisal",
+    // The same length with nowhere to break — the case that actually overflowed.
+    "Chandravaddhanasovannarithratanakvisalsokhachandara",
+  ];
+
+  for (const width of [375, 1280]) {
+    const control = await inspectorHeader(page, width, "Jane Doe");
+    expect(control.nameTruncated, `@${width}: the control name must fit, or nothing here means anything`).toBe(false);
+    expect(control.overflow, `@${width}: the control header must not overflow`).toBe(0);
+
+    for (const name of LONG_NAMES) {
+      const header = await inspectorHeader(page, width, name);
+      expect(header.height, `@${width}: "${name}" grew the header to a second line`).toBe(
+        control.height,
+      );
+      expect(header.overflow, `@${width}: "${name}" overflowed the header row`).toBe(0);
+      expect(header.labelWidth, `@${width}: "${name}" squeezed the "Day inspector" label`).toBe(
+        control.labelWidth,
+      );
+      expect(header.labelPastSheet, `@${width}: "${name}" pushed the label out of the sheet`).toBeLessThan(0);
+      // The name is the only thing that may give, and it must give VISIBLY.
+      expect(header.nameTruncated, `@${width}: "${name}" was not truncated`).toBe(true);
+    }
+  }
 });

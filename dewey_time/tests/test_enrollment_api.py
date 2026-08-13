@@ -363,6 +363,28 @@ class SeamTest(unittest.TestCase):
         self.assertIsNone(status["last_snapshot_at"])
 
 
+class TestEnrollmentCacheKey(unittest.TestCase):
+    def test_the_key_is_v2(self):
+        # enrollment_api.py:29-37: a deploy does not clear Redis, so for a whole
+        # TTL after one a key written by the old code can still answer the new
+        # frontend. The comment there says to bump the suffix whenever a field
+        # is added, renamed or removed anywhere in the payload -- v2 is the
+        # Khmer name fields arriving on every row -- and this is what turns that
+        # instruction into something a change has to walk past. The queue's
+        # prefix has the same pin in test_flag_queue_api.TestQueueCachePrefix,
+        # and coverage's is pinned by its invalidate test.
+        self.assertEqual(mod._CACHE_KEY, "enrollment_report:v2")
+
+    def test_invalidate_deletes_that_exact_key(self):
+        # The pin above is a literal in a test; this is the literal actually
+        # reaching Redis. Wired to the register's doc events in hooks.py, so a
+        # key that no longer matches leaves a stale report until the TTL.
+        cache = MagicMock()
+        with patch.object(mod.frappe, "cache", cache):
+            mod.invalidate_enrollment_cache()
+        cache.return_value.delete_value.assert_called_once_with("enrollment_report:v2")
+
+
 class PermissionTest(unittest.TestCase):
     def test_non_hr_session_is_rejected_before_the_cache_read_and_any_query(self):
         """The payload is the whole employee roster, so the gate runs first.

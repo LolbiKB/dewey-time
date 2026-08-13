@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from dewey_time.tests.test_closeout import _install_frappe_mock
 
@@ -58,6 +59,44 @@ class TestAnonymizeStatements(unittest.TestCase):
                           (khmer_first, "custom_khmer_first_name")]:
             self.assertIn("CASE WHEN", expr, f"{col} must preserve emptiness")
             self.assertIn(col, expr, f"{col} expression must reference its own column")
+
+
+class TestRunSkipsColumnsTheSchemaLacks(unittest.TestCase):
+    """The guarantee the Employee spec's comment leans on.
+
+    custom_telegram_chat_id is scrubbed by that spec and is NOT installed by
+    this app -- setup/custom_fields.py owns the two Khmer fields and nothing
+    else -- so on a site without the notifier it names a column that does not
+    exist. That is safe only because run() intersects each spec with the
+    columns the schema actually has, and until now nothing said so.
+    """
+
+    def _statements(self, columns):
+        anonymize.frappe.local.site = "sandbox"
+        sql = anonymize.frappe.db.sql
+        sql.reset_mock()
+        with patch.object(
+            anonymize.frappe.db, "get_table_columns", return_value=columns
+        ):
+            anonymize.run()
+        return [call.args[0] for call in sql.call_args_list]
+
+    def test_a_column_the_schema_lacks_is_dropped_from_the_update(self):
+        statements = self._statements(["employee_name", "personal_email"])
+        self.assertTrue(statements, "the scrub issued no UPDATE at all")
+        for statement in statements:
+            self.assertNotIn("custom_telegram_chat_id", statement)
+        # …and the run is not vacuous: what the schema DOES have is scrubbed.
+        self.assertTrue(any("`employee_name` =" in s for s in statements))
+
+    def test_the_column_is_scrubbed_where_the_schema_has_it(self):
+        # The other direction, so the test above cannot pass by the scrub
+        # having quietly stopped touching the field on every schema.
+        statements = self._statements(["custom_telegram_chat_id"])
+        self.assertTrue(
+            any("`custom_telegram_chat_id` = NULL" in s for s in statements),
+            "an installed chat id must still be blanked",
+        )
 
 
 if __name__ == "__main__":

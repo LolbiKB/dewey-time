@@ -381,6 +381,18 @@ export function staleEnrollmentPayload(): EnrollmentPayload {
 export type FrappeStubOverrides = {
   coverage?: ScheduleCoveragePayload;
   enrollment?: EnrollmentPayload;
+  /**
+   * What the ONE calendar employee is called.
+   *
+   * A name and not a payload, because that is the whole of what varies: the
+   * calendar roster is a single person and every other field of theirs is
+   * beside the point. It is here because the day inspector's header draws the
+   * calendar employee — not a register row — so a long name cannot be put in
+   * front of it through either feed above, and that header is the one place on
+   * this branch where the length of a name changes the layout of the box
+   * around it.
+   */
+  employeeName?: string;
 };
 
 export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}): Promise<void> {
@@ -408,10 +420,18 @@ export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}
     } else if (p.includes("get_calendar_session")) {
       message = { hr_staff: true, employee_id: "EMP-001" } satisfies CalendarSession;
     } else if (p.includes("list_calendar_employees")) {
-      // No `satisfies` here: this envelope's type is inline and unexported at
+      // No `satisfies` on the envelope: its type is inline and unexported at
       // services/calendar.ts's `listCalendarEmployees`. `EMPLOYEE` — the part
-      // that actually drifts — is checked at its declaration above.
-      message = { employees: [EMPLOYEE], current_user_employee: "EMP-001" };
+      // that actually drifts — is checked at its declaration above, and the
+      // renamed copy carries its own clause for the same reason.
+      const employee = overrides.employeeName
+        ? ({
+            ...EMPLOYEE,
+            employee_name: overrides.employeeName,
+            label: `EMP-001 · ${overrides.employeeName}`,
+          } satisfies CalendarEmployee)
+        : EMPLOYEE;
+      message = { employees: [employee], current_user_employee: "EMP-001" };
     } else if (p.includes("get_employee_calendar")) {
       const start = url.searchParams.get("start_date") ?? "2026-06-01";
       const end = url.searchParams.get("end_date") ?? "2026-06-30";

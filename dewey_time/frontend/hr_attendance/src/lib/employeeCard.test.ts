@@ -143,6 +143,13 @@ test("khmerName is null when there is nothing to show", () => {
   assert.equal(khmerName(null, null), null);
   assert.equal(khmerName(undefined, undefined), null);
   assert.equal(khmerName("   ", "\t"), null);
+});
+
+test("khmerName trims a padded pair rather than discarding it", () => {
+  // The other half of the same trim: padding around a real name is not the
+  // absence of one. Its own test, because a failure here is a name that was
+  // thrown away, and reported from the test above it would have read as
+  // "khmerName is null when there is nothing to show" — the opposite fault.
   assert.equal(khmerName("  ចាន់  ", "  សុភា "), "ចាន់ សុភា");
 });
 

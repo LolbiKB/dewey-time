@@ -1446,7 +1446,7 @@ class TestFlagGroupingAgreesWithRolloutOnLive(unittest.TestCase):
 
 
 class TestQueueCachePrefix(unittest.TestCase):
-    def test_the_prefix_is_v4(self):
+    def test_the_prefix_is_v5(self):
         # flag_queue_api.py:40-53: a deploy does not clear Redis, so a payload-shape
         # change without a new prefix means old keys answering new callers for a
         # full TTL. This assertion is the enforcement of that comment.
