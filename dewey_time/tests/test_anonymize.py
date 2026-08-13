@@ -44,9 +44,20 @@ class TestAnonymizeStatements(unittest.TestCase):
         for column in ("custom_khmer_first_name", "custom_khmer_last_name",
                        "custom_telegram_chat_id"):
             self.assertIn(column, employee, f"{column} is unscrubbed PII")
-        # Deterministic and id-preserving, like first_name -- not NULL, which
-        # would make "has a Khmer name" untestable in the sandbox.
-        self.assertIn("name", employee["custom_khmer_last_name"])
+        # Telegram chat ID: blanked to NULL (not ''), which is type-agnostic and
+        # avoids strict mode failures if the prod column is Int.
+        self.assertEqual(employee["custom_telegram_chat_id"], "NULL")
+        # Khmer fields: de-identified to deterministic id-derived values, but
+        # preserve emptiness so "has no Khmer name" stays exercisable in the
+        # sandbox. Both expressions differ (different prefixes) and both preserve
+        # their own column's emptiness via CASE WHEN.
+        khmer_last = employee["custom_khmer_last_name"]
+        khmer_first = employee["custom_khmer_first_name"]
+        self.assertNotEqual(khmer_last, khmer_first, "Khmer expressions must differ")
+        for expr, col in [(khmer_last, "custom_khmer_last_name"),
+                          (khmer_first, "custom_khmer_first_name")]:
+            self.assertIn("CASE WHEN", expr, f"{col} must preserve emptiness")
+            self.assertIn(col, expr, f"{col} expression must reference its own column")
 
 
 if __name__ == "__main__":
