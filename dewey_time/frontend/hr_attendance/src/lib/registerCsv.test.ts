@@ -10,6 +10,7 @@ const HEALTHY: FeedHealth = { schedule: true, biometric: true };
 
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+  khmer_name: null,
   image: null,
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,

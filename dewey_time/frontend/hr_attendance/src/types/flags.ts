@@ -65,6 +65,22 @@ export type QueuePerson = {
    * that case, never an empty circle.
    */
   employee_image: string | null;
+  /**
+   * ERPNext `Employee.custom_khmer_last_name` / `custom_khmer_first_name`.
+   *
+   * Raw and unordered on the wire; compose with `khmerName()` before display,
+   * which puts the family name first. Optional because a site mid-migration may
+   * not have the columns yet — the backend selects them behind a
+   * `has_column` check.
+   *
+   * Deliberately UNPREFIXED, unlike `employee_branch` / `employee_image` on
+   * this same type — `flag_grouping._person()` emits these two exactly as
+   * the other three payload types do, precisely so this type matches them.
+   * Do not "correct" it to a prefixed name; that would silently drop the
+   * Khmer name from the flag queue while every other surface still had it.
+   */
+  custom_khmer_last_name?: string | null;
+  custom_khmer_first_name?: string | null;
   /** The worst unresolved flag's date — the row's headline day. */
   attendance_date: string;
   /** Every distinct date THIS entry's flags fall on, ascending. */

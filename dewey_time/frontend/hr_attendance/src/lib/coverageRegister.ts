@@ -1,5 +1,6 @@
 import type { BaseTableMeta } from "@lolbikb/dewey-ui";
 
+import { khmerName } from "@/lib/employeeCard";
 import type {
   CoverageAssignedEmployee,
   CoverageEmployee,
@@ -21,6 +22,13 @@ import {
 export type RegisterRow = {
   id: string;
   employee_name: string;
+  /**
+   * Composed by `khmerName()` at the join, not at each cell.
+   *
+   * The table, the CSV and the search all read one row; three call sites
+   * composing separately is how these surfaces drifted apart the first time.
+   */
+  khmer_name: string | null;
   /**
    * Schedule-feed fact — the employee's photo URL, or null for the many who
    * have none.
@@ -129,6 +137,7 @@ export function joinRegisterRows(
     byId.set(emp.id, {
       id: emp.id,
       employee_name: emp.employee_name || emp.id,
+      khmer_name: khmerName(emp.custom_khmer_last_name, emp.custom_khmer_first_name),
       image: emp.image ?? null,
       branch: emp.branch ?? null,
       department: emp.department ?? null,
@@ -153,6 +162,7 @@ export function joinRegisterRows(
       const merged: RegisterRow = existing ?? {
         id: row.id,
         employee_name: row.employee_name || row.id,
+        khmer_name: khmerName(row.custom_khmer_last_name, row.custom_khmer_first_name),
         // The enrolment feed carries no photo, so a row only it knows about
         // has none — not a borrowed one, and not a guessed URL.
         image: null,
@@ -178,6 +188,12 @@ export function joinRegisterRows(
       // fall back to the enrollment copy for rows coverage never returned.
       merged.branch = merged.branch ?? row.branch ?? null;
       merged.department = merged.department ?? row.department ?? null;
+      // Coverage wins when both feeds carry it, on the same precedence as
+      // `branch`. The enrolment feed fills the gap for a leaver coverage
+      // never returned -- the security finding this page exists for.
+      if (merged.khmer_name === null) {
+        merged.khmer_name = khmerName(row.custom_khmer_last_name, row.custom_khmer_first_name);
+      }
       byId.set(row.id, merged);
     }
   }

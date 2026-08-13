@@ -15,6 +15,16 @@ export type CoverageEmployee = {
   employment_type?: string | null;
   title?: string | null;
   image?: string | null;
+  /**
+   * ERPNext `Employee.custom_khmer_last_name` / `custom_khmer_first_name`.
+   *
+   * Raw and unordered on the wire; compose with `khmerName()` before display,
+   * which puts the family name first. Optional because a site mid-migration may
+   * not have the columns yet — the backend selects them behind a
+   * `has_column` check.
+   */
+  custom_khmer_last_name?: string | null;
+  custom_khmer_first_name?: string | null;
 };
 
 export type CoverageAssignedEmployee = CoverageEmployee & {

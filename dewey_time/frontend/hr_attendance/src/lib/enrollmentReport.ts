@@ -24,6 +24,16 @@ export type EnrollmentRow = {
   /** Carried because the bridge computes it; no UI column — nobody enrolls faces. */
   face_count: number;
   days_since_relieving: number | null;
+  /**
+   * ERPNext `Employee.custom_khmer_last_name` / `custom_khmer_first_name`.
+   *
+   * Raw and unordered on the wire; compose with `khmerName()` before display,
+   * which puts the family name first. Optional because a site mid-migration may
+   * not have the columns yet — the backend selects them behind a
+   * `has_column` check.
+   */
+  custom_khmer_last_name?: string | null;
+  custom_khmer_first_name?: string | null;
 };
 
 export type EnrollmentCounts = {
