@@ -61,8 +61,10 @@ export type EmployeeIdentityProps = {
  * · ហេង សុវណ្ណារី` needs 194px at 14px semibold, so the Khmer name turns on at
  * 200. When it will not fit it is NOT RENDERED rather than shrunk or truncated
  * — shrinking would need 3px for that name, and Khmer has no inter-word spaces
- * so an ellipsis lands mid-cluster. Because a container query hides the
- * element, no ellipsis ever appears.
+ * so an ellipsis lands mid-cluster. That threshold is one global worst case
+ * rather than a per-name calculation, so it narrows the mid-cluster ellipsis to
+ * a residual rather than ruling it out: a pair longer than the widest one
+ * measured, in a container barely past 200, still meets line one's `truncate`.
  *
  * Hook-free on purpose, so `renderToStaticMarkup` can reach it — the same
  * constraint AlertDot and FacetOptions are built to.
@@ -93,7 +95,9 @@ export function EmployeeIdentity(props: EmployeeIdentityProps) {
             // box as Latin at 14px, so this costs no row height — and at 11px
             // its stacked subscripts start compressing into each other.
             <span className="hidden @min-[200px]:inline">
-              <span className="mx-1.5 font-normal opacity-40">·</span>
+              <span aria-hidden="true" className="mx-1.5 font-normal opacity-40">
+                ·
+              </span>
               <span className="font-khmer">{props.khmerName}</span>
             </span>
           ) : null}
@@ -106,11 +110,15 @@ export function EmployeeIdentity(props: EmployeeIdentityProps) {
               key={`${fact.label}-${index}`}
               className={cn(
                 "hidden",
-                TAIL_VISIBILITY[index] ?? "@min-[230px]:inline",
+                // A fourth fact and beyond share the last rung: the threshold
+                // is read out of the ladder so the number lives in one place.
+                TAIL_VISIBILITY[index] ?? TAIL_VISIBILITY[TAIL_VISIBILITY.length - 1],
                 fact.tone === "warning" && "text-brand-accent",
               )}
             >
-              <span className="mx-1 opacity-40">·</span>
+              <span aria-hidden="true" className="mx-1 opacity-40">
+                ·
+              </span>
               {fact.label}
             </span>
           ))}

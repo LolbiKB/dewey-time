@@ -24,11 +24,19 @@
    border-brand-accent (supports /opacity, e.g. bg-brand-accent/10). */
 @theme inline {
   --color-brand-accent: var(--brand-accent);
+}
 
-  /* Kantumruy Pro's Khmer subset already ships in the bundle — dewey-ui supplies
-     the face and check-fonts.mjs emits it. Nothing rendered Khmer until now, so
-     nothing referenced it. Latin fallback first is deliberate: a Khmer name is
-     Khmer script only, and any Latin that lands here should match the rest. */
+/* The Khmer face, for the one place a Khmer name is drawn — EmployeeIdentity's
+   line one. Kantumruy Pro's Khmer subset already ships in the bundle: dewey-ui
+   supplies the face and check-fonts.mjs emits it. Nothing rendered Khmer until
+   now, so nothing referenced it. Latin fallback first is deliberate — a Khmer
+   name is Khmer script only, and any Latin that lands here should match the
+   rest.
+
+   NOT `inline`, unlike the block above: that modifier is for values built out of
+   other variables, and it inlines the stack into the utility WITHOUT emitting
+   the custom property, so var(--font-khmer) would resolve to nothing. */
+@theme {
   --font-khmer: "Kantumruy Pro", "Khmer MN", ui-sans-serif, sans-serif;
 }
 
