@@ -154,6 +154,20 @@ export function registerColumns(
       header: sortableHeader("Employee"),
       cell: ({ row }) => (
         <EmployeeIdentity
+          // The floor the query container took away, and this column cannot do
+          // without: `container-type: inline-size` computes the block's min-
+          // and max-content contributions AS IF IT HAD NO CONTENTS, and this
+          // table is auto-layout — dewey-ui renders a bare `w-full` <table> and
+          // reads no TanStack `size`, so a column with no intrinsic width is
+          // sized by its header. Measured: the cell fell from 361px to 193px at
+          // a 1280 content area, and at 375 every name in the fixture clipped
+          // to 39px of text.
+          //
+          // 185 = 36px avatar + 10px gap + 139px of text, which is the stack
+          // width the spec measured this cell at. Deliberately under 200 — that
+          // is where the Khmer name switches on, and this cell's recorded trade
+          // is that it shows none at either viewport.
+          className="min-w-[185px]"
           englishName={row.original.employee_name}
           employeeId={row.original.id}
           // Already composed at the join by joinRegisterRows, family name

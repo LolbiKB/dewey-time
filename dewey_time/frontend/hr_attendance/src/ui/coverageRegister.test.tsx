@@ -129,10 +129,12 @@ function renderRow(
  * tag to slice on, "the department is not in the identity block" quietly
  * becomes "the department is not in the first few characters of it".
  */
-function renderRegisterCell(row: RegisterRow): { html: string } {
+function renderRegisterCell(row: RegisterRow): { markup: string } {
   const cell = /<td data-col="employee">.*?<\/td>/.exec(renderRow(row).markup);
   assert.ok(cell, "the register has no employee column");
-  return { html: cell[0] };
+  // `markup`, the same name renderRow gives a raw HTML string, rather than
+  // `html`, which in this file means the per-column record.
+  return { markup: cell[0] };
 }
 
 /** Narrows a rendered node to its `onClick`, without an `as any`/`as unknown as` cast. */
@@ -658,17 +660,31 @@ test("the register's employee cell carries the Khmer name in the markup", () => 
   // Present in the DOM but hidden by the container query at the register's
   // 139px and 90px stacks -- e2e proves the hiding. This proves the cell is
   // not the thing that dropped it, so widening the column later is enough.
-  const { html } = renderRegisterCell({ ...BASE_ROW, khmer_name: "ចាន់ សុភា" });
-  assert.match(html, /ចាន់ សុភា/);
-  assert.match(html, /data-slot="employee-name"/, "the e2e hook survives");
+  const { markup } = renderRegisterCell({ ...BASE_ROW, khmer_name: "ចាន់ សុភា" });
+  assert.match(markup, /ចាន់ សុភា/);
+  assert.match(markup, /data-slot="employee-name"/, "the e2e hook survives");
 });
 
 test("the register declares an empty tail — Branch and Dept are its own columns", () => {
   // A tail here would print facts the table already has in dedicated, sortable
-  // columns, and eat the width the ID needs.
-  const { html } = renderRegisterCell({ ...BASE_ROW, department: "Retail", branch: "DIU" });
-  const cell = html.slice(0, html.indexOf("</td>") + 5);
-  assert.doesNotMatch(cell, /Retail/, "department belongs to its own column");
+  // columns, and eat the width the ID needs. `renderRegisterCell` is already
+  // scoped to the one cell, so this is the whole of it.
+  const { markup } = renderRegisterCell({ ...BASE_ROW, department: "Retail", branch: "DIU" });
+  assert.doesNotMatch(markup, /Retail/, "department belongs to its own column");
+  assert.doesNotMatch(markup, /DIU/, "and so does branch");
+});
+
+test("the employee cell declares the width floor its query container cannot", () => {
+  // `container-type: inline-size` computes the identity block's min- and
+  // max-content contributions as if it had no contents, and this table is
+  // auto-layout, so with no floor the column is sized by its header instead of
+  // its names: measured at 193px against 361px before the conversion, and at
+  // 375 every name in the fixture clipped to 39px of text.
+  //
+  // The width itself is only measurable in a browser, so what is pinned here is
+  // that a floor is DECLARED. Deleting it is how this regresses.
+  const { markup } = renderRegisterCell(BASE_ROW);
+  assert.match(markup, /min-w-\[185px\]/);
 });
 
 test("the employee cell carries the face the coverage feed sent", () => {

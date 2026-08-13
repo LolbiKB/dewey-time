@@ -418,7 +418,7 @@ function PersonRow(props: {
         .filter(Boolean)
         .join(". ")}
     >
-      {/* flex-[3_1_auto] against the badge's flex-[1_1_auto]: when the line
+      {/* flex-[3_1_0%] against the badge's flex-[1_1_0%]: when the line
           overflows, both give way and the person keeps roughly three quarters
           of what is left — the face included, now that it sits inside the
           identity block. The badge used to be shrink-0, which made the name the
@@ -426,11 +426,18 @@ function PersonRow(props: {
           1 elsewhere" and rendered the person as "B…". Whatever else a triage
           row loses, it cannot lose whose row it is.
 
+          `0%` rather than the `auto` these two carried before. A flex base of
+          `auto` is the item's own content width, and the identity block is a
+          query container, whose content contributes NOTHING to that — so the
+          name's share collapsed to the 40px face while the badge, still sized
+          by its text, grew. Measured at 375: the name had 89px before, 59px
+          under `auto`, and 92px on a real 3:1 split of the line.
+
           The wrapper carries the native tooltip a truncated name needs:
           EmployeeIdentity takes no `title`, and scoping it here rather than to
           the whole line stops a hover over the badge naming the person. */}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className="min-w-0 flex-[3_1_auto]" title={person.employee_name}>
+        <span className="min-w-0 flex-[3_1_0%]" title={person.employee_name}>
           <EmployeeIdentity
             englishName={person.employee_name}
             employeeId={person.employee}
@@ -464,7 +471,7 @@ function PersonRow(props: {
             pattern group without knowing about their other row is the whole
             risk the per-flag invariant introduced. */}
         {crossReference ? (
-          <span className="min-w-0 flex-[1_1_auto] truncate text-[11px] font-normal text-muted-foreground">
+          <span className="min-w-0 flex-[1_1_0%] truncate text-[11px] font-normal text-muted-foreground">
             {crossReference}
           </span>
         ) : null}
