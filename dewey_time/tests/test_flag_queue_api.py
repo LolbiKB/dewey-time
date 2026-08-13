@@ -446,7 +446,13 @@ class TestQueueInputs(unittest.TestCase):
         self.assertEqual(flags[0]["attendance_date"], "2026-08-03")
         self.assertEqual(
             kwargs["employees_by_id"]["HR-EMP-00000"],
-            {"employee_name": "Name HR-EMP-00000", "branch": "BR-A", "image": None},
+            {
+                "employee_name": "Name HR-EMP-00000",
+                "custom_khmer_last_name": None,
+                "custom_khmer_first_name": None,
+                "branch": "BR-A",
+                "image": None,
+            },
         )
 
     def test_only_auto_flags_reach_the_queue(self):
@@ -569,6 +575,26 @@ class TestEmployeePhoto(unittest.TestCase):
             flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
             employees = h.build.call_args.kwargs["employees_by_id"]
         self.assertIsNone(employees["HR-EMP-00000"]["image"])
+
+    def test_the_khmer_name_fields_reach_build_queue_on_the_employee_meta(self):
+        """Emitted, not merely selected: a field in the SELECT list that the
+        output dict drops is a production no-op that returns None forever --
+        exactly what `branch` did in hr_calendar.py until it was caught in
+        review.
+        """
+        rows = _roster(1)
+        rows["Employee"] = [
+            {
+                **_employee_row("HR-EMP-00000"),
+                "custom_khmer_last_name": "ចាន់",
+                "custom_khmer_first_name": "សុភា",
+            }
+        ]
+        with _harness(rows) as h:
+            flag_queue_api.get_flag_queue("2026-08-01", "2026-08-07")
+            employees = h.build.call_args.kwargs["employees_by_id"]
+        self.assertEqual(employees["HR-EMP-00000"]["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(employees["HR-EMP-00000"]["custom_khmer_first_name"], "សុភា")
 
 
 class TestOutageDatesInPayload(unittest.TestCase):

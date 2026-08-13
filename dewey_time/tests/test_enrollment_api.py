@@ -55,6 +55,20 @@ class BuildPayloadTest(unittest.TestCase):
         self.assertEqual(row["branch"], "DIU")
         self.assertEqual(row["department"], "Finance")
 
+    def test_the_khmer_name_fields_reach_the_enrollment_row(self):
+        """Emitted, not merely selected: a field in the SELECT list that the
+        output dict drops is a production no-op that returns None forever --
+        exactly what `branch` did in hr_calendar.py until it was caught in
+        review.
+        """
+        employee = _emp("E1")
+        employee["custom_khmer_last_name"] = "ចាន់"
+        employee["custom_khmer_first_name"] = "សុភា"
+        payload = self._build([employee], [], {})
+        row = payload["rows"][0]
+        self.assertEqual(row["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(row["custom_khmer_first_name"], "សុភា")
+
     def test_a_leaver_with_a_live_template_reports_days_since(self):
         payload = self._build(
             [_emp("E1", status="Left", relieving=date(2026, 8, 1))], [_reg("E1")], {"E1": 400}

@@ -280,11 +280,18 @@ def _employees_by_id(employee_ids: set[str]) -> dict[str, dict]:
     list is bounded by QUEUE_FLAG_LIMIT distinct employees."""
     if not employee_ids:
         return {}
+    fields = ["name", "employee_name", "branch", "image"]
+    # Installed by dewey_time.setup.custom_fields, but a site mid-migration may
+    # not have them yet -- and an unknown column makes frappe.get_all raise,
+    # taking the whole flag queue down rather than losing one optional fact.
+    for khmer_field in ("custom_khmer_last_name", "custom_khmer_first_name"):
+        if frappe.db.has_column("Employee", khmer_field):
+            fields.append(khmer_field)
     rows = (
         frappe.get_all(
             "Employee",
             filters={"name": ["in", sorted(employee_ids)]},
-            fields=["name", "employee_name", "branch", "image"],
+            fields=fields,
         )
         or []
     )
@@ -294,6 +301,11 @@ def _employees_by_id(employee_ids: set[str]) -> dict[str, dict]:
     return {
         row["name"]: {
             "employee_name": row.get("employee_name"),
+            # Emitted, not merely selected. A field in the SELECT list that
+            # the output dict drops is a production no-op returning None
+            # forever. `.get` because the SELECT above is conditional.
+            "custom_khmer_last_name": row.get("custom_khmer_last_name"),
+            "custom_khmer_first_name": row.get("custom_khmer_first_name"),
             "branch": row.get("branch"),
             "image": row.get("image"),
         }
