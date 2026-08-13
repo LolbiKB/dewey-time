@@ -147,6 +147,14 @@ TailFact = { label: string; tone?: "normal" | "warning" }
 The caller passes a composed `khmerName`, not the two fields, so the composition rule lives in one
 tested function rather than at every call site.
 
+**The avatar is a per-surface prop and never space-driven.** A surface decides once whether it shows
+one; the ladder never takes it away. This was tested against the alternative and rejected: because
+the avatar plus gap is 46px, dropping it in the 200–245px band is exactly what would buy the Khmer
+name there — but the avatar then disappears as the box narrows and *reappears* as it narrows further,
+which reads as a rendering fault. A surface deciding once is legible; a decoration that comes and
+goes as you resize is not. The register keeps its avatar and therefore does not show a Khmer name;
+that is the accepted trade, not an oversight.
+
 ### `khmerName()` — the pure composition rule
 
 Added to `src/lib/employeeCard.ts`, beside the existing name helpers.
@@ -170,9 +178,32 @@ This is not a stylistic preference. The register's Employee cell is **139px at a
 cannot tell those apart. Tailwind is 4.3.0 (container queries built in, no plugin) and dewey-ui
 already ships one (`@container/field-group`), so the pattern is precedented in the design system.
 
+**The container goes on the text stack, not on the component root.** The avatar sits outside it, as a
+sibling:
+
+```
+<div class="flex items-center gap-…">      ← avatar + stack, NOT the container
+  <EmployeeAvatar …/>                      ← outside the query
+  <div class="@container flex-1 min-w-0">  ← container-type: inline-size
+    line one
+    line two
+  </div>
+</div>
+```
+
+Two reasons. The avatar's footprint differs by surface — 36px + 10px gap in the register, 32 + 8 in a
+picker row, 40 + 12 in the trigger — so one threshold measured on the whole box would mean three
+different text budgets. And measuring the stack means every threshold below is stated in the same
+units as the name widths they were derived from.
+
+Verified in Chromium rather than assumed: `container-type: inline-size` on a `flex-1 min-w-0` item
+reports the width flex assigned it, not its content width. Probed at six row widths — a 385px row
+gives a 329px stack and fires a `min-width: 200px` query; a 246px row gives 190px and does not.
+
 ### Thresholds
 
-Set from the measured worst case, not the typical one.
+Set from the measured worst case, not the typical one. **All widths are the text stack's**, per the
+container placement above — not the component box, and not the table cell.
 
 | Threshold | Turns on | Worst case needs |
 |---|---|---|
@@ -180,6 +211,14 @@ Set from the measured worst case, not the typical one.
 | `≥ 120px` | first caller fact on line two | 110px |
 | `≥ 170px` | second caller fact | 158px |
 | `≥ 230px` | third caller fact | 206px |
+
+For anyone reading a rendered box rather than the stack, the avatar and gap to add back:
+
+| Surface | Avatar + gap | Stack @1280 | Box @1280 | Stack @375 | Box @375 |
+|---|---|---|---|---|---|
+| Picker trigger | 40 + 12 = 52 | 361 | 413 | 184 | 236 |
+| Picker popover row | 32 + 8 = 40 | 345 | 385 | 168 | 208 |
+| Register Employee cell | 36 + 10 = 46 | 139 | 185 | 90 | 136 |
 
 Where each context lands:
 
@@ -301,12 +340,13 @@ that remains between surfaces is one a surface declared, rather than one it drif
    implementation; does not block it.
 
 2. **Whether the register should get the Khmer name.** Under the agreed thresholds it does not, at
-   any viewport. If it should, the width has to come from somewhere, and there are three measured
-   options: drop the avatar from the register cell (worth 46px, and the code already treats it as
-   decorative — `aria-hidden`, `alt=""`, with a comment saying it "says nothing the cell does not
-   already say in words"); widen the Employee column by ~60px out of Biometric (236px) or Action
-   (167px); or both, at ~15px of widening. This is deliberately left out of scope — it changes the
-   register's column layout, which is a separate decision from how one person is drawn.
+   any viewport, and the two cheapest ways to change that have both been considered and declined.
+   Dropping the register's avatar would buy 46px, taking its stack to 185px — enough for three of the
+   four measured names but 9px short of the longest — and was declined with the avatar decision above.
+   Widening the Employee column by ~60px would work, but it has to come out of Biometric (236px) or
+   Action (167px), or add horizontal scroll at 1280 where the table currently fills its scroller
+   exactly. That remains available as a later, separate change: it alters the register's column
+   layout, which is a different decision from how one person is drawn.
 
 3. **Fixed thresholds versus per-row measurement.** A fixed 200px threshold denies the Khmer name to
    short names that would have fitted at 168px (`Sophea Chan · ចាន់ សុភា` needs 151px). Exact
