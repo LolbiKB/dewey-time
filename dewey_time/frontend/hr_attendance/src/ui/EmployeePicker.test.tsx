@@ -3,9 +3,10 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Command, CommandGroup, CommandList } from "@/components/ui/command";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CalendarEmployee } from "@/types/calendar";
 
-import { EmployeeOption } from "./EmployeePicker";
+import { EmployeeOption, EmployeePicker } from "./EmployeePicker";
 import { ScheduleEmployeeOption } from "./ScheduleEmployeePicker";
 
 // list_calendar_employees sorts employees with shift coverage first, so clock-based
@@ -90,4 +91,36 @@ test("the weekly-schedule picker puts employment type ahead of department", () =
     custom_khmer_last_name: null, custom_khmer_first_name: null,
   });
   assert.ok(html.indexOf("Full-time") < html.indexOf("Warehouse"));
+});
+
+// Regression: EmployeeIdentity always renders a second line, so feeding its
+// `employeeId` slot `props.value ?? ""` with nothing selected left that line
+// blank where employeePickerSubtitle used to prompt "Choose an employee".
+test("with nothing selected, the picker prompts rather than going blank", () => {
+  const trigger = renderToStaticMarkup(
+    <TooltipProvider>
+      <EmployeePicker
+        employees={[]}
+        value={null}
+        onChange={() => {}}
+        weekDates={[]}
+        daysByDate={new Map()}
+        weekAssignedShiftDays={0}
+      />
+    </TooltipProvider>,
+  );
+  assert.match(trigger, /Choose an employee/, "the interactive trigger prompts, not blank");
+
+  const readOnly = renderToStaticMarkup(
+    <EmployeePicker
+      employees={[]}
+      value={null}
+      onChange={() => {}}
+      weekDates={[]}
+      daysByDate={new Map()}
+      weekAssignedShiftDays={0}
+      readOnly
+    />,
+  );
+  assert.match(readOnly, /Choose an employee/, "the read-only branch prompts, not blank");
 });

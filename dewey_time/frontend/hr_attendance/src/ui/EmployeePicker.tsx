@@ -55,6 +55,13 @@ export function EmployeePicker(props: EmployeePickerProps) {
     selected?.department ? { label: selected.department } : null,
     selected?.title ? { label: selected.title } : null,
   ].filter((fact): fact is TailFact => fact !== null);
+  // EmployeeIdentity always renders a second line, so with nothing selected
+  // the id slot carries the same "Choose an employee" prompt
+  // employeePickerSubtitle used to put there, rather than going blank. Keyed
+  // off `selected`, not `props.value`: an id that names no employee in the
+  // list (still loading, filtered out) should read the same as no id at all,
+  // not repeat the bare id that already lost the argument on line one.
+  const employeeIdLine = selected ? selected.id : "Choose an employee";
 
   if (props.readOnly) {
     return (
@@ -68,7 +75,7 @@ export function EmployeePicker(props: EmployeePickerProps) {
         <EmployeeIdentity
           className="min-w-0 flex-1"
           englishName={name}
-          employeeId={props.value ?? ""}
+          employeeId={employeeIdLine}
           khmerName={khmer}
           avatar={
             <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />
@@ -104,7 +111,7 @@ export function EmployeePicker(props: EmployeePickerProps) {
             <EmployeeIdentity
               className="min-w-0 flex-1"
               englishName={name}
-              employeeId={props.value ?? ""}
+              employeeId={employeeIdLine}
               khmerName={khmer}
               avatar={
                 <EmployeeAvatar employee={selected} fallbackId={props.value} className="size-10" />

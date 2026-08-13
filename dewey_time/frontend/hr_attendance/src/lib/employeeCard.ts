@@ -121,10 +121,6 @@ export function weeklyScheduleIneligibleMessage(
   return `${name} (${typeLabel}) is not eligible for Weekly Schedule. Choose Full-time, Part-time Fixed, or Intern.`;
 }
 
-export function roleLine(employee: CalendarEmployee | null | undefined): string {
-  return [employee?.title, employee?.department].filter(Boolean).join(" · ");
-}
-
 /** Searchable text for the employee command list (excludes shift schedule doc names). */
 export function employeeSearchHaystack(employee: CalendarEmployee): string {
   const haystack = [
