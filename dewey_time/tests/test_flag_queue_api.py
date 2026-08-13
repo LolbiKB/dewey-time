@@ -597,6 +597,49 @@ class TestEmployeePhoto(unittest.TestCase):
         self.assertEqual(employees["HR-EMP-00000"]["custom_khmer_first_name"], "សុភា")
 
 
+class TestKhmerNameFieldsReachTheAssembledPerson(unittest.TestCase):
+    """test_the_khmer_name_fields_reach_build_queue_on_the_employee_meta above
+    proves the fields reach the `employees_by_id` map handed to build_queue --
+    it cannot fail if flag_grouping._person then drops them while rebuilding
+    the assembled Person dict, which is exactly the gap review caught.
+
+    This calls flag_grouping.build_queue directly, not through _harness (whose
+    `build` is a stub for flag_queue_api's own tests), so the real _person
+    dict-rebuild runs end to end. Modelled on
+    test_flag_grouping.test_unknown_employee_row_still_yields_a_person, the
+    established shape for asserting on an assembled Person.
+    """
+
+    def test_the_khmer_name_fields_reach_the_assembled_person(self):
+        flag = {
+            "flag_identity": "AUTO-hr-emp-00000-2026-08-03-late-start",
+            "employee": "HR-EMP-00000",
+            "attendance_date": "2026-08-03",
+            "flag_code": "LATE_START",
+            "severity": "WARNING",
+            "day_closed": 1,
+            "evidence": {"minutes": 12},
+        }
+        employees_by_id = {
+            "HR-EMP-00000": {
+                "employee_name": "Name HR-EMP-00000",
+                "custom_khmer_last_name": "ចាន់",
+                "custom_khmer_first_name": "សុភា",
+                "branch": "BR-A",
+                "image": None,
+            }
+        }
+        payload = flag_grouping.build_queue(
+            flags=[flag],
+            decisions_by_identity={},
+            employees_by_id=employees_by_id,
+            outage_branch_dates=set(),
+        )
+        person = payload["entries"][0]
+        self.assertEqual(person["custom_khmer_last_name"], "ចាន់")
+        self.assertEqual(person["custom_khmer_first_name"], "សុភា")
+
+
 class TestOutageDatesInPayload(unittest.TestCase):
     def test_a_branch_day_with_no_sync_row_reaches_the_payload(self):
         rows = _roster(2)

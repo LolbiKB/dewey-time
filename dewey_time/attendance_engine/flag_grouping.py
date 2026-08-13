@@ -242,6 +242,14 @@ def _person(employee: str, person_flags: list[dict], employees_by_id: dict, *, e
         # employee query's filters). Show the id rather than dropping someone who
         # still owes HR a decision.
         "employee_name": meta.get("employee_name") or employee,
+        # Unprefixed, unlike employee_branch/employee_image below: Task 7's
+        # frontend Person type and the other four Khmer-name payloads in this
+        # plan all use these exact keys, so renaming here would silently drop
+        # the name on this one surface while every other feed worked.
+        # `.get` so a missing Employee row yields None rather than raising --
+        # same reasoning as employee_name's `or employee` fallback above.
+        "custom_khmer_last_name": meta.get("custom_khmer_last_name"),
+        "custom_khmer_first_name": meta.get("custom_khmer_first_name"),
         "employee_branch": meta.get("branch"),
         # Employee.image — a site-relative path like "/files/sokheng.jpg", or
         # None for the many employees with no photo on file. The row renders
