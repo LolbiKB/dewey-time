@@ -7,8 +7,8 @@ import { format } from "date-fns";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { TooltipProvider } from "../components/ui/tooltip";
-import { EmployeePicker } from "./EmployeePicker";
-import { WeeklyScheduleFacts } from "./WeeklyScheduleSummary";
+import { ScheduleAccessButton } from "./AttendanceToolbar";
+import { WeeklyScheduleFacts, WeeklyScheduleSummary } from "./WeeklyScheduleSummary";
 import type { CalendarEmployee, Day } from "../types/calendar";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -192,16 +192,22 @@ test("the picker's schedule button is wired to the popover, tooltip and all", ()
   // popover trigger inside). Get that order wrong and the popover's props land
   // on the tooltip's Root instead of the button: it still renders, still shows
   // its tooltip, and silently opens nothing. Nothing else here would notice.
+  // The real composition: AttendanceToolbar owns the bordered box and mounts
+  // the summary beside the picker, so this renders that pairing directly
+  // rather than reaching it through a picker that no longer contains it.
   const html = renderToStaticMarkup(
     <TooltipProvider>
-      <EmployeePicker
-        employees={[ADA]}
-        value={ADA.id}
-        onChange={() => {}}
+      <WeeklyScheduleSummary
+        open={false}
+        onOpenChange={() => {}}
+        employee={ADA}
         weekDates={WEEK}
         daysByDate={week()}
         weekAssignedShiftDays={5}
-      />
+        showWeekDetail={false}
+      >
+        <ScheduleAccessButton weekAssignedShiftDays={5} />
+      </WeeklyScheduleSummary>
     </TooltipProvider>,
   );
   const button = (html.match(/<button[^>]*aria-label="View weekly schedule"[^>]*>/) ?? [])[0];

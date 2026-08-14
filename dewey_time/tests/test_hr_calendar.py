@@ -640,5 +640,47 @@ class TestCalendarDecisionsRealIdentity(unittest.TestCase):
         self.assertEqual(flag["decision"]["name"], "AFD-1")
 
 
+class TestCalendarEmployeeRowBranch(unittest.TestCase):
+    """The picker's employee rows must carry `branch`.
+
+    The field was once in the SELECT list and absent from the emitted dict --
+    "a production no-op returning None forever", per the comment above the
+    emit -- and only review caught it. Nothing pinned it until now, so it
+    could regress the same way twice.
+    """
+
+    def _call(self, rows):
+        import dewey_time.attendance_engine.hr_calendar as hc
+
+        with patch.object(hc.frappe.db, "has_column", return_value=False), patch.object(
+            hc.frappe, "get_all", return_value=rows
+        ) as get_all, patch.object(
+            hc, "_shift_schedule_assignment_metadata_by_employee", return_value={}
+        ), patch.object(
+            hc, "shift_assignment_bounds_by_employee", return_value={}
+        ), patch.object(
+            hc, "first_checkin_date_by_employee", return_value={}
+        ):
+            out = hc._list_calendar_employee_rows(["EMP-001"], include_all=True)
+        return out, get_all
+
+    def test_branch_is_in_the_select_list(self):
+        # In the SELECT list and in the emitted dict are different claims, and
+        # it was the second one that failed last time. Both are asserted.
+        _out, get_all = self._call([])
+        self.assertIn("branch", get_all.call_args.kwargs["fields"])
+
+    def test_branch_reaches_the_emitted_row(self):
+        out, _ = self._call(
+            [{"name": "EMP-001", "employee_name": "Jane Doe", "branch": "BRANCH-A"}]
+        )
+        self.assertEqual(out[0]["branch"], "BRANCH-A")
+
+    def test_branch_is_none_when_unset(self):
+        out, _ = self._call([{"name": "EMP-001", "employee_name": "Jane Doe"}])
+        self.assertIn("branch", out[0])
+        self.assertIsNone(out[0]["branch"])
+
+
 if __name__ == "__main__":
     unittest.main()

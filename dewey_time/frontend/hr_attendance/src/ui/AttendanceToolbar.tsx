@@ -13,11 +13,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
+import { attendancePickerTail } from "@/lib/employeeCard";
 import { formatWeekRangeLabel } from "@/lib/weekSchedule";
 import type { Severity } from "@/types/calendar";
-import { EmployeePicker } from "@/ui/EmployeePicker";
+import { AppTooltip } from "@/ui/AppTooltip";
+import { ClockBadge, EmployeePicker } from "@/ui/EmployeePicker";
 import { RunEngineDialog } from "@/ui/RunEngineDialog";
 import { WeekFlagSummary } from "@/ui/WeekFlagSummary";
+import { WeeklyScheduleSummary } from "@/ui/WeeklyScheduleSummary";
 
 export type AttendanceToolbarProps = {
   employees: CalendarEmployee[];
@@ -50,21 +53,57 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
   const weekLabel = formatWeekRangeLabel(props.weekDates);
   const navDisabled = props.isCalendarLoading;
   const hrStaff = props.hrStaff !== false;
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const selectedEmployee = props.employees.find((e) => e.id === props.employee) ?? null;
 
   return (
     <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <EmployeePicker
-        employees={props.employees}
-        value={props.employee}
-        onChange={props.onEmployeeChange}
-        isLoading={props.employeeLoading}
-        readOnly={!hrStaff}
-        weekDates={props.weekDates}
-        weekAssignedShiftDays={props.weekAssignedShiftDays}
-        showWeekScheduleHint={props.showWeekScheduleHint}
-        daysByDate={props.daysByDate}
-        className="w-full sm:flex-1 sm:max-w-lg"
-      />
+      {/* The bordered box and the divider live HERE, not in EmployeePicker. The
+          weekly-schedule button is a sibling control that happens to share a
+          border with the picker, not part of it — pulling it into the shared
+          component would make it a grab bag and hand /hr-schedule a prop it
+          never uses. */}
+      <div className="flex min-h-14 w-full min-w-0 overflow-hidden rounded-xl border border-border bg-background sm:max-w-lg sm:flex-1">
+        <EmployeePicker
+          size="lg"
+          employees={props.employees}
+          value={props.employee}
+          onChange={props.onEmployeeChange}
+          isLoading={props.employeeLoading}
+          readOnly={!hrStaff}
+          tail={attendancePickerTail}
+          badge={(employee) => (employee.is_clock_based ? <ClockBadge /> : null)}
+          // The wrapper owns the border and the width cap, so the picker gives
+          // both up. `max-w-none` is required: twMerge would otherwise leave
+          // `lg`'s max-w-lg in place and cap the picker inside an
+          // already-capped box.
+          className="min-w-0 max-w-none flex-1 rounded-none border-0"
+        />
+        {hrStaff ? (
+          <>
+            <div className="w-px shrink-0 self-stretch bg-border" aria-hidden="true" />
+            <WeeklyScheduleSummary
+              open={scheduleOpen}
+              onOpenChange={setScheduleOpen}
+              employee={selectedEmployee}
+              weekDates={props.weekDates}
+              daysByDate={props.daysByDate}
+              weekAssignedShiftDays={props.weekAssignedShiftDays}
+              showWeekDetail={props.showWeekScheduleHint === true}
+            >
+              <ScheduleAccessButton
+                weekAssignedShiftDays={props.weekAssignedShiftDays}
+                // `!selectedEmployee`, not `!props.employee`: an id that names
+                // nobody in the current list has no schedule to show, and the
+                // old picker gated on the RESOLVED employee for that reason.
+                disabled={
+                  !selectedEmployee || !props.employees.length || props.employeeLoading === true
+                }
+              />
+            </WeeklyScheduleSummary>
+          </>
+        ) : null}
+      </div>
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2 self-stretch sm:flex-none">
         <WeekFlagSummary
@@ -188,5 +227,40 @@ function WeekPicker(props: {
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The weekly-schedule button welded to the right of the employee picker.
+ *
+ * Lives here, not in EmployeePicker: it is a sibling control that shares the
+ * bordered box with the picker, not part of it. Exported so
+ * `weeklyScheduleSummary.test.tsx` can render the real summary + button
+ * composition without dragging the whole picker in.
+ */
+export function ScheduleAccessButton(props: { weekAssignedShiftDays: number; disabled?: boolean }) {
+  const detail =
+    props.weekAssignedShiftDays > 0
+      ? `${props.weekAssignedShiftDays} scheduled this week`
+      : "View expected shifts";
+
+  return (
+    // Tooltip outside, popover trigger inside: both are `asChild` slots, and
+    // only this order lets each merge onto the button. Reversed, the popover's
+    // props land on the tooltip's Root and its click handler is dropped.
+    <AppTooltip content={detail} side="bottom">
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={props.disabled}
+          aria-label="View weekly schedule"
+          className="h-auto min-h-14 w-11 shrink-0 rounded-none border-0 px-0 shadow-none hover:bg-muted/50"
+        >
+          <CalendarDaysIcon className="size-4" strokeWidth={2} />
+          <span className="sr-only">Weekly schedule</span>
+        </Button>
+      </PopoverTrigger>
+    </AppTooltip>
   );
 }

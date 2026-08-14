@@ -3,12 +3,14 @@ import test from "node:test";
 
 import {
   WEEKLY_SCHEDULE_EMPLOYMENT_TYPES,
+  attendancePickerTail,
   employeeCommandFilter,
   employeeDisplayName,
   employeeInitials,
   employeeSearchHaystack,
   isWeeklyScheduleEligible,
   khmerName,
+  schedulePickerTail,
   weeklyScheduleIneligibleMessage,
 } from "@/lib/employeeCard";
 import type { CalendarEmployee } from "@/types/calendar";
@@ -194,4 +196,102 @@ test("a Khmer query matches inside a name with no word boundary", () => {
   // shape — it is the synthetic case that closes the gap a split-and-compare
   // matcher would otherwise sail through undetected.
   assert.equal(employeeCommandFilter("ចាន់សុភា EMP-1", "សុភា"), 1);
+});
+
+test("branch is searchable, raw rather than formatted", () => {
+  // Raw, not formatBranchLabel'd: employeeCommandFilter matches on `includes`,
+  // and "BRANCH-Iconic" contains "Iconic", so the raw value matches both what
+  // HR types and what the row displays. The formatted one would match only
+  // the first.
+  const haystack = employeeSearchHaystack({
+    id: "EMP-1",
+    label: "EMP-1 · Jane Doe",
+    employee_name: "Jane Doe",
+    branch: "BRANCH-Iconic",
+  });
+  assert.match(haystack, /BRANCH-Iconic/);
+  assert.equal(employeeCommandFilter(haystack, "Iconic"), 1);
+  assert.equal(employeeCommandFilter(haystack, "BRANCH-Iconic"), 1);
+  assert.equal(employeeCommandFilter(haystack, "Warehouse"), 0);
+});
+
+test("a missing branch adds nothing to the haystack", () => {
+  const haystack = employeeSearchHaystack({ id: "EMP-2", label: "EMP-2 · Ana Ruiz" });
+  assert.doesNotMatch(haystack, /undefined|null/);
+});
+
+test("the attendance tail puts branch ahead of department, and title last", () => {
+  // Line two truncates from its end, so this order IS the priority order.
+  // Branch first: thirteen sites, and "which Sokha" is a site question before
+  // it is an org-chart one. Title last -- it has never separated two people
+  // who share a name.
+  assert.deepEqual(
+    attendancePickerTail({
+      id: "EMP-1",
+      label: "EMP-1 · Jane Doe",
+      branch: "BRANCH-Iconic",
+      department: "Retail",
+      title: "Cashier",
+    }),
+    [{ label: "Iconic" }, { label: "Retail" }, { label: "Cashier" }],
+  );
+});
+
+test("the attendance tail omits absent facts rather than blanking them", () => {
+  // Never "No branch": the backend is explicit that many employees have none
+  // and that consumers must treat that as "do not judge", not as a finding.
+  assert.deepEqual(
+    attendancePickerTail({ id: "EMP-2", label: "EMP-2 · Ana Ruiz", department: "Ops" }),
+    [{ label: "Ops" }],
+  );
+  assert.deepEqual(
+    attendancePickerTail({ id: "EMP-3", label: "EMP-3 · Bo Lin", branch: "   " }),
+    [],
+  );
+});
+
+test("the schedule tail leads with employment type, then branch, then department", () => {
+  // isWeeklyScheduleEligible gates the whole wizard on employment type, so it
+  // is the fact that says whether this person can be picked at all. It must
+  // never be the one that falls off the end.
+  assert.deepEqual(
+    schedulePickerTail({
+      id: "EMP-4",
+      label: "EMP-4 · Jonas Berg",
+      employment_type: "Full-time",
+      branch: "BRANCH-Iconic",
+      department: "Warehouse",
+    }),
+    [
+      { label: "Full-time", tone: "normal" },
+      { label: "Iconic" },
+      { label: "Warehouse" },
+    ],
+  );
+});
+
+test("the schedule tail always emits employment type, warning-toned when ineligible", () => {
+  assert.deepEqual(
+    schedulePickerTail({ id: "EMP-5", label: "EMP-5 · Casey Ward", employment_type: "Casual" }),
+    [{ label: "Casual", tone: "warning" }],
+  );
+  assert.deepEqual(
+    schedulePickerTail({ id: "EMP-6", label: "EMP-6 · Dee Osei" }),
+    [{ label: "Employment type not set", tone: "warning" }],
+  );
+});
+
+test("neither tail exceeds three facts", () => {
+  // EmployeeIdentity's ladder has exactly three rungs; a fourth silently
+  // shares the third's threshold and appears at the same width as it.
+  const full: CalendarEmployee = {
+    id: "EMP-7",
+    label: "EMP-7 · Full House",
+    employment_type: "Full-time",
+    branch: "BRANCH-Iconic",
+    department: "Retail",
+    title: "Cashier",
+  };
+  assert.ok(attendancePickerTail(full).length <= 3);
+  assert.ok(schedulePickerTail(full).length <= 3);
 });

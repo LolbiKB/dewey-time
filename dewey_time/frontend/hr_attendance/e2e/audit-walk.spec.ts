@@ -44,7 +44,7 @@ for (const vp of VIEWPORTS) {
       await page.getByRole("combobox").first().click();
       await page.waitForTimeout(300);
       await page.screenshot({ path: `${SHOTS}/${vp.tag}-attendance-picker-open.png`, fullPage: true });
-      await page.getByPlaceholder(/Search by name/).fill("zzzz");
+      await page.getByPlaceholder(/Search name, ID/).fill("zzzz");
       await page.waitForTimeout(300);
       await page.screenshot({ path: `${SHOTS}/${vp.tag}-attendance-picker-no-match.png`, fullPage: true });
       await page.keyboard.press("Escape");

@@ -488,7 +488,11 @@ test("a Khmer query narrows an open picker, non-Latin data-value and all", async
   await page.locator("[role=combobox]").first().click();
   await expect(page.getByRole("option")).toHaveCount(1);
 
-  const search = page.getByPlaceholder(/Search by name/);
+  // `Search name, ID`, not the old `Search by name`: the shared picker's
+  // placeholder now names branch too. The old pattern also matched the
+  // coverage register's box ("Search by name, Khmer name, or employee ID…"),
+  // so this is the less ambiguous anchor as well.
+  const search = page.getByPlaceholder(/Search name, ID/);
   // Jane's Khmer family name is in none of her Latin fields, so the row can
   // only have survived on the Khmer half of the haystack.
   await search.fill(JANE_KHMER_FAMILY);

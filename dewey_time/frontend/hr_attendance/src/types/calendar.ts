@@ -129,6 +129,15 @@ export type CalendarEmployee = {
   image?: string | null;
   title?: string | null;
   department?: string | null;
+  /**
+   * ERPNext `Employee.branch` — the person's primary site.
+   *
+   * Already emitted by `_list_calendar_employee_rows`; this declaration is
+   * what stops it being discarded at the type boundary. Null for the many
+   * employees who have none, which consumers must treat as "do not judge",
+   * not as a finding.
+   */
+  branch?: string | null;
   company?: string | null;
   employment_type?: string | null;
   is_full_time?: boolean;

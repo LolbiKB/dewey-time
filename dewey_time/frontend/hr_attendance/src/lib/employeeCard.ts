@@ -1,7 +1,10 @@
-import { parseDateKey } from "@/lib/attendanceTime";
+import { formatBranchLabel, parseDateKey } from "@/lib/attendanceTime";
 import { format } from "date-fns";
 
 import type { CalendarEmployee } from "@/types/calendar";
+// Type-only, so this is erased at compile time and creates no runtime cycle
+// with EmployeeIdentity — which imports nothing from here.
+import type { TailFact } from "@/ui/EmployeeIdentity";
 
 export type ScheduleStatus = {
   label: string;
@@ -121,6 +124,52 @@ export function weeklyScheduleIneligibleMessage(
   return `${name} (${typeLabel}) is not eligible for Weekly Schedule. Choose Full-time, Part-time Fixed, or Intern.`;
 }
 
+/**
+ * Line-two facts for the /hr-attendance picker, in truncation-priority order.
+ *
+ * Line two truncates from its END, so the order here IS the priority order,
+ * and it stays load-bearing even at widths where all three render: a long
+ * branch or department name still pushes the last one off.
+ *
+ * Branch leads. There are thirteen sites, and the question attendance actually
+ * asks is which Sokha — the one at this building or that one — which is a site
+ * question before it is an org-chart one. Title is last because it has never
+ * separated two people who share a name.
+ *
+ * An absent fact is omitted, never blanked: `Employee.branch` is null for many
+ * people and the backend is explicit that consumers must treat that as "do not
+ * judge". "No branch" belongs on the day inspector, where absence is the
+ * finding; in a picker it is just absence.
+ */
+export function attendancePickerTail(employee: CalendarEmployee): TailFact[] {
+  return [formatBranchLabel(employee.branch), employee.department, employee.title]
+    .map((label) => (label ?? "").trim())
+    .filter(Boolean)
+    .map((label) => ({ label }));
+}
+
+/**
+ * Line-two facts for the /hr-schedule picker.
+ *
+ * Employment type is FIRST and is never omitted: `isWeeklyScheduleEligible`
+ * gates the whole wizard on it, so it is the fact that says whether this person
+ * can be picked at all. Under the attendance ordering it would eventually be
+ * the one that fell off the end.
+ */
+export function schedulePickerTail(employee: CalendarEmployee): TailFact[] {
+  const facts: TailFact[] = [
+    {
+      label: scheduleEmployeeSubtitle(employee),
+      tone: isWeeklyScheduleEligible(employee.employment_type) ? "normal" : "warning",
+    },
+  ];
+  for (const label of [formatBranchLabel(employee.branch), employee.department]) {
+    const trimmed = (label ?? "").trim();
+    if (trimmed) facts.push({ label: trimmed });
+  }
+  return facts;
+}
+
 /** Searchable text for the employee command list (excludes shift schedule doc names). */
 export function employeeSearchHaystack(employee: CalendarEmployee): string {
   const haystack = [
@@ -130,6 +179,9 @@ export function employeeSearchHaystack(employee: CalendarEmployee): string {
     employee.employment_type,
     employee.title,
     employee.department,
+    // Raw, not formatBranchLabel'd: the filter matches on `includes`, so the
+    // raw value covers both the typed "Iconic" and the stored "BRANCH-Iconic".
+    employee.branch,
     employee.company,
     // ERPNext marks both Khmer fields in_global_search, so HR already expects
     // to find people by them.

@@ -1,6 +1,6 @@
-import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import { EmptyState, Page, Section } from "@lolbikb/dewey-ui";
 import { addDays, parseISO } from "date-fns";
-import { CheckIcon, PencilLineIcon } from "lucide-react";
+import { CheckIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useOutletContext } from "react-router-dom";
 
@@ -58,6 +58,7 @@ import {
 import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
 import {
   isWeeklyScheduleEligible,
+  schedulePickerTail,
   weeklyScheduleIneligibleMessage,
 } from "@/lib/employeeCard";
 import {
@@ -69,7 +70,7 @@ import {
 import { ClearAllSchedulesDialog } from "@/ui/ClearAllSchedulesDialog";
 import { ClearSitePatternsDialog } from "@/ui/ClearSitePatternsDialog";
 import { ClearEmployeeScheduleDialog } from "@/ui/ClearEmployeeScheduleDialog";
-import { ScheduleEmployeePicker } from "@/ui/ScheduleEmployeePicker";
+import { EmployeePicker } from "@/ui/EmployeePicker";
 import { SpreadsheetImportTrigger } from "@/ui/schedule-import/SpreadsheetImportTrigger";
 import { WeekPatternGroupEditor } from "@/ui/WeekPatternGroupEditor";
 import {
@@ -351,54 +352,46 @@ export function WeeklySchedulePage() {
     setShiftBlocks(blocks);
   }
 
-  // PageHeader.description is a ReactNode and the page always renders one, so
-  // the editing notice costs no extra height — it replaces the generic line
-  // rather than adding a row. The effective date is deliberately absent: the
-  // "Effective from" picker below owns it, and formats it properly.
-  //
-  // PageHeader already wraps `description` in its own <p>, so this uses a
-  // <span> rather than a <p> for the icon+text wrapper — nesting a <p> here
-  // is invalid HTML and triggers a hydration warning.
-  const headerDescription =
-    isEditing && scheduleEmployeeId && !ineligibleMessage ? (
-      <span className="flex items-start gap-1.5 text-sm text-muted-foreground">
-        <PencilLineIcon className="mt-[3px] size-3.5 shrink-0" aria-hidden="true" />
-        <span>
-          Editing {employeeLabel ?? "this employee"}&rsquo;s existing schedule — changes apply from
-          the effective date.
-        </span>
-      </span>
-    ) : (
-      "Configure shared shift patterns for an employee."
-    );
+  // The editing notice used to be PageHeader.description. The header is gone;
+  // it now lives in the Shift blocks CardDescription below, which already
+  // switches between read-only and editable copy.
+  const isEditingNotice = isEditing && Boolean(scheduleEmployeeId) && !ineligibleMessage;
 
   return (
     <>
       <Page>
-        <PageHeader
-          title="Weekly Schedule"
-          description={headerDescription}
-          // PageHeader's title/actions row never stacks (unlike the old
-          // lg:flex-row header), so only the compact picker lives in `actions` —
-          // it alone stays narrow enough to sit beside the title down to phone
-          // widths. The four dialog triggers are wide as a group; they go in
-          // `children` below as their own full-width row instead of squeezing
-          // the title column to zero.
-          actions={
-            <ScheduleEmployeePicker
-              employees={employees}
-              value={employee}
-              onChange={selectEmployee}
-              isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
-              className="h-9 w-40 sm:w-64"
-              compact
-            />
-          }
-        >
-          {/* This sits in PageHeader's `children` (a flex-col stack), not a row,
-              so — unlike the old actions row — it stays a grid/flex container of
-              its own rather than dissolving via sm:contents: 2-column grid on
-              mobile, a wrapping row from sm: up. */}
+        {/* No PageHeader. The nav tab the reader arrived through already reads
+            "Schedule", and a visible title costs roughly 40px of vertical
+            space on the viewport that can least afford it. /hr-attendance
+            (App.tsx) and /hr-schedule/coverage (CoverageRegisterPage.tsx) are
+            the existing precedents; this route converges on them. `<Page>`
+            stays — that is what page-insets.spec.ts and the chrome parity
+            guard actually require.
+
+            The heading does NOT go with it. `sr-only` is absolutely positioned
+            and measures zero pixels, so the space is still reclaimed, but a
+            nav tab is not a heading: it does not appear in a screen reader's
+            heading list, and a route with none has no answer to "where am I". */}
+        <h1 className="sr-only">Weekly Schedule</h1>
+
+        {/* The picker gets its own row rather than sitting beside a title. It
+            is the page's subject selector — everything below operates on
+            whatever it holds — and at `lg` it is wide enough to show the Khmer
+            name, which the old header-actions slot never was: it was pinned at
+            160px, where EmployeeIdentity's 200px Khmer threshold can never be
+            reached. */}
+        <div className="flex flex-col gap-2">
+          <EmployeePicker
+            size="lg"
+            employees={employees}
+            value={employee}
+            onChange={selectEmployee}
+            isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
+            tail={schedulePickerTail}
+            isDisabled={(candidate) => !isWeeklyScheduleEligible(candidate.employment_type)}
+          />
+
+          {/* 2-column grid on mobile, a wrapping row from sm: up. */}
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
             <SpreadsheetImportTrigger
               onClick={() => navigate("/hr-schedule/import")}
@@ -415,7 +408,7 @@ export function WeeklySchedulePage() {
             <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
             <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
           </div>
-        </PageHeader>
+        </div>
 
         <Section grow>
           {isBootstrapping ? (
@@ -456,7 +449,14 @@ export function WeeklySchedulePage() {
                       <CardDescription>
                         {scheduleReadOnly
                           ? "Preview only — clear existing SSAs to edit."
-                          : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                          : isEditingNotice
+                            ? // Was the page header's description. It loses the
+                              // employee's name: the `lg` picker directly above
+                              // now says who. The effective date stays absent —
+                              // the "Effective from" control below owns it and
+                              // formats it properly.
+                              "Editing an existing schedule — changes apply from the effective date."
+                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
                       </CardDescription>
                     )}
                   </div>
