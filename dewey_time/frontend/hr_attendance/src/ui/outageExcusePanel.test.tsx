@@ -7,7 +7,7 @@ import type { OutageGroup } from "@/lib/flagQueuePartition";
 import type { DecisionState, FlagOut, QueuePerson } from "@/types/flags";
 import { MemoryRouter } from "react-router-dom";
 
-import { OutageBand, type OutageBandProps } from "@/ui/OutageBand";
+import { OutageExcusePanel, type OutageExcusePanelProps } from "@/ui/OutageExcusePanel";
 
 function flag(identity: string, state: DecisionState = "undecided"): FlagOut {
   return {
@@ -59,10 +59,10 @@ function group(branch: string, members: QueuePerson[], dates = ["2026-08-03"]): 
 
 // MemoryRouter because the ceiling note renders a <Link>, which throws outside
 // a router. It still emits href="/hr-attendance", so the assertion is unchanged.
-function render(overrides: Partial<OutageBandProps> = {}) {
+function render(overrides: Partial<OutageExcusePanelProps> = {}) {
   return renderToStaticMarkup(
     <MemoryRouter>
-    <OutageBand
+    <OutageExcusePanel
       outages={[
         group("DIS Iconic", [member("DI-1", [flag("a")]), member("DI-2", [flag("b")])]),
         group("ISBB", [member("DI-3", [flag("c")])]),
@@ -78,7 +78,7 @@ function render(overrides: Partial<OutageBandProps> = {}) {
 
 test("no outages renders nothing at all, not an empty container", () => {
   const html = renderToStaticMarkup(
-    <OutageBand
+    <OutageExcusePanel
       outages={[]}
       excludedBranches={new Set()}
       onToggleBranch={() => {}}
@@ -88,7 +88,7 @@ test("no outages renders nothing at all, not an empty container", () => {
   assert.equal(html, "");
 });
 
-test("the collapsed band states branches, people and that nobody is judged", () => {
+test("the panel header states branches, people and that nobody is judged", () => {
   const html = render();
   assert.match(html, /2 branches had no device data/);
   assert.match(html, /3 people/);
@@ -140,17 +140,20 @@ test("a decided flag is not counted in the action", () => {
   assert.match(html, /Excuse 1 person · 1 flag/);
 });
 
-test("the band is collapsed on arrival", () => {
-  // Thirteen branches expanded on load would be the same displacement the band
-  // exists to end.
+test("the panel is a popover body, not a band — no frame of its own", () => {
+  // It used to be a bordered amber <section> sitting above the queue at all
+  // times. Inside a popover that frame would be a second border around a
+  // surface that already has one.
   const html = render();
-  assert.ok(!html.includes(OUTAGE_CEILING_NOTE), "the expanded footer is absent");
-  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /<section/);
+  assert.doesNotMatch(html, /rounded-md border border-amber/);
+  // …and the work still survives the move.
+  assert.match(html, /type="checkbox"|role="checkbox"/, "per-branch selection");
+  assert.match(html, /href="\/hr-attendance"/, "the Device health link");
 });
 
 test("each branch row names its branch, its days and its size", () => {
   const html = render({
-    defaultOpen: true,
     outages: [
       group("DIS Iconic", [member("DI-1", [flag("a")])], ["2026-08-03", "2026-08-04"]),
     ],
@@ -160,21 +163,20 @@ test("each branch row names its branch, its days and its size", () => {
   assert.match(html, /1 person · 1 flag/);
 });
 
-test("the band states its own ceiling and links to device health", () => {
-  const html = render({ defaultOpen: true });
+test("the panel states its own ceiling and links to device health", () => {
+  const html = render();
   assert.ok(html.includes(OUTAGE_CEILING_NOTE));
   assert.match(html, /href="\/hr-attendance"/);
 });
 
-test("the band never names a device serial, collapsed or expanded", () => {
+test("the panel never names a device serial", () => {
   assert.ok(!/serial/i.test(render()));
-  assert.ok(!/serial/i.test(render({ defaultOpen: true })));
 });
 
-test("the expanded list is bounded so it cannot push the queue off screen", () => {
-  // Thirteen branches is today's real count. Without a cap the band grows
-  // without limit and displaces the very queue it exists to protect.
-  const html = render({ defaultOpen: true });
+test("the branch list is bounded so it cannot outgrow the popover", () => {
+  // Thirteen branches is today's real count. Without a cap the list would make
+  // the popover taller than the viewport.
+  const html = render();
   assert.match(html, /max-h-\[/);
   assert.match(html, /overflow-y-auto/);
 });

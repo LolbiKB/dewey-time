@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
@@ -1831,18 +1832,23 @@ test("an outage group is rendered as the band, not as a queue row", () => {
   assert.equal(outages.length, 1);
   assert.deepEqual(queue, [person]);
 
+  // MemoryRouter: the outage panel's ceiling note renders a <Link>, which
+  // throws outside a router. It used to sit behind a collapsed disclosure, so
+  // these renders never reached it.
   const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 5, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false }}
-      outages={outages}
-      queuePeople={1}
-      queueRows={1}
-      excludedBranches={new Set()}
-      onToggleBranch={() => {}}
-      onExcuseOutages={() => {}}
-      list={<FlagQueueList {...listProps()} entries={queue} />}
-    />,
+    <MemoryRouter>
+      <FlagQueueView
+        {...viewProps()}
+        counts={{ open: 5, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false }}
+        outages={outages}
+        queuePeople={1}
+        queueRows={1}
+        excludedBranches={new Set()}
+        onToggleBranch={() => {}}
+        onExcuseOutages={() => {}}
+        list={<FlagQueueList {...listProps()} entries={queue} />}
+      />
+    </MemoryRouter>,
   );
 
   assert.match(html, /had no device data/, "the band states the outage");
@@ -1863,24 +1869,30 @@ test("a failed load withholds the band, not just the list", () => {
   assert.equal(outages.length, 1, "the fixture is the stale-data case");
 
   const failed = renderToStaticMarkup(
-    <FlagQueueView {...viewProps()} counts={null} error={new Error("Network request failed")} outages={outages} />
+    <MemoryRouter>
+      <FlagQueueView {...viewProps()} counts={null} error={new Error("Network request failed")} outages={outages} />
+    </MemoryRouter>
   );
   assert.doesNotMatch(failed, /had no device data/, "no band beside a failure");
   assert.doesNotMatch(failed, /Excuse/, "and nothing to press");
 
   const loading = renderToStaticMarkup(
-    <FlagQueueView {...viewProps()} counts={null} isLoading outages={outages} />
+    <MemoryRouter>
+      <FlagQueueView {...viewProps()} counts={null} isLoading outages={outages} />
+    </MemoryRouter>
   );
   assert.doesNotMatch(loading, /had no device data/, "nor beside a spinner");
 
   // …and it is back the moment the load succeeds, so this is a guard and not a
   // way of losing the band.
   const loaded = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 3, needs_re_review: 0, decided: 0, people: 1, rows: 1, open_capped: false }}
-      outages={outages}
-    />
+    <MemoryRouter>
+      <FlagQueueView
+        {...viewProps()}
+        counts={{ open: 3, needs_re_review: 0, decided: 0, people: 1, rows: 1, open_capped: false }}
+        outages={outages}
+      />
+    </MemoryRouter>
   );
   assert.match(loaded, /had no device data/);
 });
@@ -1921,13 +1933,15 @@ test("the header's device line counts everyone the outage touched, not just the 
   );
 
   const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 7, rows: 3, open_capped: false }}
-      outages={outages}
-      queuePeople={5}
-      queueRows={2}
-    />
+    <MemoryRouter>
+      <FlagQueueView
+        {...viewProps()}
+        counts={{ open: 9, needs_re_review: 0, decided: 0, people: 7, rows: 3, open_capped: false }}
+        outages={outages}
+        queuePeople={5}
+        queueRows={2}
+      />
+    </MemoryRouter>
   );
 
   assert.match(html, /5 people need a decision · 2 rows · 2 waiting on a device fault/);

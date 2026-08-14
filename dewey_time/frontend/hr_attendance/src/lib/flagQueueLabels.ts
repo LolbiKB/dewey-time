@@ -359,12 +359,6 @@ export function outageBranchSummary(affectedPeopleCount: number, flagCount: numb
   return `${plural(affectedPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
 }
 
-/** @param outageBranchCount every branch, not the checked subset — "Review 13"
- *  must not become "Review 4" as boxes are unchecked. */
-export function outageReviewLabel(outageBranchCount: number): string {
-  return `Review ${plural(outageBranchCount, "branch", "branches")}`;
-}
-
 /**
  * The band's write action.
  *

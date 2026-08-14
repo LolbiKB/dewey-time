@@ -6,6 +6,17 @@ import type { FlagOut, QueueEntry, QueuePayload, QueuePerson } from "@/types/fla
 import { stubFrappe } from "./fixtures";
 
 /**
+ * The device-outage panel.
+ *
+ * A plain aria-label locator, NOT getByRole("region"): the panel is a <div>
+ * now, because it is about to become the body of the toolbar's data-health
+ * popover, and a landmark inside a popover is a landmark nobody can reach.
+ */
+function outagePanel(page: import("@playwright/test").Page) {
+  return page.locator('[aria-label="Device outages"]');
+}
+
+/**
  * Every payload fixture in this file predates rollout phases and describes an
  * all-live range, so the pilot banner stays silent in all of them.
  *
@@ -269,13 +280,12 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // requires the branch name in the copy and still forbids a device serial, so
   // "Siem Reap Depot" is still guaranteed to appear — but no longer in a queue
   // row. An outage is a precondition, not a judgment about anybody, so it is
-  // now the band above the queue (OutageBand). The band leads with what
-  // happened and keeps its branch list behind a disclosure, collapsed on
-  // arrival so thirteen branches cannot push the queue below the fold.
-  const band = page.getByRole("region", { name: "Device outages" });
+  // now the OutageExcusePanel, which leads with what happened and names every
+  // branch beneath it. A plain aria-label locator, not getByRole("region"):
+  // the panel is a <div> now, because it is about to become a popover body and
+  // a landmark inside a popover is a landmark nobody can reach.
+  const band = page.locator('[aria-label="Device outages"]');
   await expect(band.getByText(/1 branch had no device data/)).toBeVisible();
-
-  await band.getByRole("button", { name: /Review 1 branch/ }).click();
   await expect(band.getByText("Siem Reap Depot")).toBeVisible();
 
   // …and it left the queue: three entries came back, two of them are rows.
@@ -1365,7 +1375,7 @@ test("a band excuse leaves the selected person's row and form alone", async ({ p
   await page.getByRole("button", { name: "Decide", exact: true }).click();
   await page.getByRole("textbox").first().fill(note);
 
-  const band = page.getByRole("region", { name: "Device outages" });
+  const band = outagePanel(page);
   await band.getByRole("button", { name: /^Excuse\b/ }).click();
 
   // The write landed, was announced, and cleared the band.
@@ -1436,7 +1446,7 @@ test("the band's button reports the band's own write, and no other", async ({ pa
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
+  const band = outagePanel(page);
   const bandExcuse = band.getByRole("button", { name: /Excus/ });
   const panelSubmit = page.getByRole("button", { name: /^Excuse\b/ }).last();
 
@@ -1493,10 +1503,9 @@ test("a branch unchecked for one outage is not still unchecked for the next", as
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
+  const band = outagePanel(page);
   const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
 
-  await band.getByRole("button", { name: /Review 1 branch/ }).click();
   await band.getByRole("checkbox", { name: "Include Siem Reap Depot" }).click();
   await expect(bandExcuse).toHaveText("Select a branch to excuse");
 
@@ -1563,9 +1572,9 @@ test("deciding the last judgment row lands nowhere, not on the outage", async ({
   await expect(panel.getByText("Pick a row to review")).toBeVisible();
   await expect(panel).not.toContainText("Siem Reap Depot");
 
-  // The outage itself is untouched — still a band, still awaiting its own
+  // The outage itself is untouched — still on the page, still awaiting its own
   // acknowledgement.
-  await expect(page.getByRole("region", { name: "Device outages" })).toBeVisible();
+  await expect(outagePanel(page)).toBeVisible();
 });
 
 test("a second save is announced too, not silently deduplicated", async ({ page }) => {
@@ -1753,9 +1762,7 @@ test("unchecking a branch takes its people out of the excuse", async ({ page }) 
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
-  await band.getByRole("button", { name: /^Review 2/ }).click();
-
+  const band = outagePanel(page);
   const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
   await expect(bandExcuse).toHaveText("Excuse 2 people · 2 flags");
 
@@ -1793,7 +1800,7 @@ test("the keyboard model survives the band", async ({ page }) => {
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
+  const band = outagePanel(page);
   await expect(band).toBeVisible();
 
   const list = page.getByRole("list", { name: "Flag queue" });
@@ -1820,7 +1827,9 @@ test("the keyboard model survives the band", async ({ page }) => {
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
-  await expect(band.getByRole("button", { name: /Review 1 branch/ })).not.toBeFocused();
+  // The panel's Excuse button is still a real tab stop of its own, and the
+  // arrows must not escape into it.
+  await expect(band.getByRole("button", { name: /^Excuse\b/ })).not.toBeFocused();
 });
 
 /** One person, four mornings — a compressed list small enough to count by eye. */

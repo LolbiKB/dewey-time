@@ -53,7 +53,7 @@ import { decideFlags } from "@/services/flags";
 import type { QueueEntry, QueuePayload, Tier } from "@/types/flags";
 import { FlagDecisionPanel } from "@/ui/FlagDecisionPanel";
 import { FlagQueueList, entryKey } from "@/ui/FlagQueueList";
-import { OutageBand } from "@/ui/OutageBand";
+import { OutageExcusePanel } from "@/ui/OutageExcusePanel";
 
 /** get_flag_queue caps a request at QUEUE_MAX_RANGE_DAYS (31); two weeks is the
  *  window HR actually works and keeps the payload well under QUEUE_FLAG_LIMIT. */
@@ -1106,7 +1106,7 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           above "Flags didn't load" invites a mass decision over data the page
           has just said it could not load. */}
       {props.isLoading || props.error ? null : (
-        <OutageBand
+        <OutageExcusePanel
           outages={props.outages}
           excludedBranches={props.excludedBranches}
           onToggleBranch={props.onToggleBranch}

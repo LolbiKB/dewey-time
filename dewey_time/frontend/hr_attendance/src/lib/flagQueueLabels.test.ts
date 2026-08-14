@@ -38,7 +38,6 @@ import {
   outageBranchDays,
   outageBranchSummary,
   outageExcuseLabel,
-  outageReviewLabel,
   OUTCOME_ACTION_LABELS,
   OUTCOME_LABELS,
   OUTCOME_OPTIONS,
@@ -1080,8 +1079,6 @@ test("every branch-row string is pinned, not just the ones a component happens t
   assert.equal(outageBranchDays(10), "10 days with no sync row");
   assert.equal(outageBranchDays(1), "1 day with no sync row");
   assert.equal(outageBranchSummary(99, 990), "99 people · 990 flags");
-  assert.equal(outageReviewLabel(13), "Review 13 branches");
-  assert.equal(outageReviewLabel(1), "Review 1 branch");
   assert.equal(OUTAGE_NOT_A_JUDGMENT, "the machines didn't record — nobody is being judged here");
 });
 
