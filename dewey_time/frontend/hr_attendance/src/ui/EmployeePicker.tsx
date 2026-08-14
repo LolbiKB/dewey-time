@@ -36,15 +36,16 @@ export type EmployeePickerSize = "sm" | "md" | "lg";
  * tail facts turn on at 120 / 170 / 230 on the same basis.
  *
  * The trigger's own chrome — px-3 (24), the 40px avatar, gap-2.5 (10), gap-3
- * before the chevron (12), and the 16px chevron — costs about 102px before the
- * text stack gets any width. The tokens are deliberately not round numbers:
- * 224px would clear the 120px first rung by two pixels and 336px would clear
- * the 230px third rung by four, which is inside the margin of error of
- * arithmetic. 240 and 352 clear them by eighteen and twenty.
- *
- * That 102px is DERIVED, and e2e/employee-picker.spec.ts measures it in a
- * browser rather than trusting it — the last layout number on this component's
+ * before the chevron (12), and the 16px chevron — costs 102px before the text
+ * stack gets any width. MEASURED, not derived: e2e/employee-picker.spec.ts
+ * reads it out of a browser at both viewports and gets 102px exactly, leaving
+ * text stacks of 138 / 250 / 410. The last layout number in this component's
  * neighbourhood that was reasoned rather than measured was wrong.
+ *
+ * The tokens are deliberately not round numbers: 224px would clear the 120px
+ * first rung by two pixels and 336px would clear the 230px third rung by four,
+ * which is inside the margin of error of arithmetic. 240 and 352 clear them by
+ * eighteen and twenty.
  *
  * Whole class strings, not composed: Tailwind scans source text, so a computed
  * `w-[${n}px]` produces no CSS at all.
