@@ -130,6 +130,9 @@ export function employeeSearchHaystack(employee: CalendarEmployee): string {
     employee.employment_type,
     employee.title,
     employee.department,
+    // Raw, not formatBranchLabel'd: the filter matches on `includes`, so the
+    // raw value covers both the typed "Iconic" and the stored "BRANCH-Iconic".
+    employee.branch,
     employee.company,
     // ERPNext marks both Khmer fields in_global_search, so HR already expects
     // to find people by them.

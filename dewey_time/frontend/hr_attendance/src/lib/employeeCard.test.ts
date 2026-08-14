@@ -195,3 +195,25 @@ test("a Khmer query matches inside a name with no word boundary", () => {
   // matcher would otherwise sail through undetected.
   assert.equal(employeeCommandFilter("ចាន់សុភា EMP-1", "សុភា"), 1);
 });
+
+test("branch is searchable, raw rather than formatted", () => {
+  // Raw, not formatBranchLabel'd: employeeCommandFilter matches on `includes`,
+  // and "BRANCH-Iconic" contains "Iconic", so the raw value matches both what
+  // HR types and what the row displays. The formatted one would match only
+  // the first.
+  const haystack = employeeSearchHaystack({
+    id: "EMP-1",
+    label: "EMP-1 · Jane Doe",
+    employee_name: "Jane Doe",
+    branch: "BRANCH-Iconic",
+  });
+  assert.match(haystack, /BRANCH-Iconic/);
+  assert.equal(employeeCommandFilter(haystack, "Iconic"), 1);
+  assert.equal(employeeCommandFilter(haystack, "BRANCH-Iconic"), 1);
+  assert.equal(employeeCommandFilter(haystack, "Warehouse"), 0);
+});
+
+test("a missing branch adds nothing to the haystack", () => {
+  const haystack = employeeSearchHaystack({ id: "EMP-2", label: "EMP-2 · Ana Ruiz" });
+  assert.doesNotMatch(haystack, /undefined|null/);
+});

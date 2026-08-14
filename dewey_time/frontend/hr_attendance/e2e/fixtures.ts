@@ -121,6 +121,7 @@ const EMPLOYEE = {
   ...KHMER["EMP-001"],
   title: "Cashier",
   department: "Retail",
+  branch: "BRANCH-A",
   company: "DIS",
   employment_type: "Full-time",
   is_full_time: true,
