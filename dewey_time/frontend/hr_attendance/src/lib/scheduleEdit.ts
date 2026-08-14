@@ -112,12 +112,20 @@ export function openingScheduleMode(hasLiveSchedule: boolean): ScheduleMode {
  * clean and bin it silently. Block ids are excluded via `blocksFingerprint`:
  * reseeding from the server mints new ids for identical content, and counting
  * them would make every freshly loaded form report itself dirty.
+ *
+ * `generateThrough` is collapsed to "" when the limit switch is off, exactly
+ * as the save path collapses it before sending. With the switch off the end
+ * date is neither rendered nor submitted, so it is not part of the schedule —
+ * and the server always seeds a non-empty `default_generate_through`, so
+ * counting it regardless would make toggling the switch on and straight back
+ * off (which clears the date) leave the form permanently dirty against a value
+ * the user cannot see.
  */
 export function scheduleFormFingerprint(state: ScheduleFormState): string {
   return JSON.stringify({
     blocks: blocksFingerprint(state.shiftBlocks),
     effectiveFrom: state.effectiveFrom,
-    generateThrough: state.generateThrough,
+    generateThrough: state.limitGenerateThrough ? state.generateThrough : "",
     limitGenerateThrough: state.limitGenerateThrough,
   });
 }

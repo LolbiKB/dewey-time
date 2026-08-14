@@ -170,15 +170,34 @@ test("the form fingerprint covers every editable field, not just the blocks", ()
     "a changed effective date is dirty",
   );
   assert.notEqual(
-    scheduleFormFingerprint({ ...base, generateThrough: "2026-12-31" }),
-    baseline,
-    "a changed end date is dirty",
-  );
-  assert.notEqual(
     scheduleFormFingerprint({ ...base, limitGenerateThrough: true }),
     baseline,
     "toggling the limit switch is dirty",
   );
+
+  const limited = { ...base, limitGenerateThrough: true, generateThrough: "2026-12-31" };
+  assert.notEqual(
+    scheduleFormFingerprint({ ...limited, generateThrough: "2027-01-31" }),
+    scheduleFormFingerprint(limited),
+    "a changed end date is dirty while the limit is on",
+  );
+});
+
+test("the end date is ignored while the limit switch is off", () => {
+  // The server ALWAYS seeds a non-empty default_generate_through
+  // (schedule_api.py:295), and the switch's own handler clears the date when
+  // it is turned off. So a user who toggles the limit on and straight back off
+  // lands on generateThrough "" against a seeded date — with the switch off,
+  // the field is neither rendered nor submitted, so counting it would leave
+  // the form permanently dirty against a value nobody can see, and Cancel
+  // would raise a confirm about invisible edits.
+  const off = (generateThrough: string) => ({
+    shiftBlocks: [],
+    effectiveFrom: "2026-09-01",
+    generateThrough,
+    limitGenerateThrough: false,
+  });
+  assert.equal(scheduleFormFingerprint(off("")), scheduleFormFingerprint(off("2026-09-29")));
 });
 
 test("the fingerprint ignores block ids, as blocksFingerprint does", () => {

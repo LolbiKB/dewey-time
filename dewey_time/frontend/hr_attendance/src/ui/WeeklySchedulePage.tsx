@@ -192,8 +192,13 @@ export function WeeklySchedulePage() {
   }, [context?.employee]);
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
+  // Only edit mode consumes `plan`/`resolving` — they are read by
+  // SchedulePreviewTrigger, which lives inside the edit-only footer. Preview is
+  // now the default landing state for anyone with a live schedule, so leaving
+  // this ungated would post resolve_weekly_schedule_plan on every page load
+  // for a result nothing renders and the user cannot act on.
   const { plan, resolving, resolveError } = useWeeklyScheduleResolve(
-    scheduleEmployeeId,
+    mode === "edit" ? scheduleEmployeeId : null,
     weekPattern,
     effectiveFrom || null
   );
@@ -202,7 +207,6 @@ export function WeeklySchedulePage() {
   const { templates: dynamicTemplates, isLoading: templatesLoading } = useWeeklyScheduleTemplates(24);
 
   const hasLiveSchedule = (context?.enabled_ssa_count ?? 0) > 0;
-  const scheduleReadOnly = false;
 
   const isDirty =
     seededFingerprint.current !== null &&
@@ -216,9 +220,17 @@ export function WeeklySchedulePage() {
   // Both ways out of edit mode with unsaved work funnel through one confirm.
   // `pendingEmployeeId` is what distinguishes them: null means "just leave edit
   // mode", a value means "leave, then switch to this person".
+  // Where leaving edit mode lands. The SAME rule that chose the opening mode,
+  // not a hardcoded "preview": an employee with no schedule has nothing to
+  // preview, so Cancel reverts their edits and leaves them in the editor
+  // rather than dropping them into a picture of an empty week.
+  function exitMode(): ScheduleMode {
+    return openingScheduleMode(hasLiveSchedule);
+  }
+
   function leaveEditMode() {
     if (!isDirty) {
-      setMode("preview");
+      setMode(exitMode());
       return;
     }
     setPendingEmployeeId(null);
@@ -242,15 +254,30 @@ export function WeeklySchedulePage() {
 
   function confirmDiscard() {
     setDiscardOpen(false);
-    if (pendingEmployeeId) {
-      // The seeding effect reseeds the form and the mode effect re-derives the
-      // mode, so nothing else has to be undone by hand here.
+    if (pendingEmployeeId !== null) {
+      // Drop the discarded pattern NOW rather than leaving it on screen until
+      // the arriving employee's context reseeds the form. It is not cosmetic:
+      // `useWeeklyScheduleResolve` keys on (scheduleEmployeeId, weekPattern),
+      // so a lingering pattern gets resolved against the employee arriving,
+      // and if their context fetch fails, both effects early-return and the
+      // user sits looking at the edits they just told the app to throw away.
+      // A null baseline means "not seeded yet", so nothing reads as dirty.
+      setShiftBlocks([]);
+      seededFingerprint.current = null;
       selectEmployee(pendingEmployeeId);
       setPendingEmployeeId(null);
       return;
     }
     if (context) seedFormFrom(context);
-    setMode("preview");
+    setMode(exitMode());
+  }
+
+  function closeDiscard() {
+    setDiscardOpen(false);
+    // "Keep editing", Escape and an outside click all land here. Leaving the
+    // pending id set would arm the NEXT confirm to switch employee, whatever
+    // raised it.
+    setPendingEmployeeId(null);
   }
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isScheduleLoading = contextLoading && !!scheduleEmployeeId;
@@ -303,7 +330,20 @@ export function WeeklySchedulePage() {
    */
   async function reseedFormFromServer() {
     const refetched = await refetchContext();
-    if (!refetched.data) return;
+    if (!refetched.data) {
+      // The refetch failed, so there is no server state to adopt — but the
+      // write that triggered this one succeeded, so what is on screen is no
+      // longer unsaved. Move the baseline onto it. Leaving the baseline pinned
+      // where it was would make a just-saved form report itself dirty and
+      // offer to "discard unsaved changes" that were in fact saved.
+      seededFingerprint.current = scheduleFormFingerprint({
+        shiftBlocks,
+        effectiveFrom,
+        generateThrough,
+        limitGenerateThrough,
+      });
+      return;
+    }
     seedFormFrom(refetched.data);
   }
 
@@ -406,6 +446,12 @@ export function WeeklySchedulePage() {
   const saveDisabled =
     !scheduleEmployeeId ||
     applying ||
+    // Saving an untouched form is not a no-op on this page: the backend
+    // retires the existing SSAs and recreates them, so an accidental
+    // Edit → Review changes walks the user through a typed-name confirmation
+    // to replace a schedule with an identical one. Same dirty rule the leave
+    // guard uses, applied to the action that actually mutates data.
+    !isDirty ||
     validationIssues.length > 0 ||
     !effectiveFrom ||
     !hasWorkingDays ||
@@ -535,23 +581,19 @@ export function WeeklySchedulePage() {
                 />
               ) : (
                 <Card
-                  className={cn(
-                    "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-                    scheduleReadOnly && "opacity-95"
-                  )}
+                  className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
                 >
                   <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 space-y-1">
                       <CardTitle className="text-base">Shift blocks</CardTitle>
-                      {validationIssues[0] && !scheduleReadOnly ? (
+                      {validationIssues[0] ? (
                         <CardDescription className="text-destructive">
                           {validationIssues[0].message}
                         </CardDescription>
                       ) : (
                         <CardDescription>
-                          {scheduleReadOnly
-                            ? "Preview only — clear existing SSAs to edit."
-                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                          One block per shared pattern — like Frappe Shift
+                          Schedule repeat days.
                         </CardDescription>
                       )}
                     </div>
@@ -561,7 +603,6 @@ export function WeeklySchedulePage() {
                         options={templateOptions}
                         onSelect={applyTemplate}
                         loading={templatesLoading}
-                        disabled={scheduleReadOnly}
                         triggerClassName="sm:min-w-[20rem] sm:max-w-md"
                       />
                     </div>
@@ -572,7 +613,6 @@ export function WeeklySchedulePage() {
                         blocks={shiftBlocks}
                         onChange={handleShiftBlocksChange}
                         validationIssues={validationIssues}
-                        disabled={scheduleReadOnly}
                       />
                     </CardContent>
                   </ScrollArea>
@@ -608,7 +648,6 @@ export function WeeklySchedulePage() {
                       <Switch
                         id="generate-through-limit"
                         checked={limitGenerateThrough}
-                        disabled={scheduleReadOnly}
                         onCheckedChange={(checked) => {
                           setLimitGenerateThrough(checked);
                           if (!checked) setGenerateThrough("");
@@ -624,7 +663,6 @@ export function WeeklySchedulePage() {
                       placeholder="Pick end date"
                       min={effectiveFrom ? parseISO(effectiveFrom) : undefined}
                       max={generateThroughMax}
-                      disabled={scheduleReadOnly}
                     />
                   ) : (
                     <FieldDescription className="flex h-10 items-center">
@@ -690,13 +728,13 @@ export function WeeklySchedulePage() {
 
       <ResponsiveModal
         open={discardOpen}
-        onOpenChange={setDiscardOpen}
+        onOpenChange={(o) => (o ? setDiscardOpen(true) : closeDiscard())}
         size="sm"
         title="Discard unsaved changes?"
         description="This schedule has edits that have not been saved. Discarding returns it to the version on file."
         footer={
           <>
-            <Button type="button" variant="outline" onClick={() => setDiscardOpen(false)}>
+            <Button type="button" variant="outline" onClick={closeDiscard}>
               Keep editing
             </Button>
             <Button type="button" variant="destructive" onClick={confirmDiscard}>

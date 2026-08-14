@@ -16,6 +16,64 @@ test("previewOnly is gone", () => {
   assert.doesNotMatch(pageSource(), /previewOnly/);
 });
 
+test("scheduleReadOnly is gone too, and its copy with it", () => {
+  // The same argument as previewOnly, applied to the larger of the two. It was
+  // pinned false with seven dead branches, and the design's plan to reuse it
+  // as the edit-mode disable never happened — preview renders a different
+  // branch entirely rather than a disabled editor. One of its dead branches
+  // read "Preview only — clear existing SSAs to edit.", copy that actively
+  // contradicts the real preview mode, which has nothing to do with clearing.
+  const src = pageSource();
+  assert.doesNotMatch(src, /scheduleReadOnly/);
+  assert.doesNotMatch(src, /Preview only — clear existing SSAs/);
+});
+
+test("leaving edit mode uses the shared rule, never a hardcoded preview", () => {
+  // An employee with no live schedule opens in edit BECAUSE there is nothing
+  // to preview. Sending Cancel to "preview" regardless would drop them into a
+  // picture of an empty week — seven off days and a bare fallback axis — with
+  // the editor unmounted underneath them.
+  const src = pageSource();
+  assert.match(src, /function exitMode\(\): ScheduleMode \{[\s\S]*?openingScheduleMode\(hasLiveSchedule\)/);
+  assert.doesNotMatch(src, /setMode\("preview"\)/, "no caller may hardcode the destination");
+});
+
+test("the save button is gated on the same dirty rule as the leave guard", () => {
+  // Saving an untouched form is not a no-op here: the backend retires the
+  // existing SSAs and recreates them, so Edit -> Review changes on an
+  // unchanged form walks the user through a typed-name confirmation to
+  // replace a schedule with an identical one.
+  const src = pageSource();
+  const gate = src.match(/const saveDisabled =[\s\S]*?;\n/);
+  assert.ok(gate, "expected a saveDisabled gate");
+  assert.match(gate[0], /!isDirty/);
+});
+
+test("the resolve hook is edit-only", () => {
+  // `plan` and `resolving` are read only by SchedulePreviewTrigger, inside the
+  // edit-only footer. Preview is the default landing state, so an ungated
+  // hook posts a resolve on every page load for a result nothing renders.
+  assert.match(
+    pageSource(),
+    /useWeeklyScheduleResolve\(\s*mode === "edit" \? scheduleEmployeeId : null/,
+  );
+});
+
+test("dismissing the discard confirm disarms the pending switch", () => {
+  // "Keep editing", Escape and an outside click all close the modal. Leaving
+  // pendingEmployeeId set would arm the NEXT confirm to switch employee,
+  // whatever raised it.
+  const src = pageSource();
+  const close = src.match(/function closeDiscard\(\)[\s\S]*?\n  }/);
+  assert.ok(close, "expected a closeDiscard handler");
+  assert.match(close[0], /setPendingEmployeeId\(null\)/);
+  assert.doesNotMatch(
+    src,
+    /onOpenChange=\{setDiscardOpen\}/,
+    "the modal must route its close through closeDiscard, not raw setState",
+  );
+});
+
 test("isEditing is renamed — it means 'has a live schedule', not 'is editing'", () => {
   // With a real edit mode on the page, the old name names the wrong thing.
   const src = pageSource();
