@@ -49,6 +49,51 @@ test("Edit opens the editor, and Cancel with no changes returns silently", async
   await expect(page.getByRole("button", { name: "Edit schedule" })).toBeVisible();
 });
 
+test("a dirty form confirms before Cancel throws the edits away", async ({ page }) => {
+  await page.goto("/hr-schedule?employee=EMP-001");
+  await page.getByRole("button", { name: "Edit schedule" }).click();
+
+  const limit = page.locator("#generate-through-limit");
+  await limit.click();
+  await expect(limit).toBeChecked();
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByText("Discard unsaved changes?")).toBeVisible();
+
+  // "Keep editing" leaves both the edit mode and the edit in place.
+  await page.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.getByText("Discard unsaved changes?")).toHaveCount(0);
+  await expect(limit).toBeChecked();
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Discard changes" }).click();
+  await expect(page.getByRole("button", { name: "Edit schedule" })).toBeVisible();
+
+  // Back in edit mode the discarded change is gone, not merely hidden.
+  await page.getByRole("button", { name: "Edit schedule" }).click();
+  await expect(page.locator("#generate-through-limit")).not.toBeChecked();
+});
+
+test("re-picking the employee already on screen is not a change to confirm", async ({ page }) => {
+  // EmployeePicker's onSelect fires unconditionally, so this reaches
+  // requestEmployeeChange with the current id. Without its guard the confirm
+  // would appear and then fail to do what it says: selectEmployee with an
+  // unchanged id leaves context?.employee alone, so the seeding effect never
+  // re-fires and the "discarded" edits survive.
+  await page.goto("/hr-schedule?employee=EMP-001");
+  await page.getByRole("button", { name: "Edit schedule" }).click();
+
+  const limit = page.locator("#generate-through-limit");
+  await limit.click();
+  await expect(limit).toBeChecked();
+
+  await page.getByRole("combobox").first().click();
+  await page.getByRole("option", { name: /Jane Doe/ }).click();
+
+  await expect(page.getByText("Discard unsaved changes?")).toHaveCount(0);
+  await expect(limit).toBeChecked();
+});
+
 test("preview hands the schedule the height the editing chrome was using", async ({ page }) => {
   // The spec derived ~134px at desktop from class strings. This records what it
   // actually is. Note what is being compared: the page height is FIXED (see

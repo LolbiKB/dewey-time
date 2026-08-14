@@ -226,7 +226,13 @@ export function WeeklySchedulePage() {
   }
 
   function requestEmployeeChange(id: string) {
-    if (!isDirty) {
+    // Re-picking the employee already on screen is not a change and must not
+    // raise the confirm. EmployeePicker's onSelect fires unconditionally, so
+    // this is reachable — and the confirm would be a lie: accepting it calls
+    // selectEmployee with the same id, which leaves `context?.employee`
+    // unchanged, so the seeding effect never re-fires and the edits it offered
+    // to discard would still be there.
+    if (id === employee || !isDirty) {
       selectEmployee(id);
       return;
     }
