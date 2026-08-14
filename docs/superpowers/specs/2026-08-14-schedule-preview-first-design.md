@@ -118,8 +118,11 @@ incidental, which is why it is in scope here rather than left alone.
 ## Layout changes
 
 **Import moves up beside the picker.** The picker caps at 512px (`lg`), leaving
-room on its right at desktop widths. On a phone the actions wrap to a second
-line — one line of small buttons, not a 2-column grid of four.
+room on its right at desktop widths. On a phone the wrapper is still
+`flex-col`, so Import stays below the picker exactly where it already was —
+measured at 1280 the two share `y=61`, at 375 the picker is at `y=57` and
+Import at `y=123`. The move is a desktop saving only; the phone's saving comes
+entirely from the mode. `e2e/schedule-preview.spec.ts` pins both.
 
 **The dev row must be gated at the wrapper.** The three `Clear*` dialogs each
 return `null` in production, but their wrapper is a child of a
@@ -133,16 +136,36 @@ after the switch is accepted, never with unsaved work still on screen.
 
 ### Vertical reclaimed, preview mode, production
 
-| | desktop | phone |
-|---|---|---|
-| button row + its gap | ~44px | ~88px (2-col grid, two rows) |
-| footer — border, two date controls, buttons | ~90px | ~120px |
-| Card header + template picker | 0 (shares the title row) | ~36px |
-| **total** | **~134px** | **~244px** |
+**Measured in a browser** by `e2e/schedule-preview.spec.ts`, which supersedes
+the estimate this section originally carried.
 
-These are derived from the current class strings, not measured. The
-implementation plan measures them in a browser before the numbers are repeated
-anywhere user-facing.
+First, a correction of kind, not just magnitude: `/hr-schedule` is a
+fixed-viewport layout — `Page` is `h-full flex-col` and `Section grow` is
+`min-h-0 flex-1 overflow-hidden` — so **the page never gets shorter**. Body
+height measures 900px in both modes at a 900px viewport. The reclaimed pixels
+are handed to the schedule region instead, which is the useful outcome but not
+the one the estimate described.
+
+| | desktop (1280) | phone (375) |
+|---|---|---|
+| import row + its gap — both modes | 44px | **0px** |
+| footer + Card header — preview only | **97px** | **219px** |
+| **total, preview vs. before** | **141px** | **219px** |
+
+Against the original estimate of ~134px desktop and ~244px phone: desktop came
+in slightly higher, phone materially lower. Two things the derivation got
+wrong, both worth stating rather than quietly adjusting:
+
+- **The phone's import row was never reclaimed.** The picker/import wrapper is
+  `flex-col … sm:flex-row` and Tailwind's `sm` is 640px, so at 375px the two
+  still stack exactly as they did before. The estimate's "~88px (2-col grid,
+  two rows)" also assumed all four buttons render — three of them are the
+  dev-only `Clear*` dialogs, so production only ever had one.
+- **The measured 97px desktop figure is the footer alone**, which is what the
+  estimate predicted for it (~90px). The Card header genuinely costs nothing
+  extra at desktop, as the estimate said.
+
+The section height itself: desktop 608px → 705px, phone 250px → 469px.
 
 ## Redundancy removed
 
