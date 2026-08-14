@@ -1828,9 +1828,10 @@ test("the keyboard model survives the band", async ({ page }) => {
   });
 
   await page.goto("/hr-flags");
-  await openOutagePanel(page);
-  const band = outagePanel(page);
-  await expect(band).toBeVisible();
+  // The chip, NOT the popover behind it. This test is about the list's own
+  // roving tabindex and arrow clamping; an open Radix popover puts a dismiss
+  // layer between the keyboard and the rows and makes the whole thing a race.
+  await expect(page.getByRole("button", { name: /branch(es)? offline/ })).toBeVisible();
 
   const list = page.getByRole("list", { name: "Flag queue" });
   const rows = list.getByRole("button");
@@ -1842,8 +1843,7 @@ test("the keyboard model survives the band", async ({ page }) => {
   await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "3");
 
   // Roving tabindex: exactly one row is tabbable, scoped to the list — the
-  // band's own disclosure and Excuse button are real tab stops of their own
-  // and must not be counted here.
+  // toolbar's chip is a real tab stop of its own and must not be counted here.
   await expect(list.locator('button[tabindex="0"]')).toHaveCount(1);
   await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveAttribute("tabindex", "0");
 
@@ -1856,9 +1856,9 @@ test("the keyboard model survives the band", async ({ page }) => {
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
-  // The panel's Excuse button is still a real tab stop of its own, and the
-  // arrows must not escape into it.
-  await expect(band.getByRole("button", { name: /^Excuse\b/ })).not.toBeFocused();
+  // The chip is a real tab stop of its own, and the arrows must not escape
+  // upward into it.
+  await expect(page.getByRole("button", { name: /branch(es)? offline/ })).not.toBeFocused();
 });
 
 /** One person, four mornings — a compressed list small enough to count by eye. */

@@ -13,10 +13,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
+import { attendanceHealth } from "@/lib/dataHealth";
 import { attendancePickerTail } from "@/lib/employeeCard";
 import { formatWeekRangeLabel } from "@/lib/weekSchedule";
-import type { Severity } from "@/types/calendar";
+import type { DeviceAlert, Severity } from "@/types/calendar";
 import { AppTooltip } from "@/ui/AppTooltip";
+import { DataHealthButton } from "@/ui/DataHealthButton";
+import { DeviceHealthDetail } from "@/ui/DeviceAlerts";
 import { ClockBadge, EmployeePicker } from "@/ui/EmployeePicker";
 import { RunEngineDialog } from "@/ui/RunEngineDialog";
 import { WeekFlagSummary } from "@/ui/WeekFlagSummary";
@@ -47,6 +50,10 @@ export type AttendanceToolbarProps = {
   isCalendarLoading: boolean;
   hrStaff?: boolean;
   weekFlagCounts: Record<Severity, number>;
+  /** Minutes since the last device punch, or null when not stale. */
+  staleSyncMinutes: number | null;
+  /** Device Closeout Alerts for the week on screen. */
+  deviceAlerts: DeviceAlert[];
 };
 
 export function AttendanceToolbar(props: AttendanceToolbarProps) {
@@ -104,6 +111,21 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
           </>
         ) : null}
       </div>
+
+      {/* Rides in the gap sm:justify-between already leaves between the picker
+          block and the week nav, so it costs no vertical space. Renders null
+          when both counts are clean, which is the ordinary day. */}
+      <DataHealthButton
+        conditions={attendanceHealth({
+          staleSyncMinutes: props.staleSyncMinutes,
+          closeoutAlerts: props.deviceAlerts.length,
+        })}
+      >
+        <DeviceHealthDetail
+          alerts={props.deviceAlerts}
+          staleSyncMinutes={props.staleSyncMinutes}
+        />
+      </DataHealthButton>
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2 self-stretch sm:flex-none">
         <WeekFlagSummary

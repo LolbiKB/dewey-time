@@ -36,7 +36,6 @@ import {
 } from "@/ui/AttendanceLoading";
 import { AttendanceToolbar } from "@/ui/AttendanceToolbar";
 import { DayInspectorSheet } from "@/ui/DayInspectorSheet";
-import { DeviceCloseoutBanner, DeviceSyncStalenessBanner } from "@/ui/DeviceAlerts";
 import { WeekView } from "@/ui/WeekView";
 import { WeekDayView } from "@/ui/WeekDayView";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
@@ -313,6 +312,14 @@ export function App() {
                 isRefreshing={isRefreshing}
                 isCalendarLoading={isCalendarLoading}
                 weekFlagCounts={weekFlagCounts}
+                deviceAlerts={weekDeviceAlerts}
+                // `stale ? … : null` is the contract attendanceHealth
+                // documents: null means "nothing to report", not "zero minutes
+                // ago". Passing minutesSince unconditionally would light the
+                // chip on every healthy page load.
+                staleSyncMinutes={
+                  syncStaleness.stale ? (syncStaleness.minutesSince ?? null) : null
+                }
               />
             </div>
           )}
@@ -325,12 +332,6 @@ export function App() {
               </>
             ) : (
               <>
-                {weekDeviceAlerts.length > 0 ? (
-                  <DeviceCloseoutBanner alerts={weekDeviceAlerts} />
-                ) : null}
-                {syncStaleness.stale && syncStaleness.minutesSince != null ? (
-                  <DeviceSyncStalenessBanner minutesSince={syncStaleness.minutesSince} />
-                ) : null}
                 <WeekViewAnimatedShell
                   loading={isCalendarLoading}
                   weekKey={weekKey}
