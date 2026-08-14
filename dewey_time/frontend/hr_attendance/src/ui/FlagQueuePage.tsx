@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { EmptyState, Page, PageHeader, Section } from "@lolbikb/dewey-ui";
+import { EmptyState, Page, Section } from "@lolbikb/dewey-ui";
 import { useMutation } from "@tanstack/react-query";
 import { differenceInCalendarDays, format, isValid, parseISO, subDays } from "date-fns";
-import { CheckIcon, FlaskConicalIcon, CloudOffIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, FlaskConicalIcon, TriangleAlertIcon } from "lucide-react";
 import { Navigate, useOutletContext, useSearchParams } from "react-router-dom";
 
 import { ResponsiveModal } from "@/components/ResponsiveModal";
@@ -18,10 +18,8 @@ import { rolloutBannerMessage } from "@/lib/rolloutBanner";
 import { buildOutageSet } from "@/lib/flagStrip";
 import { extractFrappeError } from "@/lib/frappeError";
 import {
-  CAPPED_EXPLAINER,
   DECIDE_FAILED_MESSAGE,
   DECIDED_TOGGLE_LABEL,
-  DEVICE_ALERT_EXPLAINER,
   NOTHING_WAITING_TITLE,
   QUEUE_LOADING_LABEL,
   RANGE_FROM_LABEL,
@@ -30,15 +28,10 @@ import {
   SHOWING_DECIDED_MESSAGE,
   TIER_FILTER_ALL_LABEL,
   TIER_FILTER_LABEL,
-  cappedHeadline,
   decisionSurfaceTitle,
   deviceAlertHeadline,
-  narrowRangeLabel,
   nothingWaitingDetail,
-  orphanedEvidenceChangedSummary,
-  orphanedFlagGoneSummary,
   partialFailureMessage,
-  queueSplitDescription,
   showDecidedLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
@@ -51,6 +44,8 @@ import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { cn } from "@/lib/utils";
 import { decideFlags } from "@/services/flags";
 import type { QueueEntry, QueuePayload, Tier } from "@/types/flags";
+import { flagQueueHealth } from "@/lib/dataHealth";
+import { DataHealthButton } from "@/ui/DataHealthButton";
 import { FlagDecisionPanel } from "@/ui/FlagDecisionPanel";
 import { FlagQueueList, entryKey } from "@/ui/FlagQueueList";
 import { OutageExcusePanel } from "@/ui/OutageExcusePanel";
@@ -252,19 +247,6 @@ export function FlagQueuePage() {
     [setSearchParams],
   );
 
-  // Trims from the START, matching clampRange: the recent end is the work that
-  // matters, so a narrower window gives up its oldest days, never today's.
-  const handleNarrowRange = useCallback(
-    (days: number) => {
-      const end = parseISO(requestedRange.endDate);
-      setRange({
-        startDate: format(subDays(end, days - 1), "yyyy-MM-dd"),
-        endDate: requestedRange.endDate,
-      });
-    },
-    [requestedRange.endDate, setRange],
-  );
-
   const setTier = useCallback(
     (next: Tier | null) => {
       setSearchParams(
@@ -291,7 +273,6 @@ export function FlagQueuePage() {
     entries,
     counts,
     alerts,
-    orphans,
     outageDates,
     range,
     rollout,
@@ -720,16 +701,11 @@ export function FlagQueuePage() {
         // something open" beside a failed load reads as "nothing to do", which
         // is the exact false calm this page exists to break.
         counts={isLoading || error ? null : counts}
-        // Withheld on the same terms as counts, and for the same reason: the
-        // hook zero-fills before the first payload, and a stale-looking orphan
-        // line beside a failed load is worse than none.
-        orphans={isLoading || error ? undefined : orphans}
         includeDecided={includeDecided}
         onToggleDecided={handleToggleDecided}
         announcement={announcement}
         range={requestedRange}
         onRangeChange={setRange}
-        onNarrowRange={handleNarrowRange}
         tier={tier}
         onTierChange={setTier}
         rolloutBanner={rolloutBanner}
@@ -742,7 +718,6 @@ export function FlagQueuePage() {
         alerts={alerts}
         outages={outages}
         queuePeople={queuePeople}
-        queueRows={queue.length}
         excludedBranches={excludedBranches}
         onToggleBranch={handleToggleBranch}
         onExcuseOutages={handleExcuseOutages}
@@ -839,7 +814,6 @@ export type FlagQueueViewProps = {
   onRangeChange: (next: { startDate: string; endDate: string }) => void;
   /** The capped notice's two levers — narrows `range` to the last N days,
    *  trimmed from the start (same rule as `clampRange`). */
-  onNarrowRange: (days: number) => void;
   tier: Tier | null;
   onTierChange: (next: Tier | null) => void;
   /** Pre-rendered pilot-period notice, or null for silence. A string rather
@@ -854,24 +828,10 @@ export type FlagQueueViewProps = {
   writeFailure?: string | null;
   /** Flagless device outages, straight from Device Closeout Alert. */
   alerts?: QueuePayload["alerts"];
-  /**
-   * Decisions that no longer match a live flag. Reported, never actionable:
-   * the queue lists flags, and by definition these have none to list.
-   *
-   * They are shown because the identity scheme trades durability for
-   * precision — correcting a punch under a MISSING_TIME or ATTENDANCE_ISSUE
-   * flag changes its identity, so the decision attached to it orphans. The
-   * design doc parks that trade with "revisit if orphan rates in practice
-   * turn out to be high", which is only answerable if the rate is visible.
-   */
-  orphans?: QueuePayload["orphans"];
   /** Device outages, partitioned out of the queue. Empty on a healthy day. */
   outages: OutageGroup[];
   /** Distinct people in the judgment queue — NOT `counts.people`, which includes outage members. */
   queuePeople: number;
-  /** Top-level rows in the judgment queue — NOT `counts.rows`, which counts the
-   *  outage groups too. This is `partitionQueue(...).queue.length`. */
-  queueRows: number;
   excludedBranches: ReadonlySet<string>;
   onToggleBranch: (groupKey: string) => void;
   onExcuseOutages: (identities: string[]) => void;
@@ -905,25 +865,19 @@ export type FlagQueueViewProps = {
 export function FlagQueueView(props: FlagQueueViewProps) {
   const counts = props.counts;
 
-  // Each line only when its own count is non-zero — reporting "0 decisions no
-  // longer have a matching flag" is noise on the overwhelmingly common day.
-  const orphanLines = [
-    props.orphans?.orphaned_flag_gone
-      ? orphanedFlagGoneSummary(props.orphans.orphaned_flag_gone)
-      : null,
-    props.orphans?.orphaned_evidence_changed
-      ? orphanedEvidenceChangedSummary(props.orphans.orphaned_evidence_changed)
-      : null,
-  ].filter((line): line is string => line !== null);
-
-  // Everyone the outage touched, counted the same way the band's own headline
-  // counts them. NOT `counts.people`, which counts both populations together and
-  // so cannot answer either question — and NOT
-  // `outageWrite(...).coveredEmployeeCount`, which counts only members holding an
-  // undecided flag and therefore falls towards zero as the excuse lands. The
-  // header would then report nobody waiting on a device fault while the band
-  // directly above it still names thirteen branches.
-  const outagePeople = queuePeopleCount(props.outages);
+  // Withheld on a failed load, and while loading, for the same reason `counts`
+  // is: react-query keeps the last good `data` when a refetch fails, so these
+  // conditions can outlive the payload they came from — and the popover behind
+  // this chip holds the page's largest WRITE. "Excuse 157 people" reachable
+  // above "Flags didn't load" invites a mass decision over data the page has
+  // just said it could not load.
+  const healthConditions =
+    props.isLoading || props.error
+      ? []
+      : flagQueueHealth({
+          outageBranches: props.outages.length,
+          closeoutAlerts: props.alerts?.length ?? 0,
+        });
 
   return (
     // No `max-w-none` here any more. This page carried one, because dewey-ui's
@@ -936,185 +890,125 @@ export function FlagQueueView(props: FlagQueueViewProps) {
     // Page and the header together, both taking their gutters from one
     // PAGE_INSET_X, so full-bleed is the default and the two edges agree.
     <Page>
-      <PageHeader
-        title="Flags"
-        description={
-          counts
-            ? queueSplitDescription(
-                props.queuePeople,
-                props.queueRows,
-                outagePeople,
-                props.includeDecided ?? false,
-              )
-            : "Loading…"
-        }
-        actions={
-          // One row, inline, no stacked labels. The three controls previously
-          // cost 62px because each carried a <Label> above it; the accessible
-          // name moves onto the control itself, which is where a screen reader
-          // reads it from anyway.
-          //
-          // `max-w-[calc(100vw-16rem)] … lg:max-w-none`, not the plain
-          // `flex-wrap` the width alone would suggest: `actions` renders
-          // inside dewey-ui's own `shrink-0` sibling of the title (page.tsx),
-          // which never gets asked to shrink and has no responsive stacking of
-          // its own — so on a phone this row's unwrapped intrinsic width
-          // (~575px measured at a 412px viewport) became this flex item's
-          // PREFERRED size regardless of `flex-wrap` on its own children, and
-          // `justify-between` took the entire deficit out of the title, down
-          // to 0 width. `max-w` is a hard clamp browsers honour over a flex
-          // item's preferred size even at `shrink-0`, and a `calc(100vw-…)`
-          // expression resolves against the viewport rather than this flex
-          // item's own (circular) auto-sizing — so it forces the real wrap
-          // `flex-wrap` was already meant to do. A fixed 16rem title column
-          // (not a fraction like `56vw`) is what keeps that from conceding
-          // chrome at the mid-size desktop widths this page is actually
-          // measured at — `56vw` bit from ~1027px down against this row's
-          // ~575px natural width, wrapping and costing ~48px even at a 900px
-          // viewport with 300+px of genuine slack beside the title. Released
-          // entirely at `lg` (1024px) and up, where dewey-ui's own `Page`
-          // padding step (`sm:px-8`) has already landed and there is always
-          // room. Regressing this clamp is caught by
-          // e2e/flags.spec.ts's "the flag queue renders groups and person
-          // rows with toolbar counts for HR staff", run under Playwright's
-          // `mobile` project — remove it and the header's description goes
-          // `hidden` there, squeezed to 0 width behind an unwrapped toolbar.
-          <div className="flex max-w-[calc(100vw-16rem)] flex-wrap items-center gap-2 lg:max-w-none">
-            <DatePickerInput
-              ariaLabel={RANGE_FROM_LABEL}
-              value={props.range.startDate}
-              max={parseISO(props.range.endDate)}
-              onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
-              className="w-36 space-y-0"
-            />
-            <span className="text-muted-foreground" aria-hidden="true">
-              –
-            </span>
-            <DatePickerInput
-              ariaLabel={RANGE_TO_LABEL}
-              value={props.range.endDate}
-              min={parseISO(props.range.startDate)}
-              onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
-              className="w-36 space-y-0"
-            />
-            <select
-              aria-label={TIER_FILTER_LABEL}
-              value={props.tier ?? ""}
-              onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
-              className="h-10 rounded-md border bg-background px-2 text-sm"
-            >
-              <option value="">{TIER_FILTER_ALL_LABEL}</option>
-              {TIER_VALUES.map((value) => (
-                <option key={value} value={value}>
-                  {tierLabel(value)}
-                </option>
-              ))}
-            </select>
-            {/* The one count that was ever a control. Open and Needs re-review
-                reported the size of the job and could not be pressed; Open has
-                moved into the description line and Needs re-review has read 0
-                on every day of this queue's life. */}
-            <button
-              type="button"
-              aria-pressed={props.includeDecided ?? false}
-              onClick={props.onToggleDecided}
-              className={cn(
-                "flex h-10 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors",
-                props.includeDecided
-                  ? "border-primary/30 bg-primary/5 text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {DECIDED_TOGGLE_LABEL}
-              <span className="tabular-nums text-foreground">{counts?.decided ?? 0}</span>
-            </button>
-          </div>
-        }
-      >
-        {/* First in the stack: a pilot period is context for everything below
-            it, where the capped notice is a fact about one query.
+      {/* No page-header component here any more. The nav tab the reader
+          arrived through already reads
+          "Flags", and a visible title plus its description cost roughly 48px on
+          the one page where vertical space converts directly into rows. The
+          description is not replaced anywhere: "206 people need a decision ·
+          206 rows · 262 waiting on a device fault" is three counts nobody acts
+          on, and the queue below states its own size by existing.
 
-            tone="accent", not the amber the capped notice uses — nothing here
-            is wrong. The range is exactly what HR asked for; the banner only
-            says how to read it. Amber for the length of a pilot would teach
-            them to ignore the bar that does mean something. */}
-        {props.rolloutBanner ? (
-          <AttentionStrip
-            tone="accent"
-            icon={<FlaskConicalIcon className="size-4 text-brand-accent" aria-hidden="true" />}
+          The heading does NOT go with it. `sr-only` is absolutely positioned
+          and measures zero pixels, so the space is still reclaimed, but a nav
+          tab is not a heading: it does not appear in a screen reader's heading
+          list, and a route with none has no answer to "where am I".
+          chromeMigration.test.tsx pins this for every route. */}
+      <h1 className="sr-only">Flags</h1>
+
+      {/* One row. The chip takes the horizontal space the title vacated, so it
+          costs nothing vertically — and the 16rem viewport clamp these controls
+          used to carry is gone with it, because that clamp existed solely to
+          stop them squeezing the title to zero width. */}
+      <div data-testid="flag-toolbar" className="flex flex-wrap items-center gap-2">
+        <DataHealthButton conditions={healthConditions}>
+          <OutageExcusePanel
+            outages={props.outages}
+            excludedBranches={props.excludedBranches}
+            onToggleBranch={props.onToggleBranch}
+            onExcuse={props.onExcuseOutages}
+            submitting={props.excusing}
+          />
+          {props.alerts && props.alerts.length > 0 ? (
+            // The only way a flagless outage reaches HR. These come from Device
+            // Closeout Alert, not from flags: on a deferred_offline or
+            // closure_failed day the fallback path skips those employees
+            // entirely, so the queue is empty for them by construction. No
+            // engine error text: it can name a device serial, and there is no
+            // device↔branch registry to make that claim true.
+            <div className="border-t border-border px-3 py-2.5">
+              <ul className="space-y-1">
+                {props.alerts.map((alert) => (
+                  <li
+                    key={`${alert.branch}:${alert.local_date}`}
+                    className="text-xs text-foreground"
+                  >
+                    {deviceAlertHeadline(alert)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </DataHealthButton>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <DatePickerInput
+            ariaLabel={RANGE_FROM_LABEL}
+            value={props.range.startDate}
+            max={parseISO(props.range.endDate)}
+            onChange={(value) => props.onRangeChange({ ...props.range, startDate: value })}
+            className="w-36 space-y-0"
+          />
+          <span className="text-muted-foreground" aria-hidden="true">
+            –
+          </span>
+          <DatePickerInput
+            ariaLabel={RANGE_TO_LABEL}
+            value={props.range.endDate}
+            min={parseISO(props.range.startDate)}
+            onChange={(value) => props.onRangeChange({ ...props.range, endDate: value })}
+            className="w-36 space-y-0"
+          />
+          <select
+            aria-label={TIER_FILTER_LABEL}
+            value={props.tier ?? ""}
+            onChange={(event) => props.onTierChange(parseTierParam(event.target.value))}
+            className="h-10 rounded-md border bg-background px-2 text-sm"
           >
-            {props.rolloutBanner}
-          </AttentionStrip>
-        ) : null}
-
-        {/* Only when capping is actually reachable by the user. The levers are
-            buttons now: the old copy told HR to narrow a range while the strip
-            offered no way to do it. Capping is structural on a queue at
-            production volume — it never clears — so this stays a control
-            rather than the permanent lecture the old strip was. */}
-        {props.truncated && counts ? (
-          <AttentionStrip
-            tone="amber"
-            icon={<TriangleAlertIcon className="size-4 text-amber-600" aria-hidden="true" />}
-          >
-            <span className="flex flex-wrap items-center gap-2">
-              <span className="min-w-0 flex-1">
-                <span className="font-medium">{cappedHeadline(counts.open)}</span>{" "}
-                <span className="text-muted-foreground">{CAPPED_EXPLAINER}</span>
-              </span>
-              {[7, 3].map((days) => (
-                <Button
-                  key={days}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => props.onNarrowRange(days)}
-                >
-                  {narrowRangeLabel(days)}
-                </Button>
-              ))}
-            </span>
-          </AttentionStrip>
-        ) : null}
-
-        {/* Without this the extra rows read as a bug: entries with no action
-            left on them, in a queue that promises everything in it is waiting
-            on you. */}
-        {props.includeDecided ? (
-          <p className="text-xs text-muted-foreground">{SHOWING_DECIDED_MESSAGE}</p>
-        ) : null}
-
-        {orphanLines.length > 0 ? (
-          <div className="space-y-0.5">
-            {orphanLines.map((line) => (
-              <p key={line} className="text-xs text-muted-foreground">
-                {line}
-              </p>
+            <option value="">{TIER_FILTER_ALL_LABEL}</option>
+            {TIER_VALUES.map((value) => (
+              <option key={value} value={value}>
+                {tierLabel(value)}
+              </option>
             ))}
-          </div>
-        ) : null}
-      </PageHeader>
+          </select>
+          {/* The one count that was ever a control. */}
+          <button
+            type="button"
+            aria-pressed={props.includeDecided ?? false}
+            onClick={props.onToggleDecided}
+            className={cn(
+              "flex h-10 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors",
+              props.includeDecided
+                ? "border-primary/30 bg-primary/5 text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {DECIDED_TOGGLE_LABEL}
+            <span className="tabular-nums text-foreground">{counts?.decided ?? 0}</span>
+          </button>
+        </div>
+      </div>
 
-      {/* Above the queue and outside it: an outage is the precondition that
-          explains the rows below, and it is not a judgment about anybody. Self-
-          hiding when there is no outage, so a healthy day looks exactly as it
-          did before.
+      {/* Stays a strip. A pilot period is set by configuration for weeks at a
+          time, is tone="accent" rather than amber, and is not a fact about
+          whether the data is healthy. */}
+      {props.rolloutBanner ? (
+        <AttentionStrip
+          tone="accent"
+          icon={<FlaskConicalIcon className="size-4 text-brand-accent" aria-hidden="true" />}
+        >
+          {props.rolloutBanner}
+        </AttentionStrip>
+      ) : null}
 
-          Withheld on a failed load for the same reason `counts` and `orphans`
-          are one level up, and with more at stake than either: react-query keeps
-          the last good `data` when a refetch fails, so the entries behind this
-          band can outlive the payload they came from — and unlike a stale count,
-          this band is the page's largest WRITE. "Excuse 157 people" sitting
-          above "Flags didn't load" invites a mass decision over data the page
-          has just said it could not load. */}
-      {props.isLoading || props.error ? null : (
-        <OutageExcusePanel
-          outages={props.outages}
-          excludedBranches={props.excludedBranches}
-          onToggleBranch={props.onToggleBranch}
-          onExcuse={props.onExcuseOutages}
-          submitting={props.excusing}
-        />
-      )}
+      {/* Stays a strip, and stays visible. It appears only when the user has
+          pressed the Decided toggle themselves, so it is a response to an
+          action rather than an unsolicited notice — and without it the extra
+          rows read as a bug: entries with no action left on them, in a queue
+          that promises everything in it is waiting on you. */}
+      {props.includeDecided ? (
+        <p className="text-xs text-muted-foreground">{SHOWING_DECIDED_MESSAGE}</p>
+      ) : null}
 
       {/* Role 2, not role 3: the queue itself loaded fine, so no region is
           missing and there is nothing for FailureBlock to replace — the write
@@ -1150,30 +1044,6 @@ export function FlagQueueView(props: FlagQueueViewProps) {
         >
           {partialFailureMessage(props.bulkFailure.saved, props.bulkFailure.attempted)}
         </AttentionStrip>
-      ) : null}
-
-      {/* The only way a flagless outage reaches HR. These come from Device
-          Closeout Alert, not from flags: on a deferred_offline or
-          closure_failed day the fallback path skips those employees entirely,
-          so the queue below is empty for them by construction. No `detail` —
-          the alert's `last_error` is engine text that can name a device serial,
-          and there is no device↔branch registry to make that claim true. No
-          decide action either: there are no flags behind these to decide. */}
-      {props.alerts && props.alerts.length > 0 ? (
-        <Section>
-          <div className="space-y-1.5">
-            {props.alerts.map((alert) => (
-              <AttentionStrip
-                key={`${alert.branch}:${alert.local_date}`}
-                tone="amber"
-                icon={<CloudOffIcon className="size-4 text-amber-600" aria-hidden="true" />}
-              >
-                {deviceAlertHeadline(alert)}
-              </AttentionStrip>
-            ))}
-            <p className="px-1 text-xs text-muted-foreground">{DEVICE_ALERT_EXPLAINER}</p>
-          </div>
-        </Section>
       ) : null}
 
       <Section grow>

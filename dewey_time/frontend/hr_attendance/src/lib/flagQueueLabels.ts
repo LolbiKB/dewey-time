@@ -382,51 +382,6 @@ export function outageExcuseLabel(
   return `Excuse ${plural(coveredPeopleCount, "person", "people")} · ${plural(flagCount, "flag", "flags")}`;
 }
 
-/**
- * Replaces `queueHeaderDescription` on this page.
- *
- * "389 people · 147 rows" counted the outage members among the people waiting on
- * HR, which is the specific lie the band exists to end: 256 of those 389 are
- * waiting on a machine, and no amount of HR attention moves them.
- *
- * `rows` survives the rewrite. It was added deliberately in 20c016fc and fixed
- * for tier filters in 38fbea19, and `queueHeaderDescription`'s own docstring
- * explains why people-only counting misleads above a list that can hold one row
- * for several people. Dropping it here would silently undo both commits.
- *
- * @param includeDecided whether the `Decided` toggle is on. REQUIRED, and
- *   deliberately not defaulted: it is the one control that changes WHO
- *   `queuePeople` counts, so a caller that forgets it must not silently get the
- *   wrong sentence. With it on, `queuePeopleCount(queue)` includes people whose
- *   flags are already settled, and "N people need a decision" is then false
- *   about every one of them — SHOWING_DECIDED_MESSAGE below the header
- *   mitigates that and does not correct it. So the claim is dropped rather
- *   than qualified, and the head falls back to the neutral count the page
- *   carried before this sentence existed.
- */
-export function queueSplitDescription(
-  queuePeople: number,
-  queueRows: number,
-  outagePeople: number,
-  includeDecided: boolean,
-): string {
-  const head = splitHead(queuePeople, queueRows, includeDecided);
-  if (outagePeople === 0) return head;
-  return `${head} · ${outagePeople.toLocaleString("en-US")} waiting on a device fault`;
-}
-
-function splitHead(queuePeople: number, queueRows: number, includeDecided: boolean): string {
-  if (includeDecided) {
-    // "Nothing to show", not "Nothing needs a decision": with the toggle on a
-    // settled person is a row this list WOULD have shown, so an empty queue is
-    // a statement about the list, not about anyone's workload.
-    if (queuePeople === 0) return "Nothing to show";
-    return `${plural(queuePeople, "person", "people")} · ${plural(queueRows, "row", "rows")}`;
-  }
-  if (queuePeople === 0) return "Nothing needs a decision";
-  return `${plural(queuePeople, "person needs", "people need")} a decision · ${plural(queueRows, "row", "rows")}`;
-}
-
 /** A filter's no-filter option. "All consequences" reads as an inclusion
  *  criterion — "only flags that carry a consequence" — which is the opposite. */
 export const TIER_FILTER_ALL_LABEL = "Any consequence";
@@ -482,25 +437,6 @@ export function decidingLabel(flag: FlagOut): string {
   return `${formatFlagLabel(flag.flag_code, parseFlagEvidence(flag.evidence))} · ${flagDayLabel(flag.attendance_date)}`;
 }
 
-export function narrowRangeLabel(days: number): string {
-  return `Last ${plural(days, "day", "days")}`;
-}
-
-/**
- * The capped notice, as a control rather than a lecture.
- *
- * The old copy named two levers ("narrow the dates, or filter by consequence")
- * and offered neither, in the loudest colour on the page, on a queue where
- * capping is structural and therefore never clears. A permanent unactionable
- * warning teaches people to skip that colour.
- */
-export function cappedHeadline(open: number): string {
-  return `Showing the newest ${open.toLocaleString("en-US")} flags`;
-}
-
-export const CAPPED_EXPLAINER =
-  "Older days in this range aren't loaded. Narrow the dates to reach them.";
-
 /**
  * The last row of a capped queue.
  *
@@ -536,25 +472,6 @@ export function showDecidedLabel(count: number): string {
 /** The skeleton rows' accessible name while the queue is loading — Global
  *  Constraint 2 reaches `aria-label` text too, not just visible copy. */
 export const QUEUE_LOADING_LABEL = "Loading flags";
-
-/**
- * Orphan-state summaries for the two counts `get_flag_queue` returns under
- * `orphans`. Both describe a past decision, never an action the toolbar can
- * take — see the design doc's "Orphaning" table (`orphaned_flag_gone`,
- * `orphaned_evidence_changed`).
- */
-export function orphanedFlagGoneSummary(count: number): string {
-  const noun = count === 1 ? "decision" : "decisions";
-  const verb = count === 1 ? "has" : "have";
-  return `${count} ${noun} no longer ${verb} a matching flag — kept for audit, not shown in the queue.`;
-}
-
-export function orphanedEvidenceChangedSummary(count: number): string {
-  const noun = count === 1 ? "flag" : "flags";
-  const pronoun = count === 1 ? "it was" : "they were";
-  const object = count === 1 ? "it" : "them";
-  return `${count} ${noun} changed since ${pronoun} decided — review ${object} again.`;
-}
 
 /** The two outcomes `decide_flags` accepts. Order is the button order. */
 export const OUTCOME_OPTIONS: readonly Outcome[] = ["EXCUSED", "UPHELD"];
@@ -871,11 +788,3 @@ export function deviceAlertHeadline(alert: DeviceAlert): string {
   }
   return `${branch} had no device data on ${when}`;
 }
-
-/**
- * The sentence under the cards. Written to explain the absence, because the
- * intuitive reading of a short queue during an outage is "a quiet day" — the
- * opposite of the truth.
- */
-export const DEVICE_ALERT_EXPLAINER =
-  "No attendance flags were generated for these branches and dates. A short queue here means missing data, not a quiet day.";

@@ -5,8 +5,6 @@ import { formatFlagLabel, formatMissingDuration } from "@/lib/flagLabels";
 import {
   appliedDecisionLabel,
   branchNoDeviceDataHeader,
-  CAPPED_EXPLAINER,
-  cappedHeadline,
   crossReferenceLabel,
   DECIDE_ONE_LABEL,
   DECIDED_TOGGLE_LABEL,
@@ -21,13 +19,10 @@ import {
   groupHeadline,
   groupSubline,
   hiddenMemberLabel,
-  narrowRangeLabel,
   NOTHING_WAITING_TITLE,
   nothingWaitingDetail,
   openCountAria,
   openCountLabel,
-  orphanedEvidenceChangedSummary,
-  orphanedFlagGoneSummary,
   OUTAGE_BAND_LABEL,
   OUTAGE_CEILING_NOTE,
   OUTAGE_EXCUSING_LABEL,
@@ -50,7 +45,6 @@ import {
   priorDecisionLabel,
   queueEndTruncatedNotice,
   queueHeaderDescription,
-  queueSplitDescription,
   QUEUE_LOADING_LABEL,
   REASON_LABELS,
   REASON_OPTIONS,
@@ -408,13 +402,6 @@ test("routineCodeHeader matches the design doc's example wording exactly", () =>
     routineCodeHeader("LATE_START", members),
     "168 one-off late starts, 6–20 min — and nothing else wrong that day",
   );
-});
-
-test("orphan summaries pluralise correctly", () => {
-  assert.match(orphanedFlagGoneSummary(1), /^1 decision /);
-  assert.match(orphanedFlagGoneSummary(3), /^3 decisions /);
-  assert.match(orphanedEvidenceChangedSummary(1), /^1 flag /);
-  assert.match(orphanedEvidenceChangedSummary(4), /^4 flags /);
 });
 
 // Hardcoded for the same reason ALL_REASONS is: derived from the map's own
@@ -914,90 +901,6 @@ test("the band's own accessible names are copy, not markup", () => {
   assert.equal(UNKNOWN_BRANCH_LABEL, "Unknown branch");
   assert.equal(outageBranchCheckboxLabel("DIS Iconic"), "Include DIS Iconic");
   assert.equal(OUTAGE_EXCUSING_LABEL, "Excusing…");
-});
-
-test("the header splits waiting-on-you from waiting-on-a-device, and keeps rows", () => {
-  // `rows` was added in 20c016fc and fixed for tier filters in 38fbea19,
-  // because one row can stand for several people. Dropping it here would
-  // silently undo both.
-  assert.equal(
-    queueSplitDescription(134, 92, 256, false),
-    "134 people need a decision · 92 rows · 256 waiting on a device fault",
-  );
-});
-
-test("the header says nothing about device faults when there are none", () => {
-  assert.equal(queueSplitDescription(37, 21, 0, false), "37 people need a decision · 21 rows");
-});
-
-test("one person left does not read as \"1 need a decision\"", () => {
-  // The most common end state of a session, in the page's primary header.
-  assert.equal(queueSplitDescription(1, 1, 0, false), "1 person needs a decision · 1 row");
-});
-
-test("a queue with nothing waiting still reads as a sentence", () => {
-  assert.equal(queueSplitDescription(0, 0, 0, false), "Nothing needs a decision");
-  assert.equal(
-    queueSplitDescription(0, 0, 256, false),
-    "Nothing needs a decision · 256 waiting on a device fault",
-  );
-});
-
-test("four-figure counts are grouped everywhere, not only in the band", () => {
-  assert.match(queueSplitDescription(1234, 900, 0, false), /1,234 people need/);
-});
-
-// `Decided` is the one control that changes WHO is counted: with it on,
-// `queuePeopleCount(queue)` includes people whose flags are already settled, so
-// "N people need a decision" states something false about every one of them.
-// SHOWING_DECIDED_MESSAGE sits below the header and mitigates that; it does not
-// correct the sentence. These four pin the neutral wording that does.
-test("with decided rows included the header counts without claiming they need a decision", () => {
-  assert.equal(
-    queueSplitDescription(134, 92, 256, true),
-    "134 people · 92 rows · 256 waiting on a device fault",
-  );
-  assert.equal(queueSplitDescription(37, 21, 0, true), "37 people · 21 rows");
-});
-
-test("the neutral head is singular for one person and one row too", () => {
-  assert.equal(queueSplitDescription(1, 1, 0, true), "1 person · 1 row");
-});
-
-test("with decided rows included, an empty queue says nothing is showing", () => {
-  // NOT "Nothing needs a decision": with the toggle on, a settled person is a
-  // row this list would have shown, so the absence is about the list and not
-  // about anyone's workload.
-  assert.equal(queueSplitDescription(0, 0, 0, true), "Nothing to show");
-  assert.equal(
-    queueSplitDescription(0, 0, 256, true),
-    "Nothing to show · 256 waiting on a device fault",
-  );
-});
-
-test("thousands are grouped on the neutral head as well", () => {
-  assert.match(queueSplitDescription(1234, 900, 0, true), /^1,234 people · 900 rows$/);
-});
-
-test("the narrow-range levers name the window they set", () => {
-  assert.equal(narrowRangeLabel(7), "Last 7 days");
-  assert.equal(narrowRangeLabel(3), "Last 3 days");
-  assert.equal(narrowRangeLabel(1), "Last 1 day");
-});
-
-// The capped notice as a control, not the old strip's lecture: it states what
-// is shown and lets the four-figure count read like `openCountLabel`'s own
-// grouping, rather than a bare "5000" that reads as a measured total.
-test("the capped headline reads as a floor, grouped the same way as elsewhere", () => {
-  assert.equal(cappedHeadline(5000), "Showing the newest 5,000 flags");
-  assert.equal(cappedHeadline(42), "Showing the newest 42 flags");
-});
-
-test("the capped explainer names no lever the notice does not itself offer", () => {
-  assert.equal(
-    CAPPED_EXPLAINER,
-    "Older days in this range aren't loaded. Narrow the dates to reach them.",
-  );
 });
 
 test("the empty-queue state names the range it found nothing in", () => {

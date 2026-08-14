@@ -3,6 +3,16 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+function flagPageSource(): string {
+  return readFileSync(resolve(PKG_ROOT, "src/ui/FlagQueuePage.tsx"), "utf8");
+}
+
 import type { PendingDecision } from "@/lib/flagDecisionState";
 import { formatFlagContextDate } from "@/lib/flagDetails";
 import { outageKey } from "@/lib/flagStrip";
@@ -298,7 +308,6 @@ function viewProps(): Omit<FlagQueueViewProps, "counts"> {
   return {
     range: { startDate: "2026-07-21", endDate: "2026-08-03" },
     onRangeChange: () => {},
-    onNarrowRange: () => {},
     tier: null,
     onTierChange: () => {},
     isLoading: false,
@@ -307,7 +316,6 @@ function viewProps(): Omit<FlagQueueViewProps, "counts"> {
     bulkFailure: null,
     outages: [],
     queuePeople: 0,
-    queueRows: 0,
     excludedBranches: new Set<string>(),
     onToggleBranch: () => {},
     onExcuseOutages: () => {},
@@ -945,81 +953,35 @@ test("the toolbar reports the decided count, and nothing else", () => {
 // Closeout Alert. When a device reports deferred_offline/closure_failed the
 // fallback path skips those employees and generates nothing, so a queue built
 // only from flag rows shows an empty, reassuring screen during a real outage.
-test("device alert cards render from alerts, with no flags present", () => {
+test("a flagless closeout alert lights the chip rather than the page column", () => {
   const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
-      isLoading={false}
-      error={null}
-      onRetry={() => {}}
-      bulkFailure={null}
-      alerts={[
-        { branch: "Phnom Penh HQ", local_date: "2026-08-03", status: "deferred_offline" },
-      ]}
-      list={<div />}
-      panel={<div />}
-    />
+    <MemoryRouter>
+      <FlagQueueView
+        {...viewProps()}
+        counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
+        isLoading={false}
+        error={null}
+        onRetry={() => {}}
+        bulkFailure={null}
+        alerts={[
+          { branch: "Phnom Penh HQ", local_date: "2026-08-03", status: "deferred_offline" },
+        ]}
+      />
+    </MemoryRouter>,
   );
 
-  assert.match(html, /Phnom Penh HQ/);
-  assert.match(html, /3 Aug/);
-  // Polite, not assertive: an outage is a persistent condition, not a failed
-  // request. role="alert" would interrupt a screen reader mid-sentence.
-  assert.match(html, /role="status"/);
-  assert.doesNotMatch(html, /role="alert"/);
+  assert.match(html, /1 device closeout pending/, "the chip names it");
+  assert.doesNotMatch(html, /Phnom Penh HQ/, "and nothing takes a row above the queue for it");
 });
 
-// Constraint 9: no device↔branch registry exists, so a serial number in the copy
-// would be a claim the data cannot support. The engine's last_error text can
-// contain one, which is exactly why it is not rendered.
-test("device alert cards never render a device serial", () => {
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
-      isLoading={false}
-      error={null}
-      onRetry={() => {}}
-      bulkFailure={null}
-      alerts={[
-        {
-          branch: "Phnom Penh HQ",
-          local_date: "2026-08-03",
-          status: "closure_failed",
-          last_error: "device ZK-A4-014 timed out after 3 retries",
-        },
-      ]}
-      list={<div />}
-      panel={<div />}
-    />
-  );
-
-  assert.doesNotMatch(html, /ZK-A4-014/);
-  assert.match(html, /Phnom Penh HQ/);
-});
-
-// Informational only. A decide action here would be a lie — there are no flags
-// behind these rows to decide on.
-test("device alert cards carry no decide action", () => {
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 0, needs_re_review: 0, open_capped: false, decided: 0, people: 0, rows: 0 }}
-      isLoading={false}
-      error={null}
-      onRetry={() => {}}
-      bulkFailure={null}
-      alerts={[
-        { branch: "Phnom Penh HQ", local_date: "2026-08-03", status: "deferred_offline" },
-      ]}
-      list={<div />}
-      panel={<div />}
-    />
-  );
-
-  assert.doesNotMatch(html, />Excuse</);
-  assert.doesNotMatch(html, />Uphold</);
+test("the closeout detail can never render a device serial", () => {
+  // Constraint 9: no device↔branch registry exists, so a serial in the copy
+  // would be a claim the data cannot support — and the engine's `last_error`
+  // is exactly where one would come from. The popover body is a portal that
+  // server-renders to null, so the guarantee is asserted against the source.
+  const src = flagPageSource();
+  assert.match(src, /\{deviceAlertHeadline\(alert\)\}/, "the headline is all that is rendered");
+  assert.doesNotMatch(src, /last_error/, "never the engine's own text");
 });
 
 const DRAFT: PendingDecision = { outcome: "EXCUSED", reason: "DEVICE_OR_DATA_FAULT", note: "" };
@@ -1190,104 +1152,6 @@ test("no alert cards render when the array is empty", () => {
   assert.doesNotMatch(html, /went offline/i);
 });
 
-// The identity scheme trades durability for precision: correcting a punch under
-// a MISSING_TIME or ATTENDANCE_ISSUE flag changes its identity, so the decision
-// attached to it orphans. The design doc parks that trade with "revisit if
-// orphan rates in practice turn out to be high" — a plan that only works if the
-// rate is on screen. Before this, get_flag_queue computed both counts and
-// nothing rendered them.
-test("orphaned decisions are reported, so the rate is visible rather than inferred", () => {
-  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
-
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={counts}
-      orphans={{ orphaned_flag_gone: 3, orphaned_evidence_changed: 1 }}
-      includeDecided={false}
-      onToggleDecided={() => {}}
-      isLoading={false}
-      error={null}
-      onRetry={() => {}}
-      bulkFailure={null}
-      list={<div />}
-      panel={<div />}
-    />
-  );
-
-  assert.match(html, /3 decisions no longer have a matching flag/);
-  assert.match(html, /1 flag changed since it was decided/);
-});
-
-// A healthy queue must stay quiet: "0 decisions no longer have a matching flag"
-// is noise on the overwhelmingly common day, and each line is independent —
-// one count being zero must not suppress the other.
-test("an orphan line appears only when its own count is non-zero", () => {
-  const counts = { open: 12, needs_re_review: 5, open_capped: false, decided: 88, people: 40, rows: 12 };
-  const render = (orphans: { orphaned_flag_gone: number; orphaned_evidence_changed: number }) =>
-    renderToStaticMarkup(
-      <FlagQueueView
-        {...viewProps()}
-        counts={counts}
-        orphans={orphans}
-        includeDecided={false}
-        onToggleDecided={() => {}}
-        isLoading={false}
-        error={null}
-        onRetry={() => {}}
-        bulkFailure={null}
-        list={<div />}
-        panel={<div />}
-      />
-    );
-
-  const none = render({ orphaned_flag_gone: 0, orphaned_evidence_changed: 0 });
-  assert.doesNotMatch(none, /no longer have a matching flag|changed since/);
-
-  const goneOnly = render({ orphaned_flag_gone: 2, orphaned_evidence_changed: 0 });
-  assert.match(goneOnly, /2 decisions no longer have a matching flag/);
-  assert.doesNotMatch(goneOnly, /changed since/, "the zero count stays silent");
-
-  const changedOnly = render({ orphaned_flag_gone: 0, orphaned_evidence_changed: 4 });
-  assert.match(changedOnly, /4 flags changed since they were decided/);
-  assert.doesNotMatch(changedOnly, /no longer have a matching flag/);
-});
-
-// Same rule the counts already follow: the hook zero-fills before the first
-// payload, so a load failure must not render an orphan line built from zeros.
-test("orphan lines are withheld while loading and on failure", () => {
-  const orphans = { orphaned_flag_gone: 3, orphaned_evidence_changed: 2 };
-
-  const loading = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={null}
-      isLoading
-      error={null}
-      onRetry={() => {}}
-      bulkFailure={null}
-      list={<div />}
-      panel={<div />}
-    />
-  );
-  assert.doesNotMatch(loading, /no longer have a matching flag|changed since/);
-
-  const failed = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={null}
-      error={new Error("boom")}
-      isLoading={false}
-      onRetry={() => {}}
-      bulkFailure={null}
-      list={<div />}
-      panel={<div />}
-    />
-  );
-  assert.doesNotMatch(failed, /no longer have a matching flag|changed since/);
-  void orphans;
-});
-
 // The safeguard that makes the per-flag invariant safe in practice. Ada is in
 // the repeatedly-late group AND in a row of her own for a three-hour gap;
 // excusing the group, believing she is dealt with, and never seeing the gap is
@@ -1370,47 +1234,6 @@ test("the same person in two entries produces two distinct row keys", () => {
   assert.equal(member.attendance_date, loner.attendance_date, "…on one headline day");
 
   assert.notEqual(entryKey(loner), entryKey({ kind: "person", ...member }));
-});
-
-test("the header states people and rows — the queue's own, not the payload's", () => {
-  // `counts` deliberately disagrees with the queue props here. Both payload
-  // numbers still include the outage entries the band now renders, so reading
-  // either one would put the band's population back into the sentence that says
-  // who is waiting on HR — the exact overcount the band exists to end.
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 9, needs_re_review: 0, open_capped: false, decided: 0, people: 296, rows: 147 }}
-      queuePeople={40}
-      queueRows={12}
-    />
-  );
-  // Not "40 people with something open": before nesting, the header counted
-  // employees while the list showed one row per person-day, so the two numbers
-  // described different things and disagreed on screen.
-  assert.match(html, /40 people need a decision · 12 rows/);
-  assert.doesNotMatch(html, /296/, "counts.people is not the header's people");
-  assert.doesNotMatch(html, /147/, "counts.rows is not the header's rows");
-});
-
-test("the header stops claiming a decision is needed once decided rows are showing", () => {
-  // The toggle is the one control that changes WHO `queuePeople` counts:
-  // `queuePeopleCount(queue)` counts settled people too once they are in
-  // `entries`. The wording has to follow the toggle, and this is the assertion
-  // that the toggle is actually WIRED to it — flagQueueLabels.test.ts pins the
-  // two strings, but a caller passing a constant `false` would satisfy that and
-  // still ship the false sentence.
-  const shared = {
-    counts: { open: 9, needs_re_review: 0, open_capped: false, decided: 88, people: 296, rows: 147 },
-    queuePeople: 40,
-    queueRows: 12,
-  };
-  const off = renderToStaticMarkup(<FlagQueueView {...viewProps()} {...shared} includeDecided={false} />);
-  const on = renderToStaticMarkup(<FlagQueueView {...viewProps()} {...shared} includeDecided />);
-
-  assert.match(off, /40 people need a decision · 12 rows/);
-  assert.match(on, /40 people · 12 rows/);
-  assert.doesNotMatch(on, /need a decision/, "a settled person does not need one");
 });
 
 test("a flag card is dated by its own flag, not by the person's headline day", () => {
@@ -1823,7 +1646,7 @@ function outageBranchEntry(): GroupEntry {
   };
 }
 
-test("an outage group is rendered as the band, not as a queue row", () => {
+test("an outage group reaches the chip, not a queue row", () => {
   const outageGroup = outageBranchEntry();
   const person = missingTimePerson();
 
@@ -1833,8 +1656,7 @@ test("an outage group is rendered as the band, not as a queue row", () => {
   assert.deepEqual(queue, [person]);
 
   // MemoryRouter: the outage panel's ceiling note renders a <Link>, which
-  // throws outside a router. It used to sit behind a collapsed disclosure, so
-  // these renders never reached it.
+  // throws outside a router.
   const html = renderToStaticMarkup(
     <MemoryRouter>
       <FlagQueueView
@@ -1842,7 +1664,6 @@ test("an outage group is rendered as the band, not as a queue row", () => {
         counts={{ open: 5, needs_re_review: 0, decided: 0, people: 2, rows: 2, open_capped: false }}
         outages={outages}
         queuePeople={1}
-        queueRows={1}
         excludedBranches={new Set()}
         onToggleBranch={() => {}}
         onExcuseOutages={() => {}}
@@ -1851,7 +1672,9 @@ test("an outage group is rendered as the band, not as a queue row", () => {
     </MemoryRouter>,
   );
 
-  assert.match(html, /had no device data/, "the band states the outage");
+  // The chip states it; the branch detail is popover content, which is a Radix
+  // portal and server-renders to null. e2e/notice-arrangement.spec.ts opens it.
+  assert.match(html, /1 branch offline/, "the chip states the outage");
   assert.equal(
     rowButtons(html).filter((row) => /had no device data/.test(row)).length,
     0,
@@ -1859,7 +1682,7 @@ test("an outage group is rendered as the band, not as a queue row", () => {
   );
 });
 
-test("a failed load withholds the band, not just the list", () => {
+test("a failed load withholds the chip, not just the list", () => {
   // react-query keeps the last good `data` when a refetch fails, so `outages`
   // can outlive the payload it came from. Every other stale thing on this page
   // is merely misleading; this one carries the largest write the page can make,
@@ -1873,7 +1696,7 @@ test("a failed load withholds the band, not just the list", () => {
       <FlagQueueView {...viewProps()} counts={null} error={new Error("Network request failed")} outages={outages} />
     </MemoryRouter>
   );
-  assert.doesNotMatch(failed, /had no device data/, "no band beside a failure");
+  assert.doesNotMatch(failed, /branch offline/, "no chip beside a failure");
   assert.doesNotMatch(failed, /Excuse/, "and nothing to press");
 
   const loading = renderToStaticMarkup(
@@ -1881,7 +1704,7 @@ test("a failed load withholds the band, not just the list", () => {
       <FlagQueueView {...viewProps()} counts={null} isLoading outages={outages} />
     </MemoryRouter>
   );
-  assert.doesNotMatch(loading, /had no device data/, "nor beside a spinner");
+  assert.doesNotMatch(loading, /branch offline/, "nor beside a spinner");
 
   // …and it is back the moment the load succeeds, so this is a guard and not a
   // way of losing the band.
@@ -1894,58 +1717,7 @@ test("a failed load withholds the band, not just the list", () => {
       />
     </MemoryRouter>
   );
-  assert.match(loaded, /had no device data/);
-});
-
-test("the header separates people waiting on HR from people waiting on a device", () => {
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      counts={{ open: 9, needs_re_review: 0, decided: 0, people: 5, rows: 2, open_capped: false }}
-      outages={[]}
-      queuePeople={5}
-      queueRows={2}
-      excludedBranches={new Set()}
-      onToggleBranch={() => {}}
-      onExcuseOutages={() => {}}
-    />,
-  );
-  assert.match(html, /5 people need a decision/);
-  assert.ok(!/waiting on a device fault/.test(html), "no outages, no device line");
-});
-
-test("the header's device line counts everyone the outage touched, not just the write", () => {
-  // Three rounds of review settled that this number is `queuePeopleCount`, and
-  // no test would have failed if it were swapped back to
-  // `outageWrite(...).coveredEmployeeCount`. The difference only shows on a
-  // fixture where some of the outage's flags are already decided — which is the
-  // ordinary state of an outage part-way through being cleared, and the state
-  // this line goes wrong in: covered shrinks as decisions land and reaches zero
-  // once the excuse is complete, so the header would announce that nobody is
-  // waiting on a device fault while the band directly above it still names the
-  // branch.
-  const outages = partitionQueue([outageBranchEntry()]).outages;
-  assert.equal(queuePeopleCount(outages), 2, "two people are behind this outage");
-  assert.equal(
-    outageWrite(outages, new Set<string>()).coveredEmployeeCount,
-    1,
-    "…but only one of them still has anything to write",
-  );
-
-  const html = renderToStaticMarkup(
-    <MemoryRouter>
-      <FlagQueueView
-        {...viewProps()}
-        counts={{ open: 9, needs_re_review: 0, decided: 0, people: 7, rows: 3, open_capped: false }}
-        outages={outages}
-        queuePeople={5}
-        queueRows={2}
-      />
-    </MemoryRouter>
-  );
-
-  assert.match(html, /5 people need a decision · 2 rows · 2 waiting on a device fault/);
-  assert.doesNotMatch(html, /1 waiting on a device fault/, "not the write's covered count");
+  assert.match(loaded, /1 branch offline/);
 });
 
 test("a confirmed re-issue is the same call plus confirm — including its source", () => {
@@ -2033,30 +1805,14 @@ test("the date controls carry accessible names without spending a row on labels"
   assert.ok(!/<label[^>]*>From</.test(html), "no visible label row");
 });
 
-// The old strip named two levers ("narrow the dates, or filter by consequence")
-// and offered neither. This one has to actually offer them.
-test("the capped notice offers narrower ranges instead of naming levers", () => {
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      truncated
-      counts={{ open: 5000, needs_re_review: 0, decided: 0, people: 389, rows: 147, open_capped: true }}
-    />,
+test("the cap the page reports is the one the query actually loaded", () => {
+  // FlagQueueList's own tests pin what the terminal row says; this pins that
+  // the page feeds it, and feeds it null when the query was not capped. The
+  // list is mounted in the container, which renderToStaticMarkup cannot reach.
+  assert.match(
+    flagPageSource(),
+    /truncatedTo=\{truncated \? \(counts\?\.open \?\? null\) : null\}/,
   );
-  assert.match(html, /Showing the newest 5,000 flags/);
-  assert.match(html, /Last 7 days/);
-  assert.match(html, /Last 3 days/);
-});
-
-test("an uncapped queue shows no capped notice at all", () => {
-  const html = renderToStaticMarkup(
-    <FlagQueueView
-      {...viewProps()}
-      truncated={false}
-      counts={{ open: 12, needs_re_review: 0, decided: 0, people: 4, rows: 4, open_capped: false }}
-    />,
-  );
-  assert.ok(!/Showing the newest/.test(html));
 });
 
 test("loading renders skeleton rows, so the layout does not jump when data lands", () => {
@@ -2402,4 +2158,47 @@ test("the notice is not counted as an item of the list", () => {
   assert.match(noticeItem, /End of the newest/, "the last item is the notice");
   assert.match(noticeItem, /^<li role="presentation"/);
   assert.doesNotMatch(noticeItem, /aria-setsize|aria-posinset/);
+});
+
+test("the page header is gone, and the heading is not", () => {
+  // sr-only is absolutely positioned and measures zero pixels, so the space is
+  // still reclaimed — but a nav tab is not a heading. chromeMigration.test.tsx
+  // requires every routed page to answer "where am I".
+  const src = flagPageSource();
+  assert.doesNotMatch(src, /PageHeader/);
+  assert.match(src, /<h1 className="sr-only">Flags<\/h1>/);
+});
+
+test("the notice stack is gone from the source, not merely hidden", () => {
+  const src = flagPageSource();
+  assert.doesNotMatch(src, /orphan/i, "the orphan counts leave the page entirely");
+  assert.doesNotMatch(src, /CAPPED_EXPLAINER|cappedHeadline/, "the cap lives at the end of the list now");
+  assert.doesNotMatch(src, /narrowRangeLabel|onNarrowRange/, "the date pickers are the narrow control");
+  assert.doesNotMatch(src, /DEVICE_ALERT_EXPLAINER/);
+  assert.doesNotMatch(src, /queueSplitDescription/);
+});
+
+test("the toolbar's title-protecting clamp goes with the title", () => {
+  // max-w-[calc(100vw-16rem)] existed for one reason: to stop the controls
+  // squeezing the PageHeader title to zero width. With no title there is
+  // nothing to protect, and the clamp only costs the toolbar room.
+  assert.doesNotMatch(flagPageSource(), /max-w-\[calc\(100vw-16rem\)\]/);
+});
+
+test("the chip is the only thing standing between the toolbar and the queue", () => {
+  const src = flagPageSource();
+  assert.match(src, /<DataHealthButton/);
+  assert.match(src, /flagQueueHealth\(/);
+  assert.match(src, /<OutageExcusePanel/, "the outage panel is the popover body");
+  // The band no longer sits in the page's own column.
+  assert.doesNotMatch(src, /<OutageBand/);
+});
+
+test("failures stay strips, because they are not data health", () => {
+  // writeFailure and bulkFailure are transient consequences of something the
+  // user just did. Behind a chip nobody has a reason to open, a failed write
+  // is a silent one.
+  const src = flagPageSource();
+  assert.match(src, /props\.writeFailure \? \(/);
+  assert.match(src, /props\.bulkFailure \? \(/);
 });
