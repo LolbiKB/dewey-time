@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Command, CommandGroup, CommandList } from "@/components/ui/command";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { attendancePickerTail, schedulePickerTail } from "@/lib/employeeCard";
 import type { CalendarEmployee } from "@/types/calendar";
+import type { TailFact } from "@/ui/EmployeeIdentity";
 
-import { EmployeeOption, EmployeePicker } from "./EmployeePicker";
+import {
+  ClockBadge,
+  EmployeeOption,
+  EmployeePicker,
+  type EmployeePickerProps,
+} from "./EmployeePicker";
 import { ScheduleEmployeeOption, ScheduleEmployeePicker } from "./ScheduleEmployeePicker";
 
 // list_calendar_employees sorts employees with shift coverage first, so clock-based
@@ -18,7 +25,13 @@ const ADA: CalendarEmployee = { id: "HR-EMP-00001", label: "Ada Lovelace" };
 // all, so both option rows are rendered through this harness rather than bare.
 function renderRow(
   employee: CalendarEmployee,
-  opts?: { selected?: boolean; onSelect?: () => void },
+  opts?: {
+    selected?: boolean;
+    disabled?: boolean;
+    tail?: (e: CalendarEmployee) => TailFact[];
+    badge?: ReactNode;
+    onSelect?: () => void;
+  },
 ): string {
   return renderToStaticMarkup(
     <Command>
@@ -27,11 +40,30 @@ function renderRow(
           <EmployeeOption
             employee={employee}
             selected={opts?.selected ?? false}
+            disabled={opts?.disabled}
+            tail={opts?.tail ?? attendancePickerTail}
+            badge={opts?.badge}
             onSelect={opts?.onSelect ?? (() => {})}
           />
         </CommandGroup>
       </CommandList>
     </Command>,
+  );
+}
+
+// Destructure before spreading. A trailing `{...overrides}` would re-apply
+// `tail: undefined` for any caller that omitted it, overriding the default and
+// crashing on `props.tail(selected)`.
+function renderTrigger(overrides: Partial<EmployeePickerProps> = {}): string {
+  const { employees, value, onChange, tail, ...rest } = overrides;
+  return renderToStaticMarkup(
+    <EmployeePicker
+      employees={employees ?? []}
+      value={value ?? null}
+      onChange={onChange ?? (() => {})}
+      tail={tail ?? attendancePickerTail}
+      {...rest}
+    />,
   );
 }
 
@@ -57,17 +89,79 @@ function renderScheduleRow(
   );
 }
 
-test("a clock-based employee's picker row carries a Clock chip", () => {
-  assert.match(renderRow({ ...ADA, is_clock_based: true }), />Clock</);
-});
-
-test("a scheduled employee's picker row has no Clock chip", () => {
-  assert.doesNotMatch(renderRow({ ...ADA, is_clock_based: false }), />Clock</);
+// Replaces three separate Clock-chip tests. The chip is now supplied by the
+// caller rather than owned by the picker, so presence, absence and tone are
+// one question about the same prop.
+test("the Clock badge is neutral and appears only when the caller asks", () => {
+  const withBadge = renderRow(ADA, { badge: <ClockBadge /> });
+  assert.match(withBadge, />Clock</);
+  assert.doesNotMatch(withBadge, /destructive/);
   assert.doesNotMatch(renderRow(ADA), />Clock</);
 });
 
-test("the picker Clock chip is neutral, never destructive", () => {
-  assert.doesNotMatch(renderRow({ ...ADA, is_clock_based: true }), /destructive/);
+test("the option row shows the branch, prefix stripped", () => {
+  const html = renderRow({
+    id: "EMP-0088",
+    label: "EMP-0088 · Sophea Chan",
+    employee_name: "Sophea Chan",
+    branch: "BRANCH-Iconic",
+    department: "Retail",
+  });
+  assert.match(html, />Iconic</, "the formatted branch label reaches the row");
+  assert.doesNotMatch(html, /BRANCH-Iconic</, "the raw value is for search, not display");
+  assert.ok(html.indexOf("Iconic") < html.indexOf("Retail"), "branch leads department");
+});
+
+test("an employee with no branch gets no branch fact at all", () => {
+  const html = renderRow({ id: "EMP-9", label: "EMP-9 · Bo Lin", department: "Ops" });
+  assert.doesNotMatch(html, /No branch/);
+});
+
+test("a disabled option cannot be chosen", () => {
+  let chosen = false;
+  const html = renderRow(
+    { id: "EMP-5", label: "EMP-5 · Casey Ward", employment_type: "Casual" },
+    {
+      disabled: true,
+      tail: schedulePickerTail,
+      onSelect: () => {
+        chosen = true;
+      },
+    },
+  );
+  assert.match(html, /data-disabled="true"/);
+  assert.equal(chosen, false);
+});
+
+test("each size token maps to its width class and nothing else", () => {
+  // Width only. A token that also changed height or type would invalidate
+  // EmployeeIdentity's thresholds, which are measured at 14px semibold.
+  assert.match(renderTrigger({ size: "sm" }), /w-60/);
+  assert.match(renderTrigger({ size: "md" }), /w-88/);
+  assert.match(renderTrigger({ size: "lg" }), /max-w-lg/);
+  for (const size of ["sm", "md", "lg"] as const) {
+    const html = renderTrigger({ size });
+    assert.match(html, /min-h-14/, `${size} must use the shared minimum height`);
+    assert.doesNotMatch(html, /text-base/, `${size} must not scale the name type`);
+  }
+});
+
+test("the trigger's height is a minimum, never a fixed height", () => {
+  // A hard h-14 clips a Khmer descender: line one's line box grows with the
+  // Khmer face's ascent and descent, and `truncate` already sets
+  // overflow:hidden on it.
+  const html = renderTrigger({ size: "lg" });
+  assert.match(html, /min-h-14/);
+  // Lookbehind for `min-`, because `\bh-14\b` matches INSIDE `min-h-14`: the
+  // hyphen is a non-word character, so it opens a word boundary. Without it
+  // this assertion fails against correct code, which is how it was caught.
+  assert.doesNotMatch(html, /(?<!min-)\bh-14\b/);
+});
+
+test("read-only renders no combobox at all", () => {
+  const html = renderTrigger({ readOnly: true });
+  assert.doesNotMatch(html, /role="combobox"/);
+  assert.match(html, /Choose an employee/);
 });
 
 test("the picker option shows the Khmer name and the employee id", () => {
@@ -114,32 +208,16 @@ test("an ineligible employment type carries the warning tone on its own fact spa
 // `employeeId` slot `props.value ?? ""` with nothing selected left that line
 // blank where employeePickerSubtitle used to prompt "Choose an employee".
 test("with nothing selected, the picker prompts rather than going blank", () => {
-  const trigger = renderToStaticMarkup(
-    <TooltipProvider>
-      <EmployeePicker
-        employees={[]}
-        value={null}
-        onChange={() => {}}
-        weekDates={[]}
-        daysByDate={new Map()}
-        weekAssignedShiftDays={0}
-      />
-    </TooltipProvider>,
+  assert.match(
+    renderTrigger(),
+    /Choose an employee/,
+    "the interactive trigger prompts, not blank",
   );
-  assert.match(trigger, /Choose an employee/, "the interactive trigger prompts, not blank");
-
-  const readOnly = renderToStaticMarkup(
-    <EmployeePicker
-      employees={[]}
-      value={null}
-      onChange={() => {}}
-      weekDates={[]}
-      daysByDate={new Map()}
-      weekAssignedShiftDays={0}
-      readOnly
-    />,
+  assert.match(
+    renderTrigger({ readOnly: true }),
+    /Choose an employee/,
+    "the read-only branch prompts, not blank",
   );
-  assert.match(readOnly, /Choose an employee/, "the read-only branch prompts, not blank");
 });
 
 // Same regression, the sibling picker: the prompt has to live in the always-
