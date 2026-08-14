@@ -501,6 +501,28 @@ export function cappedHeadline(open: number): string {
 export const CAPPED_EXPLAINER =
   "Older days in this range aren't loaded. Narrow the dates to reach them.";
 
+/**
+ * The last row of a capped queue.
+ *
+ * Replaces the amber strip that used to sit above the list. Same fact, and the
+ * same lever named in words — but it arrives when someone has worked to the
+ * bottom and is about to conclude the range is clear, rather than before they
+ * have any use for it. Capping is structural at production volume and never
+ * clears, so a permanent banner was a permanent lecture.
+ */
+export function queueEndTruncatedNotice(
+  shown: number,
+  startDate: string,
+  endDate: string,
+): string {
+  const flags = shown === 1 ? "flag" : "flags";
+  return (
+    `End of the newest ${shown.toLocaleString("en-US")} ${flags}. ` +
+    `Older days in ${dateSpanLabel([startDate, endDate])} aren't loaded — ` +
+    `narrow the dates to reach them.`
+  );
+}
+
 export const NOTHING_WAITING_TITLE = "Nothing waiting";
 
 export function nothingWaitingDetail(startDate: string, endDate: string): string {

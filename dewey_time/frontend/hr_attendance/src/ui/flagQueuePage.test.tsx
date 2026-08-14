@@ -2335,3 +2335,71 @@ test("the last undecided flag keeps its one-click repeat", () => {
   // same function, so this assertion alone could not tell them apart.
   assert.doesNotMatch(html, /Apply to remaining/);
 });
+
+test("a capped list says so at its end, where you have just run out of rows", () => {
+  // Not above the list. A line reading "newest 3,445" at the top is a fact
+  // read before there is any use for it; at the bottom it arrives exactly when
+  // someone has worked to the end and is about to conclude the period is
+  // clear, which is the only moment it changes what they do.
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[missingTimePerson(), repeatPerson()]}
+      {...listProps()}
+      range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
+      truncatedTo={3445}
+    />,
+  );
+  assert.match(html, /End of the newest 3,445 flags/);
+  assert.match(html, /4 Aug – 14 Aug/);
+  assert.match(html, /narrow the dates to reach them/);
+});
+
+test("the notice is the LAST thing in the list, not the first", () => {
+  // Position is the entire point of this change. A test that only checks the
+  // text is present would pass with it rendered above every row.
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[missingTimePerson(), repeatPerson()]}
+      {...listProps()}
+      range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
+      truncatedTo={3445}
+    />,
+  );
+  const notice = html.indexOf("End of the newest");
+  const lastRowEnd = html.lastIndexOf("</button>");
+  assert.ok(notice > 0, "expected the notice to render");
+  assert.ok(notice > lastRowEnd, "the notice must follow the final row");
+});
+
+test("an uncapped list ends without a word about it", () => {
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[missingTimePerson(), repeatPerson()]}
+      {...listProps()}
+      range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
+    />,
+  );
+  assert.doesNotMatch(html, /End of the newest/);
+});
+
+test("the notice is not counted as an item of the list", () => {
+  // Every selectable row carries aria-setsize/aria-posinset. ARIA wants that
+  // metadata all-or-none across a set, so a bare listitem here would be
+  // counted by assistive tech while the authored setsize said otherwise —
+  // the same reason the "show as group" caption leaves the set.
+  const html = renderToStaticMarkup(
+    <FlagQueueList
+      entries={[missingTimePerson(), repeatPerson()]}
+      {...listProps()}
+      range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
+      truncatedTo={3445}
+    />,
+  );
+  // Sliced from the LAST <li, which is the notice's own — an offset window
+  // from the text lands inside the warning icon's SVG and would assert about
+  // whichever row happened to precede it.
+  const noticeItem = html.slice(html.lastIndexOf("<li"));
+  assert.match(noticeItem, /End of the newest/, "the last item is the notice");
+  assert.match(noticeItem, /^<li role="presentation"/);
+  assert.doesNotMatch(noticeItem, /aria-setsize|aria-posinset/);
+});

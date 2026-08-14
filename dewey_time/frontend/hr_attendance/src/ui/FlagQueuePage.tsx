@@ -767,6 +767,7 @@ export function FlagQueuePage() {
             onCollapseGroup={handleCollapseGroup}
             focusKey={focusKey}
             onFocusHandled={() => setFocusKey(null)}
+            truncatedTo={truncated ? (counts?.open ?? null) : null}
           />
         }
         panel={

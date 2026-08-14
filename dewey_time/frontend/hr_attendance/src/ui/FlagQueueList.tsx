@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { TriangleAlertIcon } from "lucide-react";
 
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,7 @@ import {
   personDayLabel,
   personHeadline,
   personSubline,
+  queueEndTruncatedNotice,
   stripAriaLabel,
   tierLabel,
 } from "@/lib/flagQueueLabels";
@@ -59,6 +61,11 @@ export type FlagQueueListProps = {
   focusKey?: string | null;
   /** Cleared by the parent once the focus has been taken. */
   onFocusHandled?: () => void;
+  /**
+   * The number of flags actually loaded, when the query hit its cap — null or
+   * absent when it did not. Renders the end-of-list notice.
+   */
+  truncatedTo?: number | null;
 };
 
 export function FlagQueueList(props: FlagQueueListProps) {
@@ -308,6 +315,28 @@ export function FlagQueueList(props: FlagQueueListProps) {
           </li>
         );
       })}
+      {props.truncatedTo != null ? (
+        // role="presentation" for the same reason the "show as group" caption
+        // carries it: every selectable row authors aria-setsize/aria-posinset,
+        // and ARIA wants that metadata all-or-none across a set. A bare
+        // listitem here would be counted by assistive tech while the authored
+        // setsize said otherwise.
+        <li role="presentation">
+          <div className="mt-1 flex items-start gap-2 border-t border-dashed border-border px-2.5 pt-3 text-xs text-muted-foreground">
+            <TriangleAlertIcon
+              className="mt-0.5 size-3.5 shrink-0 text-amber-600"
+              aria-hidden="true"
+            />
+            <span>
+              {queueEndTruncatedNotice(
+                props.truncatedTo,
+                props.range.startDate,
+                props.range.endDate,
+              )}
+            </span>
+          </div>
+        </li>
+      ) : null}
     </ul>
   );
 }

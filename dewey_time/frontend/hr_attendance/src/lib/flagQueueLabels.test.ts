@@ -48,6 +48,7 @@ import {
   personHeadline,
   personSubline,
   priorDecisionLabel,
+  queueEndTruncatedNotice,
   queueHeaderDescription,
   queueSplitDescription,
   QUEUE_LOADING_LABEL,
@@ -1084,4 +1085,15 @@ test("every branch-row string is pinned, not just the ones a component happens t
 
 test("an empty date span leaves no dangling separator", () => {
   assert.match(outageBandSubline([], 5), /^5 flags · /);
+});
+
+test("the end-of-list notice names the count, the range and the lever", () => {
+  assert.equal(
+    queueEndTruncatedNotice(3445, "2026-08-04", "2026-08-14"),
+    "End of the newest 3,445 flags. Older days in 4 Aug – 14 Aug aren't loaded — narrow the dates to reach them.",
+  );
+});
+
+test("one flag is one flag", () => {
+  assert.match(queueEndTruncatedNotice(1, "2026-08-04", "2026-08-14"), /newest 1 flag\./);
 });
