@@ -48,6 +48,7 @@ import {
   SchedulePreviewTrigger,
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
+import { IS_DEV_BUILD } from "@/lib/devBuild";
 import { notifySuccess } from "@/lib/toast";
 import {
   summarizeReconcile,
@@ -158,9 +159,8 @@ export function WeeklySchedulePage() {
   const { apply, applying, status, clearStatus } = useApplyWeeklySchedule();
   const { templates: dynamicTemplates, isLoading: templatesLoading } = useWeeklyScheduleTemplates(24);
 
-  const isEditing = (context?.enabled_ssa_count ?? 0) > 0;
+  const hasLiveSchedule = (context?.enabled_ssa_count ?? 0) > 0;
   const scheduleReadOnly = false;
-  const previewOnly = false;
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isScheduleLoading = contextLoading && !!scheduleEmployeeId;
 
@@ -278,7 +278,8 @@ export function WeeklySchedulePage() {
       // for the *same* employee (new week_pattern/enabled_ssa_count/defaults)
       // doesn't change that string, so it wouldn't otherwise re-fire, leaving
       // stale pre-save values in the form (e.g. effectiveFrom falling below
-      // the "Effective from" min once isEditing flips true on this refetch).
+      // the "Effective from" min once hasLiveSchedule flips true on this
+      // refetch).
       await reseedFormFromServer();
 
       return true;
@@ -352,11 +353,6 @@ export function WeeklySchedulePage() {
     setShiftBlocks(blocks);
   }
 
-  // The editing notice used to be PageHeader.description. The header is gone;
-  // it now lives in the Shift blocks CardDescription below, which already
-  // switches between read-only and editable copy.
-  const isEditingNotice = isEditing && Boolean(scheduleEmployeeId) && !ineligibleMessage;
-
   return (
     <>
       <Page>
@@ -374,40 +370,53 @@ export function WeeklySchedulePage() {
             heading list, and a route with none has no answer to "where am I". */}
         <h1 className="sr-only">Weekly Schedule</h1>
 
-        {/* The picker gets its own row rather than sitting beside a title. It
-            is the page's subject selector — everything below operates on
-            whatever it holds — and at `lg` it is wide enough to show the Khmer
-            name, which the old header-actions slot never was: it was pinned at
+        {/* The picker leads the page rather than sitting beside a title. It is
+            the page's subject selector — everything below operates on whatever
+            it holds — and at `lg` it is wide enough to show the Khmer name,
+            which the old header-actions slot never was: it was pinned at
             160px, where EmployeeIdentity's 200px Khmer threshold can never be
-            reached. */}
+            reached. `lg` caps at 512px, which leaves the row's right-hand side
+            free for the page's actions at desktop widths. */}
         <div className="flex flex-col gap-2">
-          <EmployeePicker
-            size="lg"
-            employees={employees}
-            value={employee}
-            onChange={selectEmployee}
-            isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
-            tail={schedulePickerTail}
-            isDisabled={(candidate) => !isWeeklyScheduleEligible(candidate.employment_type)}
-          />
-
-          {/* 2-column grid on mobile, a wrapping row from sm: up. */}
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-            <SpreadsheetImportTrigger
-              onClick={() => navigate("/hr-schedule/import")}
-              className="w-full sm:w-auto"
+          {/* Import rides in the picker's row. In production it was the only
+              control in the row below — all three Clear* dialogs are dev-only
+              and render null — so that row cost a full band of vertical space
+              for one button. */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+            <EmployeePicker
+              size="lg"
+              employees={employees}
+              value={employee}
+              onChange={selectEmployee}
+              isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
+              tail={schedulePickerTail}
+              isDisabled={(candidate) => !isWeeklyScheduleEligible(candidate.employment_type)}
             />
-            <ClearEmployeeScheduleDialog
-              employee={scheduleEmployeeId}
-              employeeRow={selectedEmployee}
-              employeeLabel={employeeLabel}
-              triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-              disabled={!scheduleEmployeeId}
-              onSuccess={() => void reseedFormFromServer()}
-            />
-            <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
-            <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+              <SpreadsheetImportTrigger
+                onClick={() => navigate("/hr-schedule/import")}
+                className="w-full sm:w-auto"
+              />
+            </div>
           </div>
+
+          {/* Gated HERE, not only inside each dialog. Each returns null in
+              production, but an empty wrapper is still a flex child and still
+              costs the parent's gap-2. */}
+          {IS_DEV_BUILD ? (
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+              <ClearEmployeeScheduleDialog
+                employee={scheduleEmployeeId}
+                employeeRow={selectedEmployee}
+                employeeLabel={employeeLabel}
+                triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                disabled={!scheduleEmployeeId}
+                onSuccess={() => void reseedFormFromServer()}
+              />
+              <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+              <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+            </div>
+          ) : null}
         </div>
 
         <Section grow>
@@ -449,14 +458,7 @@ export function WeeklySchedulePage() {
                       <CardDescription>
                         {scheduleReadOnly
                           ? "Preview only — clear existing SSAs to edit."
-                          : isEditingNotice
-                            ? // Was the page header's description. It loses the
-                              // employee's name: the `lg` picker directly above
-                              // now says who. The effective date stays absent —
-                              // the "Effective from" control below owns it and
-                              // formats it properly.
-                              "Editing an existing schedule — changes apply from the effective date."
-                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                          : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
                       </CardDescription>
                     )}
                   </div>
@@ -495,7 +497,7 @@ export function WeeklySchedulePage() {
                   label="Effective from"
                   value={effectiveFrom}
                   onChange={setEffectiveFrom}
-                  min={isEditing ? addDays(new Date(), 1) : undefined}
+                  min={hasLiveSchedule ? addDays(new Date(), 1) : undefined}
                 />
                 <Field>
                   <div className="flex items-center justify-between gap-2">
@@ -560,7 +562,7 @@ export function WeeklySchedulePage() {
                       <Spinner className="size-3.5" />
                       Saving
                     </>
-                  ) : isEditing ? (
+                  ) : hasLiveSchedule ? (
                     "Review changes"
                   ) : (
                     "Save schedule"
@@ -596,13 +598,13 @@ export function WeeklySchedulePage() {
         size="md"
         title={
           <span className="break-words">
-            {isEditing
+            {hasLiveSchedule
               ? `Change ${employeeLabel ?? "this employee"}'s schedule?`
               : "Create shared shift records?"}
           </span>
         }
         description={
-          isEditing
+          hasLiveSchedule
             ? "Review what changes and confirm to apply."
             : "Confirm to create shared Shift Type and Shift Schedule records on save."
         }
@@ -634,7 +636,7 @@ export function WeeklySchedulePage() {
                   <Spinner className="size-3.5" />
                   Saving
                 </>
-              ) : isEditing ? (
+              ) : hasLiveSchedule ? (
                 "Save changes"
               ) : (
                 "Create and save"

@@ -3,15 +3,14 @@ import { test, expect } from "@playwright/test";
 import { stubFrappe } from "./fixtures";
 
 test.describe("schedule edit", () => {
-  test("editing shows the banner and reconcile review", async ({ page }) => {
+  test("the editor shows the shift blocks card and the reconcile review", async ({ page }) => {
     await stubFrappe(page);
     await page.goto("/hr-schedule?employee=EMP-001");
 
-    // The notice moved out of the page header into the Shift blocks card and
-    // lost the employee's name — the lg picker above the card now says who.
-    await expect(
-      page.getByText(/Editing an existing schedule — changes apply from the effective date/),
-    ).toBeVisible();
+    // The "Editing an existing schedule" notice is gone: with editing behind an
+    // explicit trigger, a line telling you that you are editing is noise. The
+    // Shift blocks card's own description is what survives.
+    await expect(page.getByText(/One block per shared pattern/)).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     const save = page.getByRole("button", { name: /Review changes|Save schedule/ });
