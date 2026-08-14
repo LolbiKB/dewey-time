@@ -75,18 +75,64 @@ const ROUTES = ["/hr-attendance", "/hr-schedule/coverage", "/hr-flags"];
 const WIDTHS = [1440, 1280, 768, 412, 375];
 
 /**
- * Kantumruy Pro's Khmer subset, confirmed loaded.
+ * Kantumruy Pro's Khmer subset, confirmed to be the face the app actually draws.
  *
- * Two measurement passes during design were wrong because it had not loaded and
- * every number came from a fallback font. A geometric test that measures the
- * wrong font is a test that cannot fail correctly, so this is a precondition
+ * Two measurement passes during design were wrong because the face had not
+ * loaded and every number came from a fallback. A geometric test that measures
+ * the wrong font is a test that cannot fail correctly, so this is a precondition
  * rather than a convenience.
+ *
+ * IT IS NOT `document.fonts.check()`. That call answers "can this text be drawn
+ * without a new download", not "is this family the one drawing it", so it
+ * returns TRUE for a family that cannot exist:
+ *
+ *     document.fonts.check('600 14px "No Such Family 9Z"', "ចាន់")  // -> true
+ *
+ * The version of this helper that asked `check('600 14px "Kantumruy Pro"', …)`
+ * therefore passed on every machine with any Khmer-capable system font — while
+ * --font-khmer named a family that did not exist and every Khmer name on macOS
+ * drew in Khmer MN. It could not have failed.
+ *
+ * WIDTH CANNOT ANSWER THIS, and neither can `document.fonts`. Both were tried:
+ *
+ *   - `document.fonts.check('600 14px "Kantumruy Pro"', "ចាន់")`, the original,
+ *     answers "can this text be drawn without a new download" — not "by what".
+ *     It returns TRUE for a family that cannot exist, so it passed on every
+ *     machine with any Khmer-capable system font, including for the whole period
+ *     --font-khmer named a family that did not exist.
+ *   - Comparing the app's width against the same string forced to
+ *     "Kantumruy Pro Variable" fails too: measured here, Kantumruy Pro and
+ *     Khmer MN draw `ហេង សុវណ្ណារី` at 74.750px and 74.734px. Sixteen
+ *     THOUSANDTHS of a pixel apart. No tolerance separates them.
+ *
+ * So ask the renderer directly. CDP's CSS.getPlatformFontsForNode reports the
+ * faces actually used to draw a node, and it distinguishes exactly what matters:
+ *
+ *      broken token -> { familyName: "Khmer MN",      isCustomFont: false }
+ *      fixed  token -> { familyName: "Kantumruy Pro", isCustomFont: true  }
+ *
+ * `isCustomFont` is the load check — only a webfont sets it. `familyName` is the
+ * identity check. Both read off the REAL rendered name in the app, not a
+ * synthetic probe, so this also fails if the markup stops applying font-khmer.
+ * Chromium-only, which is every project this config runs.
  */
-async function khmerFontLoaded(page: Page): Promise<boolean> {
-  return page.evaluate(async () => {
-    await document.fonts.ready;
-    return document.fonts.check('600 14px "Kantumruy Pro"', "ចាន់");
-  });
+type PlatformFont = { familyName: string; postScriptName: string; isCustomFont: boolean };
+
+async function khmerFaceInUse(page: Page): Promise<PlatformFont[]> {
+  const client = await page.context().newCDPSession(page);
+  await client.send("DOM.enable");
+  await client.send("CSS.enable");
+  const { root } = (await client.send("DOM.getDocument")) as { root: { nodeId: number } };
+  const { nodeId } = (await client.send("DOM.querySelector", {
+    nodeId: root.nodeId,
+    selector: ".font-khmer",
+  })) as { nodeId: number };
+  if (!nodeId) return [];
+  const { fonts } = (await client.send("CSS.getPlatformFontsForNode", { nodeId })) as {
+    fonts: PlatformFont[];
+  };
+  await client.detach();
+  return fonts;
 }
 
 /**
@@ -207,12 +253,33 @@ async function registerAt(page: Page, width: number): Promise<Stack[]> {
   return stacks(page);
 }
 
-test("the Khmer subset font is loaded, or nothing below means anything", async ({ page }) => {
+test("Khmer draws in Kantumruy Pro, or nothing below means anything", async ({ page }) => {
   await stubFrappe(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/hr-attendance");
   await expect(page.locator(".\\@container").first()).toBeVisible();
-  expect(await khmerFontLoaded(page)).toBe(true);
+
+  // Not vacuous: there must BE a Khmer name drawn, or the query below has
+  // nothing to report on and every geometric test after it is unguarded.
+  await expect(page.locator(".font-khmer").first()).toBeVisible();
+
+  const fonts = await khmerFaceInUse(page);
+  const describe = JSON.stringify(fonts);
+
+  expect(fonts.length, `No platform font reported for .font-khmer.`).toBeGreaterThan(0);
+
+  expect(
+    fonts[0].isCustomFont,
+    `Khmer is drawing in a SYSTEM face, not the bundled webfont: ${describe}. ` +
+      `Either Kantumruy Pro failed to load, or --font-khmer in src/brand/tokens.css ` +
+      `names a family that does not exist — @fontsource-variable/kantumruy-pro ` +
+      `registers 'Kantumruy Pro Variable' and nothing else.`,
+  ).toBe(true);
+
+  expect(
+    fonts[0].familyName,
+    `Khmer is drawing in the wrong webfont: ${describe}.`,
+  ).toBe("Kantumruy Pro");
 });
 
 test("a name line is never clipped, and line two only where measured", async ({ page }) => {

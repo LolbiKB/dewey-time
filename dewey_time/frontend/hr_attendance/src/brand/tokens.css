@@ -35,9 +35,20 @@
 
    NOT `inline`, unlike the block above: that modifier is for values built out of
    other variables, and it inlines the stack into the utility WITHOUT emitting
-   the custom property, so var(--font-khmer) would resolve to nothing. */
+   the custom property, so var(--font-khmer) would resolve to nothing.
+
+   THE FAMILY NAME CARRIES "Variable" AND MUST. @fontsource-variable/kantumruy-pro
+   registers exactly one family, 'Kantumruy Pro Variable'; there is no face named
+   "Kantumruy Pro". This stack said "Kantumruy Pro" from the start, matched
+   nothing, and fell through to "Khmer MN" — so every Khmer name on macOS drew in
+   Apple's system face while the 57KB Kantumruy subset downloaded unused. Measured
+   in Chromium: the widest pair drew 183.2px, identical to Khmer MN alone, against
+   196.2px for the real face; and Khmer MN's taller metrics added 4px to the line
+   box where Kantumruy adds zero. That 4px is the "a Khmer name costs 4px" the e2e
+   suite spent a round documenting, and it is also why the number differed on
+   Linux CI — a different box has a different system fallback. */
 @theme {
-  --font-khmer: "Kantumruy Pro", "Khmer MN", ui-sans-serif, sans-serif;
+  --font-khmer: "Kantumruy Pro Variable", "Khmer MN", ui-sans-serif, sans-serif;
 }
 
 /* ---------------------------------------------------------------------------
