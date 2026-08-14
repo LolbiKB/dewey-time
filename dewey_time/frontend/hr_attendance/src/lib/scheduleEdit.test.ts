@@ -6,8 +6,10 @@ import {
   reconcileRetiresShifts,
   confirmNameMatches,
   scheduleFormStateFromContext,
+  openingScheduleMode,
+  scheduleFormFingerprint,
 } from "@/lib/scheduleEdit";
-import { emptyWeekPattern } from "@/types/schedule";
+import { createShiftBlock, emptyWeekPattern } from "@/types/schedule";
 import type { ReconcilePreview, ScheduleContext } from "@/types/schedule";
 
 const EMPTY: ReconcilePreview = {
@@ -140,4 +142,77 @@ test("scheduleFormStateFromContext does not alias the context's week_pattern", (
   const state = scheduleFormStateFromContext(context);
   state.shiftBlocks[0]!.profile.start_time = "09:00";
   assert.equal(context.week_pattern.days[0]!.start_time, "08:00");
+});
+
+test("an employee with a live schedule opens in preview, one without opens in edit", () => {
+  // Preview-first guards the dangerous case only. Someone with no schedule has
+  // nothing to preview, and editing is the only thing they can do — an Edit
+  // button in front of that is a click for nothing.
+  assert.equal(openingScheduleMode(true), "preview");
+  assert.equal(openingScheduleMode(false), "edit");
+});
+
+test("the form fingerprint covers every editable field, not just the blocks", () => {
+  // Cancel discards all four. A fingerprint over blocks alone would call a
+  // changed effective date "clean" and bin it without asking.
+  const base = {
+    shiftBlocks: [],
+    effectiveFrom: "2026-09-01",
+    generateThrough: "",
+    limitGenerateThrough: false,
+  };
+  const baseline = scheduleFormFingerprint(base);
+
+  assert.equal(scheduleFormFingerprint({ ...base }), baseline, "same state, same key");
+  assert.notEqual(
+    scheduleFormFingerprint({ ...base, effectiveFrom: "2026-09-02" }),
+    baseline,
+    "a changed effective date is dirty",
+  );
+  assert.notEqual(
+    scheduleFormFingerprint({ ...base, limitGenerateThrough: true }),
+    baseline,
+    "toggling the limit switch is dirty",
+  );
+
+  const limited = { ...base, limitGenerateThrough: true, generateThrough: "2026-12-31" };
+  assert.notEqual(
+    scheduleFormFingerprint({ ...limited, generateThrough: "2027-01-31" }),
+    scheduleFormFingerprint(limited),
+    "a changed end date is dirty while the limit is on",
+  );
+});
+
+test("the end date is ignored while the limit switch is off", () => {
+  // The server ALWAYS seeds a non-empty default_generate_through
+  // (schedule_api.py:295), and the switch's own handler clears the date when
+  // it is turned off. So a user who toggles the limit on and straight back off
+  // lands on generateThrough "" against a seeded date — with the switch off,
+  // the field is neither rendered nor submitted, so counting it would leave
+  // the form permanently dirty against a value nobody can see, and Cancel
+  // would raise a confirm about invisible edits.
+  const off = (generateThrough: string) => ({
+    shiftBlocks: [],
+    effectiveFrom: "2026-09-01",
+    generateThrough,
+    limitGenerateThrough: false,
+  });
+  assert.equal(scheduleFormFingerprint(off("")), scheduleFormFingerprint(off("2026-09-29")));
+});
+
+test("the fingerprint ignores block ids, as blocksFingerprint does", () => {
+  // Reseeding from the server mints new block ids for identical content. If ids
+  // counted, every freshly loaded form would report itself dirty and every
+  // employee switch would raise a confirm nobody caused.
+  //
+  // `createShiftBlock` is the exported builder — ShiftBlock.profile has five
+  // required fields and there is no exported `defaultShiftProfile`.
+  const state = (id: string) => ({
+    shiftBlocks: [createShiftBlock({ id, days: ["Monday" as const] })],
+    effectiveFrom: "2026-09-01",
+    generateThrough: "",
+    limitGenerateThrough: false,
+  });
+  assert.notEqual(state("a").shiftBlocks[0]!.id, state("b").shiftBlocks[0]!.id);
+  assert.equal(scheduleFormFingerprint(state("a")), scheduleFormFingerprint(state("b")));
 });

@@ -48,14 +48,22 @@ import {
   SchedulePreviewTrigger,
 } from "@/ui/SchedulePlanPreviewDialog";
 import { cn } from "@/lib/utils";
+import { IS_DEV_BUILD } from "@/lib/devBuild";
 import { notifySuccess } from "@/lib/toast";
 import {
   summarizeReconcile,
   reconcileRetiresShifts,
   confirmNameMatches,
+  openingScheduleMode,
+  scheduleFormFingerprint,
   scheduleFormStateFromContext,
+  type ScheduleMode,
 } from "@/lib/scheduleEdit";
-import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
+import { plannedDaysFromWeekPattern, resolveWeekPatternWindow } from "@/lib/plannedDays";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
+import { summarizeWeekPattern } from "@/types/schedule";
+import { PlannedWeekCanvas } from "@/ui/PlannedWeekCanvas";
+import type { ApplyScheduleResult, ReconcilePreview, ScheduleContext } from "@/types/schedule";
 import {
   isWeeklyScheduleEligible,
   schedulePickerTail,
@@ -98,6 +106,13 @@ export function WeeklySchedulePage() {
   const [templateKey, setTemplateKey] = useState<string>("manual");
   const appliedTemplateFingerprint = useRef<string | null>(null);
   const [employeeLoading, setEmployeeLoading] = useState(false);
+  // "edit" only because no context has loaded yet; the effect below owns it
+  // from the first context onwards.
+  const [mode, setMode] = useState<ScheduleMode>("edit");
+  /** The form as the server last handed it over — the "clean" comparison key. */
+  const seededFingerprint = useRef<string | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [pendingEmployeeId, setPendingEmployeeId] = useState<string | null>(null);
 
   const weekPattern = useMemo<WeekPattern>(
     () => weekPatternFromBlocks(shiftBlocks),
@@ -139,18 +154,51 @@ export function WeeklySchedulePage() {
     if (!contextLoading) setEmployeeLoading(false);
   }, [contextLoading]);
 
-  useEffect(() => {
-    if (!context) return;
-    const seeded = scheduleFormStateFromContext(context);
+  /** Adopt the server's version of the schedule, and record it as the clean
+   * baseline in the same breath.
+   *
+   * Three paths adopt it — the seed on employee change, the refetch after a
+   * save or a clear, and a discard — and every one of them must move
+   * `seededFingerprint`. A path that reseeded the form but left the old key
+   * behind would leave a freshly loaded form reporting itself dirty, and
+   * Cancel would then raise a confirm nobody caused. One helper, so none of
+   * the three can forget. */
+  function seedFormFrom(source: ScheduleContext) {
+    const seeded = scheduleFormStateFromContext(source);
     setShiftBlocks(seeded.shiftBlocks);
     setEffectiveFrom(seeded.effectiveFrom);
     setGenerateThrough(seeded.generateThrough);
     setLimitGenerateThrough(seeded.limitGenerateThrough);
+    seededFingerprint.current = scheduleFormFingerprint(seeded);
+  }
+
+  useEffect(() => {
+    if (!context) return;
+    seedFormFrom(context);
+  }, [context?.employee]);
+
+  // The mode is a property of the employee on screen, so it is re-derived
+  // whenever the context that answers `hasLiveSchedule` arrives — including on
+  // an employee switch, which reseeds the form in the effect above. Keyed on
+  // the same `context?.employee` so the two never disagree about who is shown.
+  //
+  // Read `context.enabled_ssa_count` directly rather than the derived
+  // `hasLiveSchedule`: that constant is not in the dependency array, and adding
+  // it would re-run this on every context refetch — snapping someone out of
+  // edit mode mid-edit whenever the schedule is refreshed.
+  useEffect(() => {
+    if (!context) return;
+    setMode(openingScheduleMode((context.enabled_ssa_count ?? 0) > 0));
   }, [context?.employee]);
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
+  // Only edit mode consumes `plan`/`resolving` — they are read by
+  // SchedulePreviewTrigger, which lives inside the edit-only footer. Preview is
+  // now the default landing state for anyone with a live schedule, so leaving
+  // this ungated would post resolve_weekly_schedule_plan on every page load
+  // for a result nothing renders and the user cannot act on.
   const { plan, resolving, resolveError } = useWeeklyScheduleResolve(
-    scheduleEmployeeId,
+    mode === "edit" ? scheduleEmployeeId : null,
     weekPattern,
     effectiveFrom || null
   );
@@ -158,9 +206,79 @@ export function WeeklySchedulePage() {
   const { apply, applying, status, clearStatus } = useApplyWeeklySchedule();
   const { templates: dynamicTemplates, isLoading: templatesLoading } = useWeeklyScheduleTemplates(24);
 
-  const isEditing = (context?.enabled_ssa_count ?? 0) > 0;
-  const scheduleReadOnly = false;
-  const previewOnly = false;
+  const hasLiveSchedule = (context?.enabled_ssa_count ?? 0) > 0;
+
+  const isDirty =
+    seededFingerprint.current !== null &&
+    scheduleFormFingerprint({
+      shiftBlocks,
+      effectiveFrom,
+      generateThrough,
+      limitGenerateThrough,
+    }) !== seededFingerprint.current;
+
+  // Both ways out of edit mode with unsaved work funnel through one confirm.
+  // `pendingEmployeeId` is what distinguishes them: null means "just leave edit
+  // mode", a value means "leave, then switch to this person".
+  // Where leaving edit mode lands. The SAME rule that chose the opening mode,
+  // not a hardcoded "preview": an employee with no schedule has nothing to
+  // preview, so Cancel reverts their edits and leaves them in the editor
+  // rather than dropping them into a picture of an empty week.
+  function exitMode(): ScheduleMode {
+    return openingScheduleMode(hasLiveSchedule);
+  }
+
+  function leaveEditMode() {
+    if (!isDirty) {
+      setMode(exitMode());
+      return;
+    }
+    setPendingEmployeeId(null);
+    setDiscardOpen(true);
+  }
+
+  function requestEmployeeChange(id: string) {
+    // Re-picking the employee already on screen is not a change and must not
+    // raise the confirm. EmployeePicker's onSelect fires unconditionally, so
+    // this is reachable — and the confirm would be a lie: accepting it calls
+    // selectEmployee with the same id, which leaves `context?.employee`
+    // unchanged, so the seeding effect never re-fires and the edits it offered
+    // to discard would still be there.
+    if (id === employee || !isDirty) {
+      selectEmployee(id);
+      return;
+    }
+    setPendingEmployeeId(id);
+    setDiscardOpen(true);
+  }
+
+  function confirmDiscard() {
+    setDiscardOpen(false);
+    if (pendingEmployeeId !== null) {
+      // Drop the discarded pattern NOW rather than leaving it on screen until
+      // the arriving employee's context reseeds the form. It is not cosmetic:
+      // `useWeeklyScheduleResolve` keys on (scheduleEmployeeId, weekPattern),
+      // so a lingering pattern gets resolved against the employee arriving,
+      // and if their context fetch fails, both effects early-return and the
+      // user sits looking at the edits they just told the app to throw away.
+      // A null baseline means "not seeded yet", so nothing reads as dirty.
+      setShiftBlocks([]);
+      seededFingerprint.current = null;
+      selectEmployee(pendingEmployeeId);
+      setPendingEmployeeId(null);
+      return;
+    }
+    if (context) seedFormFrom(context);
+    setMode(exitMode());
+  }
+
+  function closeDiscard() {
+    setDiscardOpen(false);
+    // "Keep editing", Escape and an outside click all land here. Leaving the
+    // pending id set would arm the NEXT confirm to switch employee, whatever
+    // raised it.
+    setPendingEmployeeId(null);
+  }
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isScheduleLoading = contextLoading && !!scheduleEmployeeId;
 
@@ -212,12 +330,21 @@ export function WeeklySchedulePage() {
    */
   async function reseedFormFromServer() {
     const refetched = await refetchContext();
-    if (!refetched.data) return;
-    const seeded = scheduleFormStateFromContext(refetched.data);
-    setShiftBlocks(seeded.shiftBlocks);
-    setEffectiveFrom(seeded.effectiveFrom);
-    setGenerateThrough(seeded.generateThrough);
-    setLimitGenerateThrough(seeded.limitGenerateThrough);
+    if (!refetched.data) {
+      // The refetch failed, so there is no server state to adopt — but the
+      // write that triggered this one succeeded, so what is on screen is no
+      // longer unsaved. Move the baseline onto it. Leaving the baseline pinned
+      // where it was would make a just-saved form report itself dirty and
+      // offer to "discard unsaved changes" that were in fact saved.
+      seededFingerprint.current = scheduleFormFingerprint({
+        shiftBlocks,
+        effectiveFrom,
+        generateThrough,
+        limitGenerateThrough,
+      });
+      return;
+    }
+    seedFormFrom(refetched.data);
   }
 
   async function handleSave(confirmCreate = false): Promise<boolean> {
@@ -278,7 +405,8 @@ export function WeeklySchedulePage() {
       // for the *same* employee (new week_pattern/enabled_ssa_count/defaults)
       // doesn't change that string, so it wouldn't otherwise re-fire, leaving
       // stale pre-save values in the form (e.g. effectiveFrom falling below
-      // the "Effective from" min once isEditing flips true on this refetch).
+      // the "Effective from" min once hasLiveSchedule flips true on this
+      // refetch).
       await reseedFormFromServer();
 
       return true;
@@ -318,6 +446,12 @@ export function WeeklySchedulePage() {
   const saveDisabled =
     !scheduleEmployeeId ||
     applying ||
+    // Saving an untouched form is not a no-op on this page: the backend
+    // retires the existing SSAs and recreates them, so an accidental
+    // Edit → Review changes walks the user through a typed-name confirmation
+    // to replace a schedule with an identical one. Same dirty rule the leave
+    // guard uses, applied to the action that actually mutates data.
+    !isDirty ||
     validationIssues.length > 0 ||
     !effectiveFrom ||
     !hasWorkingDays ||
@@ -352,11 +486,6 @@ export function WeeklySchedulePage() {
     setShiftBlocks(blocks);
   }
 
-  // The editing notice used to be PageHeader.description. The header is gone;
-  // it now lives in the Shift blocks CardDescription below, which already
-  // switches between read-only and editable copy.
-  const isEditingNotice = isEditing && Boolean(scheduleEmployeeId) && !ineligibleMessage;
-
   return (
     <>
       <Page>
@@ -374,40 +503,53 @@ export function WeeklySchedulePage() {
             heading list, and a route with none has no answer to "where am I". */}
         <h1 className="sr-only">Weekly Schedule</h1>
 
-        {/* The picker gets its own row rather than sitting beside a title. It
-            is the page's subject selector — everything below operates on
-            whatever it holds — and at `lg` it is wide enough to show the Khmer
-            name, which the old header-actions slot never was: it was pinned at
+        {/* The picker leads the page rather than sitting beside a title. It is
+            the page's subject selector — everything below operates on whatever
+            it holds — and at `lg` it is wide enough to show the Khmer name,
+            which the old header-actions slot never was: it was pinned at
             160px, where EmployeeIdentity's 200px Khmer threshold can never be
-            reached. */}
+            reached. `lg` caps at 512px, which leaves the row's right-hand side
+            free for the page's actions at desktop widths. */}
         <div className="flex flex-col gap-2">
-          <EmployeePicker
-            size="lg"
-            employees={employees}
-            value={employee}
-            onChange={selectEmployee}
-            isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
-            tail={schedulePickerTail}
-            isDisabled={(candidate) => !isWeeklyScheduleEligible(candidate.employment_type)}
-          />
-
-          {/* 2-column grid on mobile, a wrapping row from sm: up. */}
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-            <SpreadsheetImportTrigger
-              onClick={() => navigate("/hr-schedule/import")}
-              className="w-full sm:w-auto"
+          {/* Import rides in the picker's row. In production it was the only
+              control in the row below — all three Clear* dialogs are dev-only
+              and render null — so that row cost a full band of vertical space
+              for one button. */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+            <EmployeePicker
+              size="lg"
+              employees={employees}
+              value={employee}
+              onChange={requestEmployeeChange}
+              isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
+              tail={schedulePickerTail}
+              isDisabled={(candidate) => !isWeeklyScheduleEligible(candidate.employment_type)}
             />
-            <ClearEmployeeScheduleDialog
-              employee={scheduleEmployeeId}
-              employeeRow={selectedEmployee}
-              employeeLabel={employeeLabel}
-              triggerClassName="h-9 w-full shrink-0 sm:w-auto"
-              disabled={!scheduleEmployeeId}
-              onSuccess={() => void reseedFormFromServer()}
-            />
-            <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
-            <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+              <SpreadsheetImportTrigger
+                onClick={() => navigate("/hr-schedule/import")}
+                className="w-full sm:w-auto"
+              />
+            </div>
           </div>
+
+          {/* Gated HERE, not only inside each dialog. Each returns null in
+              production, but an empty wrapper is still a flex child and still
+              costs the parent's gap-2. */}
+          {IS_DEV_BUILD ? (
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+              <ClearEmployeeScheduleDialog
+                employee={scheduleEmployeeId}
+                employeeRow={selectedEmployee}
+                employeeLabel={employeeLabel}
+                triggerClassName="h-9 w-full shrink-0 sm:w-auto"
+                disabled={!scheduleEmployeeId}
+                onSuccess={() => void reseedFormFromServer()}
+              />
+              <ClearAllSchedulesDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+              <ClearSitePatternsDialog triggerClassName="h-9 w-full shrink-0 sm:w-auto" />
+            </div>
+          ) : null}
         </div>
 
         <Section grow>
@@ -432,61 +574,55 @@ export function WeeklySchedulePage() {
               loading={isScheduleLoading}
               employeeKey={scheduleEmployeeId}
             >
-              <Card
-                className={cn(
-                  "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-                  scheduleReadOnly && "opacity-95"
-                )}
-              >
-                <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 space-y-1">
-                    <CardTitle className="text-base">Shift blocks</CardTitle>
-                    {validationIssues[0] && !scheduleReadOnly ? (
-                      <CardDescription className="text-destructive">
-                        {validationIssues[0].message}
-                      </CardDescription>
-                    ) : (
-                      <CardDescription>
-                        {scheduleReadOnly
-                          ? "Preview only — clear existing SSAs to edit."
-                          : isEditingNotice
-                            ? // Was the page header's description. It loses the
-                              // employee's name: the `lg` picker directly above
-                              // now says who. The effective date stays absent —
-                              // the "Effective from" control below owns it and
-                              // formats it properly.
-                              "Editing an existing schedule — changes apply from the effective date."
-                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
-                      </CardDescription>
-                    )}
-                  </div>
-                  <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
-                    <WeeklyScheduleTemplatePickerDialog
-                      value={templateKey}
-                      options={templateOptions}
-                      onSelect={applyTemplate}
-                      loading={templatesLoading}
-                      disabled={scheduleReadOnly}
-                      triggerClassName="sm:min-w-[20rem] sm:max-w-md"
-                    />
-                  </div>
-                </CardHeader>
-                <ScrollArea className="min-h-0 flex-1">
-                  <CardContent className="px-5 pb-5 pt-0">
-                    <WeekPatternGroupEditor
-                      blocks={shiftBlocks}
-                      onChange={handleShiftBlocksChange}
-                      validationIssues={validationIssues}
-                      disabled={scheduleReadOnly}
-                    />
-                  </CardContent>
-                </ScrollArea>
-              </Card>
+              {mode === "preview" ? (
+                <SchedulePreview
+                  weekPattern={weekPattern}
+                  onEdit={() => setMode("edit")}
+                />
+              ) : (
+                <Card
+                  className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                >
+                  <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 space-y-1">
+                      <CardTitle className="text-base">Shift blocks</CardTitle>
+                      {validationIssues[0] ? (
+                        <CardDescription className="text-destructive">
+                          {validationIssues[0].message}
+                        </CardDescription>
+                      ) : (
+                        <CardDescription>
+                          One block per shared pattern — like Frappe Shift
+                          Schedule repeat days.
+                        </CardDescription>
+                      )}
+                    </div>
+                    <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
+                      <WeeklyScheduleTemplatePickerDialog
+                        value={templateKey}
+                        options={templateOptions}
+                        onSelect={applyTemplate}
+                        loading={templatesLoading}
+                        triggerClassName="sm:min-w-[20rem] sm:max-w-md"
+                      />
+                    </div>
+                  </CardHeader>
+                  <ScrollArea className="min-h-0 flex-1">
+                    <CardContent className="px-5 pb-5 pt-0">
+                      <WeekPatternGroupEditor
+                        blocks={shiftBlocks}
+                        onChange={handleShiftBlocksChange}
+                        validationIssues={validationIssues}
+                      />
+                    </CardContent>
+                  </ScrollArea>
+                </Card>
+              )}
             </WeeklyScheduleAnimatedShell>
           )}
         </Section>
 
-        {scheduleEmployeeId ? (
+        {mode === "edit" && scheduleEmployeeId ? (
           <footer className="shrink-0 border-t border-border/60 pt-3">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:max-w-2xl">
@@ -495,7 +631,7 @@ export function WeeklySchedulePage() {
                   label="Effective from"
                   value={effectiveFrom}
                   onChange={setEffectiveFrom}
-                  min={isEditing ? addDays(new Date(), 1) : undefined}
+                  min={hasLiveSchedule ? addDays(new Date(), 1) : undefined}
                 />
                 <Field>
                   <div className="flex items-center justify-between gap-2">
@@ -512,7 +648,6 @@ export function WeeklySchedulePage() {
                       <Switch
                         id="generate-through-limit"
                         checked={limitGenerateThrough}
-                        disabled={scheduleReadOnly}
                         onCheckedChange={(checked) => {
                           setLimitGenerateThrough(checked);
                           if (!checked) setGenerateThrough("");
@@ -528,7 +663,6 @@ export function WeeklySchedulePage() {
                       placeholder="Pick end date"
                       min={effectiveFrom ? parseISO(effectiveFrom) : undefined}
                       max={generateThroughMax}
-                      disabled={scheduleReadOnly}
                     />
                   ) : (
                     <FieldDescription className="flex h-10 items-center">
@@ -550,6 +684,15 @@ export function WeeklySchedulePage() {
                 />
                 <Button
                   type="button"
+                  variant="ghost"
+                  className="h-9"
+                  onClick={leaveEditMode}
+                  disabled={applying}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
                   size="default"
                   className="h-9 min-w-[7.5rem]"
                   onClick={() => void handleSave(false)}
@@ -560,7 +703,7 @@ export function WeeklySchedulePage() {
                       <Spinner className="size-3.5" />
                       Saving
                     </>
-                  ) : isEditing ? (
+                  ) : hasLiveSchedule ? (
                     "Review changes"
                   ) : (
                     "Save schedule"
@@ -584,6 +727,29 @@ export function WeeklySchedulePage() {
       />
 
       <ResponsiveModal
+        open={discardOpen}
+        onOpenChange={(o) => (o ? setDiscardOpen(true) : closeDiscard())}
+        size="sm"
+        title="Discard unsaved changes?"
+        description="This schedule has edits that have not been saved. Discarding returns it to the version on file."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={closeDiscard}>
+              Keep editing
+            </Button>
+            <Button type="button" variant="destructive" onClick={confirmDiscard}>
+              Discard changes
+            </Button>
+          </>
+        }
+      >
+        {/* The description says the whole thing. The body is `min-h-0 flex-1`
+            with nothing in it, so it collapses and the modal is a title, a
+            sentence and two buttons. */}
+        {null}
+      </ResponsiveModal>
+
+      <ResponsiveModal
         open={confirmOpen}
         onOpenChange={(o) => {
           if (applying) return; // don't let an outside-click/Escape dismiss mid-save
@@ -596,13 +762,13 @@ export function WeeklySchedulePage() {
         size="md"
         title={
           <span className="break-words">
-            {isEditing
+            {hasLiveSchedule
               ? `Change ${employeeLabel ?? "this employee"}'s schedule?`
               : "Create shared shift records?"}
           </span>
         }
         description={
-          isEditing
+          hasLiveSchedule
             ? "Review what changes and confirm to apply."
             : "Confirm to create shared Shift Type and Shift Schedule records on save."
         }
@@ -634,7 +800,7 @@ export function WeeklySchedulePage() {
                   <Spinner className="size-3.5" />
                   Saving
                 </>
-              ) : isEditing ? (
+              ) : hasLiveSchedule ? (
                 "Save changes"
               ) : (
                 "Create and save"
@@ -711,5 +877,40 @@ export function WeeklySchedulePage() {
         ) : null}
       </ResponsiveModal>
     </>
+  );
+}
+
+/**
+ * The read-only week.
+ *
+ * Every part of this already existed inside `SchedulePlanPreviewDialog`:
+ * the canvas, both adapters, and the summary. The only new thing is that it is
+ * inline rather than in a modal. No Card header, no ScrollArea — those exist to
+ * frame an editor, and this is a document.
+ */
+function SchedulePreview(props: { weekPattern: WeekPattern; onEdit: () => void }) {
+  const { workDays, offDays, totalWeeklyMinutes } = summarizeWeekPattern(props.weekPattern);
+  const weeklyHoursLabel =
+    totalWeeklyMinutes > 0 ? formatScheduleDuration(totalWeeklyMinutes) : null;
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <div className="min-h-0 flex-1">
+        <PlannedWeekCanvas
+          days={plannedDaysFromWeekPattern(props.weekPattern)}
+          window={resolveWeekPatternWindow(props.weekPattern)}
+          minDayWidth="3rem"
+        />
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {workDays} work · {offDays} off
+          {weeklyHoursLabel ? ` · ${weeklyHoursLabel}/wk` : null}
+        </p>
+        <Button type="button" variant="outline" className="h-9" onClick={props.onEdit}>
+          Edit schedule
+        </Button>
+      </div>
+    </div>
   );
 }

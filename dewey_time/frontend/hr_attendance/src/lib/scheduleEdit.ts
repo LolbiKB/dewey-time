@@ -1,4 +1,4 @@
-import { cloneWeekPattern, weekPatternToBlocks } from "@/types/schedule";
+import { blocksFingerprint, cloneWeekPattern, weekPatternToBlocks } from "@/types/schedule";
 import type { ReconcilePreview, ScheduleContext, ShiftBlock } from "@/types/schedule";
 
 export type ScheduleChangeSummary = {
@@ -87,4 +87,45 @@ export function scheduleFormStateFromContext(context: ScheduleContext): Schedule
     generateThrough: context.default_generate_through ?? "",
     limitGenerateThrough: false,
   };
+}
+
+/** Which mode the page opens in for a given employee. */
+export type ScheduleMode = "preview" | "edit";
+
+/**
+ * The opening mode.
+ *
+ * Preview-first guards the case that can go wrong: someone with a live
+ * schedule cannot nudge a block by accident. Someone with no schedule has
+ * nothing to preview and editing is the only thing they can do, so an Edit
+ * button in front of it would be a click that buys nothing.
+ */
+export function openingScheduleMode(hasLiveSchedule: boolean): ScheduleMode {
+  return hasLiveSchedule ? "preview" : "edit";
+}
+
+/**
+ * A stable compare key for the whole editable form.
+ *
+ * Cancel discards all four fields, so all four decide whether the form is
+ * dirty — a key over `shiftBlocks` alone would call a changed effective date
+ * clean and bin it silently. Block ids are excluded via `blocksFingerprint`:
+ * reseeding from the server mints new ids for identical content, and counting
+ * them would make every freshly loaded form report itself dirty.
+ *
+ * `generateThrough` is collapsed to "" when the limit switch is off, exactly
+ * as the save path collapses it before sending. With the switch off the end
+ * date is neither rendered nor submitted, so it is not part of the schedule —
+ * and the server always seeds a non-empty `default_generate_through`, so
+ * counting it regardless would make toggling the switch on and straight back
+ * off (which clears the date) leave the form permanently dirty against a value
+ * the user cannot see.
+ */
+export function scheduleFormFingerprint(state: ScheduleFormState): string {
+  return JSON.stringify({
+    blocks: blocksFingerprint(state.shiftBlocks),
+    effectiveFrom: state.effectiveFrom,
+    generateThrough: state.limitGenerateThrough ? state.generateThrough : "",
+    limitGenerateThrough: state.limitGenerateThrough,
+  });
 }
