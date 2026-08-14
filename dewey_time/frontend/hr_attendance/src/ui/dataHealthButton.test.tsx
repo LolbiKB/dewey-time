@@ -20,11 +20,28 @@ function render(conditions: HealthCondition[]): string {
   );
 }
 
-test("no conditions renders nothing — not an empty chip", () => {
+test("no conditions renders no chip — nothing visible, and nothing in the flow", () => {
   // The toolbar on a healthy day must look exactly as it did before this
   // component existed. An empty chip is a permanent fixture in a row that has
   // no space to spare.
-  assert.equal(render([]), "");
+  //
+  // Not `=== ""` any more: the live region below is always mounted, and it has
+  // to be, or a condition arriving mid-session is announced to nobody. It is
+  // sr-only — position:absolute, zero measured pixels, out of flex flow — so
+  // the visible guarantee is unchanged and this asserts that directly.
+  const html = render([]);
+  assert.doesNotMatch(html, /<button/, "no chip");
+  assert.doesNotMatch(html, /amber/, "and none of its chrome");
+  assert.equal(html.replace(/<span class="sr-only"[^>]*><\/span>/, ""), "", "nothing else at all");
+});
+
+test("the conditions are announced, and the live region outlives them", () => {
+  // Both AttentionStrips this replaces carried role="status", so a sync going
+  // stale mid-session announced itself. A live region only announces a CHANGE,
+  // so one that mounts together with the chip announces nothing — it has to be
+  // there while the page is still healthy.
+  assert.match(render([]), /role="status"/, "present before there is anything to say");
+  assert.match(render([OUTAGE]), /role="status"[^>]*>13 branches offline/);
 });
 
 test("the leading condition is the label", () => {

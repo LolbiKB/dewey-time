@@ -112,10 +112,18 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
         ) : null}
       </div>
 
-      {/* Rides in the gap sm:justify-between already leaves between the picker
-          block and the week nav, so it costs no vertical space. Renders null
-          when both counts are clean, which is the ordinary day. */}
+      {/* From sm up it rides in the gap sm:justify-between already leaves
+          between the picker block and the week nav, and costs no vertical
+          space. BELOW sm this <header> is flex-col with the default
+          align-items:stretch, so without `self-start` the h-9 button became a
+          full-width amber bar on its own line — the banner shape this whole
+          change exists to delete. Measured at 375: 335px wide before, its own
+          content width after. It still takes a line there; see
+          e2e/notice-arrangement.spec.ts for what that costs.
+
+          Renders null when both counts are clean, which is the ordinary day. */}
       <DataHealthButton
+        className="self-start"
         conditions={attendanceHealth({
           staleSyncMinutes: props.staleSyncMinutes,
           closeoutAlerts: props.deviceAlerts.length,

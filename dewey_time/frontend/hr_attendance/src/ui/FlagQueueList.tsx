@@ -62,10 +62,12 @@ export type FlagQueueListProps = {
   /** Cleared by the parent once the focus has been taken. */
   onFocusHandled?: () => void;
   /**
-   * The number of flags actually loaded, when the query hit its cap — null or
-   * absent when it did not. Renders the end-of-list notice.
+   * The flag scan hit its cap, so older days in the range were not loaded.
+   *
+   * NOT the count of what was loaded: see `queueEndTruncatedNotice` for why no
+   * number on this page can be trusted at the bottom of this list.
    */
-  truncatedTo?: number | null;
+  flagsTruncated?: boolean;
 };
 
 export function FlagQueueList(props: FlagQueueListProps) {
@@ -181,7 +183,13 @@ export function FlagQueueList(props: FlagQueueListProps) {
   if (ordered.length === 0) {
     return (
       <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-        Nothing to triage in this range.
+        {/* A capped range whose loaded flags are all outages, or whose tier
+            filter leaves nothing, still had older days it never fetched. The
+            old amber strip sat ABOVE the list and fired regardless of row
+            count; the terminal row below cannot, because this returns first. */}
+        {props.flagsTruncated
+          ? queueEndTruncatedNotice(props.range.startDate, props.range.endDate)
+          : "Nothing to triage in this range."}
       </p>
     );
   }
@@ -315,7 +323,7 @@ export function FlagQueueList(props: FlagQueueListProps) {
           </li>
         );
       })}
-      {props.truncatedTo != null ? (
+      {props.flagsTruncated ? (
         // role="presentation" for the same reason the "show as group" caption
         // carries it: every selectable row authors aria-setsize/aria-posinset,
         // and ARIA wants that metadata all-or-none across a set. A bare
@@ -328,11 +336,7 @@ export function FlagQueueList(props: FlagQueueListProps) {
               aria-hidden="true"
             />
             <span>
-              {queueEndTruncatedNotice(
-                props.truncatedTo,
-                props.range.startDate,
-                props.range.endDate,
-              )}
+              {queueEndTruncatedNotice(props.range.startDate, props.range.endDate)}
             </span>
           </div>
         </li>

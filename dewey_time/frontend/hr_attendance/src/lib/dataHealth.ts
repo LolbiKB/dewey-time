@@ -37,6 +37,10 @@ function plural(count: number, one: string, many: string): string {
  * days/hours/minutes, so the two can never disagree about a boundary.
  */
 function coarseAge(minutes: number): string {
+  // The `??` satisfies noUncheckedIndexedAccess and nothing else: split always
+  // returns at least one element, and the genuine degenerate input (null, NaN)
+  // is already handled a level down — formatDurationMinutes returns "—" for it,
+  // which arrives here as a string, never as undefined.
   return formatDurationMinutes(minutes).split(" ")[0] ?? "—";
 }
 

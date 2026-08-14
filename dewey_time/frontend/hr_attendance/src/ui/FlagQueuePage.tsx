@@ -742,7 +742,14 @@ export function FlagQueuePage() {
             onCollapseGroup={handleCollapseGroup}
             focusKey={focusKey}
             onFocusHandled={() => setFocusKey(null)}
-            truncatedTo={truncated ? (counts?.open ?? null) : null}
+            // `counts.open_capped`, NOT the top-level `truncated`.
+            // flag_queue_api.py:561 makes `truncated` mean
+            // `flags_capped OR decisions_capped`, and a range whose DECISIONS
+            // scan capped has a complete flag set — saying "older days didn't
+            // fit" there sends HR to narrow a range with nothing hidden in it.
+            // `open_capped` (:539) is `flags_capped` alone, added for exactly
+            // this distinction and until now read by nothing.
+            flagsTruncated={counts?.open_capped ?? false}
           />
         }
         panel={
@@ -812,8 +819,6 @@ export type FlagQueueViewProps = {
   /** The range the controls edit — the request, not the payload's answer. */
   range: { startDate: string; endDate: string };
   onRangeChange: (next: { startDate: string; endDate: string }) => void;
-  /** The capped notice's two levers — narrows `range` to the last N days,
-   *  trimmed from the start (same rule as `clampRange`). */
   tier: Tier | null;
   onTierChange: (next: Tier | null) => void;
   /** Pre-rendered pilot-period notice, or null for silence. A string rather
@@ -1092,7 +1097,10 @@ export function FlagQueueView(props: FlagQueueViewProps) {
           <EmptyState
             icon={CheckIcon}
             title={NOTHING_WAITING_TITLE}
-            description={nothingWaitingDetail(props.range.startDate, props.range.endDate)}
+            description={nothingWaitingDetail(props.range.startDate, props.range.endDate, {
+              closeoutAlerts: props.alerts?.length ?? 0,
+              flagsTruncated: counts?.open_capped ?? false,
+            })}
             className="border-none"
             action={
               counts?.decided ? (

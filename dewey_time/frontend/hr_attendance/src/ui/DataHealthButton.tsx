@@ -27,9 +27,37 @@ export function DataHealthButton(props: {
   const [open, setOpen] = useState(false);
 
   const [lead, ...rest] = props.conditions;
-  // Absent, not present-and-empty. Hook order is unaffected: useState above
-  // runs on every render regardless of which branch follows it.
-  if (!lead) return null;
+
+  return (
+    <>
+      {/* The live region the AttentionStrips had and the chip nearly lost.
+          Both banners this replaces carried role="status" (notice.tsx:47, :56),
+          so a sync that went stale or a closeout that landed during a refetch
+          announced itself. A chip is a silent button.
+
+          Rendered ALWAYS — including with no conditions, when it is empty —
+          because a live region has to exist BEFORE the text changes for the
+          change to be announced. Mounting it together with the chip would
+          announce nothing, which is the state this is fixing. `sr-only` is
+          position:absolute, so it leaves flex layout alone and the chip is
+          still absent rather than present-and-empty in every visible sense. */}
+      <span className="sr-only" role="status">
+        {lead ? lead.summary : ""}
+      </span>
+      {lead ? <DataHealthChip {...props} lead={lead} rest={rest} open={open} setOpen={setOpen} /> : null}
+    </>
+  );
+}
+
+function DataHealthChip(props: {
+  children: ReactNode;
+  className?: string;
+  lead: HealthCondition;
+  rest: HealthCondition[];
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const { lead, rest, open, setOpen } = props;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -70,11 +98,15 @@ export function DataHealthButton(props: {
           />
         </button>
       </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-[min(30rem,calc(100vw-2rem))] p-0"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
+      {/* NO onOpenAutoFocus={preventDefault}. It was here to keep the page from
+          jumping on open, and it made the flags popover keyboard-unreachable:
+          this content is non-modal, so Radix sets trapFocus:false, focus stayed
+          on the trigger, and the first Tab moved to the date picker AND
+          dismissed the layer on the way (DismissableLayer's focus-outside).
+          Every control inside — thirteen checkboxes, the Device health link and
+          the page's largest write — was pointer-only. Measured in a browser,
+          not reasoned about. */}
+      <PopoverContent align="start" className="w-[min(30rem,calc(100vw-2rem))] p-0">
         {props.children}
       </PopoverContent>
     </Popover>

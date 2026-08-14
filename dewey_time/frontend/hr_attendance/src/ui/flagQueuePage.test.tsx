@@ -1811,7 +1811,7 @@ test("the cap the page reports is the one the query actually loaded", () => {
   // list is mounted in the container, which renderToStaticMarkup cannot reach.
   assert.match(
     flagPageSource(),
-    /truncatedTo=\{truncated \? \(counts\?\.open \?\? null\) : null\}/,
+    /flagsTruncated=\{counts\?\.open_capped \?\? false\}/,
   );
 });
 
@@ -2102,12 +2102,13 @@ test("a capped list says so at its end, where you have just run out of rows", ()
       entries={[missingTimePerson(), repeatPerson()]}
       {...listProps()}
       range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
-      truncatedTo={3445}
+      flagsTruncated
     />,
   );
-  assert.match(html, /End of the newest 3,445 flags/);
-  assert.match(html, /4 Aug – 14 Aug/);
+  assert.match(html, /End of the flags loaded for 4 Aug – 14 Aug/);
   assert.match(html, /narrow the dates to reach them/);
+  // No count: see queueEndTruncatedNotice for why every candidate is a lie.
+  assert.doesNotMatch(html, /newest [\d,]+ flags/);
 });
 
 test("the notice is the LAST thing in the list, not the first", () => {
@@ -2118,10 +2119,10 @@ test("the notice is the LAST thing in the list, not the first", () => {
       entries={[missingTimePerson(), repeatPerson()]}
       {...listProps()}
       range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
-      truncatedTo={3445}
+      flagsTruncated
     />,
   );
-  const notice = html.indexOf("End of the newest");
+  const notice = html.indexOf("End of the flags loaded");
   const lastRowEnd = html.lastIndexOf("</button>");
   assert.ok(notice > 0, "expected the notice to render");
   assert.ok(notice > lastRowEnd, "the notice must follow the final row");
@@ -2135,7 +2136,7 @@ test("an uncapped list ends without a word about it", () => {
       range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
     />,
   );
-  assert.doesNotMatch(html, /End of the newest/);
+  assert.doesNotMatch(html, /End of the flags loaded/);
 });
 
 test("the notice is not counted as an item of the list", () => {
@@ -2148,14 +2149,14 @@ test("the notice is not counted as an item of the list", () => {
       entries={[missingTimePerson(), repeatPerson()]}
       {...listProps()}
       range={{ startDate: "2026-08-04", endDate: "2026-08-14" }}
-      truncatedTo={3445}
+      flagsTruncated
     />,
   );
   // Sliced from the LAST <li, which is the notice's own — an offset window
   // from the text lands inside the warning icon's SVG and would assert about
   // whichever row happened to precede it.
   const noticeItem = html.slice(html.lastIndexOf("<li"));
-  assert.match(noticeItem, /End of the newest/, "the last item is the notice");
+  assert.match(noticeItem, /End of the flags loaded/, "the last item is the notice");
   assert.match(noticeItem, /^<li role="presentation"/);
   assert.doesNotMatch(noticeItem, /aria-setsize|aria-posinset/);
 });

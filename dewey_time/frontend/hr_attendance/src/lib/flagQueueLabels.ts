@@ -1,8 +1,8 @@
 /**
  * All HR-facing copy for the flag triage queue: tier names, the closed
  * reason vocabulary, outcome and decision-state wording, cause-group and
- * person headlines, device-outage cards, bulk-action labels, and
- * orphan-state summaries. Pure string formatting — no fetching, no state.
+ * person headlines, device-outage cards and bulk-action labels. Pure string
+ * formatting — no fetching, no state.
  *
  * `ui/FlagQueuePage.tsx`, `ui/FlagQueueList.tsx` and `ui/FlagDecisionPanel.tsx`
  * hold no copy of their own — every string they render is imported from here,
@@ -445,24 +445,62 @@ export function decidingLabel(flag: FlagOut): string {
  * bottom and is about to conclude the range is clear, rather than before they
  * have any use for it. Capping is structural at production volume and never
  * clears, so a permanent banner was a permanent lecture.
+ *
+ * NO COUNT, deliberately. The obvious number to print is `counts.open`, and it
+ * is untrustworthy here three separate ways:
+ *
+ *   1. On the capped path `open` IS QUEUE_FLAG_LIMIT — a constant, not a
+ *      measurement (flag_queue_api.py:532-538 says so and added `open_capped`
+ *      to flag it). "End of the newest 5,000 flags" would read as a precise
+ *      total and would still read 5,000 after HR cleared a thousand.
+ *   2. `open` stays whole-range under a tier filter — recount() refreshes only
+ *      rows/people — so it would state a count of something the reader never
+ *      saw, the same header-vs-list contradiction 38fbea19 fixed.
+ *   3. With the Decided toggle on, `open` excludes decided flags while the
+ *      list renders them, so it would undercount the rows directly above it.
+ *
+ * The load-bearing half — older days were not loaded, and the dates are the
+ * lever — is true under every one of those, so that is all this says.
  */
-export function queueEndTruncatedNotice(
-  shown: number,
-  startDate: string,
-  endDate: string,
-): string {
-  const flags = shown === 1 ? "flag" : "flags";
+export function queueEndTruncatedNotice(startDate: string, endDate: string): string {
   return (
-    `End of the newest ${shown.toLocaleString("en-US")} ${flags}. ` +
-    `Older days in ${dateSpanLabel([startDate, endDate])} aren't loaded — ` +
-    `narrow the dates to reach them.`
+    `End of the flags loaded for ${dateSpanLabel([startDate, endDate])}. ` +
+    `Older days in the range didn't fit — narrow the dates to reach them.`
   );
 }
 
 export const NOTHING_WAITING_TITLE = "Nothing waiting";
 
-export function nothingWaitingDetail(startDate: string, endDate: string): string {
-  return `Every flag between ${formatFlagContextDate(startDate)} and ${formatFlagContextDate(endDate)} has a decision.`;
+export function nothingWaitingDetail(
+  startDate: string,
+  endDate: string,
+  /**
+   * Why the queue might be empty for a reason other than "the work is done".
+   *
+   * `closeoutAlerts` is the one that made the old page lie: on a
+   * deferred_offline or closure_failed day the fallback path skips those
+   * employees entirely, so NO flags are generated and an uncorrected "Every
+   * flag has a decision" is the exact false calm DEVICE_ALERT_EXPLAINER was
+   * written to break. It said so beside the alert cards; those cards are
+   * behind the chip now, so the sentence has to be here instead.
+   *
+   * `flagsTruncated` matters because FlagQueueList's own end-of-list notice
+   * cannot fire on this path — the list is not mounted at all when the empty
+   * state renders.
+   */
+  reasons: { closeoutAlerts?: number; flagsTruncated?: boolean } = {},
+): string {
+  const span = `between ${formatFlagContextDate(startDate)} and ${formatFlagContextDate(endDate)}`;
+  if (reasons.closeoutAlerts) {
+    return (
+      `No flags were generated ${span} for ${plural(reasons.closeoutAlerts, "branch", "branches")} ` +
+      `whose device did not close out. A short queue here means missing data, not a quiet day.`
+    );
+  }
+  if (reasons.flagsTruncated) {
+    return `Older days ${span} didn't fit — narrow the dates to reach them.`;
+  }
+  return `Every flag ${span} has a decision.`;
 }
 
 export function showDecidedLabel(count: number): string {

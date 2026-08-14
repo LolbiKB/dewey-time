@@ -55,8 +55,9 @@ toolbar row. It costs **zero vertical pixels at desktop widths** — measured at
 1280, the `/hr-flags` toolbar is 40px with the chip and 40px without — because
 the row is already there and already that tall.
 
-**On a phone it is not free: 44px, one wrap line.** Measured at 375, the
-toolbar is 132px with the chip and 88px without. The retreat this spec named
+**On a phone it is not free: 44px, one wrap line, on both routes.** Measured at
+375, the flags toolbar is 132px with the chip and 88px without; the attendance
+toolbar is 142px against 98px. The retreat this spec named
 in advance (drop the chevron and the `+N` below `sm`) was tried and changed
 nothing — the date pickers already need the full row at that width, so the
 chip takes a line of its own however narrow it is. It is still a large net
@@ -294,10 +295,19 @@ picker's chrome budget, and `--font-khmer` naming a family that did not exist
 `e2e/notice-arrangement.spec.ts` measures the `/hr-flags` toolbar with and
 without the chip, at both widths, and pins the difference exactly:
 
-| Width | With chip | Without | Cost |
-|---|---|---|---|
-| 1280 | 40px | 40px | **0px** |
-| 375 | 132px | 88px | **44px — one wrap line** |
+| Route | Width | With chip | Without | Cost |
+|---|---|---|---|---|
+| `/hr-flags` | 1280 | 40px | 40px | **0px** |
+| `/hr-flags` | 375 | 132px | 88px | **44px — one wrap line** |
+| `/hr-attendance` | 1280 | 58px | 58px | **0px** |
+| `/hr-attendance` | 375 | 142px | 98px | **44px — one wrap line** |
+
+The attendance row was not measured in the first pass, and a review caught a
+second defect there that no comment predicted: `AttendanceToolbar`'s `<header>`
+is `flex flex-col` below `sm`, so the default `align-items: stretch` made the
+chip a **full-width 335px amber bar** — precisely the banner shape this design
+deletes. `self-start` fixes it; measured, the chip is now 84px wide at 375.
+Both routes are measured every run.
 
 The 375px case is the one that failed, exactly as this section anticipated it
 could. The stated retreat — drop the chevron and the `+N` at that width — was

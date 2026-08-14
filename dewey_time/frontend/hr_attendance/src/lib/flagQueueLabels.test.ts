@@ -990,13 +990,17 @@ test("an empty date span leaves no dangling separator", () => {
   assert.match(outageBandSubline([], 5), /^5 flags · /);
 });
 
-test("the end-of-list notice names the count, the range and the lever", () => {
+test("the end-of-list notice names the range and the lever", () => {
   assert.equal(
-    queueEndTruncatedNotice(3445, "2026-08-04", "2026-08-14"),
-    "End of the newest 3,445 flags. Older days in 4 Aug – 14 Aug aren't loaded — narrow the dates to reach them.",
+    queueEndTruncatedNotice("2026-08-04", "2026-08-14"),
+    "End of the flags loaded for 4 Aug – 14 Aug. Older days in the range didn't fit — narrow the dates to reach them.",
   );
 });
 
-test("one flag is one flag", () => {
-  assert.match(queueEndTruncatedNotice(1, "2026-08-04", "2026-08-14"), /newest 1 flag\./);
+test("the end-of-list notice states NO count, because none of them is true here", () => {
+  // counts.open is the constant QUEUE_FLAG_LIMIT on the capped path, stays
+  // whole-range under a tier filter, and excludes decided flags while the list
+  // renders them. Any digit in this sentence would be one of those three lies,
+  // and the half that matters — older days were not loaded — needs none.
+  assert.doesNotMatch(queueEndTruncatedNotice("2026-08-04", "2026-08-14"), /\d,?\d*\s+flags/);
 });

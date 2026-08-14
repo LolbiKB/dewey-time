@@ -26,7 +26,7 @@ export function DeviceHealthDetail(props: {
         <p className="text-foreground">
           Device data may be stale — last sync{" "}
           <span className="font-medium">
-            {formatDurationMinutes(Math.round(props.staleSyncMinutes))}
+            {formatDurationMinutes(props.staleSyncMinutes)}
           </span>{" "}
           ago
         </p>

@@ -22,6 +22,51 @@ test("an outage puts a chip in the flags toolbar and no band above the queue", a
   await expect(page.getByText(/nobody is being judged here/)).toBeVisible();
 });
 
+test("everything behind the chip is reachable by keyboard", async ({ page }) => {
+  // The regression this exists for: with onOpenAutoFocus prevented, this
+  // popover is non-modal (trapFocus:false), so focus stayed on the trigger and
+  // the first Tab BOTH moved to the date picker and dismissed the layer on the
+  // way out. Thirteen checkboxes, the Device health link and the page's largest
+  // write were pointer-only, and nothing failed.
+  await stubFrappe(page, { flagQueueOutageBranches: ["Siem Reap Depot"] });
+  await page.goto("/hr-flags");
+
+  await page.getByRole("button", { name: /branch(es)? offline/ }).focus();
+  await page.keyboard.press("Enter");
+
+  const panel = page.locator('[aria-label="Device outages"]');
+  await expect(panel).toBeVisible();
+  await expect(
+    page.evaluate(() => !!document.activeElement?.closest('[aria-label="Device outages"]')),
+  ).resolves.toBe(true);
+
+  // Tab reaches the write without dismissing the panel on the way.
+  const seen: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Tab");
+    await expect(panel).toBeVisible();
+    // aria-label OR text: the checkboxes are labelled, the Excuse button
+    // carries its name as content.
+    seen.push(
+      await page.evaluate(
+        () =>
+          document.activeElement?.getAttribute("aria-label") ??
+          document.activeElement?.textContent ??
+          "",
+      ),
+    );
+  }
+  assertReached(seen, /^Excuse /);
+  assertReached(seen, /^Include /);
+});
+
+/** Playwright has no "one of these matched" assertion; this reads better than a filter. */
+function assertReached(labels: string[], pattern: RegExp) {
+  expect(labels.some((label) => pattern.test(label)), `${pattern} in ${labels.join(" | ")}`).toBe(
+    true,
+  );
+}
+
 test("a healthy queue has no chip at all — absent, not present-and-empty", async ({ page }) => {
   await stubFrappe(page);
   await page.goto("/hr-flags");
@@ -67,5 +112,45 @@ for (const width of [1280, 375]) {
       `[measured] flags toolbar @${width}: with chip ${withChip}px · without ${withoutChip}px`,
     );
     expect(withChip - withoutChip).toBe(EXPECTED_CHIP_COST[width]);
+  });
+}
+
+/**
+ * The attendance side, which the first version of this spec did not measure at
+ * all — the "costs no vertical space" claim there was a comment, and a review
+ * found it false: below `sm` the chip was a full-width 335px amber bar on its
+ * own line, because AttendanceToolbar's <header> is flex-col with the default
+ * align-items:stretch. That is the banner shape this whole change deletes.
+ */
+const EXPECTED_ATTENDANCE_COST: Record<number, number> = { 1280: 0, 375: 44 };
+
+for (const width of [1280, 375]) {
+  test(`the attendance chip costs ${EXPECTED_ATTENDANCE_COST[width]}px and never spans the row at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const toolbar = () => page.locator('header:has([aria-label="Week navigation"])');
+
+    // A healthy day: no chip.
+    await stubFrappe(page);
+    await page.goto("/hr-attendance");
+    await expect(toolbar()).toBeVisible();
+    await expect(page.getByRole("button", { name: /Last sync/ })).toHaveCount(0);
+    const without = await toolbar().evaluate((el) => el.getBoundingClientRect().height);
+
+    // Five hours since the freshest delivery — past SYNC_STALE_AFTER_MIN.
+    await stubFrappe(page, { staleSyncHours: 5 });
+    await page.goto("/hr-attendance");
+    const chip = page.getByRole("button", { name: /Last sync/ });
+    await expect(chip).toBeVisible();
+    const withChip = await toolbar().evaluate((el) => el.getBoundingClientRect().height);
+    const chipWidth = await chip.evaluate((el) => el.getBoundingClientRect().width);
+
+    console.log(
+      `[measured] attendance toolbar @${width}: with chip ${withChip}px · without ${without}px · chip ${chipWidth}px wide`,
+    );
+    expect(withChip - without).toBe(EXPECTED_ATTENDANCE_COST[width]);
+    // self-start. Without it align-items:stretch made this the full row.
+    expect(chipWidth).toBeLessThan(width / 2);
   });
 }

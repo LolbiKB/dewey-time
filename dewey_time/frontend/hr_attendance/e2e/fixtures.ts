@@ -457,6 +457,14 @@ export type FrappeStubOverrides = {
    * single MISSING_TIME row and nothing else.
    */
   flagQueueOutageBranches?: string[];
+  /**
+   * Hours since the freshest device delivery, for the attendance page.
+   *
+   * Omitted, `device_sync` stays empty and checkDeviceSyncStaleness reports
+   * nothing — the ordinary healthy day every other spec wants. Pass a value
+   * past SYNC_STALE_AFTER_MIN to light /hr-attendance's data-health chip.
+   */
+  staleSyncHours?: number;
 };
 
 export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}): Promise<void> {
@@ -505,7 +513,19 @@ export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}
         end_date: end,
         days: buildDays(start, end),
         device_alerts: [],
-        device_sync: [],
+        device_sync:
+          overrides.staleSyncHours == null
+            ? []
+            : [
+                {
+                  device_sn: "ZK-A4-014",
+                  branch: "BRANCH-A",
+                  local_date: ymd(new Date()),
+                  last_delivered_at: frappeDatetime(
+                    new Date(Date.now() - overrides.staleSyncHours * 3_600_000),
+                  ),
+                },
+              ],
         first_checkin_date: "2026-01-01",
         schedule_max_date: "2026-12-31",
         has_shift_assignment: true,
