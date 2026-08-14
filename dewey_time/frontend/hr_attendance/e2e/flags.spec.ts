@@ -6,6 +6,29 @@ import type { FlagOut, QueueEntry, QueuePayload, QueuePerson } from "@/types/fla
 import { stubFrappe } from "./fixtures";
 
 /**
+ * The device-outage panel.
+ *
+ * A plain aria-label locator, NOT getByRole("region"): the panel is a <div>
+ * now, because it is about to become the body of the toolbar's data-health
+ * popover, and a landmark inside a popover is a landmark nobody can reach.
+ */
+function outagePanel(page: import("@playwright/test").Page) {
+  return page.locator('[aria-label="Device outages"]');
+}
+
+/**
+ * Opens the toolbar's data-health chip, behind which the panel now lives.
+ *
+ * The panel is popover content: absent from the DOM until the chip is pressed.
+ * That is the whole point of the arrangement — thirteen branches of prose no
+ * longer arrive unasked — so every test that works the panel opens it first.
+ */
+async function openOutagePanel(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: /branch(es)? offline/ }).click();
+  await expect(outagePanel(page)).toBeVisible();
+}
+
+/**
  * Every payload fixture in this file predates rollout phases and describes an
  * all-live range, so the pilot banner stays silent in all of them.
  *
@@ -269,13 +292,13 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // requires the branch name in the copy and still forbids a device serial, so
   // "Siem Reap Depot" is still guaranteed to appear — but no longer in a queue
   // row. An outage is a precondition, not a judgment about anybody, so it is
-  // now the band above the queue (OutageBand). The band leads with what
-  // happened and keeps its branch list behind a disclosure, collapsed on
-  // arrival so thirteen branches cannot push the queue below the fold.
-  const band = page.getByRole("region", { name: "Device outages" });
+  // now the OutageExcusePanel, which leads with what happened and names every
+  // branch beneath it. A plain aria-label locator, not getByRole("region"):
+  // the panel is a <div> now, because it is about to become a popover body and
+  // a landmark inside a popover is a landmark nobody can reach.
+  await openOutagePanel(page);
+  const band = outagePanel(page);
   await expect(band.getByText(/1 branch had no device data/)).toBeVisible();
-
-  await band.getByRole("button", { name: /Review 1 branch/ }).click();
   await expect(band.getByText("Siem Reap Depot")).toBeVisible();
 
   // …and it left the queue: three entries came back, two of them are rows.
@@ -292,18 +315,11 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // clothes, and it is the only one of the two that a layout can fail.
   await expect(list.getByRole("listitem").first()).toBeVisible();
 
-  // The header, against a payload whose own `counts` disagrees with all three
-  // numbers in it: `people: 5, rows: 3` count the outage's two members and the
-  // outage row along with the judgment work. Only the real page can catch these
-  // — the split is computed in `FlagQueuePage`'s body, which the unit suite has
-  // no react-query harness to reach.
-  //
-  //   3 people   = queuePeopleCount(queue): EMP-401, EMP-402, EMP-001
-  //   2 rows     = queue.length, not counts.rows (3)
-  //   2 waiting  = queuePeopleCount(outages): EMP-301, EMP-302
-  await expect(
-    page.getByText("3 people need a decision · 2 rows · 2 waiting on a device fault"),
-  ).toBeVisible();
+  // No header description any more. "3 people need a decision · 2 rows · 2
+  // waiting on a device fault" was three counts nobody acted on, above a queue
+  // that states its own size by existing — and it cost a row on the one page
+  // where vertical space converts directly into visible work.
+  await expect(page.getByText(/need a decision ·/)).toHaveCount(0);
 
   // ROUTINE_CODE group: same rule's copy example ("168 late starts, 6–20
   // min…") turns on the flag label, formatted through the shared
@@ -320,9 +336,9 @@ test("the flag queue renders groups and person rows with toolbar counts for HR s
   // · Needs re-review · Decided". "Explained" is Spec 2 scope and is not a
   // key on this endpoint's `counts` dict, so it is not asserted here).
   // Open and Needs re-review were permanent chips beside Decided; both are
-  // gone from the toolbar now (Open moved into the header's description line
-  // via queueSplitDescription, and Needs re-review read 0 on every day the
-  // queue has ever seen — flag-queue-layout task 5). Decided is the one
+  // gone from the toolbar now (Open reported the size of a job the queue
+  // itself shows, and Needs re-review read 0 on every day the queue has ever
+  // seen — flag-queue-layout task 5). Decided is the one
   // survivor and the toolbar's only remaining count. The toggle button
   // renders `{label}<span>{value}</span>` with no whitespace between the JSX
   // expression and the following element, so its real DOM text content is
@@ -1365,7 +1381,8 @@ test("a band excuse leaves the selected person's row and form alone", async ({ p
   await page.getByRole("button", { name: "Decide", exact: true }).click();
   await page.getByRole("textbox").first().fill(note);
 
-  const band = page.getByRole("region", { name: "Device outages" });
+  await openOutagePanel(page);
+  const band = outagePanel(page);
   await band.getByRole("button", { name: /^Excuse\b/ }).click();
 
   // The write landed, was announced, and cleared the band.
@@ -1401,8 +1418,8 @@ test("a band excuse leaves the selected person's row and form alone", async ({ p
 // decided a single person, announcing a mass excuse they never asked for.
 test("the band's button reports the band's own write, and no other", async ({ page }) => {
   // ≥ lg for the reason the band test above states: this reads the band WHILE
-  // the panel's own write is in flight, so both have to be on screen together,
-  // which below lg they no longer are.
+  // the panel's own write is in flight, so the panel has to be the split's
+  // own pane rather than a sheet over the list.
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/api/method/**", async (route) => {
     const url = new URL(route.request().url());
@@ -1436,11 +1453,19 @@ test("the band's button reports the band's own write, and no other", async ({ pa
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
-  const bandExcuse = band.getByRole("button", { name: /Excus/ });
-  const panelSubmit = page.getByRole("button", { name: /^Excuse\b/ }).last();
+  // Scoped to the decision pane BEFORE `.last()`. Page-wide, `.last()` would
+  // pick the popover's Excuse once it opens — the popover is a portal appended
+  // to <body> — and this test would assert the band against itself. Within the
+  // pane, `.last()` still picks the footer's submit over the Outcome toggle's
+  // "Excuse" option, which is a button too.
+  const panelSubmit = page
+    .getByRole("region", { name: "Selected flag" })
+    .getByRole("button", { name: /^Excuse\b/ })
+    .last();
 
-  // A panel write, mid-flight.
+  // A panel write, mid-flight. Started BEFORE the popover is opened: clicking a
+  // queue row dismisses the popover, so the two can no longer be worked in the
+  // other order.
   await page.locator('button[aria-label*="Vandy In"]').click();
   await page.getByRole("button", { name: "Decide", exact: true }).click();
   await page
@@ -1452,13 +1477,24 @@ test("the band's button reports the band's own write, and no other", async ({ pa
   // that the band is being read mid-flight rather than after everything
   // settled.
   await expect(panelSubmit).toBeDisabled();
+
+  await openOutagePanel(page);
+  const band = outagePanel(page);
+  const bandExcuse = band.getByRole("button", { name: /Excus/ });
+
   // Snapshot reads, NOT `expect(...).toBeEnabled()`. A web-first assertion
   // retries for five seconds, so a negative one about a two-second window
   // passes the moment the window shuts — it would report the band as quiet
   // simply by outlasting the write it was supposed to be watching.
   expect(await bandExcuse.isDisabled()).toBe(false);
   expect(await bandExcuse.textContent()).not.toMatch(/Excusing/);
-  await expect(panelSubmit).toBeEnabled({ timeout: 10_000 });
+
+  // Wait on the announcement, not on the panel's own submit: once the write
+  // lands the decided row leaves the queue and the pane empties, so the button
+  // that was the settle signal is gone rather than re-enabled.
+  await expect(page.locator('[role="status"][aria-live="polite"]')).toHaveText(/saved/i, {
+    timeout: 10_000,
+  });
 
   // The band's own write, mid-flight.
   await bandExcuse.click();
@@ -1470,8 +1506,8 @@ test("the band's button reports the band's own write, and no other", async ({ pa
 // is stable across months — the same fact that makes it unsafe to send as a
 // decision's group_key. Left standing across a change of question, a branch
 // unchecked for last week's outage silently narrows this week's write, and the
-// band is collapsed by default so the only trace is a smaller number inside a
-// button label.
+// band is behind a chip nobody need open, so the only trace is a smaller number
+// inside a button label.
 test("a branch unchecked for one outage is not still unchecked for the next", async ({ page }) => {
   await page.route("**/api/method/**", (route) => {
     const url = new URL(route.request().url());
@@ -1493,10 +1529,10 @@ test("a branch unchecked for one outage is not still unchecked for the next", as
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
+  await openOutagePanel(page);
+  const band = outagePanel(page);
   const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
 
-  await band.getByRole("button", { name: /Review 1 branch/ }).click();
   await band.getByRole("checkbox", { name: "Include Siem Reap Depot" }).click();
   await expect(bandExcuse).toHaveText("Select a branch to excuse");
 
@@ -1563,9 +1599,9 @@ test("deciding the last judgment row lands nowhere, not on the outage", async ({
   await expect(panel.getByText("Pick a row to review")).toBeVisible();
   await expect(panel).not.toContainText("Siem Reap Depot");
 
-  // The outage itself is untouched — still a band, still awaiting its own
+  // The outage itself is untouched — still on the page, still awaiting its own
   // acknowledgement.
-  await expect(page.getByRole("region", { name: "Device outages" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /branch(es)? offline/ })).toBeVisible();
 });
 
 test("a second save is announced too, not silently deduplicated", async ({ page }) => {
@@ -1753,9 +1789,8 @@ test("unchecking a branch takes its people out of the excuse", async ({ page }) 
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
-  await band.getByRole("button", { name: /^Review 2/ }).click();
-
+  await openOutagePanel(page);
+  const band = outagePanel(page);
   const bandExcuse = band.getByRole("button", { name: /Excuse|Select a branch/ });
   await expect(bandExcuse).toHaveText("Excuse 2 people · 2 flags");
 
@@ -1793,8 +1828,10 @@ test("the keyboard model survives the band", async ({ page }) => {
   });
 
   await page.goto("/hr-flags");
-  const band = page.getByRole("region", { name: "Device outages" });
-  await expect(band).toBeVisible();
+  // The chip, NOT the popover behind it. This test is about the list's own
+  // roving tabindex and arrow clamping; an open Radix popover puts a dismiss
+  // layer between the keyboard and the rows and makes the whole thing a race.
+  await expect(page.getByRole("button", { name: /branch(es)? offline/ })).toBeVisible();
 
   const list = page.getByRole("list", { name: "Flag queue" });
   const rows = list.getByRole("button");
@@ -1806,8 +1843,7 @@ test("the keyboard model survives the band", async ({ page }) => {
   await expect(list.getByRole("listitem").first()).toHaveAttribute("aria-setsize", "3");
 
   // Roving tabindex: exactly one row is tabbable, scoped to the list — the
-  // band's own disclosure and Excuse button are real tab stops of their own
-  // and must not be counted here.
+  // toolbar's chip is a real tab stop of its own and must not be counted here.
   await expect(list.locator('button[tabindex="0"]')).toHaveCount(1);
   await expect(page.locator('button[aria-label*="Vandy In"]')).toHaveAttribute("tabindex", "0");
 
@@ -1820,7 +1856,9 @@ test("the keyboard model survives the band", async ({ page }) => {
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.locator('button[aria-label*="Dara Kim"]')).toBeFocused();
-  await expect(band.getByRole("button", { name: /Review 1 branch/ })).not.toBeFocused();
+  // The chip is a real tab stop of its own, and the arrows must not escape
+  // upward into it.
+  await expect(page.getByRole("button", { name: /branch(es)? offline/ })).not.toBeFocused();
 });
 
 /** One person, four mornings — a compressed list small enough to count by eye. */

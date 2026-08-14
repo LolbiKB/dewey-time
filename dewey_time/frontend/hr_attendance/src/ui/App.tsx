@@ -36,7 +36,6 @@ import {
 } from "@/ui/AttendanceLoading";
 import { AttendanceToolbar } from "@/ui/AttendanceToolbar";
 import { DayInspectorSheet } from "@/ui/DayInspectorSheet";
-import { DeviceCloseoutBanner, DeviceSyncStalenessBanner } from "@/ui/DeviceAlerts";
 import { WeekView } from "@/ui/WeekView";
 import { WeekDayView } from "@/ui/WeekDayView";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
@@ -313,6 +312,22 @@ export function App() {
                 isRefreshing={isRefreshing}
                 isCalendarLoading={isCalendarLoading}
                 weekFlagCounts={weekFlagCounts}
+                // Withheld on a failed load, the same guard FlagQueueView
+                // applies to its own chip. Both are derived from `payload`,
+                // which react-query keeps at its last good value when a refetch
+                // fails — so without this the grid says "Attendance data didn't
+                // load" while an amber chip above it reports a sync age
+                // computed from a frozen watermark that only grows staler.
+                deviceAlerts={loadError ? [] : weekDeviceAlerts}
+                // `stale ? … : null` is the contract attendanceHealth
+                // documents: null means "nothing to report", not "zero minutes
+                // ago". Passing minutesSince unconditionally would light the
+                // chip on every healthy page load.
+                staleSyncMinutes={
+                  loadError || !syncStaleness.stale
+                    ? null
+                    : (syncStaleness.minutesSince ?? null)
+                }
               />
             </div>
           )}
@@ -325,12 +340,6 @@ export function App() {
               </>
             ) : (
               <>
-                {weekDeviceAlerts.length > 0 ? (
-                  <DeviceCloseoutBanner alerts={weekDeviceAlerts} />
-                ) : null}
-                {syncStaleness.stale && syncStaleness.minutesSince != null ? (
-                  <DeviceSyncStalenessBanner minutesSince={syncStaleness.minutesSince} />
-                ) : null}
                 <WeekViewAnimatedShell
                   loading={isCalendarLoading}
                   weekKey={weekKey}

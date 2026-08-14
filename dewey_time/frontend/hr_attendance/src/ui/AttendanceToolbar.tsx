@@ -13,10 +13,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import type { CalendarEmployee, Day } from "@/types/calendar";
 
+import { attendanceHealth } from "@/lib/dataHealth";
 import { attendancePickerTail } from "@/lib/employeeCard";
 import { formatWeekRangeLabel } from "@/lib/weekSchedule";
-import type { Severity } from "@/types/calendar";
+import type { DeviceAlert, Severity } from "@/types/calendar";
 import { AppTooltip } from "@/ui/AppTooltip";
+import { DataHealthButton } from "@/ui/DataHealthButton";
+import { DeviceHealthDetail } from "@/ui/DeviceAlerts";
 import { ClockBadge, EmployeePicker } from "@/ui/EmployeePicker";
 import { RunEngineDialog } from "@/ui/RunEngineDialog";
 import { WeekFlagSummary } from "@/ui/WeekFlagSummary";
@@ -47,6 +50,10 @@ export type AttendanceToolbarProps = {
   isCalendarLoading: boolean;
   hrStaff?: boolean;
   weekFlagCounts: Record<Severity, number>;
+  /** Minutes since the last device punch, or null when not stale. */
+  staleSyncMinutes: number | null;
+  /** Device Closeout Alerts for the week on screen. */
+  deviceAlerts: DeviceAlert[];
 };
 
 export function AttendanceToolbar(props: AttendanceToolbarProps) {
@@ -104,6 +111,29 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
           </>
         ) : null}
       </div>
+
+      {/* From sm up it rides in the gap sm:justify-between already leaves
+          between the picker block and the week nav, and costs no vertical
+          space. BELOW sm this <header> is flex-col with the default
+          align-items:stretch, so without `self-start` the h-9 button became a
+          full-width amber bar on its own line — the banner shape this whole
+          change exists to delete. Measured at 375: 335px wide before, its own
+          content width after. It still takes a line there; see
+          e2e/notice-arrangement.spec.ts for what that costs.
+
+          Renders null when both counts are clean, which is the ordinary day. */}
+      <DataHealthButton
+        className="self-start"
+        conditions={attendanceHealth({
+          staleSyncMinutes: props.staleSyncMinutes,
+          closeoutAlerts: props.deviceAlerts.length,
+        })}
+      >
+        <DeviceHealthDetail
+          alerts={props.deviceAlerts}
+          staleSyncMinutes={props.staleSyncMinutes}
+        />
+      </DataHealthButton>
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2 self-stretch sm:flex-none">
         <WeekFlagSummary

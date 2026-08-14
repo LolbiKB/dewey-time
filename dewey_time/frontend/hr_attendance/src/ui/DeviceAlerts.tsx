@@ -1,19 +1,44 @@
 import { formatDeviceAlertStatus } from "@/hooks/useHrAttendanceData";
 import { formatBranchLabel, formatDurationMinutes } from "@/lib/attendanceTime";
+import { cn } from "@/lib/utils";
 import type { DeviceAlert } from "@/types/calendar";
-import { AlertTriangleIcon, ClockIcon } from "lucide-react";
 
-import { AttentionStrip } from "@/components/ui/notice";
-
-export function DeviceCloseoutBanner({ alerts }: { alerts: DeviceAlert[] }) {
+/**
+ * The attendance page's data-health popover body.
+ *
+ * Both banners this replaces rendered inside `Section grow`, directly above the
+ * week view — so they took their height from the calendar rather than from the
+ * page. Same facts, no layout cost.
+ *
+ * One amber tone for both. `DeviceCloseoutBanner` was tone="accent", the brand
+ * orange src/brand/tokens.css reserves for the URGENT signal — but a pending
+ * closeout is a data-freshness problem, not an urgent-action one, so merged
+ * into one chip they share the staleness banner's amber. Deliberate.
+ */
+export function DeviceHealthDetail(props: {
+  alerts: DeviceAlert[];
+  /** Null when there is no staleness to report. */
+  staleSyncMinutes: number | null;
+}) {
   return (
-    <AttentionStrip
-      tone="accent"
-      count={alerts.length}
-      icon={<AlertTriangleIcon className="size-4 text-brand-accent" aria-hidden="true" />}
-      detail={
-        <ul className="space-y-1.5 text-xs text-muted-foreground">
-          {alerts.map((alert) => (
+    <div className="px-3 py-2.5 text-sm">
+      {props.staleSyncMinutes != null ? (
+        <p className="text-foreground">
+          Device data may be stale — last sync{" "}
+          <span className="font-medium">
+            {formatDurationMinutes(props.staleSyncMinutes)}
+          </span>{" "}
+          ago
+        </p>
+      ) : null}
+      {props.alerts.length > 0 ? (
+        <ul
+          className={cn(
+            "space-y-1.5 text-xs text-muted-foreground",
+            props.staleSyncMinutes != null && "mt-2 border-t border-border pt-2",
+          )}
+        >
+          {props.alerts.map((alert) => (
             <li key={`${alert.device_sn}-${alert.local_date}`} className="truncate">
               <span className="font-medium text-foreground">{alert.local_date}</span>
               {" · "}
@@ -24,26 +49,8 @@ export function DeviceCloseoutBanner({ alerts }: { alerts: DeviceAlert[] }) {
             </li>
           ))}
         </ul>
-      }
-    >
-      Device closeout pending
-    </AttentionStrip>
-  );
-}
-
-/**
- * Shown when no device punch has arrived for >3h. Surfaces a stalled Bridge
- * before the first UNNOTIFIED_ABSENCE flag appears.
- */
-export function DeviceSyncStalenessBanner({ minutesSince }: { minutesSince: number }) {
-  const ago = formatDurationMinutes(Math.round(minutesSince));
-  return (
-    <AttentionStrip
-      tone="amber"
-      icon={<ClockIcon className="size-4 text-amber-600" aria-hidden="true" />}
-    >
-      Device data may be stale — last sync <span className="font-medium">{ago}</span> ago
-    </AttentionStrip>
+      ) : null}
+    </div>
   );
 }
 
