@@ -55,6 +55,7 @@ import {
   reconcileRetiresShifts,
   confirmNameMatches,
   openingScheduleMode,
+  scheduleFormFingerprint,
   scheduleFormStateFromContext,
   type ScheduleMode,
 } from "@/lib/scheduleEdit";
@@ -62,7 +63,7 @@ import { plannedDaysFromWeekPattern, resolveWeekPatternWindow } from "@/lib/plan
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import { summarizeWeekPattern } from "@/types/schedule";
 import { PlannedWeekCanvas } from "@/ui/PlannedWeekCanvas";
-import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
+import type { ApplyScheduleResult, ReconcilePreview, ScheduleContext } from "@/types/schedule";
 import {
   isWeeklyScheduleEligible,
   schedulePickerTail,
@@ -108,6 +109,10 @@ export function WeeklySchedulePage() {
   // "edit" only because no context has loaded yet; the effect below owns it
   // from the first context onwards.
   const [mode, setMode] = useState<ScheduleMode>("edit");
+  /** The form as the server last handed it over — the "clean" comparison key. */
+  const seededFingerprint = useRef<string | null>(null);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [pendingEmployeeId, setPendingEmployeeId] = useState<string | null>(null);
 
   const weekPattern = useMemo<WeekPattern>(
     () => weekPatternFromBlocks(shiftBlocks),
@@ -149,13 +154,27 @@ export function WeeklySchedulePage() {
     if (!contextLoading) setEmployeeLoading(false);
   }, [contextLoading]);
 
-  useEffect(() => {
-    if (!context) return;
-    const seeded = scheduleFormStateFromContext(context);
+  /** Adopt the server's version of the schedule, and record it as the clean
+   * baseline in the same breath.
+   *
+   * Three paths adopt it — the seed on employee change, the refetch after a
+   * save or a clear, and a discard — and every one of them must move
+   * `seededFingerprint`. A path that reseeded the form but left the old key
+   * behind would leave a freshly loaded form reporting itself dirty, and
+   * Cancel would then raise a confirm nobody caused. One helper, so none of
+   * the three can forget. */
+  function seedFormFrom(source: ScheduleContext) {
+    const seeded = scheduleFormStateFromContext(source);
     setShiftBlocks(seeded.shiftBlocks);
     setEffectiveFrom(seeded.effectiveFrom);
     setGenerateThrough(seeded.generateThrough);
     setLimitGenerateThrough(seeded.limitGenerateThrough);
+    seededFingerprint.current = scheduleFormFingerprint(seeded);
+  }
+
+  useEffect(() => {
+    if (!context) return;
+    seedFormFrom(context);
   }, [context?.employee]);
 
   // The mode is a property of the employee on screen, so it is re-derived
@@ -184,6 +203,49 @@ export function WeeklySchedulePage() {
 
   const hasLiveSchedule = (context?.enabled_ssa_count ?? 0) > 0;
   const scheduleReadOnly = false;
+
+  const isDirty =
+    seededFingerprint.current !== null &&
+    scheduleFormFingerprint({
+      shiftBlocks,
+      effectiveFrom,
+      generateThrough,
+      limitGenerateThrough,
+    }) !== seededFingerprint.current;
+
+  // Both ways out of edit mode with unsaved work funnel through one confirm.
+  // `pendingEmployeeId` is what distinguishes them: null means "just leave edit
+  // mode", a value means "leave, then switch to this person".
+  function leaveEditMode() {
+    if (!isDirty) {
+      setMode("preview");
+      return;
+    }
+    setPendingEmployeeId(null);
+    setDiscardOpen(true);
+  }
+
+  function requestEmployeeChange(id: string) {
+    if (!isDirty) {
+      selectEmployee(id);
+      return;
+    }
+    setPendingEmployeeId(id);
+    setDiscardOpen(true);
+  }
+
+  function confirmDiscard() {
+    setDiscardOpen(false);
+    if (pendingEmployeeId) {
+      // The seeding effect reseeds the form and the mode effect re-derives the
+      // mode, so nothing else has to be undone by hand here.
+      selectEmployee(pendingEmployeeId);
+      setPendingEmployeeId(null);
+      return;
+    }
+    if (context) seedFormFrom(context);
+    setMode("preview");
+  }
   const isBootstrapping = employeesLoading && employees.length === 0;
   const isScheduleLoading = contextLoading && !!scheduleEmployeeId;
 
@@ -236,11 +298,7 @@ export function WeeklySchedulePage() {
   async function reseedFormFromServer() {
     const refetched = await refetchContext();
     if (!refetched.data) return;
-    const seeded = scheduleFormStateFromContext(refetched.data);
-    setShiftBlocks(seeded.shiftBlocks);
-    setEffectiveFrom(seeded.effectiveFrom);
-    setGenerateThrough(seeded.generateThrough);
-    setLimitGenerateThrough(seeded.limitGenerateThrough);
+    seedFormFrom(refetched.data);
   }
 
   async function handleSave(confirmCreate = false): Promise<boolean> {
@@ -410,7 +468,7 @@ export function WeeklySchedulePage() {
               size="lg"
               employees={employees}
               value={employee}
-              onChange={selectEmployee}
+              onChange={requestEmployeeChange}
               isLoading={employeesLoading || (employeeLoading && isScheduleLoading)}
               tail={schedulePickerTail}
               isDisabled={(candidate) => !isWeeklyScheduleEligible(candidate.employment_type)}
@@ -582,6 +640,15 @@ export function WeeklySchedulePage() {
                 />
                 <Button
                   type="button"
+                  variant="ghost"
+                  className="h-9"
+                  onClick={leaveEditMode}
+                  disabled={applying}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
                   size="default"
                   className="h-9 min-w-[7.5rem]"
                   onClick={() => void handleSave(false)}
@@ -614,6 +681,29 @@ export function WeeklySchedulePage() {
         effectiveFrom={effectiveFrom}
         generateThrough={generateThrough}
       />
+
+      <ResponsiveModal
+        open={discardOpen}
+        onOpenChange={setDiscardOpen}
+        size="sm"
+        title="Discard unsaved changes?"
+        description="This schedule has edits that have not been saved. Discarding returns it to the version on file."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDiscardOpen(false)}>
+              Keep editing
+            </Button>
+            <Button type="button" variant="destructive" onClick={confirmDiscard}>
+              Discard changes
+            </Button>
+          </>
+        }
+      >
+        {/* The description says the whole thing. The body is `min-h-0 flex-1`
+            with nothing in it, so it collapses and the modal is a title, a
+            sentence and two buttons. */}
+        {null}
+      </ResponsiveModal>
 
       <ResponsiveModal
         open={confirmOpen}

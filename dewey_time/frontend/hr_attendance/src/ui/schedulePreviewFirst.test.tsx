@@ -105,3 +105,46 @@ test("the opening mode comes from the shared rule, not an inline ternary", () =>
   // `hasLiveSchedule` constant, deliberately — see the effect's comment.
   assert.match(pageSource(), /openingScheduleMode\(/);
 });
+
+test("leaving edit mode is guarded by one shared dirty check, not two rules", () => {
+  // Cancel and switching employee are both "leave with unsaved work". Two
+  // different answers to that question is one more rule than the reader needs.
+  const src = pageSource();
+  assert.match(src, /scheduleFormFingerprint/, "the page must compute a dirty key");
+  assert.match(src, /pendingEmployeeId/, "an employee switch must be able to wait on the confirm");
+});
+
+test("the discard confirm reuses ResponsiveModal rather than adding a component", () => {
+  const src = pageSource();
+  assert.match(src, /discardOpen/, "expected discard-confirm state");
+  const modals = src.match(/<ResponsiveModal/g) ?? [];
+  assert.ok(modals.length >= 2, "expected the save confirm plus the discard confirm");
+});
+
+test("a clean form leaves edit mode without asking", () => {
+  // The common path is: pressed Edit, looked, left. A confirm there is a
+  // dialog that always says the same thing, which teaches people to dismiss it.
+  assert.match(
+    pageSource(),
+    /if \(!isDirty\)/,
+    "expected an early return that skips the confirm when clean",
+  );
+});
+
+test("every path that adopts the server's schedule moves the clean baseline", () => {
+  // The baseline lives in a ref, so a path that reseeds the form without
+  // moving it leaves the form reporting itself dirty against a stale key —
+  // and Cancel then raises a confirm nobody caused. Saving reseeds, clearing
+  // reseeds, and discarding reseeds: one seeding helper, so none of the three
+  // can forget.
+  const src = pageSource();
+  const helper = src.match(/function seedFormFrom\([\s\S]*?\n  }/);
+  assert.ok(helper, "expected a single seedFormFrom helper");
+  assert.match(helper[0], /seededFingerprint\.current = scheduleFormFingerprint\(/);
+  // Only the helper assigns the baseline — nowhere else sets the form fields.
+  assert.equal(
+    (src.match(/setLimitGenerateThrough\(seeded\.limitGenerateThrough\)/g) ?? []).length,
+    1,
+    "the form must be seeded in exactly one place",
+  );
+});
