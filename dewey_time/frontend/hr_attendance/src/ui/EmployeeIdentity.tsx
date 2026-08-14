@@ -95,7 +95,23 @@ export type EmployeeIdentityProps = {
  *
  * Every threshold below is a measured worst case, not a guess: `Sovannary Heng
  * · ហេង សុវណ្ណារី` needs 194px at 14px semibold, so the Khmer name turns on at
- * 200. When it will not fit it is NOT RENDERED rather than shrunk or truncated
+ * 200.
+ *
+ * THAT 194 IS THE TEXT ALONE AND THE LINE IS WIDER. Re-measured in Chromium
+ * against the real markup — English, the separator span with its `mx-1.5`
+ * (6px a side), and the Khmer name — the same pair draws 199.9px. The
+ * separator's 12px of margin was never in the 194. So the shipped threshold
+ * clears its worst case by A TENTH OF A PIXEL, not by 6px, and the headroom
+ * shrank when --font-khmer was fixed to name a family that exists: Khmer MN,
+ * which the broken token had been falling through to, drew the same pair at
+ * 199.2px. Anything that widens line one — a longer name, a wider separator,
+ * a platform that rounds differently — lands the ellipsis mid-cluster, which
+ * is the outcome this whole threshold exists to prevent. Raising it to 210
+ * costs only that Khmer appears slightly later; see the ledger's open
+ * decisions before changing it, since it interacts with the register's
+ * crossing point.
+ *
+ * When it will not fit the Khmer name is NOT RENDERED rather than shrunk or truncated
  * — shrinking would need 3px for that name, and Khmer has no inter-word spaces
  * so an ellipsis lands mid-cluster. That threshold is one global worst case
  * rather than a per-name calculation, so it narrows the mid-cluster ellipsis to
