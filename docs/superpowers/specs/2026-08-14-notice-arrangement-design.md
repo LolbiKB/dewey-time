@@ -51,8 +51,17 @@ Three calls, made by the operator after reviewing a browser mockup:
 ### One chip, in a row that already exists
 
 A single button, at the height of its neighbours, inside each page's existing
-toolbar row. It costs **zero vertical pixels** because the row is already there
-and already that tall.
+toolbar row. It costs **zero vertical pixels at desktop widths** — measured at
+1280, the `/hr-flags` toolbar is 40px with the chip and 40px without — because
+the row is already there and already that tall.
+
+**On a phone it is not free: 44px, one wrap line.** Measured at 375, the
+toolbar is 132px with the chip and 88px without. The retreat this spec named
+in advance (drop the chevron and the `+N` below `sm`) was tried and changed
+nothing — the date pickers already need the full row at that width, so the
+chip takes a line of its own however narrow it is. It is still a large net
+saving there, against a page header, a 134px outage band, a capped strip and
+up to two orphan lines.
 
 On `/hr-flags` it takes the horizontal space the deleted title vacates. On
 `/hr-attendance` it rides in the gap `AttendanceToolbar`'s
@@ -277,19 +286,28 @@ source-text convention `chromeMigration.test.tsx` already uses, and it exists
 because Radix portals server-render to `null`, putting most of this 1,391-line
 page out of `renderToStaticMarkup`'s reach.
 
-**E2E — the vertical claim is measured, not asserted.** At 1280 and 375, on
-both routes, the toolbar row's height with the chip present must equal its
-height with the chip absent. This repo has twice published derived layout
-figures that a browser then contradicted — the shared picker's chrome budget,
-and `--font-khmer` naming a family that did not exist — so "the chip is free"
-is a measurement or it is not in the spec.
+**E2E — the vertical claim is measured, not asserted.** This repo has twice
+published derived layout figures that a browser then contradicted — the shared
+picker's chrome budget, and `--font-khmer` naming a family that did not exist
+— so "the chip is free" is a measurement or it is not in the spec.
 
-The 375px case is the one that can fail: both toolbars already wrap there, and
-the chip is free only if it slots into slack in an existing wrap line rather
-than adding one. If the measurement shows it adds a line, the fallback is
-stated here rather than invented later: **drop the chip's chevron and its
-`+N` at that width, leaving icon and number only.** If it still adds a line,
-the phone keeps one extra wrap line and the spec is corrected to say so.
+`e2e/notice-arrangement.spec.ts` measures the `/hr-flags` toolbar with and
+without the chip, at both widths, and pins the difference exactly:
+
+| Width | With chip | Without | Cost |
+|---|---|---|---|
+| 1280 | 40px | 40px | **0px** |
+| 375 | 132px | 88px | **44px — one wrap line** |
+
+The 375px case is the one that failed, exactly as this section anticipated it
+could. The stated retreat — drop the chevron and the `+N` at that width — was
+applied and re-measured: **still 132 vs 88**, because below `sm` the date
+pickers already claim the whole row, so the chip is a separate flex line no
+matter how narrow it is. The retreat was therefore reverted (it cost the chip
+its only affordance for nothing) and the phone keeps one extra wrap line.
+
+The assertion pins 44 rather than relaxing to "no worse than": a change that
+added a SECOND line would still fail.
 
 **E2E — behaviour.** Landing on `/hr-flags` with an outage shows the chip and
 no band; opening it reveals Excuse; a queue with no outage has no chip. The

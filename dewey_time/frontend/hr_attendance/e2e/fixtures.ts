@@ -4,7 +4,7 @@ import type { CalendarSession } from "@/hooks/useCalendarSession";
 import type { EnrollmentPayload } from "@/lib/enrollmentReport";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
 import type { CalendarEmployee, CalendarPayload, Day } from "@/types/calendar";
-import type { QueuePayload } from "@/types/flags";
+import type { QueueEntry, QueuePayload } from "@/types/flags";
 import {
   WEEKDAYS,
   type ApplyScheduleResult,
@@ -215,10 +215,62 @@ function daysAgo(back: number): string {
  * the row's whole reason for existing and the first fact `EmployeeIdentity`'s
  * tail ladder can hide.
  */
-function flagQueuePayload(): QueuePayload {
+/**
+ * One branch that recorded nothing, for two days.
+ *
+ * A precondition rather than a judgment — `flag_grouping.py` claims the whole
+ * day before anything else looks at it — so the page partitions this out of
+ * the queue and puts it behind the toolbar's chip.
+ */
+function outageGroupEntry(branch: string): QueueEntry {
+  const dates = [daysAgo(4), daysAgo(3)];
+  return {
+    kind: "group",
+    group_type: "BRANCH_NO_DEVICE_DATA",
+    group_key: `BRANCH_NO_DEVICE_DATA:${branch}`,
+    branch,
+    flag_code: null,
+    attendance_date: null,
+    dates,
+    day_count: dates.length,
+    rank: 134,
+    tier: "act",
+    members: dates.map((date, index) => ({
+      entry_key: `p:${branch}-${index}`,
+      employee: `${branch}-${index}`,
+      employee_name: `${branch} staffer ${index + 1}`,
+      employee_branch: branch,
+      employee_image: null,
+      attendance_date: date,
+      dates: [date],
+      rank: 134,
+      tier: "act",
+      flags: [
+        {
+          flag_identity: `AUTO-${branch}-${date}-attendance_issue`,
+          flag_code: "ATTENDANCE_ISSUE",
+          attendance_date: date,
+          severity: "CRITICAL",
+          day_closed: 1,
+          evidence: {},
+          rank: 134,
+          tier: "act",
+          decision_state: "undecided",
+          decision: null,
+        },
+      ],
+      undecided_count: 1,
+      also_count: 0,
+      also_outlier_count: 0,
+    })),
+  };
+}
+
+function flagQueuePayload(outageBranches: string[] = []): QueuePayload {
   const flagged = daysAgo(7);
   return {
     entries: [
+      ...outageBranches.map(outageGroupEntry),
       {
         kind: "person",
         entry_key: "p:EMP-002",
@@ -394,6 +446,17 @@ export type FrappeStubOverrides = {
    * around it.
    */
   employeeName?: string;
+  /**
+   * Branches to put behind a BRANCH_NO_DEVICE_DATA group in the flag queue.
+   *
+   * Opt-in, not opt-out: the default payload carries no outage, because a
+   * healthy queue is what every other spec that opens /hr-flags wants. Pass
+   * branch names here to light the toolbar's data-health chip. The default
+   * payload is NOT changed — flags.spec.ts routes its own queue and would not
+   * see this either way, but a spec that reads stubFrappe's queue expects the
+   * single MISSING_TIME row and nothing else.
+   */
+  flagQueueOutageBranches?: string[];
 };
 
 export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}): Promise<void> {
@@ -452,7 +515,7 @@ export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}
     } else if (p.includes("get_enrollment_report")) {
       message = overrides.enrollment ?? enrollmentPayload();
     } else if (p.includes("get_flag_queue")) {
-      message = flagQueuePayload();
+      message = flagQueuePayload(overrides.flagQueueOutageBranches);
     } else if (p.includes("list_weekly_schedule_templates")) {
       // Envelope type is inline and unexported at services/schedule.ts's
       // `listScheduleTemplates`; the list is empty, so there is nothing to drift.
