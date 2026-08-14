@@ -4,18 +4,21 @@
 # (or human) sessions can run against this repo at once without colliding.
 #
 #   dev/new-worktree.sh <name> <frontend> [--branch <branch>] [--from <ref>]
-#                                         [--share-sandbox] [--force]
+#                                         [--port <n>] [--share-sandbox] [--force]
 #
 #   <name>      short slug; becomes .claude/worktrees/<name> and feat/<name>
 #   <frontend>  hr_attendance | adms | none   (which SPA this worktree owns)
+#   --port <n>  override the fixed port, to put a SECOND worktree on a frontend
 #
 # Three things collide when this repo is worked on in parallel. This script
 # handles all three; see dev/README-parallel.md for the reasoning.
 #
-#   1. Dev-server ports. Fixed per frontend (hr_attendance 8080, adms 5173),
-#      because both vite.config.ts and playwright.config.ts run strictPort and
-#      read PORT from the environment. A frontend is therefore owned by at most
-#      one worktree at a time, and this script refuses to hand it out twice.
+#   1. Dev-server ports. Fixed per frontend by default (hr_attendance 8080,
+#      adms 5173), because vite.config.ts and playwright.config.ts both run
+#      strictPort and read PORT from the environment. The PORT is the hard
+#      constraint, not the frontend -- two worktrees CAN share a frontend if you
+#      give the second one --port. Duplicate ports are refused; a shared
+#      frontend only warns, because its cost is collision 3 below.
 #   2. The Frappe sandbox. `docker compose` is invoked with no -p, and the
 #      compose file sets no top-level `name:`, so the project name falls back to
 #      the `sandbox` directory basename -- identical in every worktree. Sharing
@@ -48,6 +51,7 @@ name=''
 frontend=''
 branch=''
 from='origin/main'
+port_override=''
 share_sandbox=0
 force=0
 
@@ -55,6 +59,7 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	--branch) branch="${2:-}"; [ -n "$branch" ] || die '--branch needs a value'; shift 2 ;;
 	--from) from="${2:-}"; [ -n "$from" ] || die '--from needs a value'; shift 2 ;;
+	--port) port_override="${2:-}"; [ -n "$port_override" ] || die '--port needs a value'; shift 2 ;;
 	--share-sandbox) share_sandbox=1; shift ;;
 	--force) force=1; shift ;;
 	# Print the header block: every comment line after the shebang, stopping at
@@ -92,18 +97,40 @@ if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
 	die "branch already exists: $branch  (pass --branch <other> to pick another)"
 fi
 
-# A frontend may be claimed by only one live worktree, because its port is fixed.
-# Each worktree records its claim in the env file we write below.
-if [ "$frontend" != none ] && [ "$force" -eq 0 ]; then
+# Resolve the port BEFORE the scan, because the port -- not the frontend -- is
+# the hard constraint. Two worktrees may legitimately share a frontend provided
+# they listen on different ports; see dev/README-parallel.md.
+port=$(port_for "$frontend")
+if [ -n "$port_override" ]; then
+	[ "$frontend" != none ] || die '--port makes no sense with frontend "none": no SPA is served'
+	case "$port_override" in
+	'' | *[!0-9]*) die "--port must be a number, got '$port_override'" ;;
+	esac
+	[ "$port_override" -ge 1 ] && [ "$port_override" -le 65535 ] ||
+		die "--port must be between 1 and 65535, got $port_override"
+	port="$port_override"
+fi
+
+# A port may be claimed by only one live worktree: vite and playwright both run
+# strictPort, so a second listener does not degrade, it fails outright. Sharing
+# a FRONTEND is merely a warning -- it costs a bundle conflict per rebuilt
+# commit, which is a merge tax, not a broken session.
+if [ "$frontend" != none ]; then
 	while IFS= read -r existing; do
 		[ -n "$existing" ] || continue
 		env_file="$existing/.claude/worktree-env.sh"
 		[ -f "$env_file" ] || continue
-		claimed=$(sed -n 's/^# frontend: //p' "$env_file" | head -1)
-		if [ "$claimed" = "$frontend" ]; then
-			die "$frontend is already owned by $existing (port $(port_for "$frontend")).
-    Finish or remove that worktree, target a different frontend, or pass --force
-    and set PORT yourself."
+		claimed_port=$(sed -n 's/^# port: //p' "$env_file" | head -1)
+		if [ -n "$claimed_port" ] && [ "$claimed_port" = "$port" ] && [ "$force" -eq 0 ]; then
+			die "port $port is already claimed by $existing.
+    Pass --port <n> to put a second worktree on the same frontend, or --force to
+    skip this check and manage PORT yourself."
+		fi
+		if [ "$(sed -n 's/^# frontend: //p' "$env_file" | head -1)" = "$frontend" ]; then
+			note "NOTE: $existing also owns $frontend."
+			note "      Every commit that rebuilds will conflict in"
+			note "      dewey_time/public/$frontend/assets. Prefer leaving the bundle"
+			note "      untouched until the work lands; see dev/README-parallel.md."
 		fi
 	done <<-EOF
 		$(git -C "$repo_root" worktree list --porcelain | sed -n 's/^worktree //p')
@@ -120,7 +147,6 @@ git -C "$repo_root" worktree add --quiet -b "$branch" "$wt_path" "$from"
 note "$wt_path"
 note "branch $branch off $from ($(git -C "$repo_root" rev-parse --short "$from"))"
 
-port=$(port_for "$frontend")
 if [ "$frontend" != none ]; then
 	printf '==> npm ci (%s) -- only this frontend, each copy is 300-450M\n' "$frontend"
 	(cd "$wt_path/dewey_time/frontend/$frontend" && npm ci --no-audit --no-fund)
@@ -133,6 +159,7 @@ mkdir -p "$wt_path/.claude"
 {
 	printf '# Generated by dev/new-worktree.sh -- source this before running anything here.\n'
 	printf '# frontend: %s\n' "$frontend"
+	if [ -n "$port" ]; then printf '# port: %s\n' "$port"; fi
 	printf '\n'
 	if [ -n "$port" ]; then
 		printf '# vite AND playwright both read this (see devPort.ts, issue #72). It has to\n'

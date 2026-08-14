@@ -9,9 +9,10 @@ dev/new-worktree.sh khmer-cap hr_attendance
 cd .claude/worktrees/khmer-cap && source .claude/worktree-env.sh && claude
 ```
 
-Parallelise **by surface** — one session on Python, one on `hr_attendance`, one
-on `adms`. That is not just tidiness: it is what keeps collision #3 below from
-happening at all.
+Parallelise **by surface** where you can — one session on Python, one on
+`hr_attendance`, one on `adms`. That is the default because it makes collision 3
+impossible rather than merely manageable. It is not a hard limit: two sessions
+*can* share one SPA, and "Two sessions on one SPA" below is the recipe.
 
 ## 1. Dev-server ports — fixed per frontend
 
@@ -26,10 +27,10 @@ file never reaches `vite.config.ts`, because `devPort.ts` reads `process.env`
 at config-load time.
 
 Ports are fixed rather than scanned so a given SPA always lives at the same URL
-whichever worktree is serving it. The consequence is that **a frontend is owned
-by one worktree at a time**, and the script refuses to hand the same one out
-twice. That is the intended constraint, not a limitation to work around: two
-sessions editing one SPA also produce collision #3 on every commit.
+whichever worktree is serving it. The **port** is the hard constraint, not the
+frontend: `--port <n>` puts a second worktree on the same SPA, and only a
+duplicate port is refused. Sharing a frontend merely warns, because what it
+costs is collision 3 — a merge tax — not a broken session.
 
 `strictPort` means a collision fails loudly instead of silently serving the
 wrong tree. `devPort.ts` documents why (issue #72): Playwright used to read
@@ -86,7 +87,45 @@ git add -A dewey_time/public/hr_attendance dewey_time/www
 ```
 
 The rebuild *is* the resolution; which side you took stops mattering once it
-runs. Keeping one SPA to one worktree avoids the situation entirely.
+runs.
+
+**Nothing enforces that the committed bundle matches source.** CI runs
+`npm run build` to prove the build works and that `check-fonts.mjs` passes, but
+never diffs the result against what is committed — and there are no git hooks
+(`core.hooksPath` unset, only samples installed). The bundle therefore has to be
+correct *at deploy time*, not at every commit. That is what makes the next
+section possible, and it is also the trap: **a stale bundle will not fail
+anything until it is live.**
+
+## Two sessions on one SPA
+
+Supported, and sometimes the right call — two features on `hr_attendance` that
+barely touch each other beat serialising them. Two rules:
+
+```bash
+dev/new-worktree.sh feat-one hr_attendance                # port 8080
+dev/new-worktree.sh feat-two hr_attendance --port 8081    # warns, proceeds
+```
+
+1. **Different ports.** `strictPort` means the second dev server or Playwright
+   run fails outright rather than degrading, so the script refuses a duplicate
+   port. `--port` is the escape hatch.
+2. **Do not commit built assets while the work is in flight.** Leave
+   `dewey_time/public/<app>/**` untouched on both branches; land the source
+   changes; then rebuild once, on `main`, and commit that:
+
+   ```bash
+   git checkout main && git pull
+   cd dewey_time/frontend/hr_attendance && npm run build
+   cd - && git add -A dewey_time/public/hr_attendance dewey_time/www
+   git commit -m "build(hr-attendance): rebuild the bundle over <what landed>"
+   ```
+
+Rule 2 is what removes the conflict — two branches that never touch the bundle
+cannot collide in it. It costs you the guarantee that every commit is
+deployable, so **the rebuild is not optional**: `main` carries a stale bundle
+from the moment the first source change lands until you run it. Do it before any
+Frappe Cloud deploy, without exception.
 
 ## Also worth knowing
 
