@@ -14,7 +14,6 @@ import {
   EmployeePicker,
   type EmployeePickerProps,
 } from "./EmployeePicker";
-import { ScheduleEmployeeOption, ScheduleEmployeePicker } from "./ScheduleEmployeePicker";
 
 // list_calendar_employees sorts employees with shift coverage first, so clock-based
 // employees land at the bottom of the list. The chip is what tells HR they are
@@ -64,28 +63,6 @@ function renderTrigger(overrides: Partial<EmployeePickerProps> = {}): string {
       tail={tail ?? attendancePickerTail}
       {...rest}
     />,
-  );
-}
-
-// ScheduleEmployeePicker's list row is only reachable outside Radix's portal
-// via this exported component — anything left inline inside PopoverContent
-// server-renders to nothing at all.
-function renderScheduleRow(
-  employee: CalendarEmployee,
-  opts?: { selected?: boolean; onSelect?: () => void },
-): string {
-  return renderToStaticMarkup(
-    <Command>
-      <CommandList>
-        <CommandGroup>
-          <ScheduleEmployeeOption
-            employee={employee}
-            selected={opts?.selected ?? false}
-            onSelect={opts?.onSelect ?? (() => {})}
-          />
-        </CommandGroup>
-      </CommandList>
-    </Command>,
   );
 }
 
@@ -175,15 +152,18 @@ test("the picker option shows the Khmer name and the employee id", () => {
   assert.ok(html.indexOf("Sophea Chan") < html.indexOf("ចាន់ សុភា"), "English leads");
 });
 
-test("the weekly-schedule picker puts employment type ahead of department", () => {
+test("the weekly-schedule tail puts employment type ahead of department", () => {
   // isWeeklyScheduleEligible gates the wizard on employment type, so it is the
-  // fact that says whether this person can be picked at all. Under a shared
-  // global priority it would eventually be the one that fell off the end.
-  const html = renderScheduleRow({
-    id: "EMP-1", label: "EMP-1 · Jonas Berg", employee_name: "Jonas Berg",
-    department: "Warehouse", employment_type: "Full-time",
-    custom_khmer_last_name: null, custom_khmer_first_name: null,
-  });
+  // fact that says whether this person can be picked at all. Under the
+  // attendance ordering it would eventually be the one that fell off the end.
+  const html = renderRow(
+    {
+      id: "EMP-1", label: "EMP-1 · Jonas Berg", employee_name: "Jonas Berg",
+      department: "Warehouse", employment_type: "Full-time",
+      custom_khmer_last_name: null, custom_khmer_first_name: null,
+    },
+    { tail: schedulePickerTail },
+  );
   // Without this, the ordering assertion below passes as `-1 < N` if the
   // employment-type fact vanished from the markup entirely.
   assert.match(html, /Full-time/);
@@ -191,11 +171,14 @@ test("the weekly-schedule picker puts employment type ahead of department", () =
 });
 
 test("an ineligible employment type carries the warning tone on its own fact span", () => {
-  const html = renderScheduleRow({
-    id: "EMP-2", label: "EMP-2 · Casey Ward", employee_name: "Casey Ward",
-    department: "Ops", employment_type: "Casual",
-    custom_khmer_last_name: null, custom_khmer_first_name: null,
-  });
+  const html = renderRow(
+    {
+      id: "EMP-2", label: "EMP-2 · Casey Ward", employee_name: "Casey Ward",
+      department: "Ops", employment_type: "Casual",
+      custom_khmer_last_name: null, custom_khmer_first_name: null,
+    },
+    { tail: schedulePickerTail },
+  );
   // On the fact's OWN span, not just anywhere in the document — a tone class
   // landing on the wrong element would still satisfy a whole-markup match.
   assert.match(
@@ -220,14 +203,12 @@ test("with nothing selected, the picker prompts rather than going blank", () => 
   );
 });
 
-// Same regression, the sibling picker: the prompt has to live in the always-
-// rendered `employeeId` slot, not a `tail` fact — those hide below their
-// container-query threshold, so a fact-only prompt would reappear blank in a
-// narrow (e.g. `compact`) trigger, which is the width this variant is for.
-test("with nothing selected, the weekly-schedule trigger prompts rather than going blank", () => {
-  const html = renderToStaticMarkup(
-    <ScheduleEmployeePicker employees={[]} value={null} onChange={() => {}} />,
-  );
+// Same regression under the schedule tail, whose first fact is never omitted:
+// the prompt has to live in the always-rendered `employeeId` slot, not a
+// `tail` fact — those hide below their container-query threshold, so a
+// fact-only prompt would reappear blank in a narrow trigger.
+test("with nothing selected, the trigger prompts in the id slot, not a tail fact", () => {
+  const html = renderTrigger({ tail: schedulePickerTail });
   assert.match(
     html,
     /<span class="tabular-nums">Choose an employee<\/span>/,
@@ -240,21 +221,12 @@ test("with nothing selected, the weekly-schedule trigger prompts rather than goi
   );
 });
 
-test("with nothing selected, the compact weekly-schedule trigger still prompts", () => {
-  const html = renderToStaticMarkup(
-    <ScheduleEmployeePicker employees={[]} value={null} onChange={() => {}} compact />,
-  );
-  assert.match(html, /<span class="tabular-nums">Choose an employee<\/span>/);
-});
-
 test("an id absent from the employee list does not repeat itself on both lines", () => {
   // selected is null (the id names nobody in the list — still loading,
   // filtered out), so line one falls back to the bare id and line two must
   // not repeat it: it should read the same "Choose an employee" prompt as
   // no id at all.
-  const html = renderToStaticMarkup(
-    <ScheduleEmployeePicker employees={[]} value="EMP-404" onChange={() => {}} />,
-  );
+  const html = renderTrigger({ value: "EMP-404", tail: schedulePickerTail });
   assert.match(html, /EMP-404/, "line one still shows the unresolved id");
   assert.match(html, /<span class="tabular-nums">Choose an employee<\/span>/);
   assert.equal((html.match(/EMP-404/g) ?? []).length, 1, "the id is not repeated on line two");

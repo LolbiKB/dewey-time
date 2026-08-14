@@ -7,7 +7,11 @@ test.describe("schedule edit", () => {
     await stubFrappe(page);
     await page.goto("/hr-schedule?employee=EMP-001");
 
-    await expect(page.getByText(/Editing Jane Doe.s existing schedule/)).toBeVisible();
+    // The notice moved out of the page header into the Shift blocks card and
+    // lost the employee's name — the lg picker above the card now says who.
+    await expect(
+      page.getByText(/Editing an existing schedule — changes apply from the effective date/),
+    ).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     const save = page.getByRole("button", { name: /Review changes|Save schedule/ });
