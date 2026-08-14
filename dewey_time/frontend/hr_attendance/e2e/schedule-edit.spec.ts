@@ -6,6 +6,9 @@ test.describe("schedule edit", () => {
   test("the editor shows the shift blocks card and the reconcile review", async ({ page }) => {
     await stubFrappe(page);
     await page.goto("/hr-schedule?employee=EMP-001");
+    // EMP-001 has a live schedule, so the page lands on the read-only preview.
+    // The editor is behind an explicit trigger now.
+    await page.getByRole("button", { name: "Edit schedule" }).click();
 
     // The "Editing an existing schedule" notice is gone: with editing behind an
     // explicit trigger, a line telling you that you are editing is noise. The
@@ -26,6 +29,7 @@ test.describe("schedule edit", () => {
   test("typed name gates the save when shifts are retired", async ({ page }) => {
     await stubFrappe(page);
     await page.goto("/hr-schedule?employee=EMP-001");
+    await page.getByRole("button", { name: "Edit schedule" }).click();
     await page.getByRole("button", { name: /Review changes|Save schedule/ }).click();
 
     const confirm = page.getByRole("button", { name: "Save changes" });

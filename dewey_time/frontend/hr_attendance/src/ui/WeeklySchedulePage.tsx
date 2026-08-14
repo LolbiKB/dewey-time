@@ -54,8 +54,14 @@ import {
   summarizeReconcile,
   reconcileRetiresShifts,
   confirmNameMatches,
+  openingScheduleMode,
   scheduleFormStateFromContext,
+  type ScheduleMode,
 } from "@/lib/scheduleEdit";
+import { plannedDaysFromWeekPattern, resolveWeekPatternWindow } from "@/lib/plannedDays";
+import { formatScheduleDuration } from "@/lib/weekSchedule";
+import { summarizeWeekPattern } from "@/types/schedule";
+import { PlannedWeekCanvas } from "@/ui/PlannedWeekCanvas";
 import type { ApplyScheduleResult, ReconcilePreview } from "@/types/schedule";
 import {
   isWeeklyScheduleEligible,
@@ -99,6 +105,9 @@ export function WeeklySchedulePage() {
   const [templateKey, setTemplateKey] = useState<string>("manual");
   const appliedTemplateFingerprint = useRef<string | null>(null);
   const [employeeLoading, setEmployeeLoading] = useState(false);
+  // "edit" only because no context has loaded yet; the effect below owns it
+  // from the first context onwards.
+  const [mode, setMode] = useState<ScheduleMode>("edit");
 
   const weekPattern = useMemo<WeekPattern>(
     () => weekPatternFromBlocks(shiftBlocks),
@@ -147,6 +156,20 @@ export function WeeklySchedulePage() {
     setEffectiveFrom(seeded.effectiveFrom);
     setGenerateThrough(seeded.generateThrough);
     setLimitGenerateThrough(seeded.limitGenerateThrough);
+  }, [context?.employee]);
+
+  // The mode is a property of the employee on screen, so it is re-derived
+  // whenever the context that answers `hasLiveSchedule` arrives — including on
+  // an employee switch, which reseeds the form in the effect above. Keyed on
+  // the same `context?.employee` so the two never disagree about who is shown.
+  //
+  // Read `context.enabled_ssa_count` directly rather than the derived
+  // `hasLiveSchedule`: that constant is not in the dependency array, and adding
+  // it would re-run this on every context refetch — snapping someone out of
+  // edit mode mid-edit whenever the schedule is refreshed.
+  useEffect(() => {
+    if (!context) return;
+    setMode(openingScheduleMode((context.enabled_ssa_count ?? 0) > 0));
   }, [context?.employee]);
 
   const validationIssues = useMemo(() => validateWeekPattern(weekPattern), [weekPattern]);
@@ -441,54 +464,61 @@ export function WeeklySchedulePage() {
               loading={isScheduleLoading}
               employeeKey={scheduleEmployeeId}
             >
-              <Card
-                className={cn(
-                  "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-                  scheduleReadOnly && "opacity-95"
-                )}
-              >
-                <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 space-y-1">
-                    <CardTitle className="text-base">Shift blocks</CardTitle>
-                    {validationIssues[0] && !scheduleReadOnly ? (
-                      <CardDescription className="text-destructive">
-                        {validationIssues[0].message}
-                      </CardDescription>
-                    ) : (
-                      <CardDescription>
-                        {scheduleReadOnly
-                          ? "Preview only — clear existing SSAs to edit."
-                          : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
-                      </CardDescription>
-                    )}
-                  </div>
-                  <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
-                    <WeeklyScheduleTemplatePickerDialog
-                      value={templateKey}
-                      options={templateOptions}
-                      onSelect={applyTemplate}
-                      loading={templatesLoading}
-                      disabled={scheduleReadOnly}
-                      triggerClassName="sm:min-w-[20rem] sm:max-w-md"
-                    />
-                  </div>
-                </CardHeader>
-                <ScrollArea className="min-h-0 flex-1">
-                  <CardContent className="px-5 pb-5 pt-0">
-                    <WeekPatternGroupEditor
-                      blocks={shiftBlocks}
-                      onChange={handleShiftBlocksChange}
-                      validationIssues={validationIssues}
-                      disabled={scheduleReadOnly}
-                    />
-                  </CardContent>
-                </ScrollArea>
-              </Card>
+              {mode === "preview" ? (
+                <SchedulePreview
+                  weekPattern={weekPattern}
+                  onEdit={() => setMode("edit")}
+                />
+              ) : (
+                <Card
+                  className={cn(
+                    "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+                    scheduleReadOnly && "opacity-95"
+                  )}
+                >
+                  <CardHeader className="shrink-0 gap-4 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 space-y-1">
+                      <CardTitle className="text-base">Shift blocks</CardTitle>
+                      {validationIssues[0] && !scheduleReadOnly ? (
+                        <CardDescription className="text-destructive">
+                          {validationIssues[0].message}
+                        </CardDescription>
+                      ) : (
+                        <CardDescription>
+                          {scheduleReadOnly
+                            ? "Preview only — clear existing SSAs to edit."
+                            : "One block per shared pattern — like Frappe Shift Schedule repeat days."}
+                        </CardDescription>
+                      )}
+                    </div>
+                    <div className="w-full shrink-0 sm:min-w-[min(100%,22rem)] sm:max-w-md">
+                      <WeeklyScheduleTemplatePickerDialog
+                        value={templateKey}
+                        options={templateOptions}
+                        onSelect={applyTemplate}
+                        loading={templatesLoading}
+                        disabled={scheduleReadOnly}
+                        triggerClassName="sm:min-w-[20rem] sm:max-w-md"
+                      />
+                    </div>
+                  </CardHeader>
+                  <ScrollArea className="min-h-0 flex-1">
+                    <CardContent className="px-5 pb-5 pt-0">
+                      <WeekPatternGroupEditor
+                        blocks={shiftBlocks}
+                        onChange={handleShiftBlocksChange}
+                        validationIssues={validationIssues}
+                        disabled={scheduleReadOnly}
+                      />
+                    </CardContent>
+                  </ScrollArea>
+                </Card>
+              )}
             </WeeklyScheduleAnimatedShell>
           )}
         </Section>
 
-        {scheduleEmployeeId ? (
+        {mode === "edit" && scheduleEmployeeId ? (
           <footer className="shrink-0 border-t border-border/60 pt-3">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:max-w-2xl">
@@ -713,5 +743,40 @@ export function WeeklySchedulePage() {
         ) : null}
       </ResponsiveModal>
     </>
+  );
+}
+
+/**
+ * The read-only week.
+ *
+ * Every part of this already existed inside `SchedulePlanPreviewDialog`:
+ * the canvas, both adapters, and the summary. The only new thing is that it is
+ * inline rather than in a modal. No Card header, no ScrollArea — those exist to
+ * frame an editor, and this is a document.
+ */
+function SchedulePreview(props: { weekPattern: WeekPattern; onEdit: () => void }) {
+  const { workDays, offDays, totalWeeklyMinutes } = summarizeWeekPattern(props.weekPattern);
+  const weeklyHoursLabel =
+    totalWeeklyMinutes > 0 ? formatScheduleDuration(totalWeeklyMinutes) : null;
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <div className="min-h-0 flex-1">
+        <PlannedWeekCanvas
+          days={plannedDaysFromWeekPattern(props.weekPattern)}
+          window={resolveWeekPatternWindow(props.weekPattern)}
+          minDayWidth="3rem"
+        />
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {workDays} work · {offDays} off
+          {weeklyHoursLabel ? ` · ${weeklyHoursLabel}/wk` : null}
+        </p>
+        <Button type="button" variant="outline" className="h-9" onClick={props.onEdit}>
+          Edit schedule
+        </Button>
+      </div>
+    </div>
   );
 }
