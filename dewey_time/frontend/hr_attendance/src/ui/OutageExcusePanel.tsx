@@ -69,7 +69,12 @@ export function OutageExcusePanel(props: OutageExcusePanelProps) {
   const nothingToWrite = write.identities.length === 0;
 
   return (
-    <div aria-label={OUTAGE_BAND_LABEL}>
+    // role="group", not a bare <div>: aria-label on an element with no role is
+    // not exposed at all, so dropping the <section> would have silently taken
+    // the panel's accessible name with it. NOT a landmark any more — a <section
+    // aria-label> is a region, and a region inside a popover is a landmark
+    // nobody can navigate to.
+    <div role="group" aria-label={OUTAGE_BAND_LABEL}>
       <div className="flex items-start gap-2.5 border-b border-border px-3 py-2.5">
         <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden="true" />
         <div className="min-w-0">

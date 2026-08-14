@@ -925,7 +925,16 @@ export function FlagQueueView(props: FlagQueueViewProps) {
             // entirely, so the queue is empty for them by construction. No
             // engine error text: it can name a device serial, and there is no
             // device↔branch registry to make that claim true.
-            <div className="border-t border-border px-3 py-2.5">
+            <div
+              className={cn(
+                "px-3 py-2.5",
+                // Only a divider when there is something above it to divide
+                // from. OutageExcusePanel renders null with no outages, and a
+                // closeout alert can arrive without one — the whole point of
+                // Device Closeout Alert is the flagless day.
+                props.outages.length > 0 && "border-t border-border",
+              )}
+            >
               <ul className="space-y-1">
                 {props.alerts.map((alert) => (
                   <li
