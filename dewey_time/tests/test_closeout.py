@@ -94,6 +94,13 @@ def _install_frappe_mock():
     # here is a hard ImportError at `from frappe.utils import ...` rather than
     # an auto-stub. Added for the Telegram link tokens' expiry arithmetic.
     utils_mod.add_to_date = lambda value, **kwargs: value
+    # Computes for real rather than returning a constant: the Mini App's range
+    # cap is enforced with this, and a stubbed 0 would make both the
+    # oversized-range test and the at-the-limit test pass no matter what the
+    # cap said.
+    utils_mod.date_diff = lambda end, start: (
+        date.fromisoformat(str(end)) - date.fromisoformat(str(start))
+    ).days
     utils_mod.nowdate = lambda: str(date.today())
     utils_mod.cint = _mock_cint
 
