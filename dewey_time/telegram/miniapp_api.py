@@ -36,9 +36,17 @@ SHIFT_KEYS = (
     "lunch_start",
     "lunch_end",
 )
-#: NOT device_id and NOT custom_device_branch -- those are HR's. A top-level
-#: allowlist alone would pass them through inside each punch object.
-CHECKIN_KEYS = ("time", "log_type")
+#: `custom_device_branch` is IN; `device_id` is out, and the line between them
+#: is deliberate. The branch is a place the employee physically stood, which is
+#: their own attendance fact -- the check-in notification already tells them
+#: ("Checked in 07:58 · DIS Iconic"). The device serial is infrastructure.
+#:
+#: It is also load-bearing for rendering, which is how the original omission
+#: was caught: attendancePunches.ts:37 -- "Punches without
+#: custom_device_branch are never grouped -- each is its own run (rogue)" --
+#: so dropping it made every punch draw as an anomaly on the timeline. Only
+#: looking at the rendered page found that; no unit test could.
+CHECKIN_KEYS = ("time", "log_type", "custom_device_branch")
 
 
 def _pick(source, keys):

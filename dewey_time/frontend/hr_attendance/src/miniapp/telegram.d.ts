@@ -1,0 +1,15 @@
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: {
+        initData?: string;
+        ready?: () => void;
+        expand?: () => void;
+        colorScheme?: "light" | "dark";
+      };
+    };
+    csrf_token?: string;
+  }
+}
+
+export {};

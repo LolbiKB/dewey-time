@@ -101,11 +101,22 @@ class TestProjection(unittest.TestCase):
              "lunch_start", "lunch_end"},
         )
 
-    def test_each_checkin_is_narrowed_too(self):
-        # A top-level allowlist alone would pass device_id and
-        # custom_device_branch straight through inside the punch objects.
+    def test_each_checkin_is_narrowed_but_keeps_its_branch(self):
+        # A top-level allowlist alone would pass device_id straight through
+        # inside the punch objects, so the narrowing is per-field.
+        #
+        # custom_device_branch survives on purpose. It is a place the employee
+        # physically stood -- the check-in notification already names it -- and
+        # attendancePunches.ts:37 groups punches by it, so without it every
+        # punch renders as an ungrouped "rogue" run and a normal worked day
+        # draws as an anomaly. Found by looking at the built page, not here.
         checkin = self._narrowed()["days"][0]["checkins"][0]
-        self.assertEqual(set(checkin), {"time", "log_type"})
+        self.assertEqual(set(checkin), {"time", "log_type", "custom_device_branch"})
+
+    def test_the_device_serial_still_never_reaches_the_employee(self):
+        checkin = self._narrowed()["days"][0]["checkins"][0]
+        self.assertNotIn("device_id", checkin)
+        self.assertNotIn("name", checkin)
 
     def test_no_flags_reach_the_employee(self):
         # Intraday deletes and re-inserts AUTO flags on every checkin, so an
