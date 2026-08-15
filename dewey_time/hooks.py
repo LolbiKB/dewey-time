@@ -89,6 +89,11 @@ website_route_rules = [
     {"from_route": "/hr-schedule", "to_route": "hr-schedule"},
     {"from_route": "/hr-flags/<path:app_path>", "to_route": "hr-flags"},
     {"from_route": "/hr-flags", "to_route": "hr-flags"},
+    # The Telegram Mini App. The <path:app_path> rule matters even though the
+    # app has no client-side router yet: without it a reload inside the
+    # Telegram webview 404s, which reads as "the app is broken".
+    {"from_route": "/hr-me/<path:app_path>", "to_route": "hr-me"},
+    {"from_route": "/hr-me", "to_route": "hr-me"},
 ]
 
 # Ensure dewey_time's custom fields exist on install (and after every upgrade).
@@ -100,6 +105,7 @@ after_migrate = [
     "dewey_time.setup.shift_type_naming.ensure_schedule_naming",
     "dewey_time.utils.sync_hr_attendance_assets.sync_hr_attendance_assets",
     "dewey_time.utils.sync_adms_assets.sync_adms_assets",
+    "dewey_time.utils.sync_miniapp_assets.sync_miniapp_assets",
     "dewey_time.attendance_engine.dashboard_auth.ensure_adms_roles",
     "dewey_time.attendance_engine.bridge_auth.ensure_bridge_role",
     "dewey_time.webpush.ensure_vapid_keys",
@@ -122,7 +128,14 @@ scheduler_events = {
 
 doc_events = {
     "Employee Checkin": {
-        "after_insert": "dewey_time.attendance_engine.intraday.on_employee_checkin_after_insert",
+        # A list, not a string: the flag engine and the Telegram notifier both
+        # care about a new punch and neither should be nested inside the other.
+        # The notifier only enqueues, so this adds no synchronous work to the
+        # engine's hottest write path.
+        "after_insert": [
+            "dewey_time.attendance_engine.intraday.on_employee_checkin_after_insert",
+            "dewey_time.telegram.notify.on_employee_checkin_after_insert",
+        ],
         "on_update": "dewey_time.attendance_engine.intraday.on_employee_checkin_on_update",
     },
     # Keep the Schedule Coverage page fresh: clear its cached payload whenever a

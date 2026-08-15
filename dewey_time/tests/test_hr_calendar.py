@@ -1,5 +1,7 @@
+import contextlib
 import json
 import unittest
+from datetime import date as _date
 from unittest.mock import patch
 
 from dewey_time.tests.test_closeout import _install_frappe_mock
@@ -684,3 +686,63 @@ class TestCalendarEmployeeRowBranch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuilderExtractionIsBehaviourPreserving(unittest.TestCase):
+    """The Mini App cannot call get_employee_calendar.
+
+    Its gate resolves identity via frappe.session.user -> Employee.user_id, and
+    the Telegram layer deliberately creates no Frappe User, so the gate can
+    never pass for it. The payload therefore had to be reachable without the
+    gate -- and these tests are the guard that splitting it changed nothing.
+    """
+
+    def _patches(self):
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        return [
+            patch.object(hc, "getdate", lambda v: _date.fromisoformat(str(v))),
+            patch.object(hc, "get_datetime", lambda v: str(v)),
+            patch.object(hc.frappe.db, "get_value", return_value=None),
+            patch.object(hc.frappe, "get_all", return_value=[]),
+            patch.object(hc.frappe.db, "table_exists", return_value=False),
+        ]
+
+    def test_the_gated_api_and_the_builder_return_the_same_payload(self):
+        # The extraction's whole contract. If these ever diverge, HR's calendar
+        # and the employee's are being built by different code.
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        with contextlib.ExitStack() as stack:
+            for p in self._patches():
+                stack.enter_context(p)
+            stack.enter_context(patch.object(hc, "_require_calendar_access"))
+            gated = hc.get_employee_calendar("EMP-001", "2026-08-10", "2026-08-11")
+            direct = hc.build_employee_calendar("EMP-001", "2026-08-10", "2026-08-11")
+
+        self.assertEqual(gated, direct)
+
+    def test_the_gate_still_runs_on_the_whitelisted_api(self):
+        # The extraction must not take the permission check with it.
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        with contextlib.ExitStack() as stack:
+            for p in self._patches():
+                stack.enter_context(p)
+            gate = stack.enter_context(patch.object(hc, "_require_calendar_access"))
+            hc.get_employee_calendar("EMP-001", "2026-08-10", "2026-08-11")
+
+        gate.assert_called_once_with("EMP-001")
+
+    def test_the_builder_does_not_check_permissions(self):
+        # A gate here would make the Mini App path impossible again, which is
+        # the entire reason this function exists.
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        with contextlib.ExitStack() as stack:
+            for p in self._patches():
+                stack.enter_context(p)
+            gate = stack.enter_context(patch.object(hc, "_require_calendar_access"))
+            hc.build_employee_calendar("EMP-001", "2026-08-10", "2026-08-11")
+
+        gate.assert_not_called()

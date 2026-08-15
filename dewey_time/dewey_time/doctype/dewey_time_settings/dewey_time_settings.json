@@ -20,7 +20,13 @@
     "rollout_testing_start",
     "rollout_go_live",
     "branch_rollout",
-    "last_enrollment_snapshot_at"
+    "last_enrollment_snapshot_at",
+    "telegram_section",
+    "enable_telegram",
+    "telegram_bot_username",
+    "telegram_bot_token",
+    "telegram_webhook_secret",
+    "telegram_miniapp_url"
   ],
   "fields": [
     {
@@ -85,12 +91,45 @@
       "fieldtype": "Datetime",
       "label": "Last Enrollment Snapshot At",
       "read_only": 1
+    },
+    {
+      "fieldname": "telegram_section",
+      "fieldtype": "Section Break",
+      "label": "Telegram"
+    },
+    {
+      "default": "0",
+      "fieldname": "enable_telegram",
+      "fieldtype": "Check",
+      "label": "Enable Telegram"
+    },
+    {
+      "description": "Without the @, e.g. dewey_time_bot",
+      "fieldname": "telegram_bot_username",
+      "fieldtype": "Data",
+      "label": "Telegram Bot Username"
+    },
+    {
+      "fieldname": "telegram_bot_token",
+      "fieldtype": "Password",
+      "label": "Telegram Bot Token"
+    },
+    {
+      "fieldname": "telegram_webhook_secret",
+      "fieldtype": "Password",
+      "label": "Telegram Webhook Secret"
+    },
+    {
+      "description": "Absolute https URL of the Mini App page, e.g. https://<site>/hr-me",
+      "fieldname": "telegram_miniapp_url",
+      "fieldtype": "Data",
+      "label": "Telegram Mini App URL"
     }
   ],
   "index_web_pages_for_search": 0,
   "issingle": 1,
   "links": [],
-  "modified": "2026-08-17 00:00:00.000000",
+  "modified": "2026-08-19 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Dewey Time Settings",

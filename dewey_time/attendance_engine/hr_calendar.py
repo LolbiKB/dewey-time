@@ -538,7 +538,26 @@ def get_employee_calendar(employee: str, start_date: str, end_date: str):
     - shift context per day (when assigned)
     """
     _require_calendar_access(employee)
+    return build_employee_calendar(employee, start_date, end_date)
 
+
+def build_employee_calendar(employee: str, start_date: str, end_date: str):
+    """The calendar payload, with NO permission check.
+
+    Split out of get_employee_calendar so a caller that has authorized by some
+    other means can reach it. The Telegram Mini App is that caller: it creates
+    no Frappe User by design, and _require_calendar_access resolves identity
+    via frappe.session.user -> Employee.user_id, so that gate can never pass
+    for it — the split is what makes the employee surface possible at all.
+
+    CALLERS ARE RESPONSIBLE FOR AUTHORIZATION. There are exactly two:
+      - get_employee_calendar above — HR staff or self, via
+        _require_calendar_access.
+      - telegram/miniapp_api.get_my_calendar — a verified Telegram binding,
+        which also narrows the result to an allowlist before returning it.
+        This payload is HR-shaped and carries device serials, flag evidence
+        and grace minutes; do not hand it to an employee unnarrowed.
+    """
     start = getdate(start_date)
     end = getdate(end_date)
     if end < start:

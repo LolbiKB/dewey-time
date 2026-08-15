@@ -1,0 +1,105 @@
+{
+  "actions": [],
+  "allow_copy": 0,
+  "allow_guest_to_view": 0,
+  "allow_import": 0,
+  "autoname": "field:telegram_user_id",
+  "creation": "2026-08-15 12:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "document_type": "System",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "telegram_user_id",
+    "employee",
+    "chat_id",
+    "enabled",
+    "linked_at",
+    "linked_via"
+  ],
+  "fields": [
+    {
+      "description": "The authenticated Telegram account. This is the docname, so one Telegram account can never bind to two employees.",
+      "fieldname": "telegram_user_id",
+      "fieldtype": "Data",
+      "in_list_view": 1,
+      "label": "Telegram User ID",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "employee",
+      "fieldtype": "Link",
+      "in_list_view": 1,
+      "label": "Employee",
+      "options": "Employee",
+      "reqd": 1
+    },
+    {
+      "fieldname": "chat_id",
+      "fieldtype": "Data",
+      "label": "Chat ID",
+      "reqd": 1
+    },
+    {
+      "default": "1",
+      "description": "Clear this to unlink. The row and its version history are kept, so the audit trail survives the unlink.",
+      "fieldname": "enabled",
+      "fieldtype": "Check",
+      "in_list_view": 1,
+      "label": "Enabled"
+    },
+    {
+      "fieldname": "linked_at",
+      "fieldtype": "Datetime",
+      "label": "Linked At",
+      "read_only": 1
+    },
+    {
+      "fieldname": "linked_via",
+      "fieldtype": "Select",
+      "label": "Linked Via",
+      "options": "token\nhr_manual",
+      "read_only": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "links": [],
+  "modified": "2026-08-15 12:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dewey Time",
+  "name": "Telegram Link",
+  "naming_rule": "By fieldname",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "HR Manager",
+      "share": 1,
+      "write": 1
+    },
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}
