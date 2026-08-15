@@ -103,6 +103,53 @@ class TestSignature(unittest.TestCase):
                 miniapp_auth.employee_from_init_data("")
 
 
+class TestRealWorldPayloadShape(unittest.TestCase):
+    """Guards against a whole class of failure the other tests cannot see.
+
+    Every fixture above is a payload I invented. Real initData carries fields
+    those do not -- notably `signature`, which Telegram added for third-party
+    Ed25519 validation and now sends on real launches.
+
+    Per Telegram's spec the HMAC data-check-string is "a chain of all received
+    fields, sorted alphabetically" with only `hash` removed; `signature` is
+    excluded solely from the separate Ed25519 path. So `signature` MUST stay in
+    the HMAC input. Had this been implemented the other way, every real launch
+    would have failed authentication while the entire suite stayed green,
+    because no fixture emitted the field.
+    """
+
+    def test_a_payload_carrying_signature_still_validates(self):
+        fields = valid_fields()
+        fields["signature"] = "gpUmvpwCzUmYqCLNZ2f6nHy2xt9tvJm9Y8FLZ0Kk"
+        fields["chat_type"] = "sender"
+        fields["chat_instance"] = "-3788442525382237900"
+        with only_the_guard_can_raise() as resolve:
+            self.assertEqual(
+                miniapp_auth.employee_from_init_data(sign(fields)), "HR-EMP-00001"
+            )
+        self.assertEqual(resolve.call_args[0][0], "55501")
+
+    def test_tampering_with_signature_invalidates_the_payload(self):
+        # The corollary: because `signature` is inside the HMAC input, editing
+        # it breaks the hash. If it were excluded this would silently pass.
+        fields = valid_fields()
+        fields["signature"] = "original"
+        signed = sign(fields).replace("signature=original", "signature=tampered")
+        with only_the_guard_can_raise():
+            with self.assertRaises(Rejected):
+                miniapp_auth.employee_from_init_data(signed)
+
+    def test_an_unknown_future_field_does_not_break_validation(self):
+        # Telegram has added fields before and will again. Anything new is
+        # covered by the hash and must simply flow through the sort.
+        fields = valid_fields()
+        fields["some_field_telegram_adds_in_2027"] = "whatever"
+        with only_the_guard_can_raise():
+            self.assertEqual(
+                miniapp_auth.employee_from_init_data(sign(fields)), "HR-EMP-00001"
+            )
+
+
 class TestFreshness(unittest.TestCase):
     def test_stale_init_data_is_rejected(self):
         # Without this, captured initData is a permanent credential. It is the
