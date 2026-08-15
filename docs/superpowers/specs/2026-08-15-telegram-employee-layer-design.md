@@ -250,12 +250,40 @@ should treat it as its own task, sequenced before the endpoint that depends on
 it.
 
 A new endpoint `get_my_calendar(start_date, end_date)` — **no employee
-parameter** — returns a projection with these removed:
+parameter** — returns a narrowed projection of the builder's output.
 
-- `device_sync[]` entirely — device serial numbers and `last_error`.
-- `flags[]` entirely (see below).
-- Internal flag identity strings such as
-  `AUTO-emp-1-2026-05-29-late-start`.
+#### The projection is an allowlist, not a denylist
+
+This is a structural requirement, not a style preference. Written as removals
+("strip `device_sync`, strip `flags`") the projection **fails open**: the day
+someone adds a field to the calendar builder for an HR need, it flows straight
+through to every employee, silently, with no test failing and nothing in the
+diff that looks wrong.
+
+Built as an allowlist, a new field defaults to hidden and exposing it becomes a
+deliberate edit someone has to justify. The cost is identical now and the
+retrofit later is not.
+
+The v1 allowlist, per day:
+
+| Kept | |
+|---|---|
+| `date` | |
+| `shift` | `shift_type`, `start_time`, `end_time`, `lunch_start`, `lunch_end` |
+| `checkins[]` | `time`, `log_type` only |
+| `holiday` | `description`, `weekly_off` |
+| `leave` | `on_leave`, `leave_type` |
+| `observed_lunch` | |
+
+Everything else is absent by construction — including `device_sync[]` (device
+serial numbers, `last_error`), `flags[]` entirely (see below), internal flag
+identity strings such as `AUTO-emp-1-2026-05-29-late-start`, and
+`grace_minutes`, which tells an employee exactly how late they can be before
+the system notices.
+
+Note that `checkins[]` is narrowed *within* the object too — `device_id` and
+`custom_device_branch` are HR's, not the employee's. A field-level allowlist,
+not just a top-level one.
 
 Every schedule endpoint in `schedule_api.py` is HR-only (`_require_hr_role()` at
 `:197`, `:268`, `:303`, `:316`, `:355`) and none is touched — the shift windows
@@ -368,11 +396,46 @@ reconstructible from Frappe, so losing Telegram loses a convenience, not data.
 
 ## Testing
 
-**Python unit** — `initData` validation (valid, tampered hash, expired
-`auth_date`, missing fields); token redemption (single-use, expiry, unknown
-token, already-bound Telegram id); payload narrowing (assert `device_sync`,
-`flags` and evidence are absent from `get_my_calendar` output); webhook secret
-rejection; notification gating (unlinked, non-LIVE rollout phase).
+Roughly 60–80 lines carry this module's entire security boundary — the
+`initData` check and the binding lookup. That is small enough to test
+exhaustively, and the tests below are requirements rather than coverage.
+
+**Auth, written to fail closed.** The validator is one function returning an
+Employee or raising — **never a boolean**. `is_valid()` invites both
+`if is_valid` typos and forgetting to call it at all; a function whose only
+non-raising outcome is an authorized Employee cannot be accidentally ignored.
+
+**Python unit** — `initData` validation: valid; tampered `hash`; **absent
+`hash`** (must reject, not skip — the classic bypass shape); stale `auth_date`
+beyond the freshness window; **unconfigured bot token** (must refuse to operate,
+not HMAC on an empty key). Token redemption: single-use, expiry, unknown token,
+already-bound Telegram id. Binding lookup: disabled link refused, unknown
+Telegram id refused. Webhook secret rejection. Notification gating (unlinked,
+non-LIVE rollout phase).
+
+**The projection test asserts the allowlist, not the denylist.** Assert the
+returned key set *equals* the expected set — not that certain keys are absent.
+A "no `device_sync` key" assertion passes forever while a newly added field
+leaks; an equality assertion fails the moment the payload grows, which is
+exactly the alarm the allowlist exists to raise.
+
+**The signature guard.** A test asserting `get_my_calendar` accepts no
+employee-selecting parameter, carrying a comment explaining why it exists.
+
+This is the module's most important test and the least obvious one. The
+endpoint is safe today because an attacker cannot name a victim — there is no
+field to put one in. The predictable way that property dies is not an attack
+but a reasonable-looking future edit: someone building the manager view adds
+`?employee=` so a supervisor can see their team, every existing test still
+passes because they all exercise the employee's own path, and the design's
+foundation is gone with nothing objecting. The guard makes that edit fail
+loudly and explain itself.
+
+**Mutation-test the auth and projection tests.** Deleting the freshness check,
+the `hash`-absent branch, the `enabled` filter, or an allowlist entry must each
+fail a test. This codebase already practises this — see the notes in
+`outageExcusePanel.test.tsx` about a regex that stayed green through a deleted
+guard.
 
 **Sandbox** — `frappe-sandbox` run against a real bench. Mocked tests are not
 sufficient for the binding and gate behaviour.
