@@ -26,3 +26,15 @@ test("the active tab is marked for assistive tech, not only coloured", () => {
   const html = renderToStaticMarkup(<MiniTabBar active="week" onSelect={() => {}} />);
   assert.match(html, /aria-current="page"[^>]*>|aria-current="page"/);
 });
+
+test("the tab bar renders without a window, and pads when told to", () => {
+  // It used to read `window` during render, which is unrenderable anywhere
+  // without one. The safe-area value is the shell's to fetch and pass down.
+  const bare = renderToStaticMarkup(<MiniTabBar active="day" onSelect={() => {}} />);
+  assert.match(bare, /padding-bottom:\s*0/);
+
+  const padded = renderToStaticMarkup(
+    <MiniTabBar active="day" onSelect={() => {}} insetBottom={34} />,
+  );
+  assert.match(padded, /padding-bottom:\s*34px/);
+});

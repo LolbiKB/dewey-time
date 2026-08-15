@@ -6,13 +6,13 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "@/lib/queryClient";
 import { MiniAppShell } from "@/miniapp/MiniAppShell";
+import { initTelegramChrome } from "@/miniapp/telegramChrome";
 import "@/index.css";
 
-// Tell Telegram the webview is ready and let it take the full sheet. Optional
-// chaining throughout: the page is also openable as a plain URL, where it
-// renders the outside-Telegram notice rather than throwing on a missing SDK.
-window.Telegram?.WebApp?.ready?.();
-window.Telegram?.WebApp?.expand?.();
+// ready/expand, match Telegram's light or dark theme, and stop a downward
+// scroll from closing the app. Safe outside Telegram: every call is
+// feature-detected, so a plain browser just renders the notice.
+initTelegramChrome(window, document);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
