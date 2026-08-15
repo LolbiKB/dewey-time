@@ -14,6 +14,15 @@ shifts.
    python3 -c "import secrets; print(secrets.token_urlsafe(32))"
    ```
 
+   **Use exactly this generator.** Telegram allows only `A-Z a-z 0-9 _ -`
+   (1–256 chars) in `secret_token`. `openssl rand -base64 32` emits `+`, `/`
+   and `=` and will be refused, and a trailing newline picked up when copying
+   the value out of a terminal will be refused too — both produce
+   `Bad Request: secret token contains unallowed characters` from
+   `setWebhook`. Dewey Time validates the same rule when it reads the field,
+   so a bad value fails at configure time rather than silently 403-ing every
+   update later.
+
 3. In Desk → **Dewey Time Settings → Telegram**, fill in **Telegram Bot Token**,
    **Telegram Webhook Secret**, and **Telegram Bot Username** (no `@`).
    Leave **Enable Telegram** OFF until step 5.
@@ -132,3 +141,5 @@ from Frappe, so losing Telegram loses a convenience and not data.
 | Linked, but no notifications | Branch not LIVE in Dewey Time Branch Rollout; or **Enable Telegram** is off; or the link's **Enabled** is 0. |
 | Notifications stopped for one person | They blocked the bot — the link auto-disabled. |
 | `Telegram bot token is not configured` | Expected when the field is blank. The feature fails closed instead of running with an empty key. |
+| `setWebhook` → "secret token contains unallowed characters" | The secret is outside `A-Za-z0-9_-`. Usually a trailing newline from copying it, or `openssl rand -base64`. Regenerate with `secrets.token_urlsafe` and update BOTH Settings and the curl. |
+| `Telegram webhook secret must be 1-256 characters...` | Same cause, caught earlier — the value in Settings is one Telegram would never send. |

@@ -115,3 +115,46 @@ class TestMenuButton(unittest.TestCase):
             self.assertEqual(
                 transport.set_default_menu_button("https://site/hr-me"), transport.FAILED
             )
+
+
+class TestWebhookSecretFormat(unittest.TestCase):
+    """Telegram rejects a secret_token outside [A-Za-z0-9_-]{1,256}.
+
+    Caught in the wild: setWebhook answered "Bad Request: secret token
+    contains unallowed characters". Validating here turns that into an error
+    at the point the value is read, rather than three steps away at
+    registration -- or worse, a silent 403 on every update if the bad value is
+    left in Settings.
+    """
+
+    def test_a_urlsafe_token_is_accepted(self):
+        with patch.object(transport, "_secret", return_value="Xk3_9pQ-rT7wLmZ2aB4cD6eF8gH0iJkL"):
+            self.assertTrue(transport.webhook_secret())
+
+    def test_a_trailing_newline_from_a_terminal_copy_is_stripped(self):
+        # .strip() already handles this, and it is the single most likely way
+        # to get the error, so it is worth pinning rather than assuming.
+        with patch.object(transport, "_secret", return_value="abc123\n"):
+            self.assertEqual(transport.webhook_secret(), "abc123")
+
+    def test_base64_padding_and_slashes_are_refused(self):
+        # `openssl rand -base64 32` emits +, / and = -- an easy substitution
+        # for the documented generator, and all three are disallowed.
+        for bad in ("ab+cd/ef==", "abc+def", "abc/def", "abcdef="):
+            with patch.object(transport, "_secret", return_value=bad):
+                with self.assertRaises(Exception, msg=f"{bad!r} should be refused"):
+                    transport.webhook_secret()
+
+    def test_an_internal_space_or_newline_is_refused(self):
+        for bad in ("abc def", "abc\ndef", "abc\tdef"):
+            with patch.object(transport, "_secret", return_value=bad):
+                with self.assertRaises(Exception, msg=f"{bad!r} should be refused"):
+                    transport.webhook_secret()
+
+    def test_the_error_says_how_to_generate_a_good_one(self):
+        # An operator hitting this is mid-setup and should not have to go
+        # looking for the runbook.
+        with patch.object(transport, "_secret", return_value="bad+secret"):
+            with self.assertRaises(Exception) as ctx:
+                transport.webhook_secret()
+        self.assertIn("token_urlsafe", str(ctx.exception))
