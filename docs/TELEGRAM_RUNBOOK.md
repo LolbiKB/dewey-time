@@ -26,7 +26,21 @@ plan 2.
 
    Verify: `curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"` — `url`
    correct, `last_error_message` empty, `pending_update_count` low.
-5. Turn **Enable Telegram** on.
+5. Set **Telegram Mini App URL** to `https://<site>/hr-me` (https is required —
+   Telegram refuses a web_app button on plain http).
+6. Turn **Enable Telegram** on.
+7. Give the bot a permanent way back in — run
+   `dewey_time.telegram.transport.configure_menu_button` once:
+
+   ```
+   bench --site <site> execute dewey_time.telegram.transport.configure_menu_button
+   ```
+
+   This points every user's chat menu button (beside the message box) at the
+   Mini App. **Without it the only way into the app is the inline button on
+   the link-confirmation message**, which scrolls out of the chat and never
+   comes back — an employee who closes the app has no route back to it.
+   Idempotent; re-run it after changing the URL.
 
 The token and secret are `Password` fields — encrypted at rest, and they never
 appear in the SPA, in logs, or in an error message. If the token is unset the
@@ -48,6 +62,16 @@ complain about.
 
 Only the SHA-256 of the token is stored, so reading the database — a backup, a
 support session, a sandbox restore — never yields a usable link.
+
+## Opening the app
+
+Two ways in, and the second is the one that matters day to day:
+
+- the **Open my attendance** button on the message sent when they link, and
+- the **menu button** beside the chat's message box, set up in step 7.
+
+The app matches Telegram's light or dark theme automatically and will not
+close when scrolled.
 
 ## Who is linked
 

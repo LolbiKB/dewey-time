@@ -82,3 +82,36 @@ class TestWebAppButton(unittest.TestCase):
         self.assertEqual(
             markup["inline_keyboard"][0][0]["web_app"]["url"], "https://site/hr-me"
         )
+
+
+class TestMenuButton(unittest.TestCase):
+    def test_it_sets_the_default_button_for_every_user(self):
+        # No chat_id in the payload: one call covers everyone, rather than a
+        # per-employee call nobody would remember to make.
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            transport.set_default_menu_button("https://site/hr-me")
+
+        body = post.call_args[1]["json"]
+        self.assertIn("setChatMenuButton", post.call_args[0][0])
+        self.assertNotIn("chat_id", body)
+        self.assertEqual(body["menu_button"]["type"], "web_app")
+        self.assertEqual(body["menu_button"]["web_app"]["url"], "https://site/hr-me")
+
+    def test_configure_requires_hr_and_uses_the_configured_url(self):
+        with patch.object(transport, "miniapp_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "set_default_menu_button",
+                          return_value=transport.SENT) as setter:
+            result = transport.configure_menu_button()
+        setter.assert_called_once_with("https://site/hr-me")
+        self.assertEqual(result["status"], transport.SENT)
+
+    def test_a_rejection_is_reported_not_raised(self):
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 400
+            post.return_value.text = "Bad Request: BUTTON_URL_INVALID"
+            self.assertEqual(
+                transport.set_default_menu_button("https://site/hr-me"), transport.FAILED
+            )

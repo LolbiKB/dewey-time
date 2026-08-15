@@ -120,3 +120,52 @@ def send_message_with_webapp_button(chat_id: str, text: str, *, button_text: str
         )
         return FAILED
     return SENT
+
+
+MENU_BUTTON_TEXT = "My attendance"
+
+
+def set_default_menu_button(url: str) -> str:
+    """Point every user's chat menu button at the Mini App.
+
+    No chat_id, so this sets the DEFAULT button for all users in one call
+    rather than per person.
+
+    This is the app's only PERSISTENT entry point. Without it the sole way in
+    is the inline button on the link-confirmation message, which scrolls away
+    and never comes back -- an employee who closes the app has no route back
+    to it.
+    """
+    try:
+        response = requests.post(
+            f"{API_BASE}/bot{bot_token()}/setChatMenuButton",
+            json={
+                "menu_button": {
+                    "type": "web_app",
+                    "text": MENU_BUTTON_TEXT,
+                    "web_app": {"url": url},
+                }
+            },
+            timeout=TIMEOUT_SECONDS,
+        )
+    except Exception:
+        frappe.log_error(title="Telegram menu button failed", message=frappe.get_traceback())
+        return FAILED
+
+    if response.status_code != 200:
+        frappe.log_error(
+            title="Telegram menu button rejected",
+            message=f"status={response.status_code} body={response.text[:500]}",
+        )
+        return FAILED
+    return SENT
+
+
+@frappe.whitelist()
+def configure_menu_button() -> dict:
+    """HR-run, once, after the Mini App URL is set. Idempotent."""
+    from dewey_time.attendance_engine.hr_calendar import _require_hr_role
+
+    _require_hr_role()
+    url = miniapp_url()
+    return {"status": set_default_menu_button(url), "url": url}
