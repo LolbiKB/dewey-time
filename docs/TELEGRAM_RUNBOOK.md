@@ -1,8 +1,9 @@
 # Telegram employee layer — operator runbook
 
-What this covers: an employee links their Telegram account once, and from then
-on gets a message when they check in or out. There is no Mini App yet; that is
-plan 2.
+What this covers: an employee links their Telegram account once. From then on
+they get a message when they check in or out, and can open a Mini App showing
+today's timeline, what they actually worked this week, and their assigned
+shifts.
 
 ## One-time setup
 
@@ -101,8 +102,13 @@ job retrying forever. Re-linking needs a fresh invite.
 ## What employees can and cannot do
 
 The bot's only command is `/start <token>`. It does not answer `/today`,
-`/week` or anything else — reading your own attendance is the Mini App's job
-(plan 2), and until that ships the bot is notify-only.
+`/week` or anything else, and that is deliberate: reading your own attendance
+is the Mini App's job, so the bot stays a notifier and a door.
+
+The Mini App is READ-ONLY. There is nothing in it an employee can submit,
+change or delete, and it shows no attendance flags — the engine's verdict on a
+day is provisional until HR reviews it, so surfacing it to the person it
+concerns would be showing them a judgment nobody has made yet.
 
 The bot **ignores every non-private chat**. Adding it to a group does nothing,
 by design: otherwise one add would broadcast a person's attendance to their
