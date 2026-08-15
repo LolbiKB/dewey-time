@@ -86,7 +86,38 @@ Splitting `binding` / `transport` / `webhook` / `notify` is deliberate: `binding
   - `dewey_time.telegram.transport.telegram_enabled() -> bool`
   - `dewey_time.telegram.transport.send_message(chat_id: str, text: str) -> None`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Extend the shared frappe test mock**
+
+`dewey_time/tests/test_closeout.py::_install_frappe_mock` is the mock every
+test module installs. Two things this plan needs are missing from it, and both
+are additive:
+
+- `frappe.utils` is a real `ModuleType`, not a `MagicMock`, so a missing
+  attribute is a hard `ImportError` — `from frappe.utils import add_to_date`
+  fails today.
+- `frappe.PermissionError` resolves to an auto-`MagicMock`, and
+  `frappe.throw(msg, frappe.PermissionError)` then dies with
+  `TypeError: exceptions must derive from BaseException` rather than the
+  intended error. The file already solves this for `AuthenticationError`.
+
+In `_install_frappe_mock`, beside the existing `frappe.AuthenticationError = Exception`:
+
+```python
+    frappe.AuthenticationError = Exception
+    frappe.PermissionError = Exception
+    frappe.ValidationError = Exception
+```
+
+and beside the existing `utils_mod.add_days`:
+
+```python
+    utils_mod.add_to_date = lambda value, **kwargs: value
+```
+
+Run the full backend suite afterwards to confirm the additions break nothing:
+`cd dev/sandbox && ./frappe-sandbox test --backend`
+
+- [ ] **Step 2: Write the failing test**
 
 Create `dewey_time/tests/test_telegram_transport.py`:
 
@@ -1137,6 +1168,8 @@ Create `dewey_time/tests/test_telegram_notify.py`:
 import unittest
 from unittest.mock import patch
 
+from datetime import datetime
+
 from dewey_time.tests.test_closeout import _install_frappe_mock
 
 _install_frappe_mock()
@@ -1145,23 +1178,29 @@ from dewey_time.telegram import notify  # noqa: E402
 
 
 class TestCompose(unittest.TestCase):
+    # Punch times are real `datetime` objects, not strings. `Employee
+    # Checkin.time` is a Datetime field, so frappe.db.get_value hands back a
+    # datetime in production — and the test mock's `get_datetime` is the
+    # identity function, so a string here would reach `.strftime` and blow up
+    # for a reason production would never hit.
     def test_in_punch_names_the_time_and_branch(self):
-        text = notify.compose("IN", "2026-08-14 07:58:00", "DIS Iconic")
+        text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), "DIS Iconic")
         self.assertIn("07:58", text)
         self.assertIn("DIS Iconic", text)
 
     def test_out_punch_reads_as_a_checkout(self):
-        self.assertIn("out", notify.compose("OUT", "2026-08-14 17:02:00", "ISBB").lower())
+        text = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), "ISBB")
+        self.assertIn("out", text.lower())
 
     def test_missing_branch_still_produces_a_message(self):
-        text = notify.compose("IN", "2026-08-14 07:58:00", None)
+        text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
         self.assertIn("07:58", text)
         self.assertNotIn("None", text)
 
     def test_no_judgment_language(self):
         # The notification says what happened, never what it means. Lateness
         # is HR's determination and it is not final at punch time.
-        text = notify.compose("IN", "2026-08-14 09:45:00", "DIS Iconic")
+        text = notify.compose("IN", datetime(2026, 8, 14, 9, 45), "DIS Iconic")
         for word in ("late", "early", "flag", "violation", "absent"):
             self.assertNotIn(word, text.lower())
 
@@ -1184,7 +1223,7 @@ class TestGating(unittest.TestCase):
         with patch.object(notify.transport, "telegram_enabled", return_value=True), \
              patch.object(notify, "_link_for", return_value={"chat_id": "1", "name": "1"}), \
              patch.object(notify, "_checkin", return_value={
-                 "log_type": "IN", "time": "2026-08-14 07:58:00",
+                 "log_type": "IN", "time": datetime(2026, 8, 14, 7, 58),
                  "custom_device_branch": "DIS Iconic"}), \
              patch.object(notify.rollout, "phase_for_employee", return_value="TESTING"), \
              patch.object(notify.transport, "send_message") as send:
@@ -1195,7 +1234,7 @@ class TestGating(unittest.TestCase):
         with patch.object(notify.transport, "telegram_enabled", return_value=True), \
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value={
-                 "log_type": "IN", "time": "2026-08-14 07:58:00",
+                 "log_type": "IN", "time": datetime(2026, 8, 14, 7, 58),
                  "custom_device_branch": "DIS Iconic"}), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
              patch.object(notify.transport, "send_message",
@@ -1207,7 +1246,7 @@ class TestGating(unittest.TestCase):
         with patch.object(notify.transport, "telegram_enabled", return_value=True), \
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value={
-                 "log_type": "IN", "time": "2026-08-14 07:58:00",
+                 "log_type": "IN", "time": datetime(2026, 8, 14, 7, 58),
                  "custom_device_branch": "DIS Iconic"}), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
              patch.object(notify.transport, "send_message",

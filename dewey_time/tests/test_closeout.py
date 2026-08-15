@@ -51,6 +51,12 @@ def _install_frappe_mock():
     frappe.utils.get_time = _mock_get_time
     frappe.utils.add_days = lambda value, days: value
     frappe.AuthenticationError = Exception
+    # Same reason as AuthenticationError above: frappe.throw's side_effect does
+    # `generator.throw(exc)`, and an auto-MagicMock attribute is not a
+    # BaseException subclass, so `frappe.throw(msg, frappe.PermissionError)`
+    # would die with a TypeError instead of the error the caller intended.
+    frappe.PermissionError = Exception
+    frappe.ValidationError = Exception
     frappe.throw = MagicMock(side_effect=lambda msg, exc=None: (_ for _ in ()).throw(exc or Exception(msg)))
     frappe._ = lambda value: value
     frappe.conf = MagicMock()
@@ -84,6 +90,10 @@ def _install_frappe_mock():
     utils_mod.get_datetime = lambda value: value
     utils_mod.get_time = _mock_get_time
     utils_mod.add_days = lambda value, days: value
+    # frappe.utils is a real ModuleType, not a MagicMock, so anything absent
+    # here is a hard ImportError at `from frappe.utils import ...` rather than
+    # an auto-stub. Added for the Telegram link tokens' expiry arithmetic.
+    utils_mod.add_to_date = lambda value, **kwargs: value
     utils_mod.nowdate = lambda: str(date.today())
     utils_mod.cint = _mock_cint
 
