@@ -108,3 +108,27 @@ class TestRedeem(unittest.TestCase):
         self.assertEqual(create.call_args[1]["employee"], "HR-EMP-00001")
         self.assertEqual(create.call_args[1]["telegram_user_id"], "55501")
         self.assertEqual(create.call_args[1]["chat_id"], "77702")
+
+
+class TestInvite(unittest.TestCase):
+    def test_invite_requires_hr(self):
+        with patch.object(binding, "_require_hr_role",
+                          side_effect=Exception("Not permitted")) as gate:
+            with self.assertRaises(Exception):
+                binding.create_link_invite("HR-EMP-00001")
+        gate.assert_called_once()
+
+    def test_invite_returns_a_tappable_url(self):
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "issue_link_token", return_value="tok123"), \
+             patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
+            invite = binding.create_link_invite("HR-EMP-00001")
+        self.assertEqual(invite["url"], "https://t.me/dewey_time_bot?start=tok123")
+        self.assertEqual(invite["employee"], "HR-EMP-00001")
+
+    def test_invite_refuses_a_blank_employee(self):
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "issue_link_token") as issue:
+            with self.assertRaises(Exception):
+                binding.create_link_invite("  ")
+        issue.assert_not_called()
