@@ -122,7 +122,14 @@ scheduler_events = {
 
 doc_events = {
     "Employee Checkin": {
-        "after_insert": "dewey_time.attendance_engine.intraday.on_employee_checkin_after_insert",
+        # A list, not a string: the flag engine and the Telegram notifier both
+        # care about a new punch and neither should be nested inside the other.
+        # The notifier only enqueues, so this adds no synchronous work to the
+        # engine's hottest write path.
+        "after_insert": [
+            "dewey_time.attendance_engine.intraday.on_employee_checkin_after_insert",
+            "dewey_time.telegram.notify.on_employee_checkin_after_insert",
+        ],
         "on_update": "dewey_time.attendance_engine.intraday.on_employee_checkin_on_update",
     },
     # Keep the Schedule Coverage page fresh: clear its cached payload whenever a
