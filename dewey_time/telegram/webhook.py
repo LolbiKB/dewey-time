@@ -24,6 +24,7 @@ SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 LINKED_REPLY = "You're linked. You'll get a message here when you check in or out."
 LINK_FAILED_REPLY = "That link didn't work. Please ask HR for a new one."
 NEEDS_TOKEN_REPLY = "To connect your account, use the link or QR code HR gave you."
+OPEN_BUTTON_TEXT = "Open my attendance"
 
 
 def _secret_ok(supplied) -> bool:
@@ -66,7 +67,17 @@ def _handle(update: dict) -> None:
         transport.send_message(chat_id, LINK_FAILED_REPLY)
         return
 
-    transport.send_message(chat_id, LINKED_REPLY)
+    # Offer the Mini App, but never let that failure look like a link
+    # failure: the binding is already written and the employee IS linked.
+    try:
+        transport.send_message_with_webapp_button(
+            chat_id, LINKED_REPLY, button_text=OPEN_BUTTON_TEXT, url=transport.miniapp_url()
+        )
+    except Exception:
+        frappe.log_error(
+            title="Telegram Mini App button unavailable", message=frappe.get_traceback()
+        )
+        transport.send_message(chat_id, LINKED_REPLY)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

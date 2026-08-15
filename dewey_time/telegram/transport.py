@@ -78,3 +78,45 @@ def send_message(chat_id: str, text: str) -> str:
         )
         return FAILED
     return SENT
+
+
+def miniapp_url() -> str:
+    """Absolute https URL of the Mini App page, or raise.
+
+    Telegram rejects a web_app button whose URL is not https, so a
+    misconfiguration must surface here rather than as a button that silently
+    never appears.
+    """
+    url = (frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_miniapp_url") or "").strip()
+    if not url.startswith("https://"):
+        frappe.throw("Telegram Mini App URL must be set and must be https")
+    return url
+
+
+def send_message_with_webapp_button(chat_id: str, text: str, *, button_text: str, url: str) -> str:
+    """send_message, plus an inline button that launches the Mini App."""
+    try:
+        response = requests.post(
+            f"{API_BASE}/bot{bot_token()}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "reply_markup": {
+                    "inline_keyboard": [[{"text": button_text, "web_app": {"url": url}}]]
+                },
+            },
+            timeout=TIMEOUT_SECONDS,
+        )
+    except Exception:
+        frappe.log_error(title="Telegram send failed", message=frappe.get_traceback())
+        return FAILED
+
+    if response.status_code == 403:
+        return BLOCKED
+    if response.status_code != 200:
+        frappe.log_error(
+            title="Telegram send rejected",
+            message=f"status={response.status_code} body={response.text[:500]}",
+        )
+        return FAILED
+    return SENT
