@@ -21,6 +21,11 @@ import { AppTooltip } from "@/ui/AppTooltip";
 import { DataHealthButton } from "@/ui/DataHealthButton";
 import { DeviceHealthDetail } from "@/ui/DeviceAlerts";
 import { ClockBadge, EmployeePicker } from "@/ui/EmployeePicker";
+import {
+  TelegramLinkButton,
+  TelegramLinkDialog,
+  type LinkInvite,
+} from "@/ui/TelegramLinkDialog";
 import { RunEngineDialog } from "@/ui/RunEngineDialog";
 import { WeekFlagSummary } from "@/ui/WeekFlagSummary";
 import { WeeklyScheduleSummary } from "@/ui/WeeklyScheduleSummary";
@@ -61,6 +66,43 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
   const navDisabled = props.isCalendarLoading;
   const hrStaff = props.hrStaff !== false;
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [invite, setInvite] = useState<LinkInvite | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteLoading, setInviteLoading] = useState(false);
+
+  async function issueTelegramLink(employee: string) {
+    // Reset first: leaving the previous employee's link on screen while the
+    // next one loads is how someone sends the wrong person's credential.
+    setInvite(null);
+    setInviteError(null);
+    setInviteLoading(true);
+    setInviteOpen(true);
+    try {
+      const response = await fetch(
+        "/api/method/dewey_time.telegram.binding.create_link_invite",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Frappe-CSRF-Token": (window as { csrf_token?: string }).csrf_token ?? "",
+          },
+          body: JSON.stringify({ employee }),
+        },
+      );
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body?._server_messages || body?.message || "Could not issue a link");
+      }
+      setInvite(body.message as LinkInvite);
+    } catch (error) {
+      setInviteError(
+        error instanceof Error ? error.message : "Could not issue a link",
+      );
+    } finally {
+      setInviteLoading(false);
+    }
+  }
   const selectedEmployee = props.employees.find((e) => e.id === props.employee) ?? null;
 
   return (
@@ -108,6 +150,11 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
                 }
               />
             </WeeklyScheduleSummary>
+            <div className="w-px shrink-0 self-stretch bg-border" aria-hidden="true" />
+            <TelegramLinkButton
+              disabled={!selectedEmployee || props.employeeLoading === true}
+              onClick={() => selectedEmployee && issueTelegramLink(selectedEmployee.id)}
+            />
           </>
         ) : null}
       </div>
@@ -214,6 +261,16 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
         ) : null}
         </nav>
       </div>
+      {/* Inside <header> but outside the control group: Radix portals it to
+          the body, so its position in the tree costs no layout. */}
+      <TelegramLinkDialog
+        open={inviteOpen}
+        onOpenChange={setInviteOpen}
+        employeeName={selectedEmployee?.employee_name ?? selectedEmployee?.id ?? null}
+        invite={invite}
+        error={inviteError}
+        isLoading={inviteLoading}
+      />
     </header>
   );
 }

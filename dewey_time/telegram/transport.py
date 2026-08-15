@@ -4,6 +4,8 @@ Sole caller by design: one place to add rate pacing, one place to stub in
 tests, and one place where the bot token is read.
 """
 
+import re
+
 import frappe
 import requests
 from frappe.utils.password import get_decrypted_password
@@ -40,11 +42,31 @@ def bot_token() -> str:
     return token
 
 
+#: Telegram's own constraint on secret_token: 1-256 chars of A-Z, a-z, 0-9,
+#: underscore and hyphen. Anything else makes setWebhook fail with "secret
+#: token contains unallowed characters" -- notably a trailing newline picked
+#: up when copying the value out of a terminal, or `openssl rand -base64`,
+#: which emits +, / and =.
+SECRET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+
+
 def webhook_secret() -> str:
-    """The webhook secret, or raise. Same reasoning as bot_token()."""
+    """The webhook secret, or raise. Same reasoning as bot_token().
+
+    Validated against Telegram's character set here rather than left to fail
+    at setWebhook time. A secret Telegram will not accept is a secret it can
+    never send, so every update would 403 against a value sitting in Settings
+    looking perfectly fine -- the failure surfaces three steps from its cause.
+    """
     secret = (_secret("telegram_webhook_secret") or "").strip()
     if not secret:
         frappe.throw("Telegram webhook secret is not configured")
+    if not SECRET_TOKEN_RE.match(secret):
+        frappe.throw(
+            "Telegram webhook secret must be 1-256 characters of A-Z, a-z, 0-9, "
+            "underscore or hyphen. Generate one with: "
+            "python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
     return secret
 
 
