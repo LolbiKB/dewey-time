@@ -176,6 +176,41 @@ Long-polling is ruled out — Frappe has nowhere to run a persistent poller.
 **Both of these are written in the main session, not delegated to a subagent**,
 per the standing rule about isolation predicates in `CLAUDE.md`.
 
+### Verified on a real bench, 2026-08-15
+
+The no-users design rests on an assumption nothing in this codebase had ever
+exercised: with no Frappe `User`, the Mini App endpoint runs as **Guest**, and
+all three existing `allow_guest` endpoints *write* — none reads employee data.
+
+Probed on `frappe-sandbox` (`test_site`, frappe/erpnext/hrms `version-16`), with
+a seeded Employee and Checkin so that row counts distinguish "permission
+bypassed" from "silently filtered to empty":
+
+| Check as `Guest` | Result |
+|---|---|
+| `frappe.get_all("Employee")` | returns the row |
+| `frappe.get_all("Employee Checkin")` | returns the row |
+| `frappe.db.get_value("Employee", …, "company")` | returns real data |
+| `frappe.get_list("Employee")` | **PermissionError** |
+| `_require_calendar_access(emp)` | **PermissionError** |
+
+Three conclusions:
+
+1. **The design works as specified.** A Guest-context request can read
+   attendance data, so no service account is required. The one-shared-service-user
+   fallback considered during design is unnecessary and is not built.
+2. The `get_all` / `get_list` split is genuine here, not an artefact — `get_list`
+   refuses the same read that `get_all` serves.
+3. The existing gate refuses Guest exactly as it should, which confirms the
+   builder extraction below is mandatory rather than a matter of taste.
+
+**The security consequence is the important one.** Because `get_all` bypasses
+permissions entirely, there is **no Frappe permission backstop** beneath this
+feature. The `initData` HMAC check and the binding lookup are not the first line
+of defence — they are the *only* line. A defect in either serves any
+unauthenticated caller the whole workforce's attendance. This strengthens the
+rule above rather than relaxing it.
+
 ## Data: one narrowed endpoint
 
 Everything the three views need is already in one payload.
@@ -186,10 +221,33 @@ Everything the three views need is already in one payload.
 already self-access permitted via `_require_calendar_access`
 (`hr_calendar.py:540`).
 
-So **no new read logic is needed** — but the raw payload cannot be served to an
-employee. Self-access is not self-appropriate: that gate was written for
-self-access and then only ever called by HR, so nobody has audited what it hands
-a non-HR caller.
+So **no new read logic is needed** — but two things stand in the way, and the
+second is a real refactor.
+
+**The payload cannot be served to an employee as-is.** Self-access is not
+self-appropriate: that gate was written for self-access and then only ever
+called by HR, so nobody has audited what it hands a non-HR caller.
+
+**`get_employee_calendar` has no reusable builder to call.** It spans
+`hr_calendar.py:531` to end-of-file — roughly 270 lines — with
+`_require_calendar_access(employee)` as its first statement and the entire
+payload construction inlined beneath it. There is no
+`_build_employee_calendar(employee, start, end)` underneath.
+
+Since this design deliberately creates no Frappe `User`, nothing can ever
+satisfy `_require_calendar_access`, so `get_my_calendar` cannot call the
+existing function at all. The extraction is mandatory, not cosmetic:
+
+- Split the ~270-line body into an internal builder taking an already-authorized
+  employee.
+- `get_employee_calendar` keeps its gate and delegates — its behaviour and
+  payload must not change, and its existing tests are the guard for that.
+- `get_my_calendar` resolves the employee from the Telegram binding, calls the
+  same builder, and narrows the result.
+
+This is the largest single piece of backend work in the module and the plan
+should treat it as its own task, sequenced before the endpoint that depends on
+it.
 
 A new endpoint `get_my_calendar(start_date, end_date)` — **no employee
 parameter** — returns a projection with these removed:
