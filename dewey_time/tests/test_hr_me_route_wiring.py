@@ -22,3 +22,28 @@ class TestHrMeRouteWiring(unittest.TestCase):
         with open(os.path.join(APP_ROOT, "hooks.py"), encoding="utf-8") as handle:
             hooks = handle.read()
         self.assertIn("sync_miniapp_assets", hooks)
+
+
+class TestBundlesAreBuiltTogether(unittest.TestCase):
+    def test_the_main_build_also_builds_the_mini_app(self):
+        # The two bundles share src/, and BOTH are committed artifacts that
+        # Frappe Cloud never rebuilds. Before this, changing a shared
+        # component (DayCell, PlannedWeekCanvas, anything in lib/) and running
+        # `npm run build` rebuilt only the HR console -- shipping a Mini App
+        # bundle silently stale against the source it was built from, with no
+        # error anywhere.
+        import json
+
+        pkg = os.path.join(
+            os.path.dirname(APP_ROOT), "dewey_time", "frontend", "hr_attendance",
+            "package.json",
+        )
+        with open(pkg, encoding="utf-8") as handle:
+            scripts = json.load(handle)["scripts"]
+        self.assertIn("build:miniapp", scripts)
+        self.assertIn(
+            "build:miniapp",
+            scripts["build"],
+            "`npm run build` must also build the Mini App, or a shared-component "
+            "change ships a stale bundle",
+        )

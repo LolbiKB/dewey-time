@@ -1,4 +1,5 @@
 import inspect
+import pathlib
 import unittest
 from unittest.mock import patch
 
@@ -70,6 +71,23 @@ class TestSignatureGuard(unittest.TestCase):
         # new parameter. Do not delete this test to make it pass.
         params = set(inspect.signature(miniapp_api.get_my_calendar).parameters)
         self.assertEqual(params, {"init_data", "start_date", "end_date"})
+
+
+class TestHttpMethod(unittest.TestCase):
+    def test_the_endpoint_is_post_only(self):
+        # A source assertion because frappe.whitelist is a passthrough under
+        # the test mock, so the registration cannot be introspected.
+        #
+        # Without methods=["POST"] Frappe also serves GET, and a GET carries
+        # init_data -- the whole authentication credential -- in the query
+        # string, into the access log, any fronting proxy, and the webview's
+        # history. The webhook has always pinned this; this endpoint shipped
+        # without it and the whole-branch review caught it.
+        src = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "telegram" / "miniapp_api.py"
+        ).read_text()
+        self.assertIn('@frappe.whitelist(allow_guest=True, methods=["POST"])', src)
 
 
 class TestProjection(unittest.TestCase):

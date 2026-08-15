@@ -84,7 +84,12 @@ def narrow(payload: dict) -> dict:
     return {"employee": payload.get("employee"), "days": days}
 
 
-@frappe.whitelist(allow_guest=True)
+# POST-only, deliberately. Without methods=[...] Frappe also accepts GET, and
+# a GET would carry init_data -- the entire authentication credential -- in the
+# query string, where it lands in the web server's access log, any proxy in
+# front of it, and the webview's history. The webhook already pins this; this
+# endpoint did not.
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_my_calendar(init_data: str, start_date: str, end_date: str) -> dict:
     """The employee's own calendar, resolved from their Telegram binding.
 
