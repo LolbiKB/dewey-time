@@ -27,7 +27,21 @@ from dewey_time.telegram import miniapp_auth
 #: enough that it is not a history export.
 MAX_RANGE_DAYS = 62
 
-DAY_KEYS = ("date", "shift", "checkins", "holiday", "leave", "observed_lunch")
+#: first_in/last_out are derived server-side from this employee's own punches
+#: (hr_calendar.py:791) and are strictly less than the punch list already
+#: allowed below -- if they can see every punch, the first and last of them
+#: are not a new disclosure. The week view reads them via
+#: formatDayCheckinTimeRange.
+DAY_KEYS = (
+    "date",
+    "shift",
+    "checkins",
+    "holiday",
+    "leave",
+    "observed_lunch",
+    "first_in",
+    "last_out",
+)
 SHIFT_KEYS = (
     "shift_assigned",
     "shift_type",

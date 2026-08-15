@@ -31,6 +31,8 @@ HR_PAYLOAD = {
             "holiday": None,
             "leave": {"on_leave": False},
             "observed_lunch": None,
+            "first_in": "2026-08-14 07:58:00",
+            "last_out": "2026-08-14 17:06:00",
             "checkins": [
                 {
                     "name": "EMP-CKIN-1",
@@ -85,7 +87,8 @@ class TestProjection(unittest.TestCase):
         day = self._narrowed()["days"][0]
         self.assertEqual(
             set(day),
-            {"date", "shift", "checkins", "holiday", "leave", "observed_lunch"},
+            {"date", "shift", "checkins", "holiday", "leave", "observed_lunch",
+             "first_in", "last_out"},
         )
 
     def test_the_top_level_key_set_is_exactly_the_allowlist(self):
