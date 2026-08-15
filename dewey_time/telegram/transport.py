@@ -54,10 +54,14 @@ def send_message(chat_id: str, text: str) -> str:
     Callers are background jobs whose failure must not surface anywhere near a
     checkin write, so transport errors are reported as values.
     """
-    url = f"{API_BASE}/bot{bot_token()}/sendMessage"
     try:
+        # bot_token() is INSIDE the try. It throws when the token is unset, and
+        # that is reachable in production: enabling Telegram before filling the
+        # token in makes every checkin enqueue a job that would otherwise raise
+        # here, contradicting this function's "never raises" contract and
+        # filling the Error Log with tracebacks instead of one clear FAILED.
         response = requests.post(
-            url,
+            f"{API_BASE}/bot{bot_token()}/sendMessage",
             json={"chat_id": chat_id, "text": text},
             timeout=TIMEOUT_SECONDS,
         )

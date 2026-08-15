@@ -90,6 +90,28 @@ class TestRedeem(unittest.TestCase):
             with self.assertRaises(Exception):
                 binding.redeem_link_token("tok", "55501", "55501")
 
+    def test_a_telegram_redelivery_is_idempotent_not_an_error(self):
+        # Telegram redelivers an update when it does not get a timely 200, so
+        # the same /start can arrive twice. Without this the employee is told
+        # "that link didn't work" immediately after being told they're linked.
+        with patch.object(binding, "_load_token", return_value=self._token_doc(
+                redeemed_at="2026-08-01 00:00:00",
+                redeemed_by_telegram_user_id="55501")), \
+             patch.object(binding, "_create_link") as create:
+            employee = binding.redeem_link_token("tok", "55501", "77702")
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+
+    def test_a_different_account_cannot_reuse_a_redeemed_token(self):
+        # The mirror of the case above, and the reason it is scoped to the
+        # same account: a used token must stay used for everyone else.
+        with patch.object(binding, "_load_token", return_value=self._token_doc(
+                redeemed_at="2026-08-01 00:00:00",
+                redeemed_by_telegram_user_id="55501")), \
+             patch.object(binding, "_is_expired", return_value=False):
+            with self.assertRaises(Exception):
+                binding.redeem_link_token("tok", "99999", "77702")
+
     def test_expired_token_raises(self):
         with patch.object(binding, "_load_token",
                           return_value=self._token_doc(expires_at="2000-01-01 00:00:00")), \

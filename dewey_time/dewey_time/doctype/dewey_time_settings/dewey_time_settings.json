@@ -1,148 +1,148 @@
 {
- "actions": [],
- "allow_copy": 0,
- "allow_guest_to_view": 0,
- "allow_import": 0,
- "creation": "2026-06-21 00:00:00.000000",
- "custom": 0,
- "docstatus": 0,
- "doctype": "DocType",
- "document_type": "System",
- "editable_grid": 1,
- "engine": "InnoDB",
- "field_order": [
-  "enable_web_push",
-  "vapid_subject",
-  "vapid_public_key",
-  "vapid_private_key",
-  "landing_workspace_snapshot",
-  "rollout_section",
-  "rollout_testing_start",
-  "rollout_go_live",
-  "branch_rollout",
-  "last_enrollment_snapshot_at",
-  "telegram_section",
-  "enable_telegram",
-  "telegram_bot_username",
-  "telegram_bot_token",
-  "telegram_webhook_secret"
- ],
- "fields": [
-  {
-   "fieldname": "enable_web_push",
-   "fieldtype": "Check",
-   "label": "Enable Web Push",
-   "default": "0",
-   "description": "Off by default. Turn on only after VAPID keys exist and users have opted in."
-  },
-  {
-   "fieldname": "vapid_subject",
-   "fieldtype": "Data",
-   "label": "VAPID Subject",
-   "description": "Contact for push services, e.g. mailto:admin@example.com. Defaults to mailto:noreply@<site>."
-  },
-  {
-   "fieldname": "vapid_public_key",
-   "fieldtype": "Data",
-   "label": "VAPID Public Key",
-   "read_only": 1
-  },
-  {
-   "fieldname": "vapid_private_key",
-   "fieldtype": "Password",
-   "label": "VAPID Private Key",
-   "read_only": 1
-  },
-  {
-   "fieldname": "landing_workspace_snapshot",
-   "fieldtype": "Long Text",
-   "label": "Landing Workspace Snapshot",
-   "hidden": 1,
-   "description": "JSON {user: original default_workspace} saved when role-based landing is enabled; used to restore on disable. Managed by attendance_engine.landing."
-  },
-  {
-   "fieldname": "rollout_section",
-   "fieldtype": "Section Break",
-   "label": "Attendance Rollout"
-  },
-  {
-   "fieldname": "rollout_testing_start",
-   "fieldtype": "Date",
-   "label": "Testing Start",
-   "description": "The cutoff. Before this date the engine writes no AUTO flags. Blank means no cutoff \u2014 every day is treated as live, exactly as before this feature existed."
-  },
-  {
-   "fieldname": "rollout_go_live",
-   "fieldtype": "Date",
-   "label": "Go Live",
-   "description": "Flags dated on or after this day are the official record. Blank with a testing start set means the pilot is still open."
-  },
-  {
-   "fieldname": "branch_rollout",
-   "fieldtype": "Table",
-   "label": "Branch Rollout",
-   "options": "Dewey Time Branch Rollout",
-   "description": "Branches that roll out on their own timetable. A row is used whole and does not inherit the global dates field-by-field."
-  },
-  {
-   "description": "Set by the bridge enrollment snapshot ingest. Distinct from the per-row synced_at: a snapshot in which nothing changed still proves the feed is alive.",
-   "fieldname": "last_enrollment_snapshot_at",
-   "fieldtype": "Datetime",
-   "label": "Last Enrollment Snapshot At",
-   "read_only": 1
-  },
-  {
-   "fieldname": "telegram_section",
-   "fieldtype": "Section Break",
-   "label": "Telegram"
-  },
-  {
-   "default": "0",
-   "fieldname": "enable_telegram",
-   "fieldtype": "Check",
-   "label": "Enable Telegram"
-  },
-  {
-   "description": "Without the @, e.g. dewey_time_bot",
-   "fieldname": "telegram_bot_username",
-   "fieldtype": "Data",
-   "label": "Telegram Bot Username"
-  },
-  {
-   "fieldname": "telegram_bot_token",
-   "fieldtype": "Password",
-   "label": "Telegram Bot Token"
-  },
-  {
-   "fieldname": "telegram_webhook_secret",
-   "fieldtype": "Password",
-   "label": "Telegram Webhook Secret"
-  }
- ],
- "index_web_pages_for_search": 0,
- "issingle": 1,
- "links": [],
- "modified": "2026-08-15 12:00:00.000000",
- "modified_by": "Administrator",
- "module": "Dewey Time",
- "name": "Dewey Time Settings",
- "owner": "Administrator",
- "permissions": [
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "System Manager",
-   "share": 1,
-   "write": 1
-  }
- ],
- "sort_field": "modified",
- "sort_order": "DESC",
- "states": [],
- "track_changes": 0
+  "actions": [],
+  "allow_copy": 0,
+  "allow_guest_to_view": 0,
+  "allow_import": 0,
+  "creation": "2026-06-21 00:00:00.000000",
+  "custom": 0,
+  "docstatus": 0,
+  "doctype": "DocType",
+  "document_type": "System",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "enable_web_push",
+    "vapid_subject",
+    "vapid_public_key",
+    "vapid_private_key",
+    "landing_workspace_snapshot",
+    "rollout_section",
+    "rollout_testing_start",
+    "rollout_go_live",
+    "branch_rollout",
+    "last_enrollment_snapshot_at",
+    "telegram_section",
+    "enable_telegram",
+    "telegram_bot_username",
+    "telegram_bot_token",
+    "telegram_webhook_secret"
+  ],
+  "fields": [
+    {
+      "fieldname": "enable_web_push",
+      "fieldtype": "Check",
+      "label": "Enable Web Push",
+      "default": "0",
+      "description": "Off by default. Turn on only after VAPID keys exist and users have opted in."
+    },
+    {
+      "fieldname": "vapid_subject",
+      "fieldtype": "Data",
+      "label": "VAPID Subject",
+      "description": "Contact for push services, e.g. mailto:admin@example.com. Defaults to mailto:noreply@<site>."
+    },
+    {
+      "fieldname": "vapid_public_key",
+      "fieldtype": "Data",
+      "label": "VAPID Public Key",
+      "read_only": 1
+    },
+    {
+      "fieldname": "vapid_private_key",
+      "fieldtype": "Password",
+      "label": "VAPID Private Key",
+      "read_only": 1
+    },
+    {
+      "fieldname": "landing_workspace_snapshot",
+      "fieldtype": "Long Text",
+      "label": "Landing Workspace Snapshot",
+      "hidden": 1,
+      "description": "JSON {user: original default_workspace} saved when role-based landing is enabled; used to restore on disable. Managed by attendance_engine.landing."
+    },
+    {
+      "fieldname": "rollout_section",
+      "fieldtype": "Section Break",
+      "label": "Attendance Rollout"
+    },
+    {
+      "fieldname": "rollout_testing_start",
+      "fieldtype": "Date",
+      "label": "Testing Start",
+      "description": "The cutoff. Before this date the engine writes no AUTO flags. Blank means no cutoff — every day is treated as live, exactly as before this feature existed."
+    },
+    {
+      "fieldname": "rollout_go_live",
+      "fieldtype": "Date",
+      "label": "Go Live",
+      "description": "Flags dated on or after this day are the official record. Blank with a testing start set means the pilot is still open."
+    },
+    {
+      "fieldname": "branch_rollout",
+      "fieldtype": "Table",
+      "label": "Branch Rollout",
+      "options": "Dewey Time Branch Rollout",
+      "description": "Branches that roll out on their own timetable. A row is used whole and does not inherit the global dates field-by-field."
+    },
+    {
+      "description": "Set by the bridge enrollment snapshot ingest. Distinct from the per-row synced_at: a snapshot in which nothing changed still proves the feed is alive.",
+      "fieldname": "last_enrollment_snapshot_at",
+      "fieldtype": "Datetime",
+      "label": "Last Enrollment Snapshot At",
+      "read_only": 1
+    },
+    {
+      "fieldname": "telegram_section",
+      "fieldtype": "Section Break",
+      "label": "Telegram"
+    },
+    {
+      "default": "0",
+      "fieldname": "enable_telegram",
+      "fieldtype": "Check",
+      "label": "Enable Telegram"
+    },
+    {
+      "description": "Without the @, e.g. dewey_time_bot",
+      "fieldname": "telegram_bot_username",
+      "fieldtype": "Data",
+      "label": "Telegram Bot Username"
+    },
+    {
+      "fieldname": "telegram_bot_token",
+      "fieldtype": "Password",
+      "label": "Telegram Bot Token"
+    },
+    {
+      "fieldname": "telegram_webhook_secret",
+      "fieldtype": "Password",
+      "label": "Telegram Webhook Secret"
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "issingle": 1,
+  "links": [],
+  "modified": "2026-08-18 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dewey Time",
+  "name": "Dewey Time Settings",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 0
 }

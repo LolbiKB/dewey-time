@@ -125,6 +125,14 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
     if not row:
         frappe.throw("This link is not valid. Ask HR for a new one.")
     if row.get("redeemed_at"):
+        # Idempotent for the SAME Telegram account. Telegram redelivers an
+        # update when it does not get a timely 200, so a slow response to
+        # /start would otherwise tell the employee "that link didn't work"
+        # immediately after telling them they were linked. Redemption by a
+        # DIFFERENT account is still refused -- that is a used token, not a
+        # retry.
+        if str(row.get("redeemed_by_telegram_user_id") or "") == telegram_user_id:
+            return row["employee"]
         frappe.throw("This link has already been used. Ask HR for a new one.")
     if _is_expired(row["expires_at"]):
         frappe.throw("This link has expired. Ask HR for a new one.")
