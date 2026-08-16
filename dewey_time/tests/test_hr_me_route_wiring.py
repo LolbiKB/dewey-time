@@ -47,3 +47,46 @@ class TestBundlesAreBuiltTogether(unittest.TestCase):
             "`npm run build` must also build the Mini App, or a shared-component "
             "change ships a stale bundle",
         )
+
+
+class TestDeployedPagesBustTheirCache(unittest.TestCase):
+    """Every committed entry page must version its asset URLs.
+
+    The bundles are immutable per deploy and served from a stable path with
+    far-future caching, so an unversioned URL means a client that has ever
+    loaded the page keeps the old bundle. `/hr-me` shipped without this and the
+    failure mode was the worst possible one: a deploy that verifiably landed,
+    the server returning the new bytes, and the app on the phone unchanged with
+    nothing anywhere reporting a problem. A Telegram webview caches harder than
+    a browser tab and offers no reload.
+
+    Both entries are checked because guarding only one is exactly how the Mini
+    App went unguarded while the HR pages were fine.
+    """
+
+    PAGES = {
+        "hr-me.html": "miniapp",
+        "hr-attendance.html": "hr_attendance",
+        "hr-flags.html": "hr_attendance",
+        "hr-schedule.html": "hr_attendance",
+    }
+
+    def test_every_entry_page_versions_its_assets(self):
+        import re
+
+        for page, bundle in self.PAGES.items():
+            with self.subTest(page=page):
+                path = os.path.join(APP_ROOT, "www", page)
+                with open(path, encoding="utf-8") as handle:
+                    html = handle.read()
+
+                for asset in ("index.js", "index.css"):
+                    url = f"/assets/dewey_time/{bundle}/assets/{asset}"
+                    self.assertIn(url, html, f"{page} does not reference {asset}")
+                    # The version must be ON the reference, not merely present
+                    # somewhere in the file.
+                    self.assertRegex(
+                        html,
+                        re.escape(url) + r"\?v=\d+",
+                        f"{page} serves {asset} from a permanently cacheable URL",
+                    )

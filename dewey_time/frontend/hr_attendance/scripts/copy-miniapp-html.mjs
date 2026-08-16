@@ -36,9 +36,48 @@ if (cssBytes < MIN_CSS_BYTES) {
 
 // sync_miniapp_assets compares this to decide whether sites/assets needs
 // republishing, so a build that does not write it never reaches the browser.
-fs.writeFileSync(buildIdPath, `${Date.now()}\n`);
+const buildId = Date.now();
+fs.writeFileSync(buildIdPath, `${buildId}\n`);
 
-let html = fs.readFileSync(builtHtml, "utf8");
+/**
+ * Cache-bust the asset URLs, exactly as copy-html-entry.mjs does for the HR
+ * bundle.
+ *
+ * This script wrote a build id from the beginning and never put it on the
+ * URLs, so /hr-me served `assets/index.js` at a permanently stable path. The
+ * bundle is immutable per deploy and served with far-future caching, so a
+ * client that had ever loaded the Mini App kept the old one — and a Telegram
+ * webview caches harder than a browser tab and has no reload button. The
+ * symptom is the worst possible one: a deploy that verifiably shipped, with
+ * the server returning the new bytes, and the app on the phone unchanged.
+ * Confirmed live before this fix — the served bundle was byte-identical to
+ * the new build while the app on screen was the old one.
+ *
+ * Throws rather than silently doing nothing if the markup it expects is not
+ * there. A no-op replace would restore exactly the bug this exists to fix,
+ * and the build would still exit 0.
+ */
+function injectAssetVersion(source) {
+  const targets = [
+    ['src="/assets/dewey_time/miniapp/assets/index.js"', "js"],
+    ['href="/assets/dewey_time/miniapp/assets/index.css"', "css"],
+  ];
+  let out = source;
+  for (const [needle, label] of targets) {
+    if (!out.includes(needle)) {
+      console.error(
+        `miniapp html has no ${label} reference matching ${needle} — cache busting would be a silent no-op.\n` +
+          `The vite output's asset naming has changed; update this script to match before shipping.`,
+      );
+      process.exit(1);
+    }
+    // Drop the closing quote, append the query, put the quote back.
+    out = out.replace(needle, `${needle.slice(0, -1)}?v=${buildId}"`);
+  }
+  return out;
+}
+
+let html = injectAssetVersion(fs.readFileSync(builtHtml, "utf8"));
 // Frappe renders www/*.html through Jinja, so the csrf token is injected the
 // same way the HR pages do it.
 html = html.replace(
@@ -46,4 +85,4 @@ html = html.replace(
   '    <script>window.csrf_token = "{{ frappe.session.csrf_token }}";</script>\n  </head>',
 );
 fs.writeFileSync(target, html);
-console.log(`Wrote ${target} (css ${cssBytes} bytes)`);
+console.log(`Wrote ${target} (css ${cssBytes} bytes, build v=${buildId})`);
