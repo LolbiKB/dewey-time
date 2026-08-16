@@ -8,6 +8,7 @@ import re
 
 import frappe
 import requests
+from frappe.utils import get_url
 from frappe.utils.password import get_decrypted_password
 
 SETTINGS = "Dewey Time Settings"
@@ -102,16 +103,37 @@ def send_message(chat_id: str, text: str) -> str:
     return SENT
 
 
+#: Where the Mini App is served from. One place, because the fallback below
+#: and the diagnostics both need to agree with the route that actually exists.
+MINIAPP_ROUTE = "/hr-me"
+
+
 def miniapp_url() -> str:
     """Absolute https URL of the Mini App page, or raise.
 
-    Telegram rejects a web_app button whose URL is not https, so a
-    misconfiguration must surface here rather than as a button that silently
-    never appears.
+    DERIVED BY DEFAULT, and that is the fix for a real outage rather than a
+    convenience. The Settings field was the only source, with no default, and
+    every caller wraps this in a try that falls back to a plain message -- so
+    an empty field produced a bot with no button ANYWHERE, permanently, with
+    nothing to see but "Telegram Mini App button unavailable" in the Error
+    Log. Nobody reads the Error Log to find out why a button is missing.
+
+    The site already knows its own address, and the route is this app's own,
+    so there is nothing for a human to look up. The field stays as an
+    OVERRIDE, for a site reached at a different hostname than `get_url`
+    reports -- behind a proxy, or on a vanity domain.
+
+    Still https-only either way. Telegram rejects a web_app button whose URL
+    is not https, and a site running on plain http would otherwise trade a
+    visible misconfiguration for an invisible one.
     """
-    url = (frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_miniapp_url") or "").strip()
+    override = (frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_miniapp_url") or "").strip()
+    url = override or (get_url(MINIAPP_ROUTE) or "").strip()
     if not url.startswith("https://"):
-        frappe.throw("Telegram Mini App URL must be set and must be https")
+        frappe.throw(
+            "Telegram Mini App URL must be https. Set 'Telegram Mini App URL' in "
+            f"Dewey Time Settings; the site resolved to {url or '(nothing)'}."
+        )
     return url
 
 
@@ -191,3 +213,88 @@ def configure_menu_button() -> dict:
     _require_hr_role()
     url = miniapp_url()
     return {"status": set_default_menu_button(url), "url": url}
+
+
+def _get(method: str) -> dict:
+    """One GET against the Bot API, reported rather than raised."""
+    try:
+        response = requests.get(f"{API_BASE}/bot{bot_token()}/{method}", timeout=TIMEOUT_SECONDS)
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        return response.json()
+    except ValueError:
+        return {"ok": False, "error": f"status={response.status_code} body={response.text[:200]}"}
+
+
+@frappe.whitelist()
+def diagnostics() -> dict:
+    """Why is there no button? Answered in one call.
+
+    Every Mini App entry point fails SILENTLY by design -- notify.py and the
+    webhook both catch a missing URL and fall back to a plain message, because
+    a notification must never be lost to a broken button. That is right, and
+    it is also why a misconfiguration here is invisible: the bot keeps working
+    perfectly, minus the one thing you were looking for.
+
+    So this asks Telegram itself rather than reading our own settings back:
+
+      getMe             -- is the token real, and which bot is it
+      getWebhookInfo    -- is the webhook registered, and is it erroring
+      getChatMenuButton -- is the persistent entry point actually a web_app,
+                           and pointed where we think
+
+    NO SECRETS ARE RETURNED, only whether each is set. The token and webhook
+    secret are the whole security of this integration; a diagnostic that
+    printed them would put them in a browser's network log to save one glance
+    at Settings.
+    """
+    from dewey_time.attendance_engine.hr_calendar import _require_hr_role
+
+    _require_hr_role()
+
+    report: dict = {
+        "enabled": telegram_enabled(),
+        "bot_token_set": bool((_secret("telegram_bot_token") or "").strip()),
+        "webhook_secret_set": bool((_secret("telegram_webhook_secret") or "").strip()),
+        "miniapp_url_override": (
+            frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_miniapp_url") or ""
+        ).strip() or None,
+        "site_url": get_url(MINIAPP_ROUTE),
+    }
+    try:
+        report["miniapp_url"] = miniapp_url()
+    except Exception as exc:
+        report["miniapp_url"] = None
+        report["miniapp_url_error"] = str(exc)
+
+    if not report["bot_token_set"]:
+        # Everything below needs the token. Saying so beats three identical
+        # "Telegram bot token is not configured" errors.
+        report["note"] = "No bot token, so nothing could be asked of Telegram."
+        return report
+
+    me = _get("getMe")
+    report["bot"] = (me.get("result") or {}).get("username") if me.get("ok") else me
+
+    hook = _get("getWebhookInfo").get("result") or {}
+    report["webhook"] = {
+        "url": hook.get("url") or None,
+        "pending": hook.get("pending_update_count"),
+        # The two fields that explain a bot which "does nothing": Telegram
+        # records the last delivery failure here and nowhere else.
+        "last_error": hook.get("last_error_message"),
+        "last_error_date": hook.get("last_error_date"),
+    }
+
+    menu = _get("getChatMenuButton").get("result") or {}
+    report["menu_button"] = {
+        "type": menu.get("type"),
+        "text": menu.get("text"),
+        "url": (menu.get("web_app") or {}).get("url"),
+        # `commands` is Telegram's DEFAULT. Seeing it here means
+        # configure_menu_button has never been run against this bot, which is
+        # the difference between "no persistent way in" and "one tap".
+        "is_miniapp": menu.get("type") == "web_app",
+    }
+    return report

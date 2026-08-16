@@ -28,21 +28,37 @@ const EN = {
   tabSchedule: "Schedule",
 
   // Day states — records, never judgements. See the note above.
-  stateWorked: "Worked",
+  //
+  // No `stateWorked`: the Day tab's summary block is gone (MyDayPage's own
+  // note says why) and the Week row shows a worked day as its punch range,
+  // never as the word. The other five are still reached, by a day that has no
+  // range to show.
   stateDayOff: "Day off",
   stateOnLeave: "On leave",
   stateHoliday: "Holiday",
   stateScheduled: "Scheduled",
   stateNoPunches: "No punches recorded",
 
-  // Day summary
-  labelIn: "In",
-  labelOut: "Out",
-  labelWorked: "Worked",
+  // Roster labels. `labelIn`/`labelOut`/`labelWorked`/`lunchNotCounted`/
+  // `summary` went with the Day summary — restoring that block means
+  // restoring them too, in the same revert.
   labelRostered: "Rostered",
   labelLunch: "Lunch",
-  lunchNotCounted: "not counted as worked",
-  summary: "Summary",
+
+  // Where you are in the day, right now. Present tense, and RECORDS rather
+  // than verdicts — see miniStatus.ts. "Out during shift" is the clock's
+  // observation that the rostered window is still open, never a judgement
+  // about why; the engine's own verdict is provisional until HR reviews it.
+  statusNotIn: "Not checked in",
+  statusIn: "In",
+  statusLunch: "On lunch",
+  statusOutDuringShift: "Out during shift",
+  statusOut: "Checked out",
+
+  // Duration units. Letters in English, words in Khmer — see
+  // miniIntl.formatWorkedMinutes for why the spacing differs too.
+  unitHour: "h",
+  unitMinute: "m",
 
   // Week / schedule
   thisWeek: "This week",
@@ -73,7 +89,6 @@ const KM: Record<StringKey, string> = {
   tabWeek: "សប្តាហ៍",
   tabSchedule: "កាលវិភាគ",
 
-  stateWorked: "បានធ្វើការ",
   stateDayOff: "ថ្ងៃឈប់",
   stateOnLeave: "ច្បាប់ឈប់សម្រាក",
   stateHoliday: "ថ្ងៃបុណ្យ",
@@ -82,20 +97,26 @@ const KM: Record<StringKey, string> = {
   // point; see the module note.
   stateNoPunches: "មិនមានកំណត់ត្រាចូល-ចេញ",
 
-  labelIn: "ចូល",
-  labelOut: "ចេញ",
-  labelWorked: "បានធ្វើការ",
   labelRostered: "តាមកាលវិភាគ",
-  labelLunch: "អាហារថ្ងៃត្រង់",
-  lunchNotCounted: "មិនរាប់បញ្ចូលក្នុងម៉ោងធ្វើការ",
-  summary: "សង្ខេប",
+  labelLunch: "ម៉ោងសម្រាក",
+
+  statusNotIn: "មិនទាន់ចូល",
+  statusIn: "កំពុងធ្វើការ",
+  statusLunch: "កំពុងសម្រាក",
+  // "Went out, within working hours" -- a statement about the clock, not
+  // about the person. It must not drift toward "left early".
+  statusOutDuringShift: "បានចេញ ក្នុងម៉ោងធ្វើការ",
+  statusOut: "បានចេញ",
+
+  unitHour: "ម៉ោង",
+  unitMinute: "នាទី",
 
   thisWeek: "សប្តាហ៍នេះ",
   previousWeek: "សប្តាហ៍មុន",
   nextWeek: "សប្តាហ៍ក្រោយ",
   backToThisWeek: "ត្រឡប់ទៅសប្តាហ៍នេះ",
-  workedThisWeek: "ម៉ោងធ្វើការសប្តាហ៍នេះ (ដកអាហារថ្ងៃត្រង់)",
-  rosteredThisWeek: "ម៉ោងតាមកាលវិភាគសប្តាហ៍នេះ (ដកអាហារថ្ងៃត្រង់)",
+  workedThisWeek: "ម៉ោងធ្វើការសប្តាហ៍នេះ (ដកម៉ោងសម្រាក)",
+  rosteredThisWeek: "ម៉ោងតាមកាលវិភាគសប្តាហ៍នេះ (ដកម៉ោងសម្រាក)",
   noShiftsThisWeek: "សប្តាហ៍នេះ អ្នកមិនមានវេនការងារទេ។",
 
   yourRecord: "កំណត់ត្រារបស់អ្នក",

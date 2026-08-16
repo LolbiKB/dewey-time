@@ -3,10 +3,10 @@ import { format, isSameDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { plannedDaysFromSchedule, type PlannedDay } from "@/lib/plannedDays";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
-import { formatMinuteOfDay, formatSpan } from "@/miniapp/miniDay";
+import { formatMinuteOfDay } from "@/miniapp/miniDay";
 import { weekForOffset, weekRangeLabel, WeekNav } from "@/miniapp/MyWeekPage";
 import { MiniState } from "@/miniapp/MiniState";
-import { useT } from "@/miniapp/MiniLocale";
+import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
 
 /** Rostered hours net of the unpaid lunch, which is what a day is actually worth. */
 export function netRosteredMinutes(day: PlannedDay): number | null {
@@ -21,14 +21,6 @@ export function weekRosteredMinutes(days: PlannedDay[]): number | null {
   return worked.reduce((sum, d) => sum + (d.durationMin ?? 0), 0);
 }
 
-export function formatRosteredTotal(minutes: number | null): string | null {
-  if (minutes === null) return null;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (!hours) return `${rest}m`;
-  return rest ? `${hours}h ${rest}m` : `${hours}h`;
-}
-
 /**
  * One rostered day.
  *
@@ -38,29 +30,41 @@ export function formatRosteredTotal(minutes: number | null): string | null {
  * employee could not tell whether "8h" already had lunch taken out — which is
  * the single most asked question about a roster.
  */
-export function ScheduleRow(props: { day: PlannedDay; isToday: boolean }) {
+export function ScheduleRow(props: { day: PlannedDay; isToday: boolean; date?: Date }) {
   const { day, isToday } = props;
   const t = useT();
-  const span = formatSpan(day.startMin, day.endMin);
-  const lunch = formatSpan(day.lunchStartMin, day.lunchEndMin);
+  const fmt = useFormat();
+  const isKhmer = useLocale() === "km";
+  const span = fmt.span(day.startMin, day.endMin);
+  const lunch = fmt.span(day.lunchStartMin, day.lunchEndMin);
+  // `day.label` and `day.sublabel` come out of the shared week builder as
+  // "Mon" and "27", in English, because that builder also feeds the HR
+  // console. Re-derived from the date here rather than translated, which
+  // would mean mapping English abbreviations back to weekdays.
+  const label = props.date ? fmt.date(props.date, "EEE") : day.label;
+  const sublabel = props.date ? fmt.date(props.date, "d") : day.sublabel;
 
   return (
     <li
       className={cn(
-        "flex items-start gap-3 px-3 py-2.5",
+        "flex items-start gap-2 px-3 py-2.5",
         isToday && "bg-primary/5",
       )}
     >
+      {/* Same sizing rule as the Week row: the Khmer weekday abbreviation is
+          one consonant, so a column sized for "Mon" wastes 30px of a row that
+          needs it for the shift span. */}
       <span
         className={cn(
-          "w-10 shrink-0 pt-0.5 text-xs font-medium",
+          "shrink-0 pt-0.5 text-xs font-medium",
+          isKhmer ? "w-4" : "w-10",
           isToday ? "text-primary" : "text-foreground",
         )}
       >
-        {day.label}
+        {label}
       </span>
       <span className="w-6 shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground">
-        {day.sublabel}
+        {sublabel}
       </span>
 
       <div className="min-w-0 flex-1">
@@ -87,7 +91,7 @@ export function ScheduleRow(props: { day: PlannedDay; isToday: boolean }) {
 
       <span className="shrink-0 pt-0.5 text-right text-[11px] tabular-nums text-muted-foreground">
         {day.works && !day.onLeave
-          ? formatRosteredTotal(netRosteredMinutes(day)) ?? ""
+          ? fmt.worked(netRosteredMinutes(day)) ?? ""
           : ""}
       </span>
     </li>
@@ -100,6 +104,7 @@ export function MySchedulePage(props: {
   onOffsetChange?: (next: number) => void;
 }) {
   const t = useT();
+  const fmt = useFormat();
   const today = props.today ?? new Date();
   const offset = props.offset ?? 0;
   const week = weekForOffset(today, offset);
@@ -115,7 +120,7 @@ export function MySchedulePage(props: {
   // on the current week while its neighbour paged.
   const nav = (
     <WeekNav
-      label={weekRangeLabel(week)}
+      label={weekRangeLabel(week, fmt)}
       offset={offset}
       onOffsetChange={props.onOffsetChange ?? (() => {})}
       forwardLimit={false}
@@ -140,7 +145,7 @@ export function MySchedulePage(props: {
   }
 
   const planned = plannedDaysFromSchedule(week, daysByDate(query.data));
-  const total = formatRosteredTotal(weekRosteredMinutes(planned));
+  const total = fmt.worked(weekRosteredMinutes(planned));
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -155,6 +160,7 @@ export function MySchedulePage(props: {
               <ScheduleRow
                 key={day.key}
                 day={day}
+                date={week[index]!}
                 isToday={isSameDay(week[index]!, today)}
               />
             ))}

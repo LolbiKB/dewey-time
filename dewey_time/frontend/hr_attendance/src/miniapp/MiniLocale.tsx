@@ -11,6 +11,14 @@
  */
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
+import {
+  digitsFor,
+  formatClockMinute,
+  formatClockSpan,
+  formatIn,
+  formatPunchTime,
+  formatWorkedMinutes,
+} from "@/miniapp/miniIntl";
 import { translator, type Locale, type Translate } from "@/miniapp/miniStrings";
 
 const LocaleContext = createContext<{ locale: Locale; t: Translate }>({
@@ -32,4 +40,44 @@ export function useT(): Translate {
 
 export function useLocale(): Locale {
   return useContext(LocaleContext).locale;
+}
+
+/**
+ * The formatters, already bound to the current language.
+ *
+ * A hook rather than free functions taking a locale, because the locale
+ * argument is exactly the thing a component forgets — and forgetting it fails
+ * SILENTLY, printing "17 August" in the middle of a Khmer screen rather than
+ * throwing. Binding it once here means the only way to format a date in this
+ * app is to have the locale already applied.
+ */
+export type MiniFormat = {
+  /** date-fns `format`, in the reader's language and script. */
+  date: (date: Date, pattern: string) => string;
+  /** A minute-of-day as a clock time. */
+  clock: (minutes: number | null | undefined) => string | null;
+  /** Two minute-of-day values as "8:00 AM – 5:00 PM". */
+  span: (startMin: number | null | undefined, endMin: number | null | undefined) => string | null;
+  /** One punch's wall-clock time, from the API's datetime string. */
+  punch: (value: string | null | undefined) => string | null;
+  /** A duration in hours and minutes, with the units in the reader's language. */
+  worked: (minutes: number | null | undefined) => string | null;
+  /** Latin digits to the reader's script, for a string formatted elsewhere. */
+  digits: (text: string) => string;
+};
+
+export function useFormat(): MiniFormat {
+  const { locale, t } = useContext(LocaleContext);
+  return useMemo(
+    () => ({
+      date: (date, pattern) => formatIn(locale, date, pattern),
+      clock: (minutes) => formatClockMinute(locale, minutes),
+      span: (startMin, endMin) => formatClockSpan(locale, startMin, endMin),
+      punch: (value) => formatPunchTime(locale, value),
+      worked: (minutes) =>
+        formatWorkedMinutes(locale, minutes, { hour: t("unitHour"), minute: t("unitMinute") }),
+      digits: digitsFor(locale),
+    }),
+    [locale, t],
+  );
 }

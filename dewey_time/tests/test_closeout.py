@@ -103,6 +103,10 @@ def _install_frappe_mock():
     ).days
     utils_mod.nowdate = lambda: str(date.today())
     utils_mod.cint = _mock_cint
+    # An https site by default, because that is what production is and what
+    # the Telegram Mini App URL fallback needs to produce a usable button.
+    # Tests that care about the value patch `transport.get_url` directly.
+    utils_mod.get_url = lambda path="": f"https://example.test{path}"
 
     frappe.scrub = lambda value: str(value).lower().replace(" ", "-").replace("_", "-")
 
