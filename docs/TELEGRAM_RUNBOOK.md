@@ -56,22 +56,67 @@ The token and secret are `Password` fields — encrypted at rest, and they never
 appear in the SPA, in logs, or in an error message. If the token is unset the
 feature refuses to operate rather than falling back to an empty key.
 
-## Linking one employee
+## Linking: two paths
 
-Run `dewey_time.telegram.binding.create_link_invite` with the employee id. It
+**Start at Coverage.** `/hr-schedule/coverage` has a Telegram column and a
+Telegram filter. Narrow to **Not linked** — optionally by branch, to work one
+site at a time — and the list is the job. The column reports three states:
+
+| Column says | What it means | What to do |
+|---|---|---|
+| Linked | a binding exists | nothing |
+| ID on file | their Telegram id was already recorded on the Employee record | tell them to open the bot — no link needed |
+| Not linked | neither | issue a link from the row |
+| — | the lookup failed; not a claim that anyone is unlinked | check the error log |
+
+### They open the bot (no link at all)
+
+If `Employee.custom_telegram_chat_id` holds their numeric Telegram user id,
+they just open the bot and press Start. Nothing to issue, forward or expire.
+
+This trusts that the recorded id belongs to the person it is recorded against.
+Possession of the account is proved — the id comes off the authenticated
+update, never from anything the sender typed — so the only way this binds the
+wrong person is if the wrong id was recorded. Every ambiguous case refuses
+instead of guessing: no match, two employees sharing an id, an employee already
+bound to another account, or a link that was revoked. All of them fall back to
+the instruction below, and the bot never says which — the distinction is useful
+to someone probing ids.
+
+A revoked link is **not** restored by this path. Disabling a link stays
+disabled until HR issues a fresh invite.
+
+### You issue a link
+
+For everyone else: press **Issue link** on their row, or run
+`dewey_time.telegram.binding.create_link_invite` with the employee id. It
 returns a `https://t.me/<bot>?start=<token>` URL. Send that link to the
 employee, or print it as a QR on their onboarding slip. It is **single-use and
 expires in 7 days**.
 
-Nobody types a chat id at any point, and that is the design rather than a
+The link is live while it is on screen: whoever opens it first is bound to that
+employee's record. Send it to the person directly, never to a group.
+
+Only the SHA-256 of the token is stored, so reading the database — a backup, a
+support session, a sandbox restore — never yields a usable link.
+
+### Why HR is never asked to type a chat id
+
+Neither path asks anyone to enter one, and that is the design rather than a
 convenience. A Telegram chat id is an opaque number with no checksum and no
 name echoed back, so a mistyped one cannot be detected by the person typing it
 or by the system — it simply belongs to somebody else, who then quietly
 receives an employee's attendance while the intended recipient sees nothing to
 complain about.
 
-Only the SHA-256 of the token is stored, so reading the database — a backup, a
-support session, a sandbox restore — never yields a usable link.
+The recorded-id path is not an exception to that rule but the reason it
+matters. It reads ids that were already on the Employee records when this
+feature arrived — on production they are uniformly 9–10 digits with no
+handles and no duplicates, which is what machine-captured data looks like
+rather than hand-typed. **If you ever populate that column by hand, you are
+taking on exactly the risk described above**, and a wrong digit binds a
+stranger silently. Issue a link instead; it costs one click and the employee
+proves the account themselves.
 
 ## Opening the app
 
@@ -110,9 +155,10 @@ job retrying forever. Re-linking needs a fresh invite.
 
 ## What employees can and cannot do
 
-The bot's only command is `/start <token>`. It does not answer `/today`,
-`/week` or anything else, and that is deliberate: reading your own attendance
-is the Mini App's job, so the bot stays a notifier and a door.
+The bot's only command is `/start`. With a token it redeems that token; bare,
+it tries the Telegram id recorded on the Employee record. It does not answer
+`/today`, `/week` or anything else, and that is deliberate: reading your own
+attendance is the Mini App's job, so the bot stays a notifier and a door.
 
 The Mini App is READ-ONLY. There is nothing in it an employee can submit,
 change or delete, and it shows no attendance flags — the engine's verdict on a
@@ -138,6 +184,8 @@ from Frappe, so losing Telegram loses a convenience and not data.
 |---|---|
 | Bot never replies to `/start` | Webhook not registered, or the secret in Settings does not match the one given to `setWebhook`. Check `getWebhookInfo`. |
 | "That link didn't work" | Token expired, already used, or unknown. Issue a fresh invite. The bot deliberately does not say which — that distinction is useful to someone probing tokens. |
+| "Use the link or QR code HR gave you" after a bare `/start` | No usable recorded id: none on file, two employees share it, they are already bound to another account, or their link was revoked. Issue a link instead. |
+| Coverage shows "—" for the whole Telegram column | The backend lookup failed. Check the error log; the register reports silence rather than guessing everyone is unlinked. |
 | Linked, but no notifications | Branch not LIVE in Dewey Time Branch Rollout; or **Enable Telegram** is off; or the link's **Enabled** is 0. |
 | Notifications stopped for one person | They blocked the bot — the link auto-disabled. |
 | `Telegram bot token is not configured` | Expected when the field is blank. The feature fails closed instead of running with an empty key. |

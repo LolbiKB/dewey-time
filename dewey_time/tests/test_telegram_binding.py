@@ -132,6 +132,127 @@ class TestRedeem(unittest.TestCase):
         self.assertEqual(create.call_args[1]["chat_id"], "77702")
 
 
+class TestClaimByRecordedId(unittest.TestCase):
+    """The no-token path, and every way it must refuse rather than guess.
+
+    Each refusal is asserted as `_create_link` NOT being called, not merely as
+    "something raised". A guard that raises for the wrong reason -- or a mock
+    that raises before the guard is reached -- would satisfy assertRaises alone
+    while writing no link, and a guard that was deleted would raise nothing and
+    write one. Only the write tells the two apart.
+    """
+
+    def _claim(self, *, existing=None, matches=(), bound_elsewhere=False):
+        with patch.object(binding, "_existing_link", return_value=existing), \
+             patch.object(binding, "_employees_with_recorded_id", return_value=list(matches)), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=bound_elsewhere), \
+             patch.object(binding, "_create_link") as create:
+            try:
+                employee = binding.claim_by_recorded_id("55501", "77702")
+            except Exception:
+                return None, create
+            return employee, create
+
+    def test_one_active_match_binds(self):
+        employee, create = self._claim(matches=["HR-EMP-00001"])
+        self.assertEqual(employee, "HR-EMP-00001")
+        self.assertEqual(create.call_args[1]["employee"], "HR-EMP-00001")
+        self.assertEqual(create.call_args[1]["telegram_user_id"], "55501")
+        self.assertEqual(create.call_args[1]["chat_id"], "77702")
+
+    def test_a_binding_records_how_it_was_made(self):
+        # `linked_via` is what lets HR tell an auto-bind from a link they sent
+        # when they come to audit one. Defaulting it to "token" would make the
+        # 35 indistinguishable from everyone else.
+        _, create = self._claim(matches=["HR-EMP-00001"])
+        self.assertEqual(create.call_args[1]["linked_via"], "recorded_id")
+
+    def test_no_match_refuses(self):
+        employee, create = self._claim(matches=[])
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_two_employees_sharing_an_id_refuses_rather_than_picking(self):
+        # The column has no unique constraint -- verified on production, where
+        # `unique` is 0 -- so a duplicated id is possible, and there is no safe
+        # way to choose. Picking the first would hand one employee's whole
+        # attendance history to the other.
+        employee, create = self._claim(matches=["HR-EMP-00001", "HR-EMP-00002"])
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_an_existing_enabled_link_is_idempotent(self):
+        # Telegram redelivers an update when it does not get a timely 200.
+        employee, create = self._claim(
+            existing={"name": "55501", "employee": "HR-EMP-00001", "enabled": 1}
+        )
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+
+    def test_a_revoked_link_is_not_silently_restored(self):
+        # THE guard that makes revocation mean anything. Without it, disabling
+        # a link is undone by the employee reopening the bot -- and revocation
+        # is the only lever HR has when a phone is lost or someone leaves.
+        employee, create = self._claim(
+            existing={"name": "55501", "employee": "HR-EMP-00001", "enabled": 0}
+        )
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_a_revoked_link_is_not_bypassed_by_a_recorded_id(self):
+        # The same guard, with a live match behind it: the recorded id must not
+        # provide a second way in around a revocation.
+        employee, create = self._claim(
+            existing={"name": "55501", "employee": "HR-EMP-00001", "enabled": 0},
+            matches=["HR-EMP-00001"],
+        )
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_an_employee_already_bound_to_another_account_refuses(self):
+        # Either the recorded id is stale or two accounts claim one person.
+        # Both want a human, and neither wants a second reader of their data.
+        employee, create = self._claim(matches=["HR-EMP-00001"], bound_elsewhere=True)
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_a_blank_telegram_user_id_refuses(self):
+        with patch.object(binding, "_create_link") as create:
+            with self.assertRaises(Exception):
+                binding.claim_by_recorded_id("", "77702")
+        create.assert_not_called()
+
+
+class TestRecordedIdLookup(unittest.TestCase):
+    def test_only_active_employees_are_matched(self):
+        # A leaver whose id is still on their record could otherwise walk back
+        # in by messaging the bot and keep reading their own attendance.
+        import frappe
+
+        captured = {}
+
+        def get_all(_doctype, **kwargs):
+            captured.update(kwargs.get("filters") or {})
+            return []
+
+        with patch.object(frappe, "get_all", side_effect=get_all), \
+             patch.object(frappe.db, "has_column", return_value=True):
+            binding._employees_with_recorded_id("55501")
+
+        self.assertEqual(captured.get("status"), "Active")
+        self.assertEqual(captured.get(binding.TELEGRAM_ID_FIELD), "55501")
+
+    def test_a_site_without_the_column_matches_nobody_and_asks_nothing(self):
+        # CI's bench site has no such column, and selecting it anyway makes
+        # get_all raise -- which here would turn every bare /start into a
+        # logged traceback.
+        import frappe
+
+        with patch.object(frappe, "get_all", side_effect=AssertionError("must not query")), \
+             patch.object(frappe.db, "has_column", return_value=False):
+            self.assertEqual(binding._employees_with_recorded_id("55501"), [])
+
+
 class TestInvite(unittest.TestCase):
     def test_invite_requires_hr(self):
         with patch.object(binding, "_require_hr_role",
