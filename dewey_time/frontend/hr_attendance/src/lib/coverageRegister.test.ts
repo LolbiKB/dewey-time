@@ -245,6 +245,9 @@ const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   khmer_name: null,
   // No photo is the common case, and the one the row has to stay readable in.
   image: null,
+  // Unlinked is the ordinary row during the rollout; the Telegram tests
+  // override it.
+  telegram: "none",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // Both feeds know this employee — the ordinary row. Override it to build the
@@ -872,7 +875,9 @@ test("visibleColumnIds returns the full column set when both feeds are healthy",
     visibleColumnIds({ schedule: true, biometric: true }),
     [
       "employee", "branch", "department", "action",
-      "schedule", "weekly_minutes",
+      // "telegram" rides with the SCHEDULE feed, not the biometric one: the
+      // coverage endpoint resolves it, so a coverage outage takes it away.
+      "schedule", "weekly_minutes", "telegram",
       // No "fingerprint_count": the print count was fused into the biometric
       // cell and has no column of its own. It is STILL exported — the CSV is
       // keyed off feed health, not off this list, which is the whole reason
@@ -1337,7 +1342,7 @@ test("registerCsvColumns names what each downed feed takes away", () => {
     "Employment status", "Biometric", "Fingerprints", "Days since leaving",
   ]);
   assert.deepEqual(registerCsvColumns({ schedule: false, biometric: true }).omitted, [
-    "Schedule", "Weekly minutes",
+    "Schedule", "Weekly minutes", "Telegram",
   ]);
 });
 
@@ -1431,4 +1436,140 @@ test("the enrolment feed fills khmer_name for a row coverage DID return but had 
     }),
   );
   assert.equal(rows[0].khmer_name, "លី");
+});
+
+// ---------------------------------------------------------------------------
+// telegram — the rollout column
+// ---------------------------------------------------------------------------
+
+test("the join carries the Telegram state through both halves of the coverage feed", () => {
+  // Assigned and unassigned are seeded by the same helper but reached by two
+  // loops, and the register shows them in one table: a field wired into only
+  // one path renders as a blank column for half the roster.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Ana", weekly_minutes: 2400, telegram: "linked" }],
+      unassigned: [{ id: "E2", employee_name: "Ben", telegram: "id_on_file" }],
+      counts: { active: 2, unassigned: 1, assigned: 1, truncated: false },
+    }),
+    enrollment(),
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  assert.equal(byId.get("E1")?.telegram, "linked");
+  assert.equal(byId.get("E2")?.telegram, "id_on_file");
+});
+
+test("a coverage row with no Telegram state is null, never \"none\"", () => {
+  // The backend omits the field for the WHOLE roster when its lookup fails.
+  // Defaulting to "none" here would turn one failed query into a few hundred
+  // people apparently needing a link — the register's central rule, that
+  // silence is not a finding, applied to a new column.
+  const rows = joinRegisterRows(
+    coverage({
+      assigned: [{ id: "E1", employee_name: "Ana", weekly_minutes: 2400 }],
+      counts: { active: 1, unassigned: 0, assigned: 1, truncated: false },
+    }),
+    enrollment(),
+  );
+  assert.equal(rows[0].telegram, null);
+});
+
+test("a row only the enrolment feed knows about has no Telegram state", () => {
+  // The bridge knows nothing about Telegram. The leaver-still-enrolled row —
+  // the security finding this page exists for — reaches the table from that
+  // feed alone and must not claim a rollout state nobody reported.
+  const rows = joinRegisterRows(
+    coverage(),
+    enrollment({
+      rows: [{ id: "GONE", employee_name: "Left Person", branch: "DIU", department: "Ops",
+               status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true,
+               fingerprint_count: 1, face_count: 0, days_since_relieving: 12 }],
+    }),
+  );
+  assert.equal(rows[0].telegram, null);
+});
+
+test("the Telegram filter narrows to one state", () => {
+  const rows = [
+    row({ id: "A", telegram: "none" }),
+    row({ id: "B", telegram: "linked" }),
+    row({ id: "C", telegram: "id_on_file" }),
+  ];
+  assert.deepEqual(
+    filterRegisterRows(rows, { telegram: "none" }).map((r) => r.id),
+    ["A"],
+  );
+  assert.deepEqual(
+    filterRegisterRows(rows, { telegram: "id_on_file" }).map((r) => r.id),
+    ["C"],
+  );
+});
+
+test("no Telegram filter admits every state, including a null one", () => {
+  // The direction the test above cannot check: a filter that always compared
+  // would drop every row whose state is unknown.
+  const rows = [row({ id: "A", telegram: "none" }), row({ id: "B", telegram: null })];
+  assert.deepEqual(filterRegisterRows(rows, {}).map((r) => r.id), ["A", "B"]);
+});
+
+test("being unlinked is NOT a readiness problem", () => {
+  // The whole reason the alert survived this column. Telegram starts at ~90%
+  // unlinked, so folding it into isNotReady would have turned "4 need
+  // attention" into the roster size on the day it shipped, burying the two
+  // findings the page exists for. An unlinked employee is still tracked by
+  // the same device and schedule as everyone else.
+  assert.equal(isNotReady(row({ telegram: "none", schedule: "assigned", biometric: "enrolled" })), false);
+  assert.equal(isNotReady(row({ telegram: "id_on_file", schedule: "assigned", biometric: "enrolled" })), false);
+});
+
+test("the attention count ignores the Telegram column entirely", () => {
+  // isNotReady is one function but two consumers, and the alert is the one a
+  // reader actually sees. Pinned separately so a future change that routes the
+  // count through anything else still has to keep this true.
+  const rows = [
+    row({ id: "A", telegram: "none" }),
+    row({ id: "B", telegram: "none" }),
+    row({ id: "C", telegram: "none" }),
+  ];
+  const alert = registerAlert(rows, { schedule: true, biometric: true });
+  assert.equal(alert.count, 0);
+  assert.equal(alert.tone, "clear");
+});
+
+test("a downed schedule feed takes the Telegram state with it", () => {
+  // The coverage endpoint resolves it, so a coverage outage cannot leave "Not
+  // linked" on screen for a roster the page has stopped hearing about.
+  const [suppressed] = suppressUnusableFacts(
+    [row({ telegram: "linked", sources: { schedule: true, biometric: true } })],
+    { schedule: false, biometric: true },
+  );
+  assert.equal(suppressed.telegram, null);
+});
+
+test("a downed biometric feed leaves the Telegram state alone", () => {
+  // The other direction: the two feeds fail independently, and the bridge has
+  // no say over this column.
+  const [suppressed] = suppressUnusableFacts(
+    [row({ telegram: "linked", sources: { schedule: true, biometric: true } })],
+    { schedule: true, biometric: false },
+  );
+  assert.equal(suppressed.telegram, "linked");
+});
+
+test("a Telegram filter is named in the export confirmation", () => {
+  // The file holds the FILTERED rows. A reader who narrowed to "Not linked"
+  // and forgot would otherwise ship a spreadsheet that looks like the whole
+  // roster, in the words of the control they used.
+  assert.deepEqual(
+    describeRegisterFilters({ telegram: "none" }),
+    [{ label: "Telegram", value: "Not linked" }],
+  );
+});
+
+test("the CSV writes the same words the badge does", () => {
+  // Not the wire value. A reader who filtered to "ID on file" must find that
+  // phrase in the file, not `id_on_file`.
+  const csv = toRegisterCsv([row({ telegram: "id_on_file" })], { schedule: true, biometric: true });
+  assert.match(csv, /ID on file/);
+  assert.doesNotMatch(csv, /id_on_file/);
 });

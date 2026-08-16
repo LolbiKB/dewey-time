@@ -24,8 +24,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppTooltip } from "@/ui/AppTooltip";
+import type { LinkInvite } from "@/hooks/useTelegramInvite";
 
-export type LinkInvite = { employee: string; url: string; expires_at: string };
+// Re-exported so a consumer that renders the dialog gets the type from the
+// same import. It is DEFINED with the fetch that produces it, not here.
+export type { LinkInvite };
 
 export function TelegramLinkButton(props: { disabled?: boolean; onClick: () => void }) {
   return (

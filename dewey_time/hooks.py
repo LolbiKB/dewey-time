@@ -145,6 +145,16 @@ doc_events = {
         "on_update": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
         "on_trash": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
     },
+    # The coverage register's Telegram column reads this doctype, so a binding
+    # made from the bot must not stay invisible for the rest of the TTL: the
+    # employee reports they linked, HR refreshes, and the row still says to
+    # issue a link. Links are issued a few hundred times in a rollout and then
+    # essentially never, so the invalidation costs nothing.
+    "Telegram Link": {
+        "after_insert": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+        "on_update": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+        "on_trash": "dewey_time.attendance_engine.coverage_api.invalidate_coverage_cache",
+    },
     # Keep the Biometric Enrollment view fresh: a snapshot rewrites many rows,
     # so drop the cached payload rather than serve a stale one for the TTL.
     "Employee Biometric Enrollment": {

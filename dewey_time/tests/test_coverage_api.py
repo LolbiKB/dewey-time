@@ -36,11 +36,13 @@ def _days(start, end, n_working=5):
 
 
 class TestBuildCoveragePayload(unittest.TestCase):
-    def _build(self, rows, patterns):
+    def _build(self, rows, patterns, telegram=None):
         from dewey_time.attendance_engine import coverage_api
 
         with patch.object(coverage_api, "_list_calendar_employee_rows", return_value=rows), patch.object(
             coverage_api, "week_pattern_from_ssas", side_effect=lambda emp: patterns.get(emp, [])
+        ), patch.object(
+            coverage_api, "_telegram_status_by_employee", return_value=telegram or {}
         ):
             return coverage_api._build_coverage_payload()
 
@@ -93,6 +95,150 @@ class TestBuildCoveragePayload(unittest.TestCase):
         self.assertEqual(payload["assigned"][0]["weekly_minutes"], 0)
 
 
+class TestTelegramColumnInPayload(unittest.TestCase):
+    def test_both_halves_of_the_roster_carry_the_telegram_state(self):
+        # Assigned and unassigned are built on separate code paths, and the
+        # register joins them into one table -- a field added to only one half
+        # renders as a blank column for whichever half missed it.
+        rows = [_row("EMP-001", "Ana", True), _row("EMP-002", "Ben", False)]
+        payload = self._build_with(rows, {"EMP-001": "linked", "EMP-002": "none"})
+        self.assertEqual(payload["assigned"][0]["telegram"], "linked")
+        self.assertEqual(payload["unassigned"][0]["telegram"], "none")
+
+    def test_an_employee_absent_from_the_lookup_is_none_not_a_keyerror(self):
+        # The whole lookup returns {} on failure. Every row must still build.
+        payload = self._build_with([_row("EMP-001", "Ana", True)], {})
+        self.assertIsNone(payload["assigned"][0]["telegram"])
+
+    def _build_with(self, rows, telegram):
+        from dewey_time.attendance_engine import coverage_api
+
+        with patch.object(coverage_api, "_list_calendar_employee_rows", return_value=rows), patch.object(
+            coverage_api, "week_pattern_from_ssas", return_value=[]
+        ), patch.object(coverage_api, "_telegram_status_by_employee", return_value=telegram):
+            return coverage_api._build_coverage_payload()
+
+
+class TestTelegramStatusByEmployee(unittest.TestCase):
+    """The three states, and the two ways the lookup is allowed to fail."""
+
+    def _status(self, ids, *, links=(), employees=(), has_column=True, link_error=None):
+        import frappe
+
+        from dewey_time.attendance_engine import coverage_api
+
+        def get_all(doctype, **kwargs):
+            if doctype == "Telegram Link":
+                if link_error:
+                    raise link_error
+                return [{"employee": e} for e in links]
+            return list(employees)
+
+        with patch.object(frappe, "get_all", side_effect=get_all), patch.object(
+            frappe.db, "has_column", return_value=has_column
+        ):
+            return coverage_api._telegram_status_by_employee(ids)
+
+    def test_an_enabled_link_reads_linked(self):
+        self.assertEqual(self._status(["E1"], links=["E1"]), {"E1": "linked"})
+
+    def test_a_chat_id_with_no_link_reads_id_on_file(self):
+        status = self._status(
+            ["E1"], employees=[{"name": "E1", "custom_telegram_chat_id": "123456789"}]
+        )
+        self.assertEqual(status, {"E1": "id_on_file"})
+
+    def test_neither_reads_none(self):
+        self.assertEqual(self._status(["E1"]), {"E1": "none"})
+
+    def test_a_link_outranks_an_id_on_file(self):
+        # Both true is the ordinary shape for the 35 employees whose id a prior
+        # notifier recorded and who have since linked. Reporting the lead over
+        # the binding would put them back on HR's to-do list forever.
+        status = self._status(
+            ["E1"], links=["E1"], employees=[{"name": "E1", "custom_telegram_chat_id": "123456789"}]
+        )
+        self.assertEqual(status, {"E1": "linked"})
+
+    def test_a_blank_chat_id_is_not_an_id_on_file(self):
+        # The column is free-text Data, so "empty" arrives as NULL, "" and
+        # whitespace. All three mean nobody recorded anything.
+        for empty in (None, "", "   "):
+            with self.subTest(value=repr(empty)):
+                status = self._status(
+                    ["E1"], employees=[{"name": "E1", "custom_telegram_chat_id": empty}]
+                )
+                self.assertEqual(status, {"E1": "none"})
+
+    def test_a_site_without_the_column_never_reports_id_on_file(self):
+        # CI's bench site has no such column. Selecting it anyway makes
+        # frappe.get_all raise and would take the whole register down.
+        status = self._status(
+            ["E1"],
+            employees=[{"name": "E1", "custom_telegram_chat_id": "123456789"}],
+            has_column=False,
+        )
+        self.assertEqual(status, {"E1": "none"})
+
+    def test_the_employee_query_is_skipped_entirely_when_the_column_is_absent(self):
+        # Not merely that the RESULT is "none" -- that the query never runs.
+        # Asserting only the result would pass on an implementation that
+        # queried and swallowed the error, which is the version that fills the
+        # log with one traceback per page load.
+        import frappe
+
+        from dewey_time.attendance_engine import coverage_api
+
+        seen = []
+
+        def get_all(doctype, **kwargs):
+            seen.append(doctype)
+            return []
+
+        with patch.object(frappe, "get_all", side_effect=get_all), patch.object(
+            frappe.db, "has_column", return_value=False
+        ):
+            coverage_api._telegram_status_by_employee(["E1"])
+
+        self.assertEqual(seen, ["Telegram Link"])
+
+    def test_a_failed_link_lookup_yields_no_states_at_all(self):
+        # {} -> every row gets telegram: None -> a blank column. The register's
+        # rule is that silence is never a finding: reporting "none" here would
+        # tell HR to issue a few hundred links that may already exist.
+        self.assertEqual(self._status(["E1"], link_error=RuntimeError("boom")), {})
+
+    def test_an_empty_roster_asks_the_database_nothing(self):
+        import frappe
+
+        from dewey_time.attendance_engine import coverage_api
+
+        with patch.object(frappe, "get_all", side_effect=AssertionError("must not query")):
+            self.assertEqual(coverage_api._telegram_status_by_employee([]), {})
+
+    def test_only_enabled_links_count(self):
+        # A revoked link must put the employee back on the list. Without
+        # enabled=1 in the filter, revoking access would leave the register
+        # reporting them as linked forever.
+        import frappe
+
+        from dewey_time.attendance_engine import coverage_api
+
+        captured = {}
+
+        def get_all(doctype, **kwargs):
+            if doctype == "Telegram Link":
+                captured.update(kwargs.get("filters") or {})
+            return []
+
+        with patch.object(frappe, "get_all", side_effect=get_all), patch.object(
+            frappe.db, "has_column", return_value=False
+        ):
+            coverage_api._telegram_status_by_employee(["E1"])
+
+        self.assertEqual(captured.get("enabled"), 1)
+
+
 class TestInvalidateCoverageCache(unittest.TestCase):
     def test_invalidate_deletes_the_cache_key(self):
         import frappe
@@ -101,7 +247,7 @@ class TestInvalidateCoverageCache(unittest.TestCase):
 
         frappe.cache.return_value.delete_value.reset_mock()
         coverage_api.invalidate_coverage_cache()
-        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v2")
+        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v3")
 
     def test_invalidate_accepts_doc_event_args(self):
         from dewey_time.attendance_engine import coverage_api

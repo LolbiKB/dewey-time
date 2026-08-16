@@ -5,6 +5,7 @@ import type {
   CoverageAssignedEmployee,
   CoverageEmployee,
   ScheduleCoveragePayload,
+  TelegramState,
 } from "@/lib/scheduleCoverage";
 import {
   isFeedConnected, parseFrappeDatetime, STALE_AFTER_MINUTES,
@@ -50,6 +51,19 @@ export type RegisterRow = {
   fingerprint_count: number | null;
   days_since_relieving: number | null;
   /**
+   * Schedule-feed fact — where this person stands in the Telegram rollout.
+   *
+   * A schedule fact because the coverage endpoint is what resolves it; the
+   * bridge knows nothing about Telegram, so a row only the enrolment feed
+   * vouches for carries null here the way it carries null for `schedule`.
+   *
+   * Deliberately NOT part of `isNotReady`. See that function's comment: this
+   * column tracks a rollout in progress, not whether someone can be tracked
+   * today, and folding it in would turn the attention count into the roster
+   * size on the day the column shipped.
+   */
+  telegram: TelegramState | null;
+  /**
    * Which feeds vouched for this row EXISTING — not for any field on it.
    *
    * Required, not optional, so every construction site has to state it rather
@@ -91,6 +105,21 @@ export const BIOMETRIC_LABELS: Record<NonNullable<RegisterRow["biometric"]>, str
 export const SCHEDULE_LABELS: Record<NonNullable<RegisterRow["schedule"]>, string> = {
   assigned: "Assigned",
   missing: "Missing",
+};
+
+/**
+ * Same rule again, for the Telegram fact.
+ *
+ * "ID on file" is worded as a fact about the record rather than as an
+ * instruction, because what to DO with it changes: today those employees still
+ * need a link issued, and once auto-binding ships they need only to open the
+ * bot. A label like "Just needs a nudge" would have to be rewritten then; this
+ * one stays true either way.
+ */
+export const TELEGRAM_LABELS: Record<TelegramState, string> = {
+  linked: "Linked",
+  id_on_file: "ID on file",
+  none: "Not linked",
 };
 
 /**
@@ -147,6 +176,10 @@ export function joinRegisterRows(
       biometric: null,
       fingerprint_count: null,
       days_since_relieving: null,
+      // `?? null` and not a default: the backend omits this for the whole
+      // roster when its lookup fails, and "none" would read as a positive
+      // report that nobody is linked.
+      telegram: emp.telegram ?? null,
       sources: { schedule: true, biometric: false },
     });
   };
@@ -175,6 +208,10 @@ export function joinRegisterRows(
         biometric: null,
         fingerprint_count: null,
         days_since_relieving: null,
+        // The enrolment feed knows nothing about Telegram, so a row coverage
+        // never returned has no state — the same silence it gets for
+        // `schedule`.
+        telegram: null,
         sources: { schedule: false, biometric: false },
       };
       // A NEW object rather than a mutation: `merged` may be the seeded row
@@ -208,6 +245,11 @@ export type RegisterFilters = {
   status?: "Active" | "Left";
   schedule?: "assigned" | "missing";
   biometric?: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled";
+  /**
+   * The rollout filter, and the reason the column exists: narrowing to "Not
+   * linked" is how the work gets done a branch at a time.
+   */
+  telegram?: TelegramState;
   readiness?: "not-ready";
   sort?: "name" | "hours" | "prints";
   order?: "asc" | "desc";
@@ -274,6 +316,15 @@ export function applyFilterChange(
  *
  * ENROLLED_NOT_PUNCHING is deliberately absent: they can clock in and simply
  * have not, which is an attendance question, not a coverage one.
+ *
+ * `telegram` is absent for a stronger reason. This function feeds the alert
+ * count and the not-ready filter, and Telegram is a rollout that STARTS at
+ * ~90% unlinked: folding it in would have turned "4 need attention" into "467
+ * need attention" the day the column shipped, drowning the two findings the
+ * page exists for. Being unlinked also costs the employee a convenience, not
+ * the company its attendance record — they are still tracked by the same
+ * device and schedule as everyone else. The Telegram facet is how that work
+ * gets found; the alert stays for people who cannot be tracked at all.
  */
 export function isNotReady(row: RegisterRow): boolean {
   return row.schedule === "missing" || row.biometric === "none" || row.biometric === "still_enrolled";
@@ -329,6 +380,7 @@ export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters
     if (filters.status && row.status !== filters.status) return false;
     if (filters.schedule && row.schedule !== filters.schedule) return false;
     if (filters.biometric && row.biometric !== filters.biometric) return false;
+    if (filters.telegram && row.telegram !== filters.telegram) return false;
     if (filters.readiness === "not-ready" && !isNotReady(row)) return false;
     return true;
   });
@@ -383,6 +435,9 @@ export function describeRegisterFilters(filters: RegisterFilters): RegisterNarro
   }
   if (filters.biometric) {
     out.push({ label: "Biometric", value: BIOMETRIC_LABELS[filters.biometric] });
+  }
+  if (filters.telegram) {
+    out.push({ label: "Telegram", value: TELEGRAM_LABELS[filters.telegram] });
   }
 
   return out;
@@ -551,7 +606,14 @@ export type RegisterAlert = {
  * still exported to the CSV — see CSV_FIELDS, which is keyed off feed health
  * rather than off this list for exactly that reason.
  */
-const SCHEDULE_COLUMNS = ["schedule", "weekly_minutes"];
+/**
+ * `telegram` is here because these lists are keyed by FEED, not by subject
+ * matter: the coverage endpoint resolves the Telegram state, so a coverage
+ * outage must take that column with it exactly as it takes Schedule and
+ * Hrs/wk. Leaving it visible would show "Not linked" for a roster the page has
+ * just stopped hearing about.
+ */
+const SCHEDULE_COLUMNS = ["schedule", "weekly_minutes", "telegram"];
 const BIOMETRIC_COLUMNS = ["biometric", "status"];
 const ALWAYS = ["employee", "branch", "department", "action"];
 
@@ -679,6 +741,11 @@ const CSV_FIELDS: CsvField[] = [
   // on screen. It keeps its own field here on purpose; see the note above.
   { feed: "biometric", header: "Fingerprints", value: (row) => row.fingerprint_count },
   { feed: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
+  {
+    feed: "schedule",
+    header: "Telegram",
+    value: (row) => (row.telegram === null ? null : TELEGRAM_LABELS[row.telegram]),
+  },
 ];
 
 /**
@@ -772,7 +839,9 @@ export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): R
     .filter((row) => hasHealthySource(row, feeds))
     .map((row) => ({
       ...row,
-      ...(feeds.schedule ? {} : { schedule: null, weekly_minutes: null, image: null }),
+      ...(feeds.schedule
+        ? {}
+        : { schedule: null, weekly_minutes: null, image: null, telegram: null }),
       ...(feeds.biometric
         ? {}
         : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),

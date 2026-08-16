@@ -1,9 +1,16 @@
 import type { ColumnDef, HeaderContext, SortDirection } from "@tanstack/react-table";
 
 import { Badge, Button } from "@lolbikb/dewey-ui";
-import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, SendIcon } from "lucide-react";
+
+import { AppTooltip } from "@/ui/AppTooltip";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
-import { BIOMETRIC_LABELS, SCHEDULE_LABELS, type RegisterRow } from "@/lib/coverageRegister";
+import {
+  BIOMETRIC_LABELS,
+  SCHEDULE_LABELS,
+  TELEGRAM_LABELS,
+  type RegisterRow,
+} from "@/lib/coverageRegister";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
 import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import type { CalendarEmployee } from "@/types/calendar";
@@ -18,6 +25,19 @@ const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondar
   enrolled_not_punching: "outline",
   none: "destructive",
   still_enrolled: "destructive",
+};
+
+/**
+ * Only "Not linked" is drawn as a gap to close. "ID on file" is `outline` —
+ * neutral, the same weight ENROLLED_NOT_PUNCHING gets — because that employee
+ * is further along than the badge's neighbours and reads as a smaller job.
+ * Neither is `destructive`: an unlinked employee is still tracked by their
+ * device and schedule, so nothing here is a coverage failure.
+ */
+const TELEGRAM_VARIANT: Record<NonNullable<RegisterRow["telegram"]>, "secondary" | "outline"> = {
+  linked: "secondary",
+  id_on_file: "outline",
+  none: "outline",
 };
 
 /**
@@ -145,6 +165,7 @@ const SORTABLE = { sortDescFirst: false, enableMultiSort: false } as const;
 export function registerColumns(
   onOpen: (row: RegisterRow) => void,
   onAddSchedule: (row: RegisterRow) => void,
+  onIssueLink: (row: RegisterRow) => void,
 ): ColumnDef<RegisterRow, unknown>[] {
   return [
     {
@@ -163,21 +184,33 @@ export function registerColumns(
           // a 1280 content area, and at 375 every name in the fixture clipped
           // to 39px of text.
           //
-          // 185 = 36px avatar + 10px gap + 139px of text, which is the stack
-          // width the spec measured this cell at. Deliberately under 200 — that
-          // is where the Khmer name switches on, and this cell's recorded trade
-          // is that it shows none at either viewport.
+          // TWO floors, because this cell has two jobs at two sizes.
           //
-          // A floor and not a cap, so the column can widen the names as the
-          // register grows — which means the trade above holds at 375 and 1280
-          // and stops holding above them. Measured since: the stack is 139px at
-          // 375, 190px at 1280, and reaches 200px at a 1330 viewport, where the
-          // Khmer name duly appears. 1330 is an ordinary laptop rather than an
-          // exotic monitor, so treat this cell as showing Khmer on most desks.
-          // e2e/employee-identity.spec.ts pins the crossing, so moving this
-          // floor, the avatar or the threshold moves a test rather than
-          // surprising someone.
-          className="min-w-[185px]"
+          // 185 = 36px avatar + 10px gap + 139px of text: the narrow floor,
+          // deliberately UNDER the 200px at which EmployeeIdentity switches the
+          // Khmer name on. The recorded trade is that the register shows no
+          // Khmer name at 375 or at 1280, where the cell has no room for it.
+          //
+          // 246 = the same avatar and gap + 200px of text, from 1330 up. The
+          // Khmer name used to arrive there on its own: a floor is not a cap,
+          // an auto-layout table hands the surplus out, and past 1330 the
+          // surplus carried the stack over 200 by itself. That crossing was
+          // EMERGENT, and it silently depended on the column count — the
+          // Telegram column pushed it from 1330 to ~1520, which is effectively
+          // the 1536 e2e/employee-identity.spec.ts exists to rule out.
+          //
+          // So it is bought explicitly now, at the width it already happened
+          // at. A plain 246 floor was measured first and overshot: it forced
+          // the Khmer name on at 375 too, breaking the narrow half of the
+          // trade above. The breakpoint is what keeps both.
+          //
+          // Tailwind v4 can sort an arbitrary `min-[]` variant BEFORE a named
+          // breakpoint, which turns a correct-looking class string into a
+          // measured no-op — so this pair was measured, not reasoned about:
+          // 139px of stack at 375 and 768, 158px at 1280 (no Khmer), 221px at
+          // 1330 (Khmer). e2e/employee-identity.spec.ts pins all of it, which
+          // is how the Telegram column's effect surfaced in the first place.
+          className="min-w-[185px] min-[1330px]:min-w-[246px]"
           englishName={row.original.employee_name}
           employeeId={row.original.id}
           // Already composed at the join by joinRegisterRows, family name
@@ -296,6 +329,59 @@ export function registerColumns(
                 {days} {days === 1 ? "day" : "days"}
               </span>
             ) : null}
+          </span>
+        );
+      },
+    },
+    {
+      // The state and its remedy in ONE cell, the same fusion the biometric
+      // column uses for its print count — and here it is also what keeps this
+      // out of the `action` column, which can only ever show one button. That
+      // column ranks a biometric problem above a missing schedule, so putting
+      // "Issue link" there would make it unreachable for exactly the people
+      // who have another problem too. The rollout must not be blocked by an
+      // unrelated finding on the same row.
+      id: "telegram",
+      header: "Telegram",
+      cell: ({ row }) => {
+        const value = row.original.telegram;
+        if (value === null) return "—";
+        return (
+          <span className="flex items-center gap-1.5">
+            <Badge variant={TELEGRAM_VARIANT[value]}>{TELEGRAM_LABELS[value]}</Badge>
+            {/* Nothing to press once they are bound. Re-issuing for a linked
+                employee is not merely redundant: the fresh link would rebind
+                their record to whoever opens it. */}
+            {value === "linked" ? null : (
+              // Icon-only, and that is a width decision with a measurement
+              // behind it. As a text button this cell was 195px — as wide as
+              // Biometric — and the table had no slack to give it: the
+              // Employee column was already pinned at its 185px floor, so the
+              // 39px this column took came straight out of the name stack and
+              // pushed the Khmer name's 200px threshold from a 1330 viewport
+              // to well past 1340. Khmer names on an ordinary laptop is a
+              // deliberate, measured behaviour (see the Employee cell's own
+              // note); a Telegram column is not worth spending it.
+              //
+              // The same SendIcon the /hr-attendance toolbar already uses for
+              // this exact action, so the affordance is learned once. The
+              // tooltip and the accessible name both spell it out — the app
+              // wraps every route in TooltipProvider (main.tsx:22).
+              <AppTooltip content="Issue a Telegram link" side="bottom">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="size-7 shrink-0 p-0"
+                  onClick={() => onIssueLink(row.original)}
+                  // Named per row. A page of buttons all called "Issue link"
+                  // gives a screen-reader user nothing to choose between, and
+                  // the thing being chosen is which employee gets a credential.
+                  aria-label={`Issue a Telegram link for ${row.original.employee_name}`}
+                >
+                  <SendIcon className="size-3.5" aria-hidden="true" />
+                </Button>
+              </AppTooltip>
+            )}
           </span>
         );
       },

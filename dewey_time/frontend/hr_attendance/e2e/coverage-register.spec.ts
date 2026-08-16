@@ -451,12 +451,16 @@ test("a facet popover opens, narrows the table, and clears back", async ({ page 
   await openRegister(page);
   await expect(bodyRows(page)).toHaveCount(ROSTER);
 
-  // Radix renders the three single-value facets as `role="combobox"`, which is
-  // nameFrom:author — the "Status: Any" a sighted reader sees contributes
-  // NOTHING to the accessible name, and until one was given all three
-  // announced as bare unnamed comboboxes. Located BY NAME here so the name
-  // stays load-bearing: the unit suite can only assert the attribute is in the
+  // Radix renders the single-value facets as `role="combobox"`, which is
+  // nameFrom:author — the bare "Status" a sighted reader sees contributes
+  // NOTHING to the accessible name, and until one was given all of them
+  // announced as unnamed comboboxes. Located BY NAME here so the name stays
+  // load-bearing: the unit suite can only assert the attribute is in the
   // markup, not that a browser computes it into the name.
+  //
+  // The name still says "Any" while the visible text no longer does. That is
+  // the point of the split — the state is never lost for a screen-reader user,
+  // it just stops costing a toolbar row for everyone.
   for (const name of ["Status filter, Any", "Schedule filter, Any", "Biometric filter, Any"]) {
     await expect(page.getByRole("combobox", { name, exact: true })).toBeVisible();
   }
@@ -551,7 +555,7 @@ test("the export confirms what the file holds before writing it", async ({ page 
 
   const lines = csv.split("\n");
   expect(lines[0]).toBe(
-    "Employee ID,Name,Branch,Department,Employment status,Schedule,Weekly minutes,Biometric,Fingerprints,Days since leaving",
+    "Employee ID,Name,Branch,Department,Employment status,Schedule,Weekly minutes,Biometric,Fingerprints,Days since leaving,Telegram",
   );
   expect(lines).toHaveLength(NOT_READY.length + 1);
   expect(lines.slice(1).map((line) => line.split(",")[1])).toEqual(NOT_READY);
@@ -751,11 +755,16 @@ test("on a phone the register's toolbar fits, whole and without overlaps", async
 
     // The register hands its search box to the wrapping facet bar below 768,
     // so at these widths the toolbar is entirely its own controls: the alert
-    // dot, five facets, the search box and the export button. The dot is the
-    // eighth — it moved here from the page header, and it is the one control
+    // dot, six facets, the search box and the export button. The dot is one of
+    // them — it moved here from the page header, and it is the one control
     // that does NOT wrap with the bar, so it is also the one this measurement
     // most needed to be re-run for.
-    expect(fit.controls, `@${width}: the toolbar is not the one being measured`).toHaveLength(8);
+    //
+    // Nine since the Telegram facet joined the five. The count is a
+    // precondition, not the finding: what this test is actually for is the
+    // overflow and overlap assertions below, and adding a control to a bar
+    // that already wraps at 375 is exactly the change that breaks them.
+    expect(fit.controls, `@${width}: the toolbar is not the one being measured`).toHaveLength(9);
     expect(
       fit.controls,
       `@${width}: the search box must survive the handoff, under the same name`,
@@ -874,4 +883,135 @@ test("a focused control's ring is never clipped by the section that holds it", a
 
     expect(room.tight, `@${size.width}: a focus ring is cut off`).toEqual([]);
   }
+});
+
+/**
+ * The Telegram column, and the one control on this page that WRITES.
+ *
+ * Everything the node suite can see about this column it already checks —
+ * the three badges, the button's presence and its aria-label. What it
+ * structurally cannot see is the round trip: `TelegramLinkDialog`'s body is
+ * behind Radix's `DialogContent`, which resolves its portal container in a
+ * layout effect and therefore server-renders to null. Under
+ * `renderToStaticMarkup` the whole dialog is an empty string, so a button
+ * wired to nothing, a request that never fires and a link that never reaches
+ * the screen would all stay green there.
+ */
+test("the Telegram column reports each state, and only the unlinked can be issued a link", async ({ page }) => {
+  await stubFrappe(page);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  const rowFor = (name: string) => bodyRows(page).filter({ hasText: name });
+
+  // Jane Doe is bound. No button, because re-issuing would mint a live
+  // credential that rebinds her record to whoever opens it.
+  await expect(rowFor("Jane Doe")).toContainText("Linked");
+  await expect(
+    rowFor("Jane Doe").getByRole("button", { name: /^Issue a Telegram link/ }),
+  ).toHaveCount(0);
+
+  // Priya Nair's id was recorded by an earlier notifier but she is not bound
+  // yet, so she still needs a link today.
+  await expect(rowFor("Priya Nair")).toContainText("ID on file");
+  await expect(
+    rowFor("Priya Nair").getByRole("button", { name: /^Issue a Telegram link/ }),
+  ).toBeVisible();
+
+  // Tom O'Brien's state never arrived. An absent fact is an em dash and offers
+  // nothing to press — guessing "Not linked" here would put him on a to-do
+  // list built from a failed query.
+  await expect(
+    rowFor("Tom O'Brien").getByRole("button", { name: /^Issue a Telegram link/ }),
+  ).toHaveCount(0);
+});
+
+test("issuing a link from a row shows that link, named for that employee", async ({ page }) => {
+  await stubFrappe(page);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  await bodyRows(page)
+    .filter({ hasText: "Aaron Wells" })
+    .getByRole("button", { name: "Issue a Telegram link for Aaron Wells" })
+    .click();
+
+  // Named for the employee, because the dialog is how someone confirms they
+  // are about to send the right person's credential.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Aaron Wells");
+  await expect(dialog.getByRole("textbox")).toHaveValue(
+    "https://t.me/dewey_time_bot?start=e2etoken",
+  );
+  // The warning is the point of showing the raw link at all.
+  await expect(dialog).toContainText("before the employee does");
+});
+
+/**
+ * The toolbar is ONE row at a laptop width, and stays one after a sixth facet.
+ *
+ * The phone measurement above covers 375, where the bar wraps by design. This
+ * covers the width where it must not: the register dropped its own PageHeader
+ * to buy that line, and a sixth facet reclaimed it — measured, Export CSV fell
+ * to a second row and the last employee went below the fold. The fix was to
+ * stop the four single-value facets rendering ": Any" at rest.
+ *
+ * Measured, not asserted as a class string, for the reason every other layout
+ * claim on this page is: twMerge, flex-wrap and the intrinsic widths of six
+ * Radix triggers all sit between the JSX and the rendered box.
+ */
+test("at a laptop width the whole toolbar is a single row", async ({ page }) => {
+  await stubFrappe(page);
+  await page.setViewportSize(LAPTOP);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  const tops = await page.evaluate(() => {
+    const names = [
+      "4 need attention — show them", "Branch filter, 2 options",
+      "Department filter, 2 options", "Status filter, Any", "Schedule filter, Any",
+      "Biometric filter, Any", "Telegram filter, Any", "Export 14 employees as CSV",
+    ];
+    return names.map((name) => {
+      const el = document.querySelector(`[aria-label="${name}"]`);
+      if (!el) return { name, top: null as number | null };
+      return { name, top: Math.round(el.getBoundingClientRect().top) };
+    });
+  });
+
+  const missing = tops.filter((t) => t.top === null).map((t) => t.name);
+  expect(missing, "a control this measurement depends on is not on the page").toEqual([]);
+
+  // Within a few px of each other: the triggers are not all the same height,
+  // so their tops differ slightly even on one flex line. A wrap moves a control
+  // by a whole row (~40px), which this catches and rounding noise does not.
+  const values = tops.map((t) => t.top as number);
+  expect(
+    Math.max(...values) - Math.min(...values),
+    `toolbar wrapped: ${JSON.stringify(tops)}`,
+  ).toBeLessThan(12);
+});
+
+test("a facet that IS narrowing still says so on its face", async ({ page }) => {
+  // The other half of dropping ": Any". Hiding the resting state is free;
+  // hiding a CHOSEN one would mean a reader could not see what the table has
+  // been narrowed to without opening each menu in turn — and the register's
+  // whole failure mode is a filter you forgot you set.
+  await stubFrappe(page);
+  await page.setViewportSize(LAPTOP);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  const telegram = page.getByRole("combobox", { name: "Telegram filter, Any", exact: true });
+  await expect(telegram).toHaveText("Telegram");
+
+  await telegram.click();
+  await page.getByRole("option", { name: "Not linked", exact: true }).click();
+
+  await expect(
+    page.getByRole("combobox", { name: "Telegram filter, Not linked", exact: true }),
+  ).toHaveText("Telegram: Not linked");
+  // And it really filtered — otherwise this is a test about a label.
+  await expect(bodyRows(page)).toHaveCount(2);
 });

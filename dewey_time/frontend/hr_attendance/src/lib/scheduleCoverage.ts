@@ -25,7 +25,20 @@ export type CoverageEmployee = {
    */
   custom_khmer_last_name?: string | null;
   custom_khmer_first_name?: string | null;
+  /**
+   * Where this employee stands in the Telegram rollout, resolved server-side.
+   *
+   * `id_on_file` means a prior notifier recorded their numeric Telegram id on
+   * `Employee.custom_telegram_chat_id` but no binding exists yet. Optional and
+   * nullable because the backend returns null for the whole roster when the
+   * lookup fails — silence, which the register renders as a blank column
+   * rather than as a few hundred people needing a link.
+   */
+  telegram?: TelegramState | null;
 };
+
+/** The Telegram rollout states, in the order HR works through them. */
+export type TelegramState = "linked" | "id_on_file" | "none";
 
 export type CoverageAssignedEmployee = CoverageEmployee & {
   /** Scheduled minutes/week resolved server-side (0 when the SSA couldn't be resolved). */

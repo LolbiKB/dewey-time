@@ -13,6 +13,7 @@ const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   // No Khmer name is the common case for these fixtures.
   khmer_name: null,
   image: null,
+  telegram: "none",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // Both feeds know this employee — the ordinary row. Override it to build the
@@ -41,6 +42,7 @@ test("the healthy header line is pinned whole, so no field can be mislabelled or
     "Biometric",
     "Fingerprints",
     "Days since leaving",
+    "Telegram",
   ]);
 });
 
@@ -51,7 +53,7 @@ test("a data row is pinned whole, in the header's order", () => {
   );
   assert.equal(
     csv.split("\n")[1],
-    "E1,Sok Dara,DIU,Finance,Left,Assigned,2400,Still enrolled,2,42",
+    "E1,Sok Dara,DIU,Finance,Left,Assigned,2400,Still enrolled,2,42,Not linked",
   );
 });
 
@@ -149,10 +151,11 @@ test("row order is the caller's, not re-sorted on the way out", () => {
 test("a null cell is an empty field, never a zero or a placeholder", () => {
   const csv = toRegisterCsv(
     [row({ branch: null, department: null, weekly_minutes: null, fingerprint_count: null,
-           status: null, schedule: null, biometric: null, days_since_relieving: null })],
+           status: null, schedule: null, biometric: null, days_since_relieving: null,
+           telegram: null })],
     HEALTHY,
   );
-  assert.equal(csv.split("\n")[1], "E1,Sok Dara,,,,,,,,");
+  assert.equal(csv.split("\n")[1], "E1,Sok Dara,,,,,,,,,");
   assert.doesNotMatch(csv.split("\n")[1], /0/, "an absent number must not export as 0");
   assert.doesNotMatch(csv, /—/, "the table's em dash is a rendering, not a value");
 });
@@ -184,7 +187,7 @@ test("a field containing a comma is quoted", () => {
   // the count holds whichever way the field went out.
   assert.equal(
     csv.split("\n")[1],
-    'E1,"Reyes, Ana",DIU,Finance,Active,Assigned,2400,Enrolled,2,',
+    'E1,"Reyes, Ana",DIU,Finance,Active,Assigned,2400,Enrolled,2,,Not linked',
   );
 });
 
@@ -224,7 +227,7 @@ test("a field a spreadsheet would run as a formula is marked as text", () => {
     const line = toRegisterCsv([row({ employee_name: value })], HEALTHY).split("\n")[1];
     assert.equal(
       line,
-      `E1,'${value},DIU,Finance,Active,Assigned,2400,Enrolled,2,`,
+      `E1,'${value},DIU,Finance,Active,Assigned,2400,Enrolled,2,,Not linked`,
       `${value} must go out marked as text`,
     );
   }
