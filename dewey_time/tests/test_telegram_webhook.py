@@ -82,12 +82,63 @@ class TestStartCommand(unittest.TestCase):
         self.assertNotIn("2026-01-01", reply)
         self.assertIn("HR", reply)
 
-    def test_bare_start_explains_how_to_link(self):
+    def test_bare_start_explains_how_to_link_when_no_id_is_recorded(self):
+        # The ordinary case for most of the roster. `claim_by_recorded_id`
+        # refusing is not a fault, so the reply is the same instruction as
+        # before and nothing is logged as an error.
         with patch.object(webhook.binding, "redeem_link_token") as redeem, \
+             patch.object(webhook.binding, "claim_by_recorded_id",
+                          side_effect=Exception("no recorded id")), \
              patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start"))
         redeem.assert_not_called()
         self.assertIn("HR", send.call_args[0][1])
+
+    def test_bare_start_binds_an_employee_whose_id_is_on_file(self):
+        # The whole point of the no-token path: opening the bot IS the flow.
+        with patch.object(webhook.binding, "claim_by_recorded_id",
+                          return_value="HR-EMP-00001") as claim, \
+             patch.object(webhook.binding, "redeem_link_token") as redeem, \
+             patch.object(webhook.transport, "miniapp_url", return_value="https://x/hr-me"), \
+             patch.object(webhook.transport, "send_message_with_webapp_button") as button:
+            webhook._handle(_update(text="/start"))
+        redeem.assert_not_called(), "a bare /start has no token to redeem"
+        self.assertEqual(claim.call_args[0][0], "55501", "the id comes off the update")
+        self.assertEqual(claim.call_args[0][1], "77702")
+        self.assertIn("linked", button.call_args[0][1].lower())
+
+    def test_a_token_start_never_takes_the_recorded_id_path(self):
+        # The two paths must not blur: a token names ONE employee, and falling
+        # back to the recorded id would bind a different one than the link HR
+        # sent was for.
+        with patch.object(webhook.binding, "redeem_link_token",
+                          return_value="HR-EMP-00001"), \
+             patch.object(webhook.binding, "claim_by_recorded_id") as claim, \
+             patch.object(webhook.transport, "miniapp_url", return_value="https://x/hr-me"), \
+             patch.object(webhook.transport, "send_message_with_webapp_button"):
+            webhook._handle(_update(text="/start tok123"))
+        claim.assert_not_called()
+
+    def test_a_failed_token_does_not_fall_back_to_the_recorded_id(self):
+        # An expired or already-used token must fail as a token. Falling
+        # through would silently bind via a different rule than the one the
+        # employee was handed.
+        with patch.object(webhook.binding, "redeem_link_token",
+                          side_effect=Exception("expired")), \
+             patch.object(webhook.binding, "claim_by_recorded_id") as claim, \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/start tok123"))
+        claim.assert_not_called()
+        self.assertIn("didn't work", send.call_args[0][1])
+
+    def test_whitespace_only_payload_is_treated_as_bare(self):
+        # "/start   " must not be redeemed as a token made of spaces.
+        with patch.object(webhook.binding, "redeem_link_token") as redeem, \
+             patch.object(webhook.binding, "claim_by_recorded_id",
+                          side_effect=Exception("none")), \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle(_update(text="/start   "))
+        redeem.assert_not_called()
 
     def test_unknown_text_is_ignored_silently(self):
         with patch.object(webhook.transport, "send_message") as send:

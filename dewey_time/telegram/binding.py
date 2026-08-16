@@ -76,14 +76,16 @@ def _mark_redeemed(token_hash: str, telegram_user_id: str) -> None:
     )
 
 
-def _create_link(*, employee: str, telegram_user_id: str, chat_id: str) -> None:
+def _create_link(
+    *, employee: str, telegram_user_id: str, chat_id: str, linked_via: str = "token"
+) -> None:
     doc = frappe.new_doc(LINK_DT)
     doc.telegram_user_id = telegram_user_id
     doc.employee = employee
     doc.chat_id = chat_id
     doc.enabled = 1
     doc.linked_at = now_datetime()
-    doc.linked_via = "token"
+    doc.linked_via = linked_via
     doc.insert(ignore_permissions=True)
 
 
@@ -144,6 +146,120 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
     )
     _mark_redeemed(row["name"], telegram_user_id)
     return row["employee"]
+
+
+#: The Employee column a prior Telegram notifier left behind, holding a numeric
+#: Telegram user id. THIS APP DOES NOT INSTALL IT, so every read is behind a
+#: has_column check -- the same guard coverage_api uses for the same field.
+TELEGRAM_ID_FIELD = "custom_telegram_chat_id"
+
+
+def _existing_link(telegram_user_id: str):
+    """The link row for this Telegram account, enabled or not, or None.
+
+    `Telegram Link` autonames `field:telegram_user_id`, so the account id IS
+    the document name -- one row per Telegram account, by construction.
+    """
+    if not frappe.db.exists(LINK_DT, telegram_user_id):
+        return None
+    return frappe.db.get_value(
+        LINK_DT, telegram_user_id, ["name", "employee", "enabled"], as_dict=True
+    )
+
+
+def _employees_with_recorded_id(telegram_user_id: str) -> list[str]:
+    """ACTIVE employees whose recorded Telegram id is exactly this one.
+
+    Active only, and that is a guard rather than a tidy-up: a leaver whose id
+    is still on their record could otherwise walk back in by messaging the bot
+    and keep reading their own attendance after leaving. Coverage filters the
+    same way, so the register never offered them either.
+    """
+    if not frappe.db.has_column("Employee", TELEGRAM_ID_FIELD):
+        return []
+    rows = (
+        frappe.get_all(
+            "Employee",
+            filters={TELEGRAM_ID_FIELD: telegram_user_id, "status": "Active"},
+            fields=["name"],
+        )
+        or []
+    )
+    return [row["name"] for row in rows]
+
+
+def _employee_bound_elsewhere(employee: str, telegram_user_id: str) -> bool:
+    """Is this Employee already bound to some OTHER Telegram account?"""
+    return bool(
+        frappe.get_all(
+            LINK_DT,
+            filters={
+                "employee": employee,
+                "enabled": 1,
+                "telegram_user_id": ["!=", telegram_user_id],
+            },
+            fields=["name"],
+            limit_page_length=1,
+        )
+    )
+
+
+def claim_by_recorded_id(telegram_user_id: str, chat_id: str) -> str:
+    """Bind using the Telegram id already recorded on the Employee record.
+
+    The no-token path. A prior notifier wrote numeric Telegram user ids onto
+    `Employee.custom_telegram_chat_id` for part of the roster; those people can
+    bind by opening the bot, with no link for HR to issue and nothing to
+    forward or expire.
+
+    WHAT IS BEING TRUSTED, exactly: that the recorded id belongs to the person
+    it is recorded against. Possession of the account is proved -- the id comes
+    off the authenticated update, not from anything the sender typed -- so the
+    only way this binds the wrong person is if the wrong id was recorded. That
+    is the same trust the token path places in HR sending the link to the right
+    person, except this one is auditable after the fact and correctable in the
+    Employee record.
+
+    Every ambiguous case REFUSES rather than guessing. Refusing costs one
+    token link; guessing hands someone another employee's attendance history,
+    check-in times and branch locations, and nothing downstream would notice.
+    """
+    telegram_user_id = str(telegram_user_id or "").strip()
+    if not telegram_user_id:
+        frappe.throw("Invalid link request")
+
+    existing = _existing_link(telegram_user_id)
+    if existing:
+        if not existing.get("enabled"):
+            # A REVOKED link must stay revoked. Without this, disabling a link
+            # would be undone by the employee simply reopening the bot, which
+            # makes revocation theatre -- and revocation is the only lever HR
+            # has when a phone is lost or someone leaves.
+            frappe.throw("This account cannot be linked automatically.")
+        # Idempotent. Telegram redelivers an update when it does not get a
+        # timely 200, so the same bare /start can arrive twice.
+        return existing["employee"]
+
+    matches = _employees_with_recorded_id(telegram_user_id)
+    if len(matches) != 1:
+        # Zero: nobody recorded this id -- they need a link from HR.
+        # Two or more: the column has no unique constraint, so a duplicated id
+        # is possible, and there is no safe way to choose between them.
+        frappe.throw("This account cannot be linked automatically.")
+
+    employee = matches[0]
+    if _employee_bound_elsewhere(employee, telegram_user_id):
+        # Someone is already bound to this employee. Either the recorded id is
+        # stale, or two accounts are claiming one person; both want a human.
+        frappe.throw("This account cannot be linked automatically.")
+
+    _create_link(
+        employee=employee,
+        telegram_user_id=telegram_user_id,
+        chat_id=str(chat_id),
+        linked_via="recorded_id",
+    )
+    return employee
 
 
 def employee_for_telegram_user(telegram_user_id: str) -> str:

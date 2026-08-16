@@ -8,8 +8,9 @@ but with one important difference: those are server-to-server and can hold an
 API key as well. A webhook can only hold this one secret, so it carries the
 whole load.
 
-The bot's only command is /start <token>. There is deliberately no /today or
-/week: the Mini App is the read surface.
+The bot's only command is /start. With a token payload it redeems that token;
+bare, it tries the Telegram id already recorded on the Employee record. There
+is deliberately no /today or /week: the Mini App is the read surface.
 """
 
 import hmac
@@ -52,12 +53,28 @@ def _handle(update: dict) -> None:
         return
 
     parts = text.split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
-        transport.send_message(chat_id, NEEDS_TOKEN_REPLY)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+
+    if not payload:
+        # A BARE /start. Part of the roster already has a numeric Telegram id
+        # recorded against their Employee record by an earlier notifier, and
+        # those people need no link at all -- opening the bot is the whole
+        # flow. Everyone else falls through to the same instruction as before.
+        try:
+            binding.claim_by_recorded_id(str(telegram_user_id), str(chat_id))
+        except Exception:
+            # Deliberately NOT logged as an error and deliberately not
+            # distinguished in the reply. Most bare /start messages are from
+            # people with no recorded id, which is the ordinary case and not a
+            # fault; and the refusal reasons -- no match, duplicate id, revoked
+            # link -- would tell someone probing ids which ones exist.
+            transport.send_message(chat_id, NEEDS_TOKEN_REPLY)
+            return
+        _confirm_linked(chat_id)
         return
 
     try:
-        binding.redeem_link_token(parts[1].strip(), str(telegram_user_id), str(chat_id))
+        binding.redeem_link_token(payload, str(telegram_user_id), str(chat_id))
     except Exception:
         # Never echo the reason: it distinguishes "expired" from "never
         # existed" for someone probing tokens.
@@ -67,8 +84,15 @@ def _handle(update: dict) -> None:
         transport.send_message(chat_id, LINK_FAILED_REPLY)
         return
 
-    # Offer the Mini App, but never let that failure look like a link
-    # failure: the binding is already written and the employee IS linked.
+    _confirm_linked(chat_id)
+
+
+def _confirm_linked(chat_id) -> None:
+    """Tell them they're linked, and offer the Mini App if that is possible.
+
+    Shared by both binding paths. A Mini App failure must never look like a
+    link failure: the binding is already written and the employee IS linked.
+    """
     try:
         transport.send_message_with_webapp_button(
             chat_id, LINKED_REPLY, button_text=OPEN_BUTTON_TEXT, url=transport.miniapp_url()
