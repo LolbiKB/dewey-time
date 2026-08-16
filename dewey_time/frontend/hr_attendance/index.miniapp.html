@@ -7,8 +7,19 @@
     <title>My Attendance</title>
     <!-- Telegram's SDK, which is what puts initData on window.Telegram.WebApp.
          It has to be a plain script tag from telegram.org: Telegram does not
-         inject it, and vendoring a copy is unsupported. -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+         inject it, and vendoring a copy is unsupported.
+
+         `defer` is load-bearing, not tidiness. Without it this is a blocking
+         classic script in <head>, so the parser stops here until it resolves —
+         measured, a request that never completes leaves <body> unparsed and
+         the app renders NOTHING, with no error to explain it. That is a
+         third-party CDN on the critical path to first paint, over whatever
+         connection a phone on a factory floor happens to have.
+
+         Ordering still holds: deferred classic scripts and module scripts both
+         run after parsing, in document order, so the SDK is on `window` before
+         main.tsx reads it. -->
+    <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
     <div id="root"></div>

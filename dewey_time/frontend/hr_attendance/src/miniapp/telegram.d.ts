@@ -5,7 +5,23 @@ declare global {
     Telegram?: {
       WebApp?: {
         initData?: string;
+        /** Client-supplied and explicitly untrusted. Decoration only — the
+         *  server's answer is what identifies anyone. */
+        initDataUnsafe?: { user?: { photo_url?: string } };
         colorScheme?: "light" | "dark";
+        /** Partial by contract: every field is optional in the Bot API, and
+         *  older clients send only the first handful. */
+        themeParams?: Record<string, string | undefined>;
+        /** Bot API 6.1+ / 7.10+ for the bottom bar. */
+        setHeaderColor?: (color: string) => void;
+        setBackgroundColor?: (color: string) => void;
+        setBottomBarColor?: (color: string) => void;
+        BackButton?: {
+          show?: () => void;
+          hide?: () => void;
+          onClick?: (handler: () => void) => void;
+          offClick?: (handler: () => void) => void;
+        };
         /** Present from Bot API 8.0; absent on older clients. */
         safeAreaInset?: SafeAreaInset;
         /** Present from Bot API 8.0; absent on older clients. */

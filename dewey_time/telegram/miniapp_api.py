@@ -68,6 +68,16 @@ def _pick(source, keys):
     return {k: source[k] for k in keys if k in source}
 
 
+#: Top-level keys an employee may see about themselves.
+#:
+#: `employee_branch` is their own primary site -- the same fact the check-in
+#: notification already states ("Checked in 07:58 · DIS Iconic"). Everything
+#: else the payload carries at this level stays out: `device_alerts` and
+#: `device_sync` are infrastructure health, and `_employee_nav_meta` is the
+#: SPA's picker plumbing.
+PAYLOAD_KEYS = ("employee", "employee_branch")
+
+
 def narrow(payload: dict) -> dict:
     """Project the HR calendar payload down to what an employee may see."""
     days = []
@@ -81,7 +91,45 @@ def narrow(payload: dict) -> dict:
             _pick(c, CHECKIN_KEYS) for c in (day.get("checkins") or [])
         ]
         days.append(narrowed)
-    return {"employee": payload.get("employee"), "days": days}
+    return {**_pick(payload, PAYLOAD_KEYS), "days": days}
+
+
+def _identity(employee: str) -> dict:
+    """Who the server resolved this launch to.
+
+    THE POINT IS CONFIRMATION, not decoration. Telegram already knows the
+    user's own name and echoing it back proves nothing; what an employee cannot
+    otherwise check is which Employee record their account is bound to. The
+    recorded-id bind path makes that worth showing: it trusts an id somebody
+    recorded, and a wrong one binds a stranger silently. Seeing someone else's
+    name at the top of the app is how that gets reported on day one instead of
+    never.
+
+    Khmer name included because for a great many of these employees it is the
+    name they would actually recognise as theirs, and an English transliteration
+    they never use is a poor thing to verify an identity against.
+    """
+    fields = ["employee_name", "designation"]
+    # Installed by dewey_time.setup.custom_fields, but a site mid-migration may
+    # not have them yet -- and an unknown column makes the select raise, which
+    # would take the whole Mini App down to lose one optional name.
+    khmer_fields = [
+        field
+        for field in ("custom_khmer_last_name", "custom_khmer_first_name")
+        if frappe.db.has_column("Employee", field)
+    ]
+    row = frappe.db.get_value("Employee", employee, fields + khmer_fields, as_dict=True) or {}
+    khmer = " ".join(
+        part for part in (
+            row.get("custom_khmer_last_name"),
+            row.get("custom_khmer_first_name"),
+        ) if part
+    ).strip()
+    return {
+        "employee_name": row.get("employee_name"),
+        "designation": row.get("designation"),
+        "khmer_name": khmer or None,
+    }
 
 
 # POST-only, deliberately. Without methods=[...] Frappe also accepts GET, and
@@ -108,4 +156,8 @@ def get_my_calendar(init_data: str, start_date: str, end_date: str) -> dict:
     if date_diff(end, start) > MAX_RANGE_DAYS:
         frappe.throw(f"Range is limited to {MAX_RANGE_DAYS} days")
 
-    return narrow(hr_calendar.build_employee_calendar(employee, str(start), str(end)))
+    payload = narrow(hr_calendar.build_employee_calendar(employee, str(start), str(end)))
+    # Merged here rather than inside narrow(): narrow is a pure projection of
+    # what it is handed, and identity is a separate lookup. Keeping it pure is
+    # what lets the allowlist tests feed it a fabricated HR payload.
+    return {**payload, **_identity(employee)}

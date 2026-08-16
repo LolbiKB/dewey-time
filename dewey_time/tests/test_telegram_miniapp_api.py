@@ -110,7 +110,27 @@ class TestProjection(unittest.TestCase):
         )
 
     def test_the_top_level_key_set_is_exactly_the_allowlist(self):
-        self.assertEqual(set(self._narrowed()), {"employee", "days"})
+        # Same equality rule as the day set above. The four beyond `days` are
+        # the employee's own identity, shown so they can confirm WHICH record
+        # their Telegram account was bound to -- the check that matters now
+        # that binding can happen from a recorded id rather than only from a
+        # link HR sent. `employee_branch` is the same site the check-in
+        # notification already names.
+        #
+        # Still absent, and this equality is what keeps them absent:
+        # device_alerts, device_sync and the picker's nav metadata.
+        self.assertEqual(
+            set(self._narrowed()),
+            {"employee", "employee_name", "khmer_name", "designation",
+             "employee_branch", "days"},
+        )
+
+    def test_the_projection_itself_exposes_no_identity(self):
+        # narrow() is a pure projection of what it is handed, and the identity
+        # is a separate lookup merged after it. Pinned because a future edit
+        # that moved the lookup inside narrow() would make every allowlist test
+        # in this class depend on a database call.
+        self.assertEqual(set(miniapp_api.narrow(HR_PAYLOAD)), {"employee", "employee_branch", "days"})
 
     def test_the_shift_block_drops_grace_minutes(self):
         # grace_minutes tells an employee exactly how late they can be before
