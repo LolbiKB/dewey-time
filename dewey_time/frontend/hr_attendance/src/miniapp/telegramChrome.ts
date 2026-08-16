@@ -143,6 +143,142 @@ export function bindBackButton(w: Window, visible: boolean, onBack: () => void):
 }
 
 /**
+ * Is this client at least this Bot API version?
+ *
+ * The SDK's own comparison, when it has one. Falling back to `false` is the
+ * safe answer: a client too old to answer the question is too old to have
+ * whatever is being asked about.
+ */
+export function atLeast(w: Window, version: string): boolean {
+  return Boolean(w?.Telegram?.WebApp?.isVersionAtLeast?.(version));
+}
+
+/**
+ * Refetch when the app comes back to the foreground.
+ *
+ * A Mini App is minimised rather than closed — it sits behind the chat and
+ * comes back holding whatever it loaded. For an attendance app that is
+ * actively wrong: the most common use is checking a punch that JUST happened,
+ * and the reader would be looking at data from before it.
+ *
+ * `activated` is Bot API 8.0; `visibilitychange` covers everything older, and
+ * both firing is harmless because the caller invalidates a query rather than
+ * mutating anything.
+ */
+export function onResume(w: Window, doc: Document, handler: () => void): () => void {
+  const app = w?.Telegram?.WebApp;
+  const onVisible = () => {
+    if (doc?.visibilityState === "visible") handler();
+  };
+
+  app?.onEvent?.("activated", handler);
+  doc?.addEventListener?.("visibilitychange", onVisible);
+  return () => {
+    app?.offEvent?.("activated", handler);
+    doc?.removeEventListener?.("visibilitychange", onVisible);
+  };
+}
+
+/**
+ * Telegram's per-user cloud storage, used to reopen on the tab you left.
+ *
+ * Not localStorage: a Mini App webview's storage is not guaranteed to survive
+ * between launches, and CloudStorage follows the user to their other devices —
+ * which is the behaviour someone expects from something that lives inside
+ * their chat app.
+ *
+ * Every failure is swallowed to the fallback. Remembering a tab is a
+ * courtesy, and a courtesy must never be able to stop the app opening.
+ */
+const TAB_KEY = "dewey_last_tab";
+const LOCALE_KEY = "dewey_locale";
+
+export function loadLastTab(w: Window, accept: (value: string) => boolean): Promise<string | null> {
+  return cloudGet(w, TAB_KEY, accept);
+}
+
+export function saveLastTab(w: Window, tab: string): void {
+  cloudSet(w, TAB_KEY, tab);
+}
+
+/**
+ * The chosen language, remembered the same way and for a stronger reason: a
+ * Khmer reader whose phone is set to English would otherwise have to switch
+ * the app back on every single launch.
+ */
+export function loadLocale(w: Window, accept: (value: string) => boolean): Promise<string | null> {
+  return cloudGet(w, LOCALE_KEY, accept);
+}
+
+export function saveLocale(w: Window, locale: string): void {
+  cloudSet(w, LOCALE_KEY, locale);
+}
+
+function cloudGet(
+  w: Window,
+  key: string,
+  accept: (value: string) => boolean,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const storage = w?.Telegram?.WebApp?.CloudStorage;
+    if (!storage?.getItem) return resolve(null);
+    try {
+      storage.getItem(key, (err, value) =>
+        resolve(!err && typeof value === "string" && accept(value) ? value : null),
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function cloudSet(w: Window, key: string, value: string): void {
+  try {
+    w?.Telegram?.WebApp?.CloudStorage?.setItem?.(key, value, () => {});
+  } catch {
+    // Deliberately silent: persistence here is a courtesy, and a courtesy
+    // must never be able to stop the app working.
+  }
+}
+
+/**
+ * Whether the app can offer "add to home screen", and whether it already is.
+ *
+ * Worth offering for exactly this app: an employee opens it most working days,
+ * and the alternative is finding the bot in a chat list first. Resolves to
+ * "unsupported" on anything that cannot answer, so the affordance simply is
+ * not drawn rather than being drawn and failing.
+ */
+export type HomeScreenStatus = "unsupported" | "unknown" | "added" | "missed";
+
+export function homeScreenStatus(w: Window): Promise<HomeScreenStatus> {
+  return new Promise((resolve) => {
+    const app = w?.Telegram?.WebApp;
+    if (!app?.checkHomeScreenStatus) return resolve("unsupported");
+    try {
+      app.checkHomeScreenStatus((status) =>
+        resolve(
+          status === "added" || status === "missed" || status === "unknown"
+            ? status
+            : "unsupported",
+        ),
+      );
+    } catch {
+      resolve("unsupported");
+    }
+  });
+}
+
+export function addToHomeScreen(w: Window): void {
+  w?.Telegram?.WebApp?.addToHomeScreen?.();
+}
+
+/** A heavier tick than a tab change, for opening something. */
+export function openHaptic(w: Window): void {
+  w?.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.("light");
+}
+
+/**
  * Subscribe to every event that can change the space we have to draw in.
  *
  * `viewportChanged` fires as the sheet is dragged and when the keyboard opens;

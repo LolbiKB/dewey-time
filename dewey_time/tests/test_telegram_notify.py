@@ -17,7 +17,10 @@ class TestCompose(unittest.TestCase):
     # for a reason production would never hit.
     def test_in_punch_names_the_time_and_branch(self):
         text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), "DIS Iconic")
-        self.assertIn("07:58", text)
+        # Twelve hour, matching the Mini App this message links into. "17:06"
+        # here and "5:06 PM" one tap later is one event described two ways.
+        self.assertIn("7:58 AM", text)
+        self.assertNotIn("07:58", text)
         self.assertIn("DIS Iconic", text)
 
     def test_out_punch_reads_as_a_checkout(self):
@@ -26,8 +29,9 @@ class TestCompose(unittest.TestCase):
 
     def test_missing_branch_still_produces_a_message(self):
         text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
-        self.assertIn("07:58", text)
+        self.assertIn("7:58 AM", text)
         self.assertNotIn("None", text)
+        self.assertNotIn("·", text, "no separator with nothing after it")
 
     def test_no_judgment_language(self):
         # The notification says what happened, never what it means. Lateness
@@ -73,7 +77,7 @@ class TestGating(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
-             patch.object(notify.transport, "send_message",
+             patch.object(notify, "_send_with_app_button",
                           return_value=notify.transport.SENT) as send:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
         self.assertEqual(send.call_args[0][0], "77702")
@@ -83,7 +87,7 @@ class TestGating(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
-             patch.object(notify.transport, "send_message",
+             patch.object(notify, "_send_with_app_button",
                           return_value=notify.transport.BLOCKED), \
              patch.object(notify, "_disable_link") as disable:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
@@ -96,7 +100,7 @@ class TestGating(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
-             patch.object(notify.transport, "send_message",
+             patch.object(notify, "_send_with_app_button",
                           return_value=notify.transport.SENT), \
              patch.object(notify, "_disable_link") as disable:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
@@ -108,7 +112,7 @@ class TestHook(unittest.TestCase):
         # A Telegram outage must never fail or slow a checkin write.
         doc = type("D", (), {"employee": "HR-EMP-00001", "name": "CKIN-1"})()
         with patch.object(notify.frappe, "enqueue") as enqueue, \
-             patch.object(notify.transport, "send_message") as send:
+             patch.object(notify, "_send_with_app_button") as send:
             notify.on_employee_checkin_after_insert(doc)
         send.assert_not_called()
         self.assertEqual(
@@ -121,3 +125,87 @@ class TestHook(unittest.TestCase):
         with patch.object(notify.frappe, "enqueue") as enqueue:
             notify.on_employee_checkin_after_insert(doc)
         enqueue.assert_not_called()
+
+
+class TestCheckinCarriesTheApp(unittest.TestCase):
+    """The message an employee actually receives, several times a day."""
+
+    def test_a_checkin_message_carries_an_inline_button_into_the_mini_app(self):
+        with patch.object(notify.transport, "miniapp_url", return_value="https://x/hr-me"), \
+             patch.object(notify.transport, "send_message_with_webapp_button",
+                          return_value="SENT") as button, \
+             patch.object(notify.transport, "send_message") as plain:
+            result = notify._send_with_app_button("77702", "Checked in 07:58")
+
+        self.assertEqual(result, "SENT")
+        plain.assert_not_called()
+        self.assertEqual(button.call_args[0][1], "Checked in 07:58")
+        self.assertEqual(button.call_args[1]["url"], "https://x/hr-me")
+
+    def test_the_message_still_arrives_when_the_button_cannot_be_built(self):
+        # An unset Mini App URL, or a client too old for web_app buttons. The
+        # notification is the product; the button is a convenience, and losing
+        # the convenience must never cost the message.
+        with patch.object(notify.transport, "miniapp_url",
+                          side_effect=Exception("not configured")), \
+             patch.object(notify.transport, "send_message_with_webapp_button") as button, \
+             patch.object(notify.transport, "send_message", return_value="SENT") as plain:
+            result = notify._send_with_app_button("77702", "Checked in 07:58")
+
+        self.assertEqual(result, "SENT")
+        button.assert_not_called()
+        self.assertEqual(plain.call_args[0][1], "Checked in 07:58")
+
+    def test_a_blocked_user_is_still_detected_through_the_button_path(self):
+        # BLOCKED disables the link. Routing through a new send function must
+        # not swallow that status, or a blocked user is retried forever.
+        with patch.object(notify.transport, "miniapp_url", return_value="https://x/hr-me"), \
+             patch.object(notify.transport, "send_message_with_webapp_button",
+                          return_value=notify.transport.BLOCKED):
+            self.assertEqual(
+                notify._send_with_app_button("77702", "hi"), notify.transport.BLOCKED
+            )
+
+
+class TestBilingualNotification(unittest.TestCase):
+    """Khmer and English in one message, rather than a guess between them.
+
+    Telegram reports a client language, but that is the language of someone's
+    PHONE — frequently English for people who read Khmer. Employee carries no
+    language field. Guessing wrong sends an unreadable message to the person
+    least able to say so, and this message is two short lines either way.
+    """
+
+    def test_both_languages_are_present_for_each_direction(self):
+        arrived = notify.compose("IN", datetime(2026, 8, 14, 7, 58), "DIS Iconic")
+        self.assertIn("បានចូល", arrived)
+        self.assertIn("Checked in", arrived)
+
+        left = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), "DIS Iconic")
+        self.assertIn("បានចេញ", left)
+        self.assertIn("Checked out", left)
+
+    def test_khmer_leads(self):
+        # The English line can be inferred from the numbers beside it; the
+        # Khmer one is the reason this is bilingual at all.
+        text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
+        lines = text.split("\n")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("បានចូល"))
+        self.assertTrue(lines[1].startswith("Checked in"))
+
+    def test_in_and_out_are_never_the_same_words(self):
+        # A copy-paste that left both directions saying "arrived" would be
+        # invisible in either language alone.
+        arrived = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
+        left = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), None)
+        self.assertNotIn("បានចេញ", arrived)
+        self.assertNotIn("បានចូល", left)
+
+    def test_both_lines_carry_the_same_time_and_branch(self):
+        # Two lines describing one punch. A stamp that differed between them
+        # would be a bug nobody reading only their own language could see.
+        text = notify.compose("OUT", datetime(2026, 8, 14, 17, 6), "DIS Iconic")
+        for line in text.split("\n"):
+            self.assertIn("5:06 PM", line)
+            self.assertIn("DIS Iconic", line)

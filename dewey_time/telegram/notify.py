@@ -30,15 +30,38 @@ from frappe.utils import get_datetime, getdate
 from dewey_time.attendance_engine import rollout
 from dewey_time.telegram import transport
 
+#: Worded identically to the webhook's button, because it opens the same place.
+#: Two names for one destination is two things to learn.
+OPEN_BUTTON_TEXT = "Open my attendance"
+
 LINK_DT = "Telegram Link"
 
 
+#: Khmer first, English under it.
+#:
+#: BILINGUAL RATHER THAN CHOSEN, and the reason is that there is nothing here
+#: worth guessing with. Telegram reports a client language, but that is the
+#: language of someone's PHONE, which on this roster is frequently English for
+#: people who read Khmer. Employee carries no language field. Guessing wrong
+#: sends an unreadable message to the person least able to say so, and this
+#: message is two short lines either way.
+#:
+#: Khmer leads because the English is the line that can be inferred from the
+#: numbers beside it, not the other way round.
+_VERBS = {
+    "IN": ("បានចូល", "Checked in"),
+    "OUT": ("បានចេញ", "Checked out"),
+}
+
+
 def compose(log_type: str, punch_time, branch) -> str:
-    stamp = get_datetime(punch_time).strftime("%H:%M")
-    verb = "Checked out" if str(log_type or "").upper() == "OUT" else "Checked in"
-    if branch:
-        return f"{verb} {stamp} · {branch}"
-    return f"{verb} {stamp}"
+    # Twelve hour, matching the Mini App this message now links into. "17:06"
+    # in the notification and "5:06 PM" one tap later is one event described
+    # two ways.
+    stamp = get_datetime(punch_time).strftime("%-I:%M %p")
+    khmer, english = _VERBS["OUT" if str(log_type or "").upper() == "OUT" else "IN"]
+    tail = f" · {branch}" if branch else ""
+    return f"{khmer} {stamp}{tail}\n{english} {stamp}{tail}"
 
 
 def _link_for(employee: str):
@@ -63,6 +86,35 @@ def _disable_link(link_name: str) -> None:
     frappe.db.set_value(LINK_DT, link_name, "enabled", 0)
 
 
+def _send_with_app_button(chat_id, text: str) -> str:
+    """The check-in message, carrying an inline button into the Mini App.
+
+    This is the message an employee actually receives — several times a day,
+    every working day — and until now it was plain text with no way onward.
+    The only inline button the bot ever sent was on the one-off link
+    confirmation, which scrolls out of the chat and never comes back. So the
+    app sat behind the menu button, which is discoverable only if you already
+    know it is there.
+
+    Falls back to a plain message on ANY failure of the button path, and the
+    fallback matters more than the button: the notification is the product
+    here, and an unset Mini App URL or an older client must cost the employee a
+    convenience, never the message itself.
+    """
+    try:
+        return transport.send_message_with_webapp_button(
+            chat_id,
+            text,
+            button_text=OPEN_BUTTON_TEXT,
+            url=transport.miniapp_url(),
+        )
+    except Exception:
+        frappe.log_error(
+            title="Telegram check-in button unavailable", message=frappe.get_traceback()
+        )
+        return transport.send_message(chat_id, text)
+
+
 def send_checkin_notification(employee: str, checkin_name: str) -> str:
     """Queued job. Returns a short status string for the job log."""
     if not transport.telegram_enabled():
@@ -82,7 +134,7 @@ def send_checkin_notification(employee: str, checkin_name: str) -> str:
     ) != rollout.LIVE:
         return "not-live"
 
-    result = transport.send_message(
+    result = _send_with_app_button(
         link["chat_id"],
         compose(row["log_type"], row["time"], row.get("custom_device_branch")),
     )

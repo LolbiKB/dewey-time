@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { dayFacts, formatTotalWorked, totalWorkedMinutes } from "@/miniapp/miniDay";
+import {
+  dayFacts, formatMinuteOfDay, formatSpan, formatTotalWorked, totalWorkedMinutes,
+} from "@/miniapp/miniDay";
 import type { Day } from "@/types/calendar";
 
 const MON = new Date(2026, 7, 10);
@@ -32,7 +34,7 @@ test("the rostered shift is reported alongside what was actually worked", () => 
   // The comparison is the whole point of showing both: "8h 12m against an
   // 09:00 roster" is a different day from "8h 12m against a 13:00 one".
   const facts = dayFacts(worked("2026-08-10"), MON, FRI);
-  assert.equal(facts.shift, "08:00 – 17:00");
+  assert.equal(facts.shift, "8:00 AM – 5:00 PM");
   assert.equal(facts.shiftMinutes, 540);
 });
 
@@ -45,7 +47,7 @@ test("an overnight roster spans the wrap instead of going negative", () => {
   } as unknown as Day;
   const facts = dayFacts(day, MON, FRI);
   assert.equal(facts.shiftMinutes, 480);
-  assert.equal(facts.shift, "22:00 – 06:00");
+  assert.equal(facts.shift, "10:00 PM – 6:00 AM");
 });
 
 test("leave outranks punches, and names the leave type", () => {
@@ -118,4 +120,57 @@ test("an exact hour drops the minutes rather than saying 0m", () => {
   const facts = [dayFacts(worked("2026-08-10", "08:00:00", "17:00:00"), MON, FRI)];
   // 09:00 minus the observed lunch this fixture has none of.
   assert.match(formatTotalWorked(facts)!, /^\d+h$/);
+});
+
+test("times are 12-hour, matching the punches shown beside them", () => {
+  // Punches read "7:58 AM" (formatCheckinTime), so a roster printed as
+  // "08:00 – 17:00" made one screen speak two clock conventions — and 17:00
+  // is not how anybody here says five o'clock.
+  assert.equal(formatMinuteOfDay(0), "12:00 AM");
+  assert.equal(formatMinuteOfDay(8 * 60), "8:00 AM");
+  assert.equal(formatMinuteOfDay(12 * 60), "12:00 PM");
+  assert.equal(formatMinuteOfDay(17 * 60 + 6), "5:06 PM");
+  assert.equal(formatSpan(8 * 60, 17 * 60), "8:00 AM – 5:00 PM");
+});
+
+test("a span with a missing end is no span at all", () => {
+  // Half a range renders as "8:00 AM – " with nothing after the dash, which
+  // reads as an open-ended shift rather than as missing data.
+  assert.equal(formatSpan(8 * 60, null), null);
+  assert.equal(formatSpan(null, 17 * 60), null);
+  assert.equal(formatMinuteOfDay(null), null);
+  assert.equal(formatMinuteOfDay(undefined), null);
+});
+
+test("the rostered lunch is reported, and only when there is one", () => {
+  // "Worked 8h 11m" against a 9-hour roster looks like an hour unaccounted
+  // for until the break is named.
+  const withLunch = {
+    date: "2026-08-10",
+    shift: {
+      shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00",
+      lunch_start: "12:00:00", lunch_end: "13:00:00",
+    },
+  } as unknown as Day;
+  const facts = dayFacts(withLunch, MON, FRI);
+  assert.equal(facts.lunch, "12:00 PM – 1:00 PM");
+  assert.equal(facts.lunchMinutes, 60);
+
+  const noLunch = {
+    date: "2026-08-15",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "12:00:00" },
+  } as unknown as Day;
+  // A four-hour Saturday has no break, and "Lunch —" reads as one taken away.
+  assert.equal(dayFacts(noLunch, MON, FRI).lunch, null);
+});
+
+test("a zero-length lunch is not a lunch", () => {
+  const day = {
+    date: "2026-08-10",
+    shift: {
+      shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00",
+      lunch_start: "12:00:00", lunch_end: "12:00:00",
+    },
+  } as unknown as Day;
+  assert.equal(dayFacts(day, MON, FRI).lunch, null);
 });

@@ -49,14 +49,14 @@ function workedDay(date: string) {
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string> } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string } = {}) {
   await page.addInitScript(
-    ({ theme, themeParams }) => {
+    ({ theme, themeParams, languageCode }) => {
       const handlers: Record<string, (() => void)[]> = {};
       (window as unknown as { Telegram: unknown }).Telegram = {
         WebApp: {
           initData: "user=%7B%22id%22%3A55501%7D&auth_date=1&hash=deadbeef",
-          initDataUnsafe: { user: { id: 55501 } },
+          initDataUnsafe: { user: { id: 55501, language_code: languageCode } },
           colorScheme: theme ?? "light",
           themeParams: themeParams ?? {},
           safeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
@@ -84,7 +84,7 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
         },
       };
     },
-    { theme: opts.theme, themeParams: opts.themeParams },
+    { theme: opts.theme, themeParams: opts.themeParams, languageCode: opts.languageCode },
   );
 
   // Telegram's real SDK is a third-party CDN script and there is no network
@@ -148,7 +148,11 @@ test("the day tab summarises the day above its timeline", async ({ page }) => {
   await openMiniApp(page);
   const summary = page.getByRole("region", { name: "Summary" });
   await expect(summary).toBeVisible();
-  await expect(summary).toContainText("Rostered 08:00 – 17:00");
+  // Twelve-hour, matching the punches shown beside it.
+  await expect(summary).toContainText("Rostered 8:00 AM – 5:00 PM");
+  // And the break, without which "Worked 8h 11m" against a 9-hour roster
+  // looks like an hour unaccounted for.
+  await expect(summary).toContainText("Lunch 12:00 PM – 1:00 PM");
   await expect(summary).toContainText("In");
   await expect(summary).toContainText("Out");
   await expect(summary).toContainText("Worked");
@@ -215,4 +219,50 @@ test("a Telegram theme's colours reach the app's own surfaces", async ({ page })
     getComputedStyle(document.documentElement).getPropertyValue("--background").trim(),
   );
   expect(bg).toBe("#17212b");
+});
+
+test("the schedule tab reads in 12-hour time and names the break", async ({ page }) => {
+  // This tab showed a bare 24-hour span and a total, so an employee could not
+  // tell whether "8h" already had lunch taken out — the single most asked
+  // question about a roster.
+  await openMiniApp(page);
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+
+  const list = page.getByRole("list");
+  await expect(list).toContainText("8:00 AM – 5:00 PM");
+  await expect(list).toContainText("Lunch 12:00 PM – 1:00 PM");
+  await expect(list).not.toContainText("08:00 – 17:00");
+  await expect(page.getByText("Rostered this week, net of lunch")).toBeVisible();
+});
+
+test("the schedule tab can look forward, because a roster is published ahead", async ({ page }) => {
+  // The Week tab is capped at the current week — attendance has not happened
+  // yet. A roster has, and looking at next week is the main reason to open
+  // this tab at all.
+  await openMiniApp(page);
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Next week" })).toBeEnabled();
+});
+
+test("a Khmer client opens in Khmer, and can switch back", async ({ page }) => {
+  // Telegram's language_code decides the opening language. It comes from
+  // initDataUnsafe — untrusted, and correctly so: nothing is authorised by it,
+  // it only picks which column of a string table is read.
+  await openMiniApp(page, { languageCode: "km" });
+
+  await expect(page.getByRole("button", { name: "ថ្ងៃនេះ", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "កាលវិភាគ", exact: true })).toBeVisible();
+
+  // The toggle is labelled in the language it switches TO: someone stuck in a
+  // language they cannot read needs the way out to be the thing they can read.
+  await page.getByRole("button", { name: "English" }).click();
+  await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
+});
+
+test("an English client is not given a Khmer interface it did not ask for", async ({ page }) => {
+  // Guessing Khmer from a region or a timezone would put an unreadable
+  // interface in front of the people least able to report it.
+  await openMiniApp(page, { languageCode: "en" });
+  await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ភាសាខ្មែរ" })).toBeVisible();
 });

@@ -17,6 +17,8 @@ evidence, internal flag names, grace minutes. None of it is an employee's to
 see, and `build_employee_calendar` says so at its own definition.
 """
 
+from __future__ import annotations
+
 import frappe
 from frappe.utils import date_diff, getdate
 
@@ -109,7 +111,7 @@ def _identity(employee: str) -> dict:
     name they would actually recognise as theirs, and an English transliteration
     they never use is a poor thing to verify an identity against.
     """
-    fields = ["employee_name", "designation"]
+    fields = ["employee_name", "designation", "image"]
     # Installed by dewey_time.setup.custom_fields, but a site mid-migration may
     # not have them yet -- and an unknown column makes the select raise, which
     # would take the whole Mini App down to lose one optional name.
@@ -129,7 +131,34 @@ def _identity(employee: str) -> dict:
         "employee_name": row.get("employee_name"),
         "designation": row.get("designation"),
         "khmer_name": khmer or None,
+        # The Employee's OWN photo — the one HR put on their record, and the
+        # one that appears beside them everywhere else in Dewey Time. The
+        # Telegram avatar is whatever the person chose for Telegram, which is
+        # frequently not a face at all, and it confirms nothing about the
+        # binding: it is the viewer's own picture by definition.
+        #
+        # `_public_image` drops private files rather than shipping a path that
+        # 403s for a Guest. See its own note.
+        "image": _public_image(row.get("image")),
     }
+
+
+def _public_image(url) -> str | None:
+    """An Employee photo URL only if a Guest can actually load it.
+
+    Mini App requests carry no Frappe session -- there is no User for these
+    callers by design -- so a `/private/files/...` path renders as a broken
+    image with a 403 behind it. Returning None instead lets the client fall
+    back to initials, which looks deliberate.
+
+    Anything not a same-origin path is dropped too: this value is written into
+    an <img src>, and the Employee image field is free text a Desk user can
+    put anything into.
+    """
+    url = str(url or "").strip()
+    if not url.startswith("/files/"):
+        return None
+    return url
 
 
 # POST-only, deliberately. Without methods=[...] Frappe also accepts GET, and

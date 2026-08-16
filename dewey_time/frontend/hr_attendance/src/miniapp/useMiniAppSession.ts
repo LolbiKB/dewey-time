@@ -16,6 +16,9 @@ export type MiniCalendar = {
   employee_name?: string | null;
   khmer_name?: string | null;
   designation?: string | null;
+  /** The Employee record's own photo, or null when there is none a Guest
+   *  can load. Never the Telegram avatar. */
+  image?: string | null;
   employee_branch?: string | null;
   days: Day[];
 };
@@ -27,6 +30,16 @@ export type MiniCalendar = {
  * exactly this: it is decoration beside a name the SERVER supplied. Nothing is
  * decided by it. It is never used to identify anyone.
  */
+/**
+ * The client's own language setting.
+ *
+ * From `initDataUnsafe`, which is untrusted — and that is fine here: nothing
+ * is authorised by it, it only picks which column of a string table is read.
+ */
+export function telegramLanguageCode(w: Window): string | undefined {
+  return w?.Telegram?.WebApp?.initDataUnsafe?.user?.language_code;
+}
+
 export function telegramPhotoUrl(w: Window): string | null {
   const url = w?.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
   return typeof url === "string" && url.startsWith("https://") ? url : null;

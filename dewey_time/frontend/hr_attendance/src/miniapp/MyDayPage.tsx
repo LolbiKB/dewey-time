@@ -7,6 +7,7 @@ import { resolveWeekTimelineWindow } from "@/lib/weekTimelineWindow";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { dayFacts, type DayFacts } from "@/miniapp/miniDay";
 import { MiniState } from "@/miniapp/MiniState";
+import { useT } from "@/miniapp/MiniLocale";
 
 /**
  * One labelled number. Three of these are the whole summary.
@@ -47,9 +48,13 @@ const TONE_STYLE: Record<DayFacts["tone"], string> = {
 
 export function DaySummary(props: { facts: DayFacts }) {
   const { facts } = props;
+  const t = useT();
+  const state = facts.tone === "worked"
+    ? t("stateWorked")
+    : facts.noteText ?? (facts.noteKey ? t(facts.noteKey) : "—");
   return (
     <section
-      aria-label="Summary"
+      aria-label={t("summary")}
       className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3"
     >
       <div className="flex items-center justify-between gap-2">
@@ -59,22 +64,32 @@ export function DaySummary(props: { facts: DayFacts }) {
             TONE_STYLE[facts.tone],
           )}
         >
-          {facts.tone === "worked" ? "Worked" : (facts.note ?? "—")}
+          {state}
         </span>
         {facts.shift ? (
           <span className="text-[11px] tabular-nums text-muted-foreground">
-            Rostered {facts.shift}
+            {t("labelRostered")} {facts.shift}
           </span>
         ) : null}
       </div>
+
+      {/* The break, where there is one. Without it "Worked 8h 11m" against a
+          9-hour roster looks like an hour unaccounted for, when it is lunch —
+          the most common reason someone reads this screen at all. */}
+      {facts.lunch ? (
+        <p className="text-[11px] tabular-nums text-muted-foreground">
+          {t("labelLunch")} {facts.lunch}
+          <span className="ml-1">· {t("lunchNotCounted")}</span>
+        </p>
+      ) : null}
       {/* Only for a day with punches. On a rest day three em dashes under three
           headings is a form nobody filled in, where the badge above has
           already given the complete answer. */}
       {facts.tone === "worked" ? (
         <div className="flex gap-3">
-          <Stat label="In" value={facts.firstIn} />
-          <Stat label="Out" value={facts.lastOut} />
-          <Stat label="Worked" value={facts.worked} accent />
+          <Stat label={t("labelIn")} value={facts.firstIn} />
+          <Stat label={t("labelOut")} value={facts.lastOut} />
+          <Stat label={t("labelWorked")} value={facts.worked} accent />
         </div>
       ) : null}
     </section>
@@ -82,13 +97,14 @@ export function DaySummary(props: { facts: DayFacts }) {
 }
 
 export function MyDayPage(props: { today?: Date; date?: Date }) {
+  const t = useT();
   const today = props.today ?? new Date();
   const date = props.date ?? today;
   const key = format(date, "yyyy-MM-dd");
   const query = useMiniAppCalendar(key, key);
 
-  if (query.isLoading) return <MiniState>Loading your day…</MiniState>;
-  if (query.isError) return <MiniState>Couldn't load your day. Try again in a moment.</MiniState>;
+  if (query.isLoading) return <MiniState>{t("loadingDay")}</MiniState>;
+  if (query.isError) return <MiniState>{t("errorDay")}</MiniState>;
 
   const byDate = daysByDate(query.data);
   const info = byDate.get(key);
@@ -104,7 +120,7 @@ export function MyDayPage(props: { today?: Date; date?: Date }) {
     <div className="flex h-full min-h-0 flex-col gap-3 p-3">
       <header className="px-1">
         <h1 className="text-base font-semibold text-foreground">
-          {isSameDay(date, today) ? "Today" : format(date, "EEEE")}
+          {isSameDay(date, today) ? t("tabToday") : format(date, "EEEE")}
           <span className="ml-2 text-sm font-normal text-muted-foreground">
             {format(date, "d MMMM")}
           </span>

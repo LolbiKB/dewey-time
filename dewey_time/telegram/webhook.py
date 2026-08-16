@@ -22,9 +22,25 @@ from dewey_time.telegram import binding, transport
 
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
-LINKED_REPLY = "You're linked. You'll get a message here when you check in or out."
-LINK_FAILED_REPLY = "That link didn't work. Please ask HR for a new one."
-NEEDS_TOKEN_REPLY = "To connect your account, use the link or QR code HR gave you."
+# Khmer first, English under it, for the reason notify.compose gives: the
+# language Telegram reports is the language of someone's PHONE, and guessing
+# wrong sends an unreadable message to the person least able to report it.
+# These three are also the messages most likely to arrive when something has
+# gone wrong, which is the worst moment to be unreadable.
+LINKED_REPLY = (
+    "អ្នកបានភ្ជាប់គណនីរួចរាល់។ យើងនឹងផ្ញើសារនៅពេលអ្នកចូល ឬចេញ។\n"
+    "You're linked. You'll get a message here when you check in or out."
+)
+LINK_FAILED_REPLY = (
+    "តំណនេះមិនដំណើរការទេ។ សូមសុំតំណថ្មីពីផ្នែកធនធានមនុស្ស។\n"
+    "That link didn't work. Please ask HR for a new one."
+)
+NEEDS_TOKEN_REPLY = (
+    "ដើម្បីភ្ជាប់គណនី សូមប្រើតំណ ឬ QR code ដែលផ្នែកធនធានមនុស្សបានផ្ដល់ជូន។\n"
+    "To connect your account, use the link or QR code HR gave you."
+)
+# The button label stays English-only: Telegram caps inline button text, and a
+# two-language label wraps or truncates rather than reading as either.
 OPEN_BUTTON_TEXT = "Open my attendance"
 
 

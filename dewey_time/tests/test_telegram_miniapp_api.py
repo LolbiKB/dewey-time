@@ -122,7 +122,7 @@ class TestProjection(unittest.TestCase):
         self.assertEqual(
             set(self._narrowed()),
             {"employee", "employee_name", "khmer_name", "designation",
-             "employee_branch", "days"},
+             "image", "employee_branch", "days"},
         )
 
     def test_the_projection_itself_exposes_no_identity(self):
@@ -246,3 +246,33 @@ class TestRange(unittest.TestCase):
                           return_value={"employee": "E", "days": []}) as build:
             miniapp_api.get_my_calendar("d", "2026-06-01", "2026-08-02")  # 62 days
         build.assert_called_once()
+
+
+class TestEmployeePhoto(unittest.TestCase):
+    """The avatar is the Employee's own photo, and only when a Guest can load it."""
+
+    def test_a_public_file_is_kept(self):
+        self.assertEqual(miniapp_api._public_image("/files/dara.jpg"), "/files/dara.jpg")
+
+    def test_a_private_file_is_dropped_rather_than_shipped_broken(self):
+        # Mini App requests carry no Frappe session by design, so a private
+        # path renders as a broken image with a 403 behind it. None lets the
+        # client fall back to initials, which looks deliberate.
+        self.assertIsNone(miniapp_api._public_image("/private/files/dara.jpg"))
+
+    def test_an_absolute_or_foreign_url_is_dropped(self):
+        # The Employee image field is free text a Desk user can put anything
+        # into, and this value lands in an <img src>.
+        for hostile in (
+            "https://evil.example/x.jpg",
+            "//evil.example/x.jpg",
+            "javascript:alert(1)",
+            "data:image/svg+xml;base64,AAAA",
+        ):
+            with self.subTest(url=hostile):
+                self.assertIsNone(miniapp_api._public_image(hostile))
+
+    def test_nothing_on_the_record_is_nothing_to_show(self):
+        for empty in (None, "", "   "):
+            with self.subTest(value=repr(empty)):
+                self.assertIsNone(miniapp_api._public_image(empty))
