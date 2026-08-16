@@ -137,13 +137,15 @@ const EMPLOYEE = {
 // employees spread across weekly-hours buckets (incl. one unresolvable 0-minute row).
 const COVERAGE = {
   unassigned: [
-    { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null },
-    { id: "EMP-118", employee_name: "Priya Nair", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null },
+    { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, telegram: "none" },
+    { id: "EMP-118", employee_name: "Priya Nair", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null, telegram: "id_on_file" },
+    // No `telegram` at all, on purpose: the backend omits it when its lookup
+    // fails, and this row is what keeps the "—" branch reachable end to end.
     { id: "EMP-131", employee_name: "Tom O'Brien", department: "Retail", employment_type: "", title: "Sales Associate", image: null },
   ],
   assigned: [
-    { id: "EMP-001", employee_name: "Jane Doe", ...KHMER["EMP-001"], department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
-    { id: "EMP-002", employee_name: "Aaron Wells", ...KHMER["EMP-002"], department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400 },
+    { id: "EMP-001", employee_name: "Jane Doe", ...KHMER["EMP-001"], department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400, telegram: "linked" },
+    { id: "EMP-002", employee_name: "Aaron Wells", ...KHMER["EMP-002"], department: "Retail", employment_type: "Full-time", title: "Cashier", image: null, weekly_minutes: 2400, telegram: "none" },
     { id: "EMP-003", employee_name: "Bianca Cruz", department: "Warehouse", employment_type: "Full-time", title: "Lead", image: null, weekly_minutes: 2400 },
     { id: "EMP-005", employee_name: "Derek Hale", ...KHMER["EMP-005"], department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 2400 },
     { id: "EMP-007", employee_name: "Elena Park", department: "Retail", employment_type: "Full-time", title: "Supervisor", image: null, weekly_minutes: 2250 },
@@ -532,6 +534,12 @@ export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}
       } satisfies CalendarPayload;
     } else if (p.includes("get_schedule_coverage")) {
       message = overrides.coverage ?? COVERAGE;
+    } else if (p.includes("create_link_invite")) {
+      message = {
+        employee: "EMP-002",
+        url: "https://t.me/dewey_time_bot?start=e2etoken",
+        expires_at: "2026-08-17 12:00:00",
+      };
     } else if (p.includes("get_enrollment_report")) {
       message = overrides.enrollment ?? enrollmentPayload();
     } else if (p.includes("get_flag_queue")) {

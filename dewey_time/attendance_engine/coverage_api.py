@@ -31,8 +31,17 @@ from dewey_time.attendance_engine.schedule_resolver import week_pattern_from_ssa
 #
 # v2: employee rows (both assigned and unassigned) gained
 # custom_khmer_last_name / custom_khmer_first_name.
-_CACHE_KEY = "schedule_coverage:v2"
+# v3: employee rows gained `telegram`.
+_CACHE_KEY = "schedule_coverage:v3"
 _CACHE_TTL_SECONDS = 120
+
+# The Employee column a prior Telegram notifier left behind, holding a numeric
+# Telegram user id. THIS APP DOES NOT INSTALL IT -- setup/custom_fields.py owns
+# no such field -- so every read of it is guarded by has_column, the same way
+# hr_calendar guards the Khmer pair. A site without it simply never reports
+# `id_on_file`, which is the truth there: there is no id on file because there
+# is nowhere to put one.
+_TELEGRAM_ID_FIELD = "custom_telegram_chat_id"
 
 # Upper bound on active employees scanned for coverage. Higher than the calendar
 # picker's 500 (this is meant to be an exhaustive roster); `truncated` flags when hit.
@@ -58,6 +67,74 @@ def _employee_base(row: dict) -> dict:
     return {key: row.get(key) for key in _EMPLOYEE_FIELDS}
 
 
+def _telegram_status_by_employee(employee_ids: list[str]) -> dict[str, str]:
+    """employee id -> "linked" | "id_on_file" | "none", for the register's column.
+
+    Three states because HR does three different things with them: a linked
+    employee is done, one with an id on file has been recorded by some earlier
+    notifier and needs no link once auto-binding lands, and one with neither
+    needs a link issued today. Collapsing the middle into "not linked" would
+    hide the only part of the rollout that is already paid for.
+
+    "linked" wins over "id_on_file" when both are true. The link is the fact
+    that matters -- an id on file is a lead, a link is a binding -- and a row
+    that reported the lead while the binding already existed would be a
+    standing invitation to redo work that is done.
+
+    Returns {} on any failure, which the caller turns into `telegram: None` --
+    the register's own rule that a fact no feed vouched for is silence, never a
+    finding. An empty dict is also what a site with no Telegram Link doctype
+    yields, so a bench mid-migration degrades to a blank column rather than a
+    roster of false "needs a link".
+    """
+    if not employee_ids:
+        return {}
+
+    try:
+        linked = {
+            row["employee"]
+            for row in frappe.get_all(
+                "Telegram Link",
+                filters={"employee": ["in", employee_ids], "enabled": 1},
+                fields=["employee"],
+            )
+            or []
+        }
+    except Exception:
+        frappe.log_error(title="schedule coverage: telegram link lookup failed")
+        return {}
+
+    with_id: set[str] = set()
+    if frappe.db.has_column("Employee", _TELEGRAM_ID_FIELD):
+        try:
+            with_id = {
+                row["name"]
+                for row in frappe.get_all(
+                    "Employee",
+                    filters={"name": ["in", employee_ids]},
+                    fields=["name", _TELEGRAM_ID_FIELD],
+                )
+                or []
+                # Filtered in Python rather than in the query: the column is
+                # free-text Data, so "empty" is both NULL and "", and expressing
+                # that as a Frappe filter is more fragile than reading it here.
+                if str(row.get(_TELEGRAM_ID_FIELD) or "").strip()
+            }
+        except Exception:
+            frappe.log_error(title="schedule coverage: telegram id lookup failed")
+            with_id = set()
+
+    status = {}
+    for employee in employee_ids:
+        if employee in linked:
+            status[employee] = "linked"
+        elif employee in with_id:
+            status[employee] = "id_on_file"
+        else:
+            status[employee] = "none"
+    return status
+
+
 def _employee_weekly_minutes(employee: str) -> int:
     """Resolved scheduled minutes/week for an assigned employee; 0 if unresolvable."""
     try:
@@ -70,11 +147,15 @@ def _employee_weekly_minutes(employee: str) -> int:
 
 def _build_coverage_payload() -> dict:
     rows = _list_calendar_employee_rows(None, include_all=True, limit=COVERAGE_EMPLOYEE_LIMIT)
+    telegram = _telegram_status_by_employee([row["id"] for row in rows])
 
     unassigned: list[dict] = []
     assigned: list[dict] = []
     for row in rows:
-        base = _employee_base(row)
+        # `.get`, so a failed lookup lands as None on every row rather than
+        # KeyError-ing the whole payload -- one absent column must not take the
+        # register down.
+        base = {**_employee_base(row), "telegram": telegram.get(row["id"])}
         if row.get("has_shift_assignment"):
             assigned.append({**base, "weekly_minutes": _employee_weekly_minutes(row["id"])})
         else:

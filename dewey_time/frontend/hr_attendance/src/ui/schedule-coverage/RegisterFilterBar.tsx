@@ -26,6 +26,7 @@ import {
   BIOMETRIC_LABELS,
   registerFacets,
   SCHEDULE_LABELS,
+  TELEGRAM_LABELS,
   type FeedHealth,
   type RegisterFilters,
   type RegisterRow,
@@ -53,6 +54,18 @@ const BIOMETRIC_OPTIONS: { value: NonNullable<RegisterFilters["biometric"]>; lab
   { value: "enrolled_not_punching", label: BIOMETRIC_LABELS.enrolled_not_punching },
   { value: "none", label: BIOMETRIC_LABELS.none },
   { value: "still_enrolled", label: BIOMETRIC_LABELS.still_enrolled },
+];
+
+/**
+ * "Not linked" first. Every other facet on this bar lists its options in the
+ * enum's own order, but this one exists to find work, and the work is the
+ * unlinked — at rollout that is most of the roster, and it is the option a
+ * reader opening this menu is looking for.
+ */
+const TELEGRAM_OPTIONS: { value: NonNullable<RegisterFilters["telegram"]>; label: string }[] = [
+  { value: "none", label: TELEGRAM_LABELS.none },
+  { value: "id_on_file", label: TELEGRAM_LABELS.id_on_file },
+  { value: "linked", label: TELEGRAM_LABELS.linked },
 ];
 
 /**
@@ -279,6 +292,19 @@ export function RegisterFilterBar({
           onChange={(biometric) => change({ biometric })}
         />
       ) : null}
+
+      {/* Gated on the SCHEDULE feed, not the biometric one: the coverage
+          endpoint resolves the Telegram state, the bridge knows nothing about
+          it. Same gate as the Schedule facet above, for the same reason. */}
+      {feeds.schedule ? (
+        <SingleFacet
+          label="Telegram"
+          anyLabel="Any Telegram state"
+          value={filters.telegram}
+          options={TELEGRAM_OPTIONS}
+          onChange={(telegram) => change({ telegram })}
+        />
+      ) : null}
     </div>
   );
 }
@@ -451,9 +477,23 @@ export function SingleFacet<T extends string>(props: {
       >
         {/* Explicit children. Radix fills SelectValue from the mounted
             SelectItem, which lives in a portal, so with children omitted the
-            trigger renders blank until the list has been opened once. */}
+            trigger renders blank until the list has been opened once.
+
+            ": Any" is dropped when nothing is chosen. It is the resting state
+            of every one of these, so it was four repetitions of "this filter
+            is doing nothing" — and it cost the row it was written on: measured
+            at 1280, the four ": Any" suffixes are ~140px, and adding a sixth
+            facet (Telegram) pushed Export CSV onto a second toolbar line,
+            taking the last employee below the fold. This page dropped its own
+            PageHeader to buy that line back; spending it on the word "Any" is
+            not the trade it made.
+
+            A CHOSEN value still shows, because that one is load-bearing — a
+            reader must be able to see what they have narrowed to without
+            opening the menu. The accessible name is unchanged either way and
+            still carries the state, per the note above. */}
         <SelectValue>
-          {props.label}: {selected?.label ?? "Any"}
+          {selected ? `${props.label}: ${selected.label}` : props.label}
         </SelectValue>
       </SelectTrigger>
       <SelectContent>

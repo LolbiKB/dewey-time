@@ -14,6 +14,8 @@ import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { useCoverageRegister } from "@/hooks/useCoverageRegister";
+import { useTelegramInvite } from "@/hooks/useTelegramInvite";
+import { TelegramLinkDialog } from "@/ui/TelegramLinkDialog";
 import {
   applyFilterChange,
   columnIdForSort,
@@ -49,6 +51,7 @@ export type CoverageRegisterViewProps = {
   onRetry: () => void;
   onOpen: (row: RegisterRow) => void;
   onAddSchedule: (row: RegisterRow) => void;
+  onIssueLink: (row: RegisterRow) => void;
   /**
    * Under 768px, where dewey-ui's toolbar row runs out of room.
    *
@@ -83,14 +86,15 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
     onFiltersChange,
     onOpen,
     onAddSchedule,
+    onIssueLink,
   } = props;
 
   // Memoised, and fed only stable callbacks: registerColumns allocates a new
   // array and new per-row closures on every call, and TanStack resets column
   // state whenever the `columns` reference changes.
   const columns = useMemo(
-    () => registerColumns(onOpen, onAddSchedule),
-    [onOpen, onAddSchedule],
+    () => registerColumns(onOpen, onAddSchedule, onIssueLink),
+    [onOpen, onAddSchedule, onIssueLink],
   );
 
   // Columns are REMOVED when their feed is absent, never blanked — an empty
@@ -581,6 +585,19 @@ export function CoverageRegisterPage() {
     [navigate],
   );
 
+  // The one control on this page that WRITES. Everything else navigates or
+  // narrows; this mints a credential, so it stays in the routed component
+  // beside the dialog that displays it rather than travelling into the view.
+  const telegramInvite = useTelegramInvite();
+  const [invitee, setInvitee] = useState<string | null>(null);
+  const handleIssueLink = useCallback(
+    (row: RegisterRow) => {
+      setInvitee(row.employee_name);
+      telegramInvite.issue(row.id);
+    },
+    [telegramInvite],
+  );
+
   if (sessionLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -591,19 +608,30 @@ export function CoverageRegisterPage() {
   if (!hrStaff) return <Navigate to="/hr-attendance" replace />;
 
   return (
-    <CoverageRegisterView
-      rows={rows}
-      feeds={feeds}
-      alert={alert}
-      truncated={truncated}
-      isLoading={isLoading}
-      bothFailed={bothFailed}
-      filters={filters}
-      narrow={narrow}
-      onFiltersChange={setFilters}
-      onRetry={refresh}
-      onOpen={handleOpen}
-      onAddSchedule={handleAddSchedule}
-    />
+    <>
+      <CoverageRegisterView
+        rows={rows}
+        feeds={feeds}
+        alert={alert}
+        truncated={truncated}
+        isLoading={isLoading}
+        bothFailed={bothFailed}
+        filters={filters}
+        narrow={narrow}
+        onFiltersChange={setFilters}
+        onRetry={refresh}
+        onOpen={handleOpen}
+        onAddSchedule={handleAddSchedule}
+        onIssueLink={handleIssueLink}
+      />
+      <TelegramLinkDialog
+        open={telegramInvite.open}
+        onOpenChange={telegramInvite.setOpen}
+        employeeName={invitee}
+        invite={telegramInvite.invite}
+        error={telegramInvite.error}
+        isLoading={telegramInvite.isLoading}
+      />
+    </>
   );
 }

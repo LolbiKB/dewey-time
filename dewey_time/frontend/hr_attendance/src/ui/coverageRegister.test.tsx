@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Command, CommandList } from "@lolbikb/dewey-ui";
 import { getCoreRowModel, useReactTable, type SortingState } from "@tanstack/react-table";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { AlertDot } from "@/ui/schedule-coverage/AlertDot";
 import { registerColumns } from "@/ui/schedule-coverage/registerColumns";
 import {
@@ -62,6 +63,9 @@ const BASE_ROW: RegisterRow = {
   biometric: "enrolled",
   fingerprint_count: 2,
   days_since_relieving: null,
+  // Unlinked is the ordinary row during the rollout; the Telegram tests
+  // override it.
+  telegram: "none",
   // Both feeds know this employee — the ordinary row.
   sources: { schedule: true, biometric: true },
 };
@@ -84,12 +88,13 @@ function renderRow(
   row: RegisterRow,
   onOpen: (row: RegisterRow) => void = noop,
   onAddSchedule: (row: RegisterRow) => void = noop,
+  onIssueLink: (row: RegisterRow) => void = noop,
 ): { html: Record<string, string>; elements: Record<string, ReactNode>; markup: string } {
   const elements: Record<string, ReactNode> = {};
   function Harness() {
     const table = useReactTable({
       data: [row],
-      columns: registerColumns(onOpen, onAddSchedule),
+      columns: registerColumns(onOpen, onAddSchedule, onIssueLink),
       getCoreRowModel: getCoreRowModel(),
     });
     const tableRow = table.getRowModel().rows[0];
@@ -112,7 +117,16 @@ function renderRow(
       </table>
     );
   }
-  const fullHtml = renderToStaticMarkup(<Harness />);
+  // TooltipProvider, because the Telegram cell's button carries an AppTooltip
+  // and Radix's Tooltip THROWS outside a provider rather than degrading. The
+  // app has one at the root (main.tsx:22), so this mirrors the real tree — and
+  // without it every assertion in this file would fail at once, which is how
+  // the same omission was caught in the Mini App's Week tab.
+  const fullHtml = renderToStaticMarkup(
+    <TooltipProvider>
+      <Harness />
+    </TooltipProvider>,
+  );
   const html: Record<string, string> = {};
   for (const match of fullHtml.matchAll(/<td data-col="([^"]+)">(.*?)<\/td>/g)) {
     html[match[1]] = match[2];
@@ -196,7 +210,7 @@ function renderHeader(columnId: string, sorting: SortingState = []) {
   function Harness() {
     const table = useReactTable({
       data: [BASE_ROW],
-      columns: registerColumns(noop, noop),
+      columns: registerColumns(noop, noop, noop),
       getCoreRowModel: getCoreRowModel(),
       manualSorting: true,
       state: { sorting },
@@ -384,7 +398,7 @@ test("the hit area is a padded button around a same-size 12px dot", () => {
 
 test("every column id is one visibleColumnIds knows about", () => {
   // A typo here silently makes a column permanently invisible.
-  const ids = registerColumns(noop, noop).map((c) => c.id);
+  const ids = registerColumns(noop, noop, noop).map((c) => c.id);
   const known = visibleColumnIds({ schedule: true, biometric: true });
   for (const id of ids) assert.ok(known.includes(id!), `unknown column id: ${id}`);
   for (const id of known) assert.ok(ids.includes(id), `visibleColumnIds names a column that does not exist: ${id}`);
@@ -960,21 +974,27 @@ function searchBoxName(html: string): string | null {
 }
 
 function renderView(over: Partial<CoverageRegisterViewProps> = {}): string {
+  // Wrapped for the same reason renderRow is: the Telegram cell's button
+  // carries an AppTooltip, and Radix's Tooltip throws outside a provider. The
+  // app puts one at the root (main.tsx:22).
   return renderToStaticMarkup(
-    <CoverageRegisterView
-      rows={[BASE_ROW]}
-      feeds={HEALTHY_FEEDS}
-      alert={CLEAR_ALERT}
-      truncated={false}
-      isLoading={false}
-      bothFailed={false}
-      filters={{}}
-      onFiltersChange={noop}
-      onRetry={noop}
-      onOpen={noop}
-      onAddSchedule={noop}
-      {...over}
-    />,
+    <TooltipProvider>
+      <CoverageRegisterView
+        rows={[BASE_ROW]}
+        feeds={HEALTHY_FEEDS}
+        alert={CLEAR_ALERT}
+        truncated={false}
+        isLoading={false}
+        bothFailed={false}
+        filters={{}}
+        onFiltersChange={noop}
+        onRetry={noop}
+        onOpen={noop}
+        onAddSchedule={noop}
+        onIssueLink={noop}
+        {...over}
+      />
+    </TooltipProvider>,
   );
 }
 
@@ -1109,18 +1129,20 @@ test("a healthy pair of feeds shows every column", () => {
   // Without this the test above passes just as well against a table that never
   // renders any column at all.
   const html = renderView();
-  const labelled = ["Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric"];
+  const labelled = [
+    "Employee", "Branch", "Dept", "Status", "Schedule", "Hrs/wk", "Biometric", "Telegram",
+  ];
   for (const header of labelled) {
     assert.ok(html.includes(`>${header}<`), `expected the ${header} column`);
   }
-  // And EIGHT columns in total — the seven above plus `action`, whose header is
+  // And NINE columns in total — the eight above plus `action`, whose header is
   // deliberately empty. Counted, not implied: the loop above is satisfied by a
-  // table that has quietly grown a ninth column, and this test is the one a
+  // table that has quietly grown a tenth column, and this test is the one a
   // reader will look at to find out what the register's shape is.
   assert.equal(
     html.split('data-slot="table-head"').length - 1,
     labelled.length + 1,
-    "seven labelled columns and the unlabelled action column, and nothing else",
+    "eight labelled columns and the unlabelled action column, and nothing else",
   );
   assert.doesNotMatch(html, />Prints</, "the print count lives inside the biometric cell now");
   assert.doesNotMatch(html, /Biometric feed unavailable/, "no outage banner on a healthy load");
@@ -1479,9 +1501,24 @@ function facetName(html: string, label: string): string | null {
   return html.match(new RegExp(`aria-label="(${label} filter[^"]*)"`))?.[1] ?? null;
 }
 
-/** The single-select triggers render "Label: value" as their whole content. */
+/** A single-select trigger's visible text, or null when the facet is absent. */
+function selectText(html: string, label: string): string | null {
+  const all = [...html.matchAll(/data-slot="select-value"[^>]*>([^<]*)</g)].map((m) => m[1]);
+  return all.find((text) => text === label || text.startsWith(`${label}: `)) ?? null;
+}
+
+/**
+ * Which value a single-select facet is showing — "Any" when it is showing none.
+ *
+ * The trigger renders its label ALONE at rest and "Label: value" once something
+ * is chosen, so "Any" is no longer a string on screen; it is the absence of a
+ * suffix. Every caller below asks the same question it always did, and the one
+ * test that cares about the wording itself asserts the text directly.
+ */
 function selectValue(html: string, label: string): string | null {
-  return html.match(new RegExp(`data-slot="select-value"[^>]*>${label}: ([^<]*)<`))?.[1] ?? null;
+  const text = selectText(html, label);
+  if (text === null) return null;
+  return text === label ? "Any" : text.slice(label.length + 2);
 }
 
 test("each single select says what it filters, not only what it is set to", () => {
@@ -2253,4 +2290,148 @@ test("an export that would match nobody says so before it is confirmed", () => {
   const html = renderSummary({ rows: [], rosterSize: 14 });
   assert.match(html, /0 employees/);
   assert.match(html, /header row and nothing else/);
+});
+
+// ---------------------------------------------------------------------------
+// The Telegram column
+// ---------------------------------------------------------------------------
+
+/** The Telegram cell's "Issue link" button props, or null when it draws none. */
+function issueLinkButton(row: RegisterRow) {
+  const { elements } = renderRow(row);
+  return findProps<{ onClick?: () => void; "aria-label"?: string }>(
+    elements.telegram,
+    (props) => typeof props["aria-label"] === "string"
+      && props["aria-label"].startsWith("Issue a Telegram link"),
+  );
+}
+
+test("each Telegram state renders its own badge wording", () => {
+  // Exhaustive on purpose: an unhandled state renders an empty badge, which
+  // reads as "linked" to nobody and as a rendering bug to everybody.
+  const seen = (["linked", "id_on_file", "none"] as const).map(
+    (telegram) => renderRow({ ...BASE_ROW, telegram }).html.telegram,
+  );
+  assert.match(seen[0], />Linked</);
+  assert.match(seen[1], />ID on file</);
+  assert.match(seen[2], />Not linked</);
+});
+
+test("an unknown Telegram state is an em dash, not an empty cell", () => {
+  // Matches every other column on this page: no fact reads as "—", never as
+  // blank space that looks like a rendering failure.
+  assert.match(renderRow({ ...BASE_ROW, telegram: null }).html.telegram, /—/);
+});
+
+test("a linked employee gets no Issue link button", () => {
+  // Not merely redundant. Issuing a fresh link for someone already bound mints
+  // a live credential that rebinds their record to whoever opens it.
+  assert.equal(issueLinkButton({ ...BASE_ROW, telegram: "linked" }), null);
+});
+
+test("an unlinked employee gets an Issue link button wired to the row", () => {
+  for (const telegram of ["none", "id_on_file"] as const) {
+    const row = { ...BASE_ROW, telegram };
+    let issued: RegisterRow | null = null;
+    const { elements } = renderRow(row, noop, noop, (r) => { issued = r; });
+    const button = findProps<{ onClick?: () => void; "aria-label"?: string }>(
+      elements.telegram,
+      (props) => typeof props["aria-label"] === "string"
+        && props["aria-label"].startsWith("Issue a Telegram link"),
+    );
+    assert.ok(button, `${telegram} must offer a link`);
+    button.onClick?.();
+    assert.equal(issued, row, `${telegram} must pass its own row`);
+  }
+});
+
+test("the Issue link button names the employee it would issue for", () => {
+  // A page of buttons all called "Issue link" gives a screen-reader user
+  // nothing to choose between, and what is being chosen is which employee
+  // receives a credential.
+  const button = issueLinkButton({ ...BASE_ROW, telegram: "none" });
+  assert.equal(button?.["aria-label"], "Issue a Telegram link for Amara Okafor");
+});
+
+test("nothing in the Telegram cell is drawn as destructive", () => {
+  // Unlinked is a rollout gap, not a coverage failure — the person still
+  // clocks in on the same device. Red here would compete with the two states
+  // that DO mean someone cannot be tracked.
+  //
+  // Keyed on `bg-destructive`, the VARIANT's own background, not on the bare
+  // word: dewey-ui's badge base class carries `aria-invalid:ring-destructive`
+  // whatever the variant, so a naive /destructive/ match fails on every badge
+  // ever rendered — including the green one.
+  const DESTRUCTIVE = /bg-destructive/;
+
+  // Direction first, so this test cannot quietly become vacuous if dewey-ui
+  // renames the class: the biometric column DOES draw one, and if that stops
+  // matching then the assertions below are proving nothing.
+  assert.match(
+    renderRow({ ...BASE_ROW, biometric: "none" }).html.biometric,
+    DESTRUCTIVE,
+    "the biometric column still draws a destructive badge — if not, this marker is stale",
+  );
+
+  for (const telegram of ["linked", "id_on_file", "none"] as const) {
+    assert.doesNotMatch(
+      renderRow({ ...BASE_ROW, telegram }).html.telegram,
+      DESTRUCTIVE,
+      `${telegram} must not render as a destructive badge`,
+    );
+  }
+});
+
+test("the Telegram facet is offered only while the coverage feed is up", () => {
+  // Gated on the SCHEDULE feed: the coverage endpoint resolves this state, so
+  // a facet offered during a coverage outage would filter on a column that is
+  // no longer on screen.
+  const up = renderView({ feeds: { schedule: true, biometric: true } });
+  assert.match(up, /Any Telegram state|Telegram/);
+  const down = renderView({
+    feeds: { schedule: false, biometric: true },
+    rows: [{ ...BASE_ROW, sources: { schedule: false, biometric: true } }],
+  });
+  assert.doesNotMatch(down, />Telegram</, "the column and its facet go together");
+});
+
+test("a facet at rest shows its label alone — no \": Any\" suffix", () => {
+  // ": Any" was four repetitions of "this filter is doing nothing", and it cost
+  // the row it was written on: measured at 1280, the suffixes are ~140px, and a
+  // sixth facet pushed Export CSV onto a second toolbar line. The register
+  // dropped its own PageHeader to buy that line.
+  const html = renderBar();
+  for (const label of ["Status", "Schedule", "Biometric", "Telegram"]) {
+    assert.equal(selectText(html, label), label, `${label} must render bare at rest`);
+  }
+  assert.doesNotMatch(html, /: Any</, "no trigger may still be writing \": Any\"");
+});
+
+test("a facet that IS narrowing keeps its value on its face", () => {
+  // The direction that matters. Hiding the resting state is free; hiding a
+  // CHOSEN one would mean a reader could not see what they had narrowed to
+  // without opening each menu — and a forgotten filter is this page's own
+  // named failure mode (see describeRegisterFilters).
+  assert.equal(
+    selectText(renderBar({ filters: { telegram: "none" } }), "Telegram"),
+    "Telegram: Not linked",
+  );
+  assert.equal(
+    selectText(renderBar({ filters: { status: "Left" } }), "Status"),
+    "Status: Left",
+  );
+});
+
+test("the Telegram facet goes with the coverage feed, not the biometric one", () => {
+  // Its state is resolved by the coverage endpoint, so it must disappear with
+  // Schedule and survive a bridge outage — offering a filter over a column the
+  // page has blanked invites the reader to narrow to nobody.
+  assert.equal(
+    selectValue(renderBar({ feeds: { schedule: true, biometric: false } }), "Telegram"),
+    "Any",
+  );
+  assert.equal(
+    selectValue(renderBar({ feeds: { schedule: false, biometric: true } }), "Telegram"),
+    null,
+  );
 });
