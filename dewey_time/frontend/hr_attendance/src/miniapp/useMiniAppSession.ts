@@ -6,8 +6,31 @@ import type { Day } from "@/types/calendar";
 export const MISSING_INIT_DATA = "";
 
 /** The narrowed payload get_my_calendar returns. A structural subset of `Day`,
- *  which is why the HR timeline components render it unchanged. */
-export type MiniCalendar = { employee: string; days: Day[] };
+ *  which is why the HR timeline components render it unchanged.
+ *
+ *  The identity fields are nullable by contract, not by oversight: designation
+ *  and branch are unset for a great many employees, and the Khmer pair is a
+ *  custom field the backend reads behind a has_column check. */
+export type MiniCalendar = {
+  employee: string;
+  employee_name?: string | null;
+  khmer_name?: string | null;
+  designation?: string | null;
+  employee_branch?: string | null;
+  days: Day[];
+};
+
+/**
+ * The viewer's Telegram avatar, if the client offered one.
+ *
+ * From `initDataUnsafe`, which is explicitly untrusted — and that is fine for
+ * exactly this: it is decoration beside a name the SERVER supplied. Nothing is
+ * decided by it. It is never used to identify anyone.
+ */
+export function telegramPhotoUrl(w: Window): string | null {
+  const url = w?.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
+  return typeof url === "string" && url.startsWith("https://") ? url : null;
+}
 
 /**
  * Only the SDK's copy of initData is trusted.
