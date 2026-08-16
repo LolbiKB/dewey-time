@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  addToHomeScreen,
   applyTelegramPalette,
+  atLeast,
+  homeScreenStatus,
+  loadLastTab,
+  onResume,
+  openHaptic,
+  saveLastTab,
   applyTheme,
   bindBackButton,
   bottomInset,
@@ -234,4 +241,111 @@ test("every event that can resize the sheet is subscribed, and all are released"
   assert.deepEqual(on, ["viewportChanged", "safeAreaChanged", "contentSafeAreaChanged"]);
   teardown();
   assert.deepEqual(off, on, "a listener left attached outlives the component");
+});
+
+// ---------------------------------------------------------------------------
+// Deeper Telegram API use — all of it optional on older clients
+// ---------------------------------------------------------------------------
+
+test("none of the newer APIs throw on a client that has none of them", () => {
+  // These span Bot API 6.9 to 8.0 and run on every launch. A factory-floor
+  // phone on an old Telegram must degrade, not white-screen.
+  const bare = {} as Window;
+  const doc = { addEventListener() {}, removeEventListener() {} } as unknown as Document;
+  assert.doesNotThrow(() => onResume(bare, doc, () => {})());
+  assert.doesNotThrow(() => saveLastTab(bare, "week"));
+  assert.doesNotThrow(() => addToHomeScreen(bare));
+  assert.doesNotThrow(() => openHaptic(bare));
+  assert.equal(atLeast(bare, "8.0"), false, "a client that cannot answer is too old");
+});
+
+test("a resume refetches, from Telegram's event and from visibility alike", async () => {
+  // A Mini App is minimised rather than closed and comes back holding whatever
+  // it loaded — for attendance that is actively wrong.
+  let fired = 0;
+  const handlers: Record<string, (() => void)[]> = {};
+  const listeners: Record<string, (() => void)[]> = {};
+  const w = { Telegram: { WebApp: {
+    onEvent: (e: string, h: () => void) => { (handlers[e] ||= []).push(h); },
+    offEvent: (e: string, h: () => void) => {
+      handlers[e] = (handlers[e] || []).filter((x) => x !== h);
+    },
+  } } } as unknown as Window;
+  const doc = {
+    visibilityState: "visible",
+    addEventListener: (e: string, h: () => void) => { (listeners[e] ||= []).push(h); },
+    removeEventListener: (e: string, h: () => void) => {
+      listeners[e] = (listeners[e] || []).filter((x) => x !== h);
+    },
+  } as unknown as Document;
+
+  const teardown = onResume(w, doc, () => { fired += 1; });
+  handlers["activated"]?.forEach((h) => h());
+  assert.equal(fired, 1, "Telegram's own activated event");
+  listeners["visibilitychange"]?.forEach((h) => h());
+  assert.equal(fired, 2, "and the fallback for clients older than 8.0");
+
+  teardown();
+  assert.equal(handlers["activated"]?.length ?? 0, 0, "listener released");
+  assert.equal(listeners["visibilitychange"]?.length ?? 0, 0, "listener released");
+});
+
+test("a hidden document does not count as a resume", () => {
+  // visibilitychange fires on the way OUT too; refetching then is work nobody
+  // is waiting for.
+  let fired = 0;
+  const listeners: Record<string, (() => void)[]> = {};
+  const doc = {
+    visibilityState: "hidden",
+    addEventListener: (e: string, h: () => void) => { (listeners[e] ||= []).push(h); },
+    removeEventListener: () => {},
+  } as unknown as Document;
+  onResume({} as Window, doc, () => { fired += 1; });
+  listeners["visibilitychange"]?.forEach((h) => h());
+  assert.equal(fired, 0);
+});
+
+test("a remembered tab is validated before it is trusted", async () => {
+  // CloudStorage holds whatever was last written, including by an older build
+  // with different tab names. It is data, not a promise.
+  const store: Record<string, string> = { dewey_last_tab: "week" };
+  const w = { Telegram: { WebApp: { CloudStorage: {
+    getItem: (k: string, cb: (e: unknown, v?: string) => void) => cb(null, store[k]),
+  } } } } as unknown as Window;
+  const accept = (v: string) => v === "day" || v === "week" || v === "schedule";
+
+  assert.equal(await loadLastTab(w, accept), "week");
+
+  store.dewey_last_tab = "flags";
+  assert.equal(await loadLastTab(w, accept), null, "an unknown tab is refused");
+});
+
+test("a CloudStorage failure opens the app anyway", async () => {
+  // Remembering a tab is a courtesy, and a courtesy must never be able to
+  // stop the app opening.
+  const w = { Telegram: { WebApp: { CloudStorage: {
+    getItem: (_k: string, cb: (e: unknown) => void) => cb(new Error("nope")),
+  } } } } as unknown as Window;
+  assert.equal(await loadLastTab(w, () => true), null);
+
+  const throwing = { Telegram: { WebApp: { CloudStorage: {
+    getItem: () => { throw new Error("boom"); },
+  } } } } as unknown as Window;
+  assert.equal(await loadLastTab(throwing, () => true), null);
+});
+
+test("the home-screen offer is only made where it can work", async () => {
+  assert.equal(await homeScreenStatus({} as Window), "unsupported");
+
+  const added = { Telegram: { WebApp: {
+    checkHomeScreenStatus: (cb: (s: string) => void) => cb("added"),
+  } } } as unknown as Window;
+  assert.equal(await homeScreenStatus(added), "added");
+
+  // An answer nobody recognises is treated as unsupported rather than
+  // offered — drawing a button that cannot work is worse than not drawing it.
+  const odd = { Telegram: { WebApp: {
+    checkHomeScreenStatus: (cb: (s: string) => void) => cb("wat"),
+  } } } as unknown as Window;
+  assert.equal(await homeScreenStatus(odd), "unsupported");
 });

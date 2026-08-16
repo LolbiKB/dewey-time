@@ -1,72 +1,179 @@
-import { format } from "date-fns";
+import { format, isSameDay } from "date-fns";
 
-import { formatScheduleDuration } from "@/lib/weekSchedule";
-import { plannedDaysFromSchedule } from "@/lib/plannedDays";
+import { cn } from "@/lib/utils";
+import { plannedDaysFromSchedule, type PlannedDay } from "@/lib/plannedDays";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
-import { weekDatesFor } from "@/miniapp/MyWeekPage";
+import { formatMinuteOfDay, formatSpan } from "@/miniapp/miniDay";
+import { weekForOffset, weekRangeLabel, WeekNav } from "@/miniapp/MyWeekPage";
 import { MiniState } from "@/miniapp/MiniState";
+import { useT } from "@/miniapp/MiniLocale";
 
-function hhmm(minutes: number | undefined): string {
-  if (minutes === undefined) return "";
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+/** Rostered hours net of the unpaid lunch, which is what a day is actually worth. */
+export function netRosteredMinutes(day: PlannedDay): number | null {
+  if (!day.works || day.durationMin === undefined) return null;
+  return day.durationMin;
+}
+
+/** Total net rostered minutes for the week. Null when nothing is rostered. */
+export function weekRosteredMinutes(days: PlannedDay[]): number | null {
+  const worked = days.filter((d) => d.works && !d.onLeave && d.durationMin);
+  if (!worked.length) return null;
+  return worked.reduce((sum, d) => sum + (d.durationMin ?? 0), 0);
+}
+
+export function formatRosteredTotal(minutes: number | null): string | null {
+  if (minutes === null) return null;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!hours) return `${rest}m`;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
 }
 
 /**
- * The assigned shift pattern as a list rather than a canvas.
+ * One rostered day.
  *
- * The week view already shows the same data on a timeline. This answers a
- * different question -- "what am I rostered for" -- which is read as text, and
- * a list survives a narrow phone in a way a seven-column grid does not.
+ * Three lines of information in two rows, because a shift is not just a span:
+ * the hours you are due, when your break is, and what that day is worth net of
+ * it. Before this the row showed a 24-hour span and a bare total, so an
+ * employee could not tell whether "8h" already had lunch taken out — which is
+ * the single most asked question about a roster.
  */
-export function MySchedulePage(props: { today?: Date }) {
+export function ScheduleRow(props: { day: PlannedDay; isToday: boolean }) {
+  const { day, isToday } = props;
+  const t = useT();
+  const span = formatSpan(day.startMin, day.endMin);
+  const lunch = formatSpan(day.lunchStartMin, day.lunchEndMin);
+
+  return (
+    <li
+      className={cn(
+        "flex items-start gap-3 px-3 py-2.5",
+        isToday && "bg-primary/5",
+      )}
+    >
+      <span
+        className={cn(
+          "w-10 shrink-0 pt-0.5 text-xs font-medium",
+          isToday ? "text-primary" : "text-foreground",
+        )}
+      >
+        {day.label}
+      </span>
+      <span className="w-6 shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground">
+        {day.sublabel}
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p
+          className={cn(
+            "truncate text-sm tabular-nums",
+            day.works && !day.onLeave ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          {day.onLeave
+            ? (day.leaveType ?? t("stateOnLeave"))
+            : day.works
+              ? (span ?? t("labelRostered"))
+              : t("stateDayOff")}
+        </p>
+        {/* Only when there IS one. "Lunch —" on a four-hour Saturday shift
+            reads as a break that was taken away. */}
+        {day.works && !day.onLeave && lunch ? (
+          <p className="truncate text-[11px] tabular-nums text-muted-foreground">
+            {t("labelLunch")} {lunch}
+          </p>
+        ) : null}
+      </div>
+
+      <span className="shrink-0 pt-0.5 text-right text-[11px] tabular-nums text-muted-foreground">
+        {day.works && !day.onLeave
+          ? formatRosteredTotal(netRosteredMinutes(day)) ?? ""
+          : ""}
+      </span>
+    </li>
+  );
+}
+
+export function MySchedulePage(props: {
+  today?: Date;
+  offset?: number;
+  onOffsetChange?: (next: number) => void;
+}) {
+  const t = useT();
   const today = props.today ?? new Date();
-  const week = weekDatesFor(today);
+  const offset = props.offset ?? 0;
+  const week = weekForOffset(today, offset);
   const query = useMiniAppCalendar(
     format(week[0]!, "yyyy-MM-dd"),
     format(week[6]!, "yyyy-MM-dd"),
   );
 
-  if (query.isLoading) return <MiniState>Loading your schedule…</MiniState>;
+  // The same navigator the Week tab uses, and deliberately the same component:
+  // the two tabs answer "what did I work" and "what am I rostered for" about
+  // THE SAME WEEK, and two different ways of choosing it would be two things
+  // to learn. This tab did not offer one at all, so it was permanently stuck
+  // on the current week while its neighbour paged.
+  const nav = (
+    <WeekNav
+      label={weekRangeLabel(week)}
+      offset={offset}
+      onOffsetChange={props.onOffsetChange ?? (() => {})}
+      forwardLimit={false}
+    />
+  );
+
+  if (query.isLoading) {
+    return (
+      <div className="flex flex-col gap-3 p-3">
+        {nav}
+        <MiniState>{t("loadingSchedule")}</MiniState>
+      </div>
+    );
+  }
   if (query.isError) {
-    return <MiniState>Couldn't load your schedule. Try again in a moment.</MiniState>;
+    return (
+      <div className="flex flex-col gap-3 p-3">
+        {nav}
+        <MiniState>{t("errorSchedule")}</MiniState>
+      </div>
+    );
   }
 
   const planned = plannedDaysFromSchedule(week, daysByDate(query.data));
-  if (planned.every((d) => !d.works)) {
-    return <MiniState>No shifts are assigned to you this week.</MiniState>;
-  }
+  const total = formatRosteredTotal(weekRosteredMinutes(planned));
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      <header className="px-1">
-        <h1 className="text-base font-semibold text-foreground">This week's shifts</h1>
-      </header>
-      <ul className="divide-y divide-border rounded-md border border-border">
-        {planned.map((day) => (
-          <li key={day.key} className="flex items-center gap-3 px-3 py-2.5">
-            <span className="w-12 shrink-0 text-xs font-medium text-foreground">
-              {day.label}
+      {nav}
+
+      {planned.every((d) => !d.works) ? (
+        <MiniState>{t("noShiftsThisWeek")}</MiniState>
+      ) : (
+        <>
+          <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+            {planned.map((day, index) => (
+              <ScheduleRow
+                key={day.key}
+                day={day}
+                isToday={isSameDay(week[index]!, today)}
+              />
+            ))}
+          </ul>
+
+          {/* Named "rostered", never "worked". This tab is the plan; the Week
+              tab is what happened, and the two numbers differ on any real
+              week. Saying which is which is the whole reason both exist. */}
+          <div className="flex items-baseline justify-between px-1">
+            <span className="text-xs text-muted-foreground">{t("rosteredThisWeek")}</span>
+            <span className="text-sm font-semibold tabular-nums text-foreground">
+              {total ?? "—"}
             </span>
-            <span className="w-8 shrink-0 text-xs text-muted-foreground tabular-nums">
-              {day.sublabel}
-            </span>
-            <span className="min-w-0 flex-1 text-sm tabular-nums text-foreground">
-              {day.onLeave
-                ? (day.leaveType ?? "On leave")
-                : day.works
-                  ? `${hhmm(day.startMin)} – ${hhmm(day.endMin)}`
-                  : "—"}
-            </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-              {day.works && !day.onLeave && day.durationMin
-                ? formatScheduleDuration(day.durationMin)
-                : ""}
-            </span>
-          </li>
-        ))}
-      </ul>
+          </div>
+        </>
+      )}
     </div>
   );
 }
+
+/** Re-exported for the tests, which assert the 12h conversion at this seam. */
+export { formatMinuteOfDay };

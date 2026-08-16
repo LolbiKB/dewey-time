@@ -24,8 +24,24 @@ export type MiniIdentityProps = {
   khmerName: string | null | undefined;
   designation: string | null | undefined;
   branch: string | null | undefined;
-  /** Telegram's avatar, which is decoration and may be absent. */
+  /**
+   * The EMPLOYEE RECORD's photo — the one HR put on the record, and the one
+   * that appears beside this person everywhere else in Dewey Time.
+   */
+  imageUrl?: string | null;
+  /**
+   * Telegram's avatar, used ONLY when the record has no photo.
+   *
+   * It is whatever the person chose for Telegram — frequently not a face —
+   * and it confirms nothing about the binding, since it is the viewer's own
+   * picture by definition. A record with no photo is still better served by
+   * something recognisable than by two grey letters, so it is kept as the
+   * middle rung: record photo, then Telegram's, then initials.
+   */
   photoUrl?: string | null;
+  /** The OTHER language's own name, e.g. "ភាសាខ្មែរ" while reading English. */
+  localeLabel?: string;
+  onToggleLocale?: () => void;
 };
 
 /** Initials from the English name, falling back to the employee id. */
@@ -69,11 +85,11 @@ export function MiniIdentity(props: MiniIdentityProps) {
       className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-2"
       aria-label="Your record"
     >
-      {props.photoUrl ? (
+      {props.imageUrl || props.photoUrl ? (
         // alt="" and aria-hidden: the name is right beside it in text, so an
         // announced photo would be the same fact twice.
         <img
-          src={props.photoUrl}
+          src={props.imageUrl || props.photoUrl || undefined}
           alt=""
           aria-hidden="true"
           className="size-8 shrink-0 rounded-full object-cover"
@@ -102,6 +118,21 @@ export function MiniIdentity(props: MiniIdentityProps) {
           {subtitle ? `${subtitle} · ${props.employee ?? ""}` : (props.employee ?? "")}
         </p>
       </div>
+
+      {/* In the header rather than behind a settings screen: this app has no
+          settings screen, and a language switch nobody can find is a language
+          switch nobody has. Its own name in its own script is also the one
+          label that needs no translation to be understood. */}
+      {props.onToggleLocale && props.localeLabel ? (
+        <button
+          type="button"
+          onClick={props.onToggleLocale}
+          aria-label={props.localeLabel}
+          className="shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-primary active:bg-muted"
+        >
+          {props.localeLabel}
+        </button>
+      ) : null}
     </header>
   );
 }

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 
 import { cn } from "@/lib/utils";
@@ -6,33 +7,54 @@ import { MyDayPage } from "@/miniapp/MyDayPage";
 import { MySchedulePage } from "@/miniapp/MySchedulePage";
 import { MyWeekPage } from "@/miniapp/MyWeekPage";
 import { MiniIdentity } from "@/miniapp/MiniIdentity";
+import { MiniLocaleProvider, useT } from "@/miniapp/MiniLocale";
+import {
+  isLocale, LOCALE_LABEL, otherLocale, resolveLocale,
+  type Locale, type StringKey,
+} from "@/miniapp/miniStrings";
 import {
   isInsideTelegram,
+  telegramLanguageCode,
   telegramPhotoUrl,
   useMiniAppCalendar,
 } from "@/miniapp/useMiniAppSession";
 import {
+  addToHomeScreen,
   bindBackButton,
   bottomInset,
+  homeScreenStatus,
+  loadLastTab,
+  loadLocale,
+  onResume,
   onViewportChange,
+  openHaptic,
+  saveLastTab,
+  saveLocale,
   tabHaptic,
   topInset,
+  type HomeScreenStatus,
 } from "@/miniapp/telegramChrome";
 
 export type MiniTab = "day" | "week" | "schedule";
 
-const TABS: { key: MiniTab; label: string }[] = [
-  { key: "day", label: "Today" },
-  { key: "week", label: "Week" },
-  { key: "schedule", label: "Schedule" },
-];
+/** Guards what comes back out of CloudStorage — it is data, not a promise. */
+export function isMiniTab(value: string): value is MiniTab {
+  return value === "day" || value === "week" || value === "schedule";
+}
+
+const TABS = [
+  { key: "day", label: "tabToday" },
+  { key: "week", label: "tabWeek" },
+  { key: "schedule", label: "tabSchedule" },
+] as const satisfies readonly { key: MiniTab; label: StringKey }[];
 
 export function OutsideTelegramNotice() {
+  const t = useT();
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <p className="text-sm font-medium text-foreground">Open this from Telegram</p>
+      <p className="text-sm font-medium text-foreground">{t("openFromTelegram")}</p>
       <p className="text-xs text-muted-foreground">
-        Your attendance is only available through the Dewey Time bot.
+        {t("openFromTelegramBody")}
       </p>
     </div>
   );
@@ -46,6 +68,7 @@ export function MiniTabBar(props: {
    *  it made this component unrenderable in tests. The shell owns the read. */
   insetBottom?: number;
 }) {
+  const t = useT();
   return (
     // Inline style, not a class: the value is only known at runtime. Without
     // it the tab bar sits under the home indicator on a notched phone — the
@@ -67,7 +90,7 @@ export function MiniTabBar(props: {
               : "text-muted-foreground hover:text-foreground",
           )}
         >
-          {tab.label}
+          {t(tab.label)}
         </button>
       ))}
     </nav>
@@ -97,6 +120,61 @@ export function MiniAppShell() {
     [],
   );
 
+  // Reopen on the tab they left. Applied ONLY while nothing has been touched:
+  // the read resolves asynchronously, so a slow CloudStorage round trip would
+  // otherwise yank the screen away from a tab the reader had already chosen.
+  const touched = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void loadLastTab(window, isMiniTab).then((saved) => {
+      if (cancelled || touched.current || !saved || !isMiniTab(saved)) return;
+      setTab(saved);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // A Mini App is minimised, not closed, and comes back holding whatever it
+  // loaded. For attendance that is actively wrong -- the commonest use is
+  // checking a punch that just happened.
+  const queryClient = useQueryClient();
+  useEffect(
+    () => onResume(window, document, () => {
+      void queryClient.invalidateQueries({ queryKey: ["mini-calendar"] });
+    }),
+    [queryClient],
+  );
+
+  // Opens in the client's language, unless they have chosen otherwise once.
+  const [locale, setLocale] = useState<Locale>(() =>
+    resolveLocale(null, telegramLanguageCode(window)),
+  );
+  const localeTouched = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void loadLocale(window, isLocale).then((saved) => {
+      if (cancelled || localeTouched.current || !saved || !isLocale(saved)) return;
+      setLocale(saved);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const toggleLocale = useCallback(() => {
+    localeTouched.current = true;
+    setLocale((current) => {
+      const next = otherLocale(current);
+      saveLocale(window, next);
+      return next;
+    });
+  }, []);
+
+  const [homeScreen, setHomeScreen] = useState<HomeScreenStatus>("unsupported");
+  useEffect(() => {
+    let cancelled = false;
+    void homeScreenStatus(window).then((status) => {
+      if (!cancelled) setHomeScreen(status);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const closeDay = useCallback(() => setOpenDay(null), []);
   // Telegram's own back button, shown only while a specific day is open. The
   // teardown hides it, so switching tabs while drilled in cannot strand a
@@ -104,15 +182,20 @@ export function MiniAppShell() {
   useEffect(() => bindBackButton(window, openDay !== null, closeDay), [openDay, closeDay]);
 
   const selectTab = useCallback((next: MiniTab) => {
+    touched.current = true;
     tabHaptic(window);
     // Leaving the drill-in behind. Tapping "Today" while Thursday is open
     // must show today, not Thursday under a heading that says otherwise.
     setOpenDay(null);
     setTab(next);
+    saveLastTab(window, next);
   }, []);
 
   const openDayFrom = useCallback((date: Date) => {
-    tabHaptic(window);
+    touched.current = true;
+    // A heavier tick than a tab change: this opens something rather than
+    // switching between peers, and Telegram's own UI makes that distinction.
+    openHaptic(window);
     setOpenDay(date);
     setTab("day");
   }, []);
@@ -127,13 +210,21 @@ export function MiniAppShell() {
   // Not a security check -- the server re-verifies every request. This is so a
   // page opened in a plain browser explains itself instead of firing an
   // unauthenticated call and rendering a permission error.
-  if (!isInsideTelegram()) return <OutsideTelegramNotice />;
+  if (!isInsideTelegram()) {
+    return (
+      <MiniLocaleProvider locale={locale}>
+        <OutsideTelegramNotice />
+      </MiniLocaleProvider>
+    );
+  }
 
   return (
-    // Telegram's own viewport variable rather than dvh. Inside the webview
-    // the sheet is not the visual viewport, so dvh overshoots and pushes the
-    // tab bar off-screen; --tg-viewport-stable-height is the height Telegram
-    // says is actually stable. dvh stays as the fallback for a plain browser.
+    <MiniLocaleProvider locale={locale}>
+    {/* Telegram's own viewport variable rather than dvh. Inside the webview
+        the sheet is not the visual viewport, so dvh overshoots and pushes the
+        tab bar off-screen; --tg-viewport-stable-height is the height Telegram
+        says is actually stable. dvh stays as the fallback for a plain
+        browser. */}
     <div
       className="flex w-full flex-col"
       style={{
@@ -154,7 +245,13 @@ export function MiniAppShell() {
           khmerName={identity.data.khmer_name}
           designation={identity.data.designation}
           branch={identity.data.employee_branch}
+          imageUrl={identity.data.image}
           photoUrl={telegramPhotoUrl(window)}
+          // Labelled in the language it switches TO, never in the current
+          // one: someone stuck in a language they cannot read needs the way
+          // out to be the thing they CAN read.
+          localeLabel={LOCALE_LABEL[otherLocale(locale)]}
+          onToggleLocale={toggleLocale}
         />
       ) : null}
 
@@ -171,7 +268,30 @@ export function MiniAppShell() {
           <MySchedulePage />
         )}
       </main>
+      {/* Offered only where Telegram says it is possible AND not already
+          done. An employee opens this most working days, and the alternative
+          is finding the bot in a chat list first. `unknown` counts as
+          offerable: the client supports it but cannot tell whether the icon
+          exists, and a duplicate is a far smaller cost than never offering. */}
+      {homeScreen === "missed" || homeScreen === "unknown" ? (
+        <button
+          type="button"
+          onClick={() => {
+            openHaptic(window);
+            addToHomeScreen(window);
+            // Optimistic, and one-way: whether it worked is not reliably
+            // reported, and re-offering after a tap reads as the button
+            // having failed.
+            setHomeScreen("added");
+          }}
+          className="shrink-0 border-t border-border bg-card px-3 py-2 text-left text-[11px] text-muted-foreground"
+        >
+          Add <span className="font-medium text-foreground">My Attendance</span> to your home screen
+        </button>
+      ) : null}
+
       <MiniTabBar active={tab} onSelect={selectTab} insetBottom={insets.bottom} />
     </div>
+    </MiniLocaleProvider>
   );
 }

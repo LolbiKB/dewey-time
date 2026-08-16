@@ -7,7 +7,7 @@ declare global {
         initData?: string;
         /** Client-supplied and explicitly untrusted. Decoration only — the
          *  server's answer is what identifies anyone. */
-        initDataUnsafe?: { user?: { photo_url?: string } };
+        initDataUnsafe?: { user?: { photo_url?: string; language_code?: string } };
         colorScheme?: "light" | "dark";
         /** Partial by contract: every field is optional in the Bot API, and
          *  older clients send only the first handful. */
@@ -22,6 +22,15 @@ declare global {
           onClick?: (handler: () => void) => void;
           offClick?: (handler: () => void) => void;
         };
+        isVersionAtLeast?: (version: string) => boolean;
+        /** Bot API 6.9+. Per-user, follows them across devices. */
+        CloudStorage?: {
+          getItem?: (key: string, cb: (err: unknown, value?: string) => void) => void;
+          setItem?: (key: string, value: string, cb?: (err: unknown) => void) => void;
+        };
+        /** Bot API 8.0+. */
+        checkHomeScreenStatus?: (cb: (status: string) => void) => void;
+        addToHomeScreen?: () => void;
         /** Present from Bot API 8.0; absent on older clients. */
         safeAreaInset?: SafeAreaInset;
         /** Present from Bot API 8.0; absent on older clients. */

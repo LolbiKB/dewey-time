@@ -13,7 +13,7 @@
  * nobody has taken yet. The Mini App also receives no flags at all — the API
  * allowlist drops them — so it could not report one even if it wanted to.
  */
-import { isSameDay } from "date-fns";
+import { format, isSameDay } from "date-fns";
 
 import {
   clamp,
@@ -27,6 +27,7 @@ import {
 import { deriveSegments } from "@/lib/attendancePunches";
 import { netWorkedMinutes } from "@/lib/clockDay";
 import type { Day } from "@/types/calendar";
+import { translator, type StringKey } from "@/miniapp/miniStrings";
 
 /**
  * Which kind of day this is. Drives colour and wording, so it is a closed set
@@ -45,31 +46,98 @@ export type DayFacts = {
   worked: string | null;
   /** Net worked in minutes, for totalling a week without re-parsing text. */
   workedMinutes: number | null;
-  /** The rostered shift, e.g. "08:00 – 17:00". Null when not scheduled. */
+  /** The rostered shift, e.g. "8:00 AM – 5:00 PM". Null when not scheduled. */
   shift: string | null;
-  /** Rostered minutes, so a day can be compared against its plan. */
+  /** Rostered minutes, gross of lunch. */
   shiftMinutes: number | null;
-  /** The one-line answer when there is no span: leave type, holiday, or state. */
+  /** The rostered lunch, e.g. "12:00 PM – 1:00 PM". Null when none is set. */
+  lunch: string | null;
+  /** Rostered lunch minutes, so net rostered time can be shown. */
+  lunchMinutes: number | null;
+  /**
+   * The DATA's own name for the day — a leave type, a holiday's description.
+   * Never translated: it is a value out of ERPNext, not a word this app owns.
+   */
+  noteText: string | null;
+  /**
+   * The app's own name for the state, as a key rather than a sentence, so the
+   * Khmer interface is a lookup and not a second copy of this logic.
+   */
+  noteKey: StringKey | null;
+  /**
+   * The English rendering of whichever of the two applies. Kept because the
+   * accessible names and the tests read one string, and because a surface
+   * with no locale in hand still has to say something.
+   */
   note: string | null;
 };
 
-function hhmm(minutes: number | null): string | null {
-  if (minutes === null) return null;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+/**
+ * A minute-of-day as "8:00 AM".
+ *
+ * TWELVE HOUR, matching every other time this app shows. Punches already read
+ * "7:58 AM" (formatCheckinTime), so a roster printed as "08:00 – 17:00" beside
+ * them made one screen speak two clock conventions — and 17:00 is not how
+ * anybody here says five o'clock.
+ *
+ * Minute-of-day rather than a datetime, because a roster has no date: the same
+ * 08:00 applies to every Monday. `formatMinuteOnDay` needs a date key it would
+ * only be given a fake one of.
+ */
+export function formatMinuteOfDay(minutes: number | null | undefined): string | null {
+  if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) return null;
+  // Any date will do; only the clock face is read off it.
+  const at = new Date(2000, 0, 1, Math.floor(minutes / 60), minutes % 60, 0, 0);
+  return format(at, "h:mm a");
+}
+
+/** "8:00 AM – 5:00 PM" from two minute-of-day values. */
+export function formatSpan(
+  startMin: number | null | undefined,
+  endMin: number | null | undefined,
+): string | null {
+  const start = formatMinuteOfDay(startMin);
+  const end = formatMinuteOfDay(endMin);
+  return start && end ? `${start} – ${end}` : null;
 }
 
 /** The rostered window, when there is one. */
-function shiftOf(day: Day | undefined): { label: string | null; minutes: number | null } {
-  if (!day?.shift?.shift_assigned) return { label: null, minutes: null };
+function shiftOf(day: Day | undefined): {
+  label: string | null;
+  minutes: number | null;
+  lunch: string | null;
+  lunchMinutes: number | null;
+} {
+  const none = { label: null, minutes: null, lunch: null, lunchMinutes: null };
+  if (!day?.shift?.shift_assigned) return none;
   const start = parseTimeToMinutes(day.shift.start_time);
   const end = parseTimeToMinutes(day.shift.end_time);
-  if (start === null || end === null) return { label: null, minutes: null };
+  if (start === null || end === null) return none;
   // An overnight shift ends "before" it starts on the clock; the roster still
   // spans the wrap, and a negative duration would render as a negative day.
   const span = end >= start ? end - start : 24 * 60 - start + end;
-  return { label: `${hhmm(start)} – ${hhmm(end)}`, minutes: span };
+
+  const lunchStart = parseTimeToMinutes(day.shift.lunch_start);
+  const lunchEnd = parseTimeToMinutes(day.shift.lunch_end);
+  const hasLunch = lunchStart !== null && lunchEnd !== null && lunchEnd > lunchStart;
+
+  return {
+    label: formatSpan(start, end),
+    minutes: span,
+    lunch: hasLunch ? formatSpan(lunchStart, lunchEnd) : null,
+    lunchMinutes: hasLunch ? lunchEnd - lunchStart : null,
+  };
+}
+
+const inEnglish = translator("en");
+
+/** Attach the data's name, the state key, and the English rendering of both. */
+function note(
+  partial: Omit<DayFacts, "noteText" | "noteKey" | "note">,
+  text: string | null,
+  key: StringKey,
+): DayFacts {
+  return { ...partial, noteText: text, noteKey: key, note: text ?? inEnglish(key) };
 }
 
 export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFacts {
@@ -82,16 +150,18 @@ export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFact
     workedMinutes: null,
     shift: shift.label,
     shiftMinutes: shift.minutes,
+    lunch: shift.lunch,
+    lunchMinutes: shift.lunchMinutes,
   };
 
   // Leave and holiday outrank punches deliberately: someone who came in for an
   // hour on a public holiday is still on a holiday, and the header should say
   // so rather than reporting an hour as an ordinary day.
   if (day?.leave?.on_leave) {
-    return { ...base, tone: "leave", note: day.leave.leave_type ?? "On leave" };
+    return note({ ...base, tone: "leave" }, day.leave.leave_type ?? null, "stateOnLeave");
   }
   if (day?.holiday) {
-    return { ...base, tone: "holiday", note: day.holiday.description ?? "Holiday" };
+    return note({ ...base, tone: "holiday" }, day.holiday.description ?? null, "stateHoliday");
   }
 
   const range = formatDayCheckinTimeRange(day);
@@ -110,18 +180,20 @@ export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFact
       lastOut: formatCheckinTime(day?.last_out) || null,
       worked: net == null ? null : formatDurationMinutes(net),
       workedMinutes: net ?? null,
+      noteText: null,
+      noteKey: null,
       note: null,
     };
   }
 
   if (!day?.shift?.shift_assigned) {
-    return { ...base, tone: "off", note: "Day off" };
+    return note({ ...base, tone: "off" }, null, "stateDayOff");
   }
   // Scheduled and not yet arrived. A future day has simply not happened.
   if (date > today && !isSameDay(date, today)) {
-    return { ...base, tone: "scheduled", note: "Scheduled" };
+    return note({ ...base, tone: "scheduled" }, null, "stateScheduled");
   }
-  return { ...base, tone: "nothing", note: "No punches recorded" };
+  return note({ ...base, tone: "nothing" }, null, "stateNoPunches");
 }
 
 /** Net worked across a set of days, in minutes. Null when nothing is known. */

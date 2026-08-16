@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { dayFacts, formatTotalWorked, type DayFacts } from "@/miniapp/miniDay";
 import { MiniState } from "@/miniapp/MiniState";
+import { useT } from "@/miniapp/MiniLocale";
 
 /** Monday-first, matching the HR week view. */
 export function weekDatesFor(today: Date): Date[] {
@@ -48,13 +49,20 @@ export function WeekNav(props: {
   label: string;
   offset: number;
   onOffsetChange: (next: number) => void;
+  /**
+   * Whether forward is capped at the current week. True for attendance, which
+   * has not happened yet; FALSE for the roster, which is published ahead and
+   * is the thing an employee most wants to look forward at.
+   */
+  forwardLimit?: boolean;
 }) {
-  const forward = canGoForward(props.offset);
+  const t = useT();
+  const forward = props.forwardLimit === false ? true : canGoForward(props.offset);
   return (
     <div className="flex items-center justify-between gap-2">
       <button
         type="button"
-        aria-label="Previous week"
+        aria-label={t("previousWeek")}
         onClick={() => props.onOffsetChange(props.offset - 1)}
         className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
       >
@@ -69,10 +77,10 @@ export function WeekNav(props: {
             onClick={() => props.onOffsetChange(0)}
             className="text-[11px] font-medium text-primary"
           >
-            Back to this week
+            {t("backToThisWeek")}
           </button>
         ) : (
-          <p className="text-[11px] text-muted-foreground">This week</p>
+          <p className="text-[11px] text-muted-foreground">{t("thisWeek")}</p>
         )}
       </div>
 
@@ -80,7 +88,7 @@ export function WeekNav(props: {
           under the user's thumb between weeks. */}
       <button
         type="button"
-        aria-label="Next week"
+        aria-label={t("nextWeek")}
         disabled={!forward}
         onClick={() => props.onOffsetChange(props.offset + 1)}
         className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:bg-muted disabled:pointer-events-none disabled:opacity-30"
@@ -103,6 +111,11 @@ export function WeekRow(props: {
   onOpen: (date: Date) => void;
 }) {
   const { date, facts, isToday } = props;
+  const t = useT();
+  // The data's own name for the day when it has one (a leave type out of
+  // ERPNext), otherwise this app's word for the state, in the reader's
+  // language. Never a translation of a value ERPNext owns.
+  const label = facts.range ?? facts.noteText ?? (facts.noteKey ? t(facts.noteKey) : null);
   return (
     <li>
       {/* A real button spanning the row. The row is the affordance — tapping a
@@ -136,7 +149,7 @@ export function WeekRow(props: {
             facts.range ? "text-foreground" : "text-muted-foreground",
           )}
         >
-          {facts.range ?? facts.note}
+          {label}
         </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
           {rowValue(facts) ?? ""}
@@ -152,6 +165,7 @@ export function MyWeekPage(props: {
   onOffsetChange?: (next: number) => void;
   onOpenDay?: (date: Date) => void;
 }) {
+  const t = useT();
   const today = props.today ?? new Date();
   const offset = props.offset ?? 0;
   const week = weekForOffset(today, offset);
@@ -175,7 +189,7 @@ export function MyWeekPage(props: {
     return (
       <div className="flex flex-col gap-3 p-3">
         {nav}
-        <MiniState>Loading your week…</MiniState>
+        <MiniState>{t("loadingWeek")}</MiniState>
       </div>
     );
   }
@@ -183,7 +197,7 @@ export function MyWeekPage(props: {
     return (
       <div className="flex flex-col gap-3 p-3">
         {nav}
-        <MiniState>Couldn't load your week. Try again in a moment.</MiniState>
+        <MiniState>{t("errorWeek")}</MiniState>
       </div>
     );
   }
@@ -216,7 +230,7 @@ export function MyWeekPage(props: {
       {/* Net of lunch, and said so. "39h 10m" against a 40-hour roster invites
           exactly one question, and the answer is the word "net". */}
       <div className="flex items-baseline justify-between px-1">
-        <span className="text-xs text-muted-foreground">Worked this week, net of lunch</span>
+        <span className="text-xs text-muted-foreground">{t("workedThisWeek")}</span>
         <span className="text-sm font-semibold tabular-nums text-foreground">{total ?? "—"}</span>
       </div>
     </div>
