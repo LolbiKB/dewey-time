@@ -96,6 +96,16 @@ export function useMiniAppCalendar(startDate: string, endDate: string) {
     // is never fired -- the shell shows an explanation instead of a 403.
     enabled: initData !== MISSING_INIT_DATA,
     queryFn: () => fetchCalendar(initData, startDate, endDate),
+    // WHILE VISIBLE ONLY. Refetching on resume covers a minimised app coming
+    // back, and misses the case this exists for: the app open on screen while
+    // the person walks to the terminal and punches. Without a poll the header
+    // keeps saying "In" after they have clocked out, which is not a stale
+    // number but a false statement about where somebody is.
+    //
+    // 60s because the claim is about the present and a minute is the
+    // resolution the times are shown at. `refetchIntervalInBackground` stays
+    // off by default, so a phone in a pocket makes no requests.
+    refetchInterval: 60_000,
   });
 }
 

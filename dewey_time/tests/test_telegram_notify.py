@@ -198,3 +198,49 @@ class TestBilingualNotification(unittest.TestCase):
         for line in text.split("\n"):
             self.assertIn("5:06 PM", line)
             self.assertIn("DIS Iconic", line)
+
+
+class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
+    """`log_type` is an OPTIONAL Select and nothing in this app writes it.
+
+    The rule was "anything that is not OUT is an arrival", so on a device that
+    reports only timestamps every departure announced itself as "Checked in /
+    បានចូល" -- telling someone they had arrived as they walked out of the
+    building. The Mini App's status chip had the identical bug and is fixed
+    the same way: the message and the app must not describe one punch two
+    different ways.
+    """
+
+    def test_an_explicit_label_is_believed(self):
+        self.assertEqual(notify.direction_of("E1", {"log_type": "OUT", "time": "2026-08-17 17:06:00"}), "OUT")
+        self.assertEqual(notify.direction_of("E1", {"log_type": "in", "time": "2026-08-17 07:58:00"}), "IN")
+
+    def test_an_unlabelled_punch_is_paired_against_the_day(self):
+        # Fourth punch of the day is a departure; third is a return.
+        with patch.object(notify.frappe.db, "count", return_value=4):
+            self.assertEqual(
+                notify.direction_of("E1", {"log_type": "", "time": "2026-08-17 17:06:00"}), "OUT"
+            )
+        with patch.object(notify.frappe.db, "count", return_value=3):
+            self.assertEqual(
+                notify.direction_of("E1", {"log_type": None, "time": "2026-08-17 12:58:00"}), "IN"
+            )
+
+    def test_the_count_is_bounded_at_this_punch_not_at_now(self):
+        # The job is queued, so by the time it runs the employee may have
+        # punched again. Counting "today so far" would let a later punch flip
+        # what THIS message says.
+        with patch.object(notify.frappe.db, "count", return_value=1) as count:
+            notify.direction_of("E1", {"log_type": "", "time": "2026-08-17 07:58:00"})
+        window = count.call_args[0][1]["time"]
+        self.assertEqual(window[0], "between")
+        self.assertEqual(window[1][1], "2026-08-17 07:58:00")
+
+    def test_a_checkout_on_an_unlabelled_stream_says_checked_out(self):
+        # The whole point, end to end: the words an employee actually reads.
+        with patch.object(notify.frappe.db, "count", return_value=4):
+            direction = notify.direction_of("E1", {"log_type": "", "time": "2026-08-17 17:06:00"})
+        message = notify.compose(direction, datetime(2026, 8, 17, 17, 6), "DIS Iconic")
+        self.assertIn("Checked out", message)
+        self.assertIn("បានចេញ", message)
+        self.assertNotIn("Checked in", message)

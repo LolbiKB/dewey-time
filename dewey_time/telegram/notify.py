@@ -52,14 +52,53 @@ _VERBS = {
 }
 
 
-def compose(log_type: str, punch_time, branch) -> str:
-    # Twelve hour, matching the Mini App this message now links into. "17:06"
-    # in the notification and "5:06 PM" one tap later is one event described
-    # two ways.
+def compose(direction: str, punch_time, branch) -> str:
+    """The message body. `direction` is already resolved to IN or OUT."""
+    # Twelve hour, matching the Mini App. "17:06" here and "5:06 PM" one tap
+    # later is one event described two ways.
     stamp = get_datetime(punch_time).strftime("%-I:%M %p")
-    khmer, english = _VERBS["OUT" if str(log_type or "").upper() == "OUT" else "IN"]
+    khmer, english = _VERBS["OUT" if str(direction or "").upper() == "OUT" else "IN"]
     tail = f" · {branch}" if branch else ""
     return f"{khmer} {stamp}{tail}\n{english} {stamp}{tail}"
+
+
+def direction_of(employee: str, row) -> str:
+    """IN or OUT for this punch -- resolved, not assumed.
+
+    `log_type` on Employee Checkin is an OPTIONAL Select and nothing in this
+    app writes it; a device that reports only a timestamp leaves it empty on
+    every row. This module used to read "anything that is not OUT is an
+    arrival", so on such a stream every departure announced itself as
+    "Checked in / បានចូល" -- telling someone they had arrived as they walked
+    out of the building.
+
+    The Mini App's status chip had the identical bug and is fixed the same
+    way, which matters: the message and the app must not describe one punch
+    two different ways.
+
+    An explicit label is believed. Without one the punch is PAIRED against
+    the day's earlier ones -- the same rule `deriveSegments` uses to draw the
+    timeline -- so an odd count is an arrival and an even one a departure.
+    Bounded at this punch's own timestamp rather than "today so far", because
+    the job runs asynchronously and a later punch must not change what this
+    message says.
+    """
+    explicit = str((row or {}).get("log_type") or "").upper()
+    if explicit in ("IN", "OUT"):
+        return explicit
+
+    # The date is sliced off the timestamp rather than parsed out of it.
+    # `row["time"]` is a datetime from the database or a string from a
+    # fixture, and str() renders both as "YYYY-MM-DD HH:MM:SS" -- so the first
+    # ten characters are the day, with no parser to disagree about a space
+    # versus a T. (getdate() handles both on a real bench; the CI harness's
+    # stub does not, and this needed no parse to begin with.)
+    day = str(row["time"])[:10]
+    so_far = frappe.db.count(
+        "Employee Checkin",
+        {"employee": employee, "time": ["between", [f"{day} 00:00:00", row["time"]]]},
+    )
+    return "IN" if int(so_far or 0) % 2 == 1 else "OUT"
 
 
 def _link_for(employee: str):
@@ -110,7 +149,7 @@ def send_checkin_notification(employee: str, checkin_name: str) -> str:
     # should be glanceable and gone.
     result = transport.send_message(
         link["chat_id"],
-        compose(row["log_type"], row["time"], row.get("custom_device_branch")),
+        compose(direction_of(employee, row), row["time"], row.get("custom_device_branch")),
     )
     if result == transport.BLOCKED:
         # The user blocked the bot. That is a decision, not a fault -- stop
