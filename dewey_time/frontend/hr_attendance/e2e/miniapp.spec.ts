@@ -15,8 +15,26 @@ import { expect, test, type Page } from "@playwright/test";
 
 const MINIAPP = "/index.miniapp.html";
 
-/** A day the fixture calls "worked": two punches around a 08:00–17:00 shift. */
-function workedDay(date: string) {
+/**
+ * A rostered 08:00–17:00 day, at one of four points through it.
+ *
+ * `none` and `open` are the two whose STATUS does not move with the wall
+ * clock — no punches is always "Not checked in", and a trailing in-punch is
+ * always "In" — which is why the header assertions below use those two. A
+ * finished day reads "Out during shift" before 5pm and "Checked out" after,
+ * so asserting on it would pass in the morning and fail in the evening.
+ */
+type Punches = "none" | "open" | "partial" | "full";
+
+function rosteredDay(date: string, punches: Punches = "full") {
+  const all = [
+    { time: `${date} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    { time: `${date} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+    { time: `${date} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    { time: `${date} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+  ];
+  const checkins = all.slice(0, { none: 0, open: 1, partial: 3, full: 4 }[punches]);
+  const outs = checkins.filter((c) => c.log_type === "OUT");
   return {
     date,
     shift: {
@@ -30,14 +48,9 @@ function workedDay(date: string) {
     holiday: null,
     leave: { on_leave: false },
     observed_lunch: null,
-    first_in: `${date} 07:58:00`,
-    last_out: `${date} 17:06:00`,
-    checkins: [
-      { time: `${date} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
-      { time: `${date} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
-      { time: `${date} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
-      { time: `${date} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
-    ],
+    first_in: checkins.length ? checkins[0]!.time : null,
+    last_out: outs.length ? outs[outs.length - 1]!.time : null,
+    checkins,
   };
 }
 
@@ -49,7 +62,7 @@ function workedDay(date: string) {
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches } = {}) {
   await page.addInitScript(
     ({ theme, themeParams, languageCode }) => {
       const handlers: Record<string, (() => void)[]> = {};
@@ -109,10 +122,10 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
         String(cursor.getMonth() + 1).padStart(2, "0"),
         String(cursor.getDate()).padStart(2, "0"),
       ].join("-");
-      // Every day worked, deliberately: the tests below assert on "today" and
-      // on the current week, and a weekend rule would make them pass or fail
-      // depending on which day of the week the suite runs.
-      days.push(workedDay(key));
+      // Every day the same, deliberately: the tests below assert on "today"
+      // and on the current week, and a weekend rule would make them pass or
+      // fail depending on which day of the week the suite runs.
+      days.push(rosteredDay(key, opts.punched ?? "full"));
       cursor.setDate(cursor.getDate() + 1);
     }
     await route.fulfill({
@@ -144,18 +157,70 @@ test("the identity header names the record the server resolved", async ({ page }
   await expect(header).toContainText("HR-EMP-00042");
 });
 
-test("the day tab summarises the day above its timeline", async ({ page }) => {
+test("the day tab is the timeline, and nothing restates it", async ({ page }) => {
+  // There is no summary block. It used to sit here and say, in text, what the
+  // canvas below draws: the punch times, the rostered window, the lunch gap.
+  // Three lines to read past on the way to the picture that already said it.
   await openMiniApp(page);
-  const summary = page.getByRole("region", { name: "Summary" });
-  await expect(summary).toBeVisible();
-  // Twelve-hour, matching the punches shown beside it.
-  await expect(summary).toContainText("Rostered 8:00 AM – 5:00 PM");
-  // And the break, without which "Worked 8h 11m" against a 9-hour roster
-  // looks like an hour unaccounted for.
-  await expect(summary).toContainText("Lunch 12:00 PM – 1:00 PM");
-  await expect(summary).toContainText("In");
-  await expect(summary).toContainText("Out");
-  await expect(summary).toContainText("Worked");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Today");
+  await expect(page.getByRole("region", { name: "Summary" })).toHaveCount(0);
+
+  // The canvas itself, carrying the punch times on the blocks — ONCE. This is
+  // the assertion that would catch the block coming back.
+  await expect(page.getByText("7:58AM")).toHaveCount(1);
+  await expect(page.getByText("5:06PM")).toHaveCount(1);
+  // And the hour axis, without which a lone timeline has no scale to read on.
+  await expect(page.getByText("8 AM", { exact: true })).toBeVisible();
+});
+
+test("a day with no punches still renders its timeline, and says you are not in", async ({ page }) => {
+  // The state that reported this whole thread. With the summary gone the only
+  // text on this tab is the date and the status, so an empty canvas here would
+  // be a blank screen rather than a quiet one.
+  await openMiniApp(page, { punched: "none" });
+  const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
+  await expect(header).toContainText("Today");
+  await expect(header).toContainText("Not checked in");
+  await expect(page.getByRole("region", { name: "Summary" })).toHaveCount(0);
+  await expect(page.getByText("8 AM", { exact: true })).toBeVisible();
+  await expect(page.getByText("7:58AM")).toHaveCount(0);
+});
+
+test("clocked in and not yet out reads as In, with the branch", async ({ page }) => {
+  // Time-independent by construction: a trailing IN punch is "In" at any hour,
+  // where a finished day reads "Out during shift" before 5pm and "Checked out"
+  // after — an assertion that would pass in the morning and fail at night.
+  //
+  // This is also the state the old summary got WRONG. It read the day through
+  // formatDayCheckinTimeRange, which needs a last_out, so someone who had
+  // clocked in an hour ago was told "No punches recorded" while the canvas
+  // below drew their punch.
+  await openMiniApp(page, { punched: "open" });
+  const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
+  await expect(header).toContainText("In · DIS Iconic");
+  await expect(header).not.toContainText("No punches recorded");
+
+  // And the canvas cannot cover for it: one unpaired punch draws as a marker
+  // with a hover tooltip, not as a labelled block, so on a touch screen this
+  // chip is the ONLY place the state is written down.
+  await expect(page.getByText("7:58AM")).toHaveCount(0);
+  await expect(page.getByText("8 AM", { exact: true })).toBeVisible();
+});
+
+test("the day header does not wrap in Khmer at a narrow width", async ({ page }) => {
+  // The date and the status share one row, which is the arrangement that
+  // failed the first time round: Khmer labels are clauses where English ones
+  // are two words. Height is the measurement, because a wrap is invisible to
+  // every assertion about text.
+  await openMiniApp(page, { languageCode: "km", punched: "open" });
+  const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
+  await expect(header).toBeVisible();
+  const wide = (await header.boundingBox())!.height;
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  const narrow = (await header.boundingBox())!.height;
+  expect(narrow, `the Khmer header grew ${narrow - wide}px narrower — something wrapped`)
+    .toBeLessThanOrEqual(wide);
 });
 
 test("the week tab pages between weeks and cannot go past this one", async ({ page }) => {
@@ -177,12 +242,18 @@ test("tapping a day in the week opens that day, and Telegram's back button retur
   await openMiniApp(page);
   await page.getByRole("button", { name: "Week", exact: true }).click();
 
-  const monday = page.getByRole("button", { name: /^Monday .*:/ });
-  await expect(monday).toBeVisible();
-  await monday.click();
+  // NOT today. The heading reads "Today" for the current date by design, so a
+  // hardcoded Monday made this test fail every Monday — it asserted the
+  // heading names the day, and on one day in seven the correct heading does
+  // not. Pick any other day of the same week instead.
+  const todayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
+  const other = todayName === "Monday" ? "Tuesday" : "Monday";
+  const row = page.getByRole("button", { name: new RegExp(`^${other} .*:`) });
+  await expect(row).toBeVisible();
+  await row.click();
 
   // The day tab, showing that day rather than today.
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Monday");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(other);
   // Telegram's own back button is the way out — not one we drew ourselves.
   const shown = await page.evaluate(
     () => (window as unknown as { Telegram: { WebApp: { BackButton: { isVisible: boolean } } } })
@@ -257,6 +328,50 @@ test("a Khmer client opens in Khmer, and can switch back", async ({ page }) => {
   // language they cannot read needs the way out to be the thing they can read.
   await page.getByRole("button", { name: "English" }).click();
   await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
+});
+
+test("a Khmer interface has no Latin digits left anywhere in it", async ({ page }) => {
+  // The mechanical check, deliberately: a half-translated interface keeps its
+  // numerals, and the numerals are the half carrying the information. Asserting
+  // on the ABSENCE of [0-9] catches any surface someone adds later without a
+  // formatter, which naming individual strings would not.
+  //
+  // Scoped to the app's own regions. The hour gutter down the timeline is the
+  // shared HR `DayCell` axis and is still Latin — see the note in MyDayPage.
+  await openMiniApp(page, { languageCode: "km", punched: "full" });
+
+  const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
+  await expect(header).toContainText("សីហា");
+  expect(await header.innerText(), "the Day heading kept Latin numerals")
+    .not.toMatch(/[0-9]/);
+
+  await page.getByRole("button", { name: "សប្តាហ៍", exact: true }).click();
+  const week = page.getByRole("list");
+  await expect(week).toBeVisible();
+  expect(await week.innerText(), "a Week row kept Latin numerals").not.toMatch(/[0-9]/);
+  // And the total under it, which is a duration rather than a date.
+  const weekTotal = page.getByText("ម៉ោងធ្វើការសប្តាហ៍នេះ (ដកម៉ោងសម្រាក)");
+  await expect(weekTotal.locator("xpath=..")).not.toContainText(/[0-9]/);
+
+  await page.getByRole("button", { name: "កាលវិភាគ", exact: true }).click();
+  const schedule = page.getByRole("list");
+  await expect(schedule).toBeVisible();
+  expect(await schedule.innerText(), "a Schedule row kept Latin numerals")
+    .not.toMatch(/[0-9]/);
+});
+
+test("the same screens in English are unchanged, digits and all", async ({ page }) => {
+  // The positive control. Without it the test above passes just as well on a
+  // screen that renders no numbers at all.
+  await openMiniApp(page, { languageCode: "en", punched: "full" });
+  const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
+  await expect(header).toContainText("August");
+  expect(await header.innerText()).toMatch(/[0-9]/);
+
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  const week = page.getByRole("list");
+  await expect(week).toContainText("8h 11m");
+  await expect(week).toContainText("7:58 AM – 5:06 PM");
 });
 
 test("an English client is not given a Khmer interface it did not ask for", async ({ page }) => {

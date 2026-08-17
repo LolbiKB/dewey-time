@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  dayFacts, formatMinuteOfDay, formatSpan, formatTotalWorked, totalWorkedMinutes,
+  dayFacts, formatMinuteOfDay, formatSpan, totalWorkedMinutes,
 } from "@/miniapp/miniDay";
 import type { Day } from "@/types/calendar";
 
@@ -25,8 +25,9 @@ function worked(date: string, from = "07:58:00", to = "17:06:00"): Day {
 test("a worked day reports its own in, out and net", () => {
   const facts = dayFacts(worked("2026-08-10"), MON, FRI);
   assert.equal(facts.tone, "worked");
-  assert.match(facts.firstIn!, /7:58/);
-  assert.match(facts.lastOut!, /5:06/);
+  // RAW datetimes, not rendered times — the renderer owns the locale.
+  assert.equal(facts.firstInAt, "2026-08-10 07:58:00");
+  assert.equal(facts.lastOutAt, "2026-08-10 17:06:00");
   assert.ok(facts.workedMinutes! > 0);
 });
 
@@ -93,7 +94,6 @@ test("a week's total adds only the days that have one", () => {
   ];
   const total = totalWorkedMinutes(facts);
   assert.equal(total, facts[0]!.workedMinutes! + facts[2]!.workedMinutes!);
-  assert.ok(formatTotalWorked(facts));
 });
 
 test("a week with nothing worked totals null, never zero", () => {
@@ -101,25 +101,6 @@ test("a week with nothing worked totals null, never zero", () => {
   // yet has not made that claim, and a zero would read as one.
   const facts = [dayFacts(undefined, MON, FRI), dayFacts(undefined, FRI, FRI)];
   assert.equal(totalWorkedMinutes(facts), null);
-  assert.equal(formatTotalWorked(facts), null);
-});
-
-test("a week's total is hours and minutes, never days", () => {
-  // formatDurationMinutes rolls past 24h into days, which is right for one
-  // day and useless for a week: a normal week rendered as "2d 6h 48m".
-  // Nobody is owed hours in days and no payslip states them that way.
-  const week = Array.from({ length: 6 }, (_, i) =>
-    dayFacts(worked(`2026-08-1${i}`), MON, FRI),
-  );
-  const total = formatTotalWorked(week)!;
-  assert.doesNotMatch(total, /d/, `a weekly total must not be given in days: ${total}`);
-  assert.match(total, /^\d+h( \d+m)?$/);
-});
-
-test("an exact hour drops the minutes rather than saying 0m", () => {
-  const facts = [dayFacts(worked("2026-08-10", "08:00:00", "17:00:00"), MON, FRI)];
-  // 09:00 minus the observed lunch this fixture has none of.
-  assert.match(formatTotalWorked(facts)!, /^\d+h$/);
 });
 
 test("times are 12-hour, matching the punches shown beside them", () => {

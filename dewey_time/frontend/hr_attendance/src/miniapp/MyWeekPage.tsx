@@ -3,9 +3,9 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
-import { dayFacts, formatTotalWorked, type DayFacts } from "@/miniapp/miniDay";
+import { dayFacts, totalWorkedMinutes, type DayFacts } from "@/miniapp/miniDay";
 import { MiniState } from "@/miniapp/MiniState";
-import { useT } from "@/miniapp/MiniLocale";
+import { useFormat, useLocale, useT, type MiniFormat } from "@/miniapp/MiniLocale";
 
 /** Monday-first, matching the HR week view. */
 export function weekDatesFor(today: Date): Date[] {
@@ -20,13 +20,16 @@ export function weekDatesFor(today: Date): Date[] {
  * a 390px phone every character in this header competes with the two arrow
  * buttons beside it.
  */
-export function weekRangeLabel(week: Date[]): string {
+export function weekRangeLabel(week: Date[], fmt?: MiniFormat): string {
   const first = week[0]!;
   const last = week[6]!;
   const sameMonth = first.getMonth() === last.getMonth();
+  // Defaulted so the pure-function tests can call it with a week and nothing
+  // else; every render passes the bound formatter.
+  const at = fmt?.date ?? ((date: Date, pattern: string) => format(date, pattern));
   return sameMonth
-    ? `${format(first, "d")} – ${format(last, "d MMM")}`
-    : `${format(first, "d MMM")} – ${format(last, "d MMM")}`;
+    ? `${at(first, "d")} – ${at(last, "d MMM")}`
+    : `${at(first, "d MMM")} – ${at(last, "d MMM")}`;
 }
 
 /**
@@ -100,8 +103,11 @@ export function WeekNav(props: {
 }
 
 /** The row's right-hand value: worked time, or nothing when none is known. */
-function rowValue(facts: DayFacts): string | null {
-  return facts.worked;
+function rowValue(facts: DayFacts, fmt: MiniFormat): string | null {
+  // From MINUTES, not from the pre-formatted string on the facts: that one is
+  // built in English inside dayFacts, and re-localising a rendered "8h 11m"
+  // would mean parsing our own output back out again.
+  return fmt.worked(facts.workedMinutes);
 }
 
 export function WeekRow(props: {
@@ -112,10 +118,17 @@ export function WeekRow(props: {
 }) {
   const { date, facts, isToday } = props;
   const t = useT();
+  const fmt = useFormat();
+  const isKhmer = useLocale() === "km";
+  // The punch span, rebuilt in the reader's script from the two ends dayFacts
+  // already resolved. `range` on the facts is English by construction.
+  const range = facts.firstInAt && facts.lastOutAt
+    ? `${fmt.punch(facts.firstInAt)} – ${fmt.punch(facts.lastOutAt)}`
+    : null;
   // The data's own name for the day when it has one (a leave type out of
   // ERPNext), otherwise this app's word for the state, in the reader's
   // language. Never a translation of a value ERPNext owns.
-  const label = facts.range ?? facts.noteText ?? (facts.noteKey ? t(facts.noteKey) : null);
+  const label = range ?? facts.noteText ?? (facts.noteKey ? t(facts.noteKey) : null);
   return (
     <li>
       {/* A real button spanning the row. The row is the affordance — tapping a
@@ -126,22 +139,28 @@ export function WeekRow(props: {
       <button
         type="button"
         onClick={() => props.onOpen(date)}
-        aria-label={`${format(date, "EEEE d MMMM")}: ${facts.range ?? facts.note ?? "no record"}`}
+        aria-label={`${fmt.date(date, "EEEE d MMMM")}: ${range ?? facts.note ?? "no record"}`}
         className={cn(
-          "flex w-full items-baseline gap-3 px-3 py-3 text-left transition-colors active:bg-muted",
+          "flex w-full items-baseline gap-2 px-3 py-3 text-left transition-colors active:bg-muted",
           isToday && "bg-primary/5",
         )}
       >
+        {/* Sized to the script, not to English. The Khmer weekday
+            abbreviation is a SINGLE consonant (ច for ចន្ទ) where "Mon" is
+            three letters, so a 2.5rem column spends 30px on nothing — and at
+            320px that is exactly the room the punch range was truncating for.
+            Measured, not assumed. */}
         <span
           className={cn(
-            "w-10 shrink-0 text-xs font-medium",
+            "shrink-0 text-xs font-medium",
+            isKhmer ? "w-4" : "w-10",
             isToday ? "text-primary" : "text-foreground",
           )}
         >
-          {format(date, "EEE")}
+          {fmt.date(date, "EEE")}
         </span>
         <span className="w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
-          {format(date, "d")}
+          {fmt.date(date, "d")}
         </span>
         <span
           className={cn(
@@ -152,7 +171,7 @@ export function WeekRow(props: {
           {label}
         </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {rowValue(facts) ?? ""}
+          {rowValue(facts, fmt) ?? ""}
         </span>
       </button>
     </li>
@@ -166,6 +185,7 @@ export function MyWeekPage(props: {
   onOpenDay?: (date: Date) => void;
 }) {
   const t = useT();
+  const fmt = useFormat();
   const today = props.today ?? new Date();
   const offset = props.offset ?? 0;
   const week = weekForOffset(today, offset);
@@ -176,7 +196,7 @@ export function MyWeekPage(props: {
 
   const nav = (
     <WeekNav
-      label={weekRangeLabel(week)}
+      label={weekRangeLabel(week, fmt)}
       offset={offset}
       onOffsetChange={props.onOffsetChange ?? (() => {})}
     />
@@ -204,7 +224,7 @@ export function MyWeekPage(props: {
 
   const byDate = daysByDate(query.data);
   const facts = week.map((date) => dayFacts(byDate.get(format(date, "yyyy-MM-dd")), date, today));
-  const total = formatTotalWorked(facts);
+  const total = fmt.worked(totalWorkedMinutes(facts));
 
   return (
     <div className="flex flex-col gap-3 p-3">

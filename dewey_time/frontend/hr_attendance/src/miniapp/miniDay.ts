@@ -17,7 +17,6 @@ import { format, isSameDay } from "date-fns";
 
 import {
   clamp,
-  formatCheckinTime,
   formatDayCheckinTimeRange,
   formatDurationMinutes,
   minutesFromDateTime,
@@ -40,8 +39,18 @@ export type DayFacts = {
   tone: DayTone;
   /** Punch span, e.g. "7:58 AM – 5:06 PM". Null when nothing was recorded. */
   range: string | null;
-  firstIn: string | null;
-  lastOut: string | null;
+  /**
+   * The first in and last out as the API's own datetime strings, NOT as
+   * rendered times.
+   *
+   * Raw on purpose: the Mini App renders these in the reader's script, and a
+   * formatted "7:58 AM" cannot be converted to "៧:៥៨ ព្រឹក" without parsing
+   * our own output back out again. Whoever displays them owns the locale;
+   * this function owns the facts. (Caught by a test that got "null – null"
+   * after exactly that mistake.)
+   */
+  firstInAt: string | null;
+  lastOutAt: string | null;
   /** Net worked, lunch removed, already formatted. */
   worked: string | null;
   /** Net worked in minutes, for totalling a week without re-parsing text. */
@@ -144,8 +153,8 @@ export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFact
   const shift = shiftOf(day);
   const base = {
     range: null,
-    firstIn: null,
-    lastOut: null,
+    firstInAt: null,
+    lastOutAt: null,
     worked: null,
     workedMinutes: null,
     shift: shift.label,
@@ -176,8 +185,8 @@ export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFact
       ...base,
       tone: "worked",
       range,
-      firstIn: formatCheckinTime(day?.first_in) || null,
-      lastOut: formatCheckinTime(day?.last_out) || null,
+      firstInAt: day?.first_in ?? null,
+      lastOutAt: day?.last_out ?? null,
       worked: net == null ? null : formatDurationMinutes(net),
       workedMinutes: net ?? null,
       noteText: null,
@@ -201,27 +210,4 @@ export function totalWorkedMinutes(facts: DayFacts[]): number | null {
   const known = facts.filter((f) => f.workedMinutes !== null);
   if (!known.length) return null;
   return known.reduce((sum, f) => sum + (f.workedMinutes ?? 0), 0);
-}
-
-/**
- * The week's total, in hours and minutes — never days.
- *
- * NOT `formatDurationMinutes`, which rolls anything past 24h into days. That
- * is right for one day's duration, which never reaches a day, and wrong the
- * moment a week is summed: a normal week rendered as "2d 6h 48m", which is
- * arithmetically true and useless. Nobody is owed hours in days, no payslip
- * states them that way, and it cannot be checked against a 40-hour roster
- * without doing the conversion in your head.
- *
- * Caught by rendering the page, not by a test — the unit suite only asserted
- * that a total existed.
- */
-export function formatTotalWorked(facts: DayFacts[]): string | null {
-  const total = totalWorkedMinutes(facts);
-  if (total === null) return null;
-  const rounded = Math.round(total);
-  const hours = Math.floor(rounded / 60);
-  const minutes = rounded % 60;
-  if (!hours) return `${minutes}m`;
-  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
 }

@@ -92,7 +92,14 @@ export function MiniIdentity(props: MiniIdentityProps) {
           src={props.imageUrl || props.photoUrl || undefined}
           alt=""
           aria-hidden="true"
-          className="size-8 shrink-0 rounded-full object-cover"
+          // bg-muted UNDER the image, not decoration. Employee photos on this
+          // roster are PNGs, and a PNG carries an alpha channel: a cut-out
+          // portrait renders its background as whatever is behind it, so on a
+          // dark Telegram theme a head floats on black with no edge, and on a
+          // white one the crop lines vanish. A filled circle behind it gives
+          // every photo the same silhouette as the initials fallback beside
+          // it, whether or not it has its own background.
+          className="size-8 shrink-0 rounded-full bg-muted object-cover"
         />
       ) : (
         <span

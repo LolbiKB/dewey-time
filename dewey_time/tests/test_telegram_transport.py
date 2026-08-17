@@ -59,8 +59,31 @@ class TestMiniAppUrl(unittest.TestCase):
             with self.assertRaises(Exception):
                 transport.miniapp_url()
 
-    def test_an_unset_url_is_refused(self):
-        with patch.object(transport.frappe, "get_cached_value", return_value=""):
+    def test_an_unset_url_falls_back_to_the_site(self):
+        # THE FIX FOR A REAL OUTAGE. Every caller wraps miniapp_url() in a try
+        # that degrades to a plain message, so an empty Settings field produced
+        # a bot with no button anywhere, permanently, and nothing to see but an
+        # Error Log entry. The site knows its own address and the route is this
+        # app's own, so there is nothing for a human to look up.
+        with patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://dewey.example/hr-me") as url:
+            self.assertEqual(transport.miniapp_url(), "https://dewey.example/hr-me")
+        url.assert_called_once_with(transport.MINIAPP_ROUTE)
+
+    def test_the_configured_url_overrides_the_site(self):
+        # The field survives as an override, for a site reached at a different
+        # hostname than get_url reports -- a proxy, or a vanity domain.
+        with patch.object(transport.frappe, "get_cached_value",
+                          return_value=" https://vanity.example/hr-me "), \
+             patch.object(transport, "get_url", return_value="https://internal/hr-me"):
+            self.assertEqual(transport.miniapp_url(), "https://vanity.example/hr-me")
+
+    def test_a_plain_http_site_is_still_refused(self):
+        # The fallback must not trade a visible misconfiguration for an
+        # invisible one: a dev site on http would otherwise silently produce a
+        # URL Telegram rejects.
+        with patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="http://localhost:8000/hr-me"):
             with self.assertRaises(Exception):
                 transport.miniapp_url()
 
@@ -100,7 +123,12 @@ class TestMenuButton(unittest.TestCase):
         self.assertEqual(body["menu_button"]["web_app"]["url"], "https://site/hr-me")
 
     def test_configure_requires_hr_and_uses_the_configured_url(self):
-        with patch.object(transport, "miniapp_url", return_value="https://site/hr-me"), \
+        # `_require_hr_role` is patched explicitly rather than left to the
+        # shared frappe mock. Without this the test passes only when some
+        # earlier test module has already granted HR roles on that mock, and
+        # fails whenever this file is run on its own.
+        with patch("dewey_time.attendance_engine.hr_calendar._require_hr_role"), \
+             patch.object(transport, "miniapp_url", return_value="https://site/hr-me"), \
              patch.object(transport, "set_default_menu_button",
                           return_value=transport.SENT) as setter:
             result = transport.configure_menu_button()
@@ -158,3 +186,85 @@ class TestWebhookSecretFormat(unittest.TestCase):
             with self.assertRaises(Exception) as ctx:
                 transport.webhook_secret()
         self.assertIn("token_urlsafe", str(ctx.exception))
+
+
+class TestDiagnostics(unittest.TestCase):
+    """Why is there no button? Answered in one call rather than by reading the
+    Error Log, which is where every Mini App entry point fails silently."""
+
+    def _hr(self):
+        return patch("dewey_time.attendance_engine.hr_calendar._require_hr_role")
+
+    def test_it_never_returns_the_secrets_themselves(self):
+        # The token and the webhook secret are the whole security of this
+        # integration. A diagnostic that printed them would put them in a
+        # browser's network log to save one glance at Settings.
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:SUPERSECRET"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", return_value={"ok": True, "result": {}}):
+            report = transport.diagnostics()
+
+        self.assertNotIn("SUPERSECRET", repr(report))
+        self.assertTrue(report["bot_token_set"])
+        self.assertTrue(report["webhook_secret_set"])
+
+    def test_it_reports_the_resolved_url_and_where_it_came_from(self):
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value=""), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"):
+            report = transport.diagnostics()
+
+        self.assertIsNone(report["miniapp_url_override"])
+        self.assertEqual(report["miniapp_url"], "https://site/hr-me")
+        # No token, so nothing was asked of Telegram -- and it says so rather
+        # than reporting three identical credential errors.
+        self.assertIn("note", report)
+        self.assertNotIn("menu_button", report)
+
+    def test_a_default_menu_button_is_reported_as_not_the_mini_app(self):
+        # Telegram's default is type "commands". Seeing that is the difference
+        # between "no persistent way in" and "one tap" -- and it is the state
+        # of any bot where configure_menu_button was never run.
+        def answer(method):
+            if method == "getChatMenuButton":
+                return {"ok": True, "result": {"type": "commands"}}
+            return {"ok": True, "result": {}}
+
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", side_effect=answer):
+            report = transport.diagnostics()
+
+        self.assertFalse(report["menu_button"]["is_miniapp"])
+        self.assertEqual(report["menu_button"]["type"], "commands")
+
+    def test_the_webhook_last_error_is_surfaced(self):
+        # Telegram records the last delivery failure here and nowhere else, so
+        # a bot that "does nothing" is explained by this field or by no field.
+        def answer(method):
+            if method == "getWebhookInfo":
+                return {"ok": True, "result": {
+                    "url": "https://site/api/method/x",
+                    "pending_update_count": 7,
+                    "last_error_message": "Wrong response from the webhook: 403 Forbidden",
+                }}
+            return {"ok": True, "result": {}}
+
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", side_effect=answer):
+            report = transport.diagnostics()
+
+        self.assertEqual(report["webhook"]["pending"], 7)
+        self.assertIn("403", report["webhook"]["last_error"])
