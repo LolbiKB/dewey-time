@@ -114,10 +114,13 @@ test("a single_checkin ATTENDANCE_ISSUE render contains no grace string at all",
   assert.doesNotMatch(text, /8:00 AM/, "shift_start reached the narrative");
 });
 
-test("the three no-detector codes get the generic treatment, not a confident finding", () => {
+test("the no-detector codes get the generic treatment, not a confident finding", () => {
+  // NO_CHECKIN_YET was the third and has left: intraday raises it now, so the
+  // "isn't a rule this engine currently checks" copy would be false about a row
+  // the engine had just written.
   assert.deepEqual(
     [...NO_DETECTOR_CODES].sort(),
-    ["MISSING_IN_OR_OUT", "MISSING_LUNCH", "NO_CHECKIN_YET"],
+    ["MISSING_IN_OR_OUT", "MISSING_LUNCH"],
   );
   for (const code of NO_DETECTOR_CODES) {
     assert.equal(isEmittedCode(code), false, `${code} must not be treated as emitted`);
@@ -178,7 +181,9 @@ test("the no-detector fallback promotes evidence.reason verbatim and unmapped", 
 
 test("empty evidence still names who raised the flag, and says the blob was empty", () => {
   const narrative = flagNarrative(
-    flag({ flag_code: "NO_CHECKIN_YET", source: "EMPLOYEE", evidence: null }),
+    // MISSING_LUNCH rather than NO_CHECKIN_YET: this test needs a code with no
+    // detector, and NO_CHECKIN_YET became one the engine writes.
+    flag({ flag_code: "MISSING_LUNCH", source: "EMPLOYEE", evidence: null }),
     EMPTY_DAY,
     DATE_KEY,
   );
@@ -2296,4 +2301,79 @@ test("UNNOTIFIED_ABSENCE raised intraday does not tell HR a running day is confi
     !/confirmed at|confirmed by|confirmed automatically/i.test(caughtBy ?? ""),
     `a provisional row must not read as settled: ${caughtBy}`,
   );
+});
+
+// --- NO_CHECKIN_YET --------------------------------------------------------
+//
+// The intraday tense of UNNOTIFIED_ABSENCE, sharing its builder. These pin the
+// one thing that must differ.
+
+const NO_CHECKIN_YET_FLAG: Flag = {
+  name: "AUTO-ncy-1",
+  flag_code: "NO_CHECKIN_YET",
+  evidence: {
+    employee: "HR-EMP-00003",
+    date: "2026-08-06",
+    on_shift: true,
+    reason: "on_shift_no_checkins_intraday",
+    checkins_count: 0,
+    provisional: true,
+    minutes: 31,
+  },
+};
+
+const NO_CHECKIN_YET_DAY: NarrativeDay = {
+  checkins: [],
+  shift: { shift_assigned: true, shift_type: "Morning", start_time: "08:00", end_time: "17:00" },
+};
+
+test("NO_CHECKIN_YET never claims a running day had zero punches ALL day", () => {
+  // THE REASON THIS CODE EXISTS. The shared builder's headline is written for a
+  // finished day — "never checked in — zero punches all day" — and intraday
+  // raises this row about half an hour after shift start. At 08:31 that
+  // sentence is a claim HR can disprove by looking out of the window, and the
+  // person it describes may be in the car park.
+  const narrative = flagNarrative(NO_CHECKIN_YET_FLAG, NO_CHECKIN_YET_DAY, "2026-08-06");
+
+  assert.equal(
+    narrative.headline,
+    "Scheduled for the Morning shift, and no check-in has been recorded yet.",
+  );
+  assert.doesNotMatch(narrative.headline, /all day/);
+  assert.doesNotMatch(narrative.headline, /never checked in/);
+});
+
+test("NO_CHECKIN_YET is treated as emitted, not as a rule the engine skips", () => {
+  // It sat in NO_DETECTOR_CODES for as long as nothing wrote it. Leaving it
+  // there would have HR reading "isn't a rule this engine currently checks
+  // automatically" underneath a row the engine had just raised.
+  assert.equal(isEmittedCode("NO_CHECKIN_YET"), true);
+  const narrative = flagNarrative(NO_CHECKIN_YET_FLAG, NO_CHECKIN_YET_DAY, "2026-08-06");
+  assert.doesNotMatch(narrative.headline, /isn't a rule this engine/);
+});
+
+test("NO_CHECKIN_YET keeps the absence panel's facts and its empty timeline", () => {
+  // It shares narrateUnnotifiedAbsence deliberately: the situation, the
+  // evidence and the drawing are identical. Only the tense differs. If routing
+  // ever drops back to the generic fallback, HR loses the zero-punch fact and
+  // the hatched shift band with it.
+  const narrative = flagNarrative(NO_CHECKIN_YET_FLAG, NO_CHECKIN_YET_DAY, "2026-08-06");
+
+  assert.equal(narrative.facts.find((f) => f.label === "Punches")?.value, "0");
+  assert.equal(
+    narrative.facts.find((f) => f.label === "Caught by")?.value,
+    "No punches yet today — not yet confirmed",
+  );
+  assert.ok(narrative.timeline, "the hatched shift band must still be drawn");
+});
+
+test("a shiftless day still gets the running-tense headline", () => {
+  // The builder has two headline shapes per tense; the no-shift one is reached
+  // when the calendar cannot resolve a shift name.
+  const narrative = flagNarrative(
+    NO_CHECKIN_YET_FLAG,
+    { checkins: [], shift: { shift_assigned: true } },
+    "2026-08-06",
+  );
+  assert.equal(narrative.headline, "Scheduled to work, and no check-in has been recorded yet.");
 });

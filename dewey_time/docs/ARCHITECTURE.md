@@ -249,7 +249,7 @@ Scheduler daily        → closeout.run_company_fallback_closeout
 | `OFF_SHIFT_PUNCH` | Checkins present but off-shift or holiday |
 | `NON_PRIMARY_SITE_PUNCH` | Employee branch ≠ device branch |
 | `LATE_FROM_LUNCH` | Returned late from observed lunch |
-| `NO_CHECKIN_YET` | Intraday placeholder |
+| `NO_CHECKIN_YET` | Intraday: rostered, running, zero punches — withdrawn on the first punch |
 
 ### Flag lifecycle
 

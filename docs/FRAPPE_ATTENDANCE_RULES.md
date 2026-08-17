@@ -184,7 +184,11 @@ Evidence JSON on flags includes both raw fields and effective values (`shift_gra
 - Shift spanning midnight.
 - Device-specific IN/OUT mapping from verify types.
 - Automatic approvals / penalties.
-- **`NO_CHECKIN_YET`:** reserved on Attendance Flag doctype; **not generated** by current engine.
+- **`NO_CHECKIN_YET`:** raised by the intraday pass (`intraday.py`) on a rostered day that
+  is still running with zero punches, from the moment the first `MISSING_TIME` interval
+  would have appeared. WARNING and provisional (`day_closed=0`), withdrawn on the next
+  refresh once a punch lands. `UNNOTIFIED_ABSENCE` is the closeout verdict for the same
+  situation; intraday no longer writes it.
 - **`MISSING_LUNCH`:** suppressed; P1 tuning if policy requires explicit flag.
 - Holiday-aware SSA / skip Shift Assignment creation on holidays (P1); MVP uses **holiday wins at flag time** only.
 
