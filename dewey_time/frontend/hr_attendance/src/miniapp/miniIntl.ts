@@ -151,3 +151,26 @@ export function formatWorkedMinutes(
   if (!hours) return m;
   return rest ? `${h} ${m}` : h;
 }
+
+/**
+ * "2y 5mo", or "២ ឆ្នាំ ៥ ខែ".
+ *
+ * Composed exactly the way formatWorkedMinutes composes hours and minutes,
+ * including the space-before-unit rule: Khmer separates the number from its
+ * word, English does not, and driving that off the LOCALE rather than off the
+ * unit strings keeps "2y" from becoming "2 y" the day somebody edits the
+ * English table.
+ */
+export function formatServiceLength(
+  locale: Locale,
+  service: { years: number; months: number } | null,
+  units: { year: string; month: string },
+): string | null {
+  if (!service) return null;
+  const digits = digitsFor(locale);
+  const join = locale === "km" ? " " : "";
+  const years = `${digits(String(service.years))}${join}${units.year}`;
+  const months = `${digits(String(service.months))}${join}${units.month}`;
+  if (!service.years) return months;
+  return service.months ? `${years} ${months}` : years;
+}

@@ -130,6 +130,67 @@ const EN = {
   loadingSchedule: "Loading your schedule…",
   errorDay: "Couldn't load your day. Try again in a moment.",
   errorSchedule: "Couldn't load your schedule. Try again in a moment.",
+  loadingProfile: "Loading your record…",
+  errorProfile: "Couldn't load your record. Try again in a moment.",
+
+  // ── Profile ──
+  tabProfile: "Profile",
+
+  sectionRecord: "Your record",
+  sectionBiometric: "Fingerprint & face",
+  sectionContact: "Contact HR has for you",
+  sectionMonth: "{month} so far",
+  sectionRoster: "Your roster",
+
+  labelEmployeeId: "Employee ID",
+  labelDepartment: "Department",
+  labelEmployment: "Employment",
+  labelJoined: "Joined",
+  labelReportsTo: "Reports to",
+  labelStatus: "Status",
+  labelFingers: "Fingers",
+  labelFace: "Face",
+  labelDevicesAt: "Devices at",
+  labelLastChecked: "Last checked",
+  labelPhone: "Phone",
+  labelEmail: "Email",
+
+  // Enrolment. A statement about the DEVICES, never about the person: it is
+  // the machines that do not know them, not the person who failed to do
+  // something. "Not checked yet" is a third state on purpose — see
+  // miniapp_api._biometric for why it is not folded into "Not set up".
+  bioEnrolled: "Set up",
+  bioNotEnrolled: "Not set up",
+  bioUnknown: "Not checked yet",
+  bioNotEnrolledBody:
+    "The fingerprint devices don't know you yet. Ask HR to enrol you, or you'll be marked absent.",
+  bioUnknownBody:
+    "We haven't heard from the fingerprint devices yet, so we can't tell you either way.",
+  bioRecorded: "{n} recorded",
+
+  statDaysWorked: "days worked",
+  statHours: "hours",
+  statToCheck: "to check",
+
+  contactReadOnly: "Wrong? Tell HR — this page can't change it.",
+
+  unitYear: "y",
+  unitMonth: "mo",
+
+  // The ten device slots plus the fallback. finger_slots.py owns the FID→slug
+  // mapping; these are only the words for the slugs, and miniProfile.test.ts
+  // reads that Python to keep the two lists in step.
+  fingerLeftLittle: "Left little",
+  fingerLeftRing: "Left ring",
+  fingerLeftMiddle: "Left middle",
+  fingerLeftIndex: "Left index",
+  fingerLeftThumb: "Left thumb",
+  fingerRightThumb: "Right thumb",
+  fingerRightIndex: "Right index",
+  fingerRightMiddle: "Right middle",
+  fingerRightRing: "Right ring",
+  fingerRightLittle: "Right little",
+  fingerOther: "Another finger",
 } as const;
 
 const KM: Record<StringKey, string> = {
@@ -215,6 +276,60 @@ const KM: Record<StringKey, string> = {
   loadingSchedule: "កំពុងផ្ទុក…",
   errorDay: "មិនអាចផ្ទុកបានទេ។ សូមព្យាយាមម្ដងទៀត។",
   errorSchedule: "មិនអាចផ្ទុកបានទេ។ សូមព្យាយាមម្ដងទៀត។",
+  loadingProfile: "កំពុងផ្ទុកកំណត់ត្រារបស់អ្នក…",
+  errorProfile: "មិនអាចផ្ទុកកំណត់ត្រារបស់អ្នកបានទេ។ សូមព្យាយាមម្ដងទៀត។",
+
+  // ── Profile ──
+  tabProfile: "ប្រវត្តិរូប",
+
+  sectionRecord: "កំណត់ត្រារបស់អ្នក",
+  sectionBiometric: "ស្នាមម្រាមដៃ និងមុខ",
+  sectionContact: "ទំនាក់ទំនងដែល HR មាន",
+  sectionMonth: "{month} រហូតមកដល់ពេលនេះ",
+  sectionRoster: "កាលវិភាគរបស់អ្នក",
+
+  labelEmployeeId: "លេខសម្គាល់បុគ្គលិក",
+  labelDepartment: "ផ្នែក",
+  labelEmployment: "ប្រភេទការងារ",
+  labelJoined: "ចូលធ្វើការ",
+  labelReportsTo: "ស្ថិតក្រោមការគ្រប់គ្រងរបស់",
+  labelStatus: "ស្ថានភាព",
+  labelFingers: "ម្រាមដៃ",
+  labelFace: "មុខ",
+  labelDevicesAt: "ម៉ាស៊ីននៅ",
+  labelLastChecked: "ពិនិត្យចុងក្រោយ",
+  labelPhone: "ទូរស័ព្ទ",
+  labelEmail: "អ៊ីមែល",
+
+  bioEnrolled: "បានចុះឈ្មោះ",
+  bioNotEnrolled: "មិនទាន់បានចុះឈ្មោះ",
+  bioUnknown: "មិនទាន់បានពិនិត្យ",
+  bioNotEnrolledBody:
+    "ម៉ាស៊ីនស្នាមម្រាមដៃមិនទាន់ស្គាល់អ្នកនៅឡើយទេ។ សូមប្រាប់ HR ឱ្យចុះឈ្មោះអ្នក បើមិនដូច្នេះទេ អ្នកនឹងត្រូវបានកត់ត្រាថាអវត្តមាន។",
+  bioUnknownBody:
+    "យើងមិនទាន់ទទួលបានព័ត៌មានពីម៉ាស៊ីនស្នាមម្រាមដៃនៅឡើយទេ ដូច្នេះយើងមិនអាចប្រាប់អ្នកបានទេ។",
+  bioRecorded: "បានកត់ត្រា {n}",
+
+  statDaysWorked: "ថ្ងៃធ្វើការ",
+  statHours: "ម៉ោង",
+  statToCheck: "ត្រូវពិនិត្យ",
+
+  contactReadOnly: "ខុសមែនទេ? សូមប្រាប់ HR — ទំព័រនេះមិនអាចកែបានទេ។",
+
+  unitYear: "ឆ្នាំ",
+  unitMonth: "ខែ",
+
+  fingerLeftLittle: "កូនដៃឆ្វេង",
+  fingerLeftRing: "ម្រាមនាងឆ្វេង",
+  fingerLeftMiddle: "ម្រាមកណ្តាលឆ្វេង",
+  fingerLeftIndex: "ម្រាមចង្អុលឆ្វេង",
+  fingerLeftThumb: "មេដៃឆ្វេង",
+  fingerRightThumb: "មេដៃស្តាំ",
+  fingerRightIndex: "ម្រាមចង្អុលស្តាំ",
+  fingerRightMiddle: "ម្រាមកណ្តាលស្តាំ",
+  fingerRightRing: "ម្រាមនាងស្តាំ",
+  fingerRightLittle: "កូនដៃស្តាំ",
+  fingerOther: "ម្រាមដៃផ្សេងទៀត",
 };
 
 const TABLES: Record<Locale, Record<StringKey, string>> = { en: EN, km: KM };
