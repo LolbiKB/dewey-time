@@ -19,6 +19,8 @@ see, and `build_employee_calendar` says so at its own definition.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import frappe
 from frappe.utils import date_diff, getdate
 
@@ -43,6 +45,7 @@ DAY_KEYS = (
     "observed_lunch",
     "first_in",
     "last_out",
+    "flags",
 )
 SHIFT_KEYS = (
     "shift_assigned",
@@ -64,10 +67,152 @@ SHIFT_KEYS = (
 #: looking at the rendered page found that; no unit test could.
 CHECKIN_KEYS = ("time", "log_type", "custom_device_branch")
 
+#: Flag codes an employee may be told about.
+#:
+#: An ALLOWLIST for the same reason DAY_KEYS is one: written as removals, a code
+#: added to the engine next year would reach every employee silently, with no
+#: test failing. Built this way it stays hidden until somebody edits this set on
+#: purpose.
+#:
+#: Excluded deliberately. UNKNOWN_DEVICE_BRANCH and DELIVERY_FAILED are our
+#: infrastructure failing rather than the employee's day, and neither is
+#: actionable by them. NON_PRIMARY_SITE_PUNCH is INFO and usually just a cover
+#: shift -- it would alarm somebody who did nothing unusual.
+EMPLOYEE_FLAG_CODES = frozenset({
+    "LATE_START",
+    "LEFT_EARLY",
+    "LATE_FROM_LUNCH",
+    "MISSING_TIME",
+    "MISSING_IN_OR_OUT",
+    "UNNOTIFIED_ABSENCE",
+    "OFF_SHIFT_PUNCH",
+    "MISSING_LUNCH",
+    "ATTENDANCE_ISSUE",
+})
+
+#: `evidence` is NOT here, and that is the load-bearing omission -- it carries
+#: grace minutes, thresholds and rule internals. `severity` is not here either:
+#: it is HR's triage order, not a measure of what matters to the person.
+FLAG_KEYS = ("flag_code", "is_provisional", "decision", "decision_state")
+
+#: What an employee may see of HR's decision. A SECOND allowlist, because
+#: `decision` is a nested dict and FLAG_KEYS only guards the level above it.
+#:
+#: hr_calendar.py:725 already redacts this to the same two fields -- but only
+#: `if not hr_view`, which is a `frappe.session.user` check in another module.
+#: Depending on it would put this module's whole promise ("the projection is an
+#: allowlist, so a field added to the calendar builder for an HR need is hidden
+#: by default") in the hands of a predicate that knows nothing about the Mini
+#: App. Add `reason` to that dict upstream for an HR need and every phone gets
+#: HR's rejection reasons, with no test in this file failing.
+#:
+#: So it is re-projected here, and pinned by an equality test. The duplication
+#: is the point: two independent narrowings of the same object, and this one
+#: cannot be widened from somewhere else.
+DECISION_KEYS = ("outcome", "decided_at")
+
 
 def _pick(source, keys):
     source = source or {}
     return {k: source[k] for k in keys if k in source}
+
+
+def _at(value):
+    """A datetime, or None -- never an exception.
+
+    `datetime.fromisoformat` rather than `frappe.utils.get_datetime`, and that
+    is deliberate twice over.
+
+    It accepts BOTH separators, which is the whole point: evidence stores an ISO
+    datetime with a "T" (absence_flags.py builds it from `.isoformat()`) and
+    Frappe stores punch times with a space. Anything that does not reconcile the
+    two ends up comparing them as strings, where " " sorts before "T" and 12:58
+    lands before 12:31.
+
+    And it does not go through the frappe mock. `test_closeout._install_frappe_mock`
+    stubs `get_datetime` as `lambda value: value` -- a passthrough that hands
+    back the string -- so a comparison built on it would silently be a string
+    comparison under test while looking correct in the source. That is not a
+    hypothetical: the first draft of this function used get_datetime and the
+    parse test caught it.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _certain(flag: dict, checkins: list[dict]) -> bool:
+    """Is this flag safe to show the person it describes?
+
+    A final flag is a fact about the record. A PROVISIONAL one is the engine
+    mid-thought: intraday deletes and re-inserts AUTO flags on every punch, so
+    one can appear in the morning and be gone by closeout. Showing those turns
+    this surface into an accusation that withdraws itself.
+
+    Only two provisional codes can reach here -- intraday writes MISSING_TIME,
+    NON_PRIMARY_SITE_PUNCH and UNNOTIFIED_ABSENCE (intraday.py:29), and the
+    middle one is already out under EMPLOYEE_FLAG_CODES.
+    """
+    if not flag.get("is_provisional"):
+        return True
+
+    code = flag.get("flag_code")
+
+    # A provisional no-show. intraday.py:175 raises it the moment the first
+    # MISSING_TIME interval would have appeared and withdraws it when a punch
+    # lands. Someone whose approved leave has not been keyed into ERPNext yet
+    # would carry "no record for this day" all morning -- the worst thing this
+    # surface could do, and the case that happens most.
+    if code == "UNNOTIFIED_ABSENCE":
+        return False
+
+    # A gap that is still running is a person who may be about to walk back in.
+    # The engine measures today's gaps up to the present MINUTE --
+    # missing_expected_max_end_min returns present_hour_start_min(now), which
+    # despite its name is now.hour * 60 + now.minute (absence_intervals.py:44)
+    # -- so an untracked lunch becomes a 31-minute gap at 12:31 while the person
+    # is still eating. A gap that ended because a punch resumed after it is
+    # certain; that is what this asks.
+    if code == "MISSING_TIME":
+        end = _at((flag.get("evidence") or {}).get("interval_end"))
+        if end is None:
+            return False
+        # PARSED, not compared as strings. evidence stores an ISO datetime with
+        # a "T" and Frappe stores punch times with a space; " " sorts before
+        # "T", so a string compare puts 12:58 BEFORE 12:31 and withholds a
+        # closed gap forever. There is a test named after exactly this.
+        for checkin in checkins:
+            punch = _at(checkin.get("time"))
+            if punch is not None and punch >= end:
+                return True
+        return False
+
+    return True
+
+
+def _pick_flags(day: dict) -> list[dict]:
+    checkins = day.get("checkins") or []
+    picked = []
+    for flag in day.get("flags") or []:
+        if flag.get("flag_code") not in EMPLOYEE_FLAG_CODES:
+            continue
+        if not _certain(flag, checkins):
+            continue
+        narrowed = _pick(flag, FLAG_KEYS)
+        # Only when there IS one. `_pick` of a None decision would fabricate an
+        # empty dict, and the client reads `decision?.outcome` to mean "HR has
+        # not looked at this yet" -- an empty object is truthy and would still
+        # resolve to the same "awaiting" branch today, but it is a lie about the
+        # data that the next reader of this code would have to re-derive.
+        if narrowed.get("decision"):
+            narrowed["decision"] = _pick(narrowed["decision"], DECISION_KEYS)
+        picked.append(narrowed)
+    return picked
 
 
 #: Top-level keys an employee may see about themselves.
@@ -92,6 +237,11 @@ def narrow(payload: dict) -> dict:
         narrowed["checkins"] = [
             _pick(c, CHECKIN_KEYS) for c in (day.get("checkins") or [])
         ]
+        # Always a list, never absent: the client counts it, and a missing key
+        # would need a guard on every day -- one of which would be forgotten.
+        # Read from the SOURCE day, not from `narrowed`, because _certain needs
+        # the punch times and `narrowed` has not been given them yet.
+        narrowed["flags"] = _pick_flags(day)
         days.append(narrowed)
     return {**_pick(payload, PAYLOAD_KEYS), "days": days}
 
