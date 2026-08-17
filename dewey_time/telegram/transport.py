@@ -342,6 +342,23 @@ def diagnostics(employee: str | None = None) -> dict:
     me = _get("getMe")
     report["bot"] = (me.get("result") or {}).get("username") if me.get("ok") else me
 
+    # The configured username against the bot the TOKEN actually reaches.
+    #
+    # These are two independent settings that must name the same bot: the
+    # token decides who sends the messages, the username builds the invite
+    # deep link. Nothing else compares them, and a mismatch is silent on both
+    # sides -- messages arrive normally while every invite link opens "user
+    # not found", which reads as a binding fault rather than a typo.
+    from dewey_time.telegram import binding
+
+    configured = binding.normalise_bot_username(
+        frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_bot_username")
+    )
+    actual = report["bot"] if isinstance(report["bot"], str) else None
+    report["invite_username"] = configured or None
+    if configured and actual and configured.lower() != actual.lower():
+        report["invite_username_mismatch"] = actual
+
     hook = _get("getWebhookInfo").get("result") or {}
     report["webhook"] = {
         "url": hook.get("url") or None,

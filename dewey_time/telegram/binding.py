@@ -14,6 +14,7 @@ an authorized Employee cannot be accidentally ignored.
 """
 
 import hashlib
+import re
 import secrets
 
 import frappe
@@ -29,6 +30,24 @@ SETTINGS = "Dewey Time Settings"
 #: limit of [A-Za-z0-9_-].
 TOKEN_BYTES = 32
 DEFAULT_TTL_HOURS = 168  # 7 days
+
+#: Telegram's rule for a username: 5-32 of [A-Za-z0-9_]. Bot usernames also
+#: end in "bot", which is NOT enforced here -- that is Telegram's rule to
+#: change, and refusing a name Telegram itself issued would be worse than the
+#: dead link this check exists to prevent.
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+#: Every form of the bot's profile address that can be pasted into the
+#: username field. Longest first, so "https://t.me/" is not left as "//t.me/"
+#: by an earlier partial match.
+_PROFILE_PREFIXES = (
+    "https://t.me/",
+    "http://t.me/",
+    "https://telegram.me/",
+    "http://telegram.me/",
+    "t.me/",
+    "telegram.me/",
+)
 
 
 def _hash_token(token: str) -> str:
@@ -106,6 +125,32 @@ def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> str:
         expires_at=add_to_date(now_datetime(), hours=ttl_hours),
     )
     return token
+
+
+def normalise_bot_username(raw) -> str:
+    """The bare username, out of whatever form it was configured in.
+
+    "@deweytimebot" is how Telegram DISPLAYS a username -- in the profile, in
+    BotFather's reply, in every mention -- so it is the form a person copies.
+    Pasted straight into Settings it produced
+    `https://t.me/@deweytimebot?start=...`, and the deep link is the one place
+    the @ is not allowed: Telegram answers that with "user not found". The
+    employee sees a broken link, HR sees a link they successfully created, and
+    nothing anywhere records a fault.
+
+    The field's description already asks for the bare name, and that was not
+    enough -- which is the usual fate of a description. So accept what people
+    actually paste: the @ form, the profile URL, either with stray whitespace.
+    """
+    text = str(raw or "").strip()
+    lowered = text.lower()
+    for prefix in _PROFILE_PREFIXES:
+        if lowered.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    # A pasted profile URL can carry a trailing slash or a query of its own.
+    text = text.split("?", 1)[0].split("/", 1)[0]
+    return text.strip().lstrip("@").strip()
 
 
 def link_url(token: str, bot_username: str) -> str:
@@ -282,9 +327,22 @@ def employee_for_telegram_user(telegram_user_id: str) -> str:
 
 
 def _bot_username() -> str:
-    username = (frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_bot_username") or "").strip()
+    username = normalise_bot_username(
+        frappe.get_cached_value(SETTINGS, SETTINGS, "telegram_bot_username")
+    )
     if not username:
         frappe.throw("Telegram bot username is not configured")
+    # REFUSED RATHER THAN INTERPOLATED. Anything that is not a username makes a
+    # link that cannot resolve, and a link that cannot resolve fails in the
+    # worst possible place: a week later, in a chat, to the employee, with the
+    # token already spent and no error anywhere HR would look. An exception in
+    # front of the person clicking "Create link" is the cheap version of the
+    # same discovery.
+    if not _USERNAME_RE.match(username):
+        frappe.throw(
+            f"Telegram bot username {username!r} is not a valid username. "
+            "Expected 5-32 letters, digits or underscores, e.g. dewey_time_bot."
+        )
     return username
 
 
@@ -302,9 +360,14 @@ def create_link_invite(employee: str) -> dict:
     if not employee:
         frappe.throw("employee is required")
 
+    # Resolved BEFORE the token is minted. Written as
+    # `link_url(issue_link_token(...), _bot_username())` the mint evaluates
+    # first, so every attempt against a misconfigured username left a live
+    # token row behind and still returned an error.
+    bot = _bot_username()
     token = issue_link_token(employee)
     return {
         "employee": employee,
-        "url": link_url(token, _bot_username()),
+        "url": link_url(token, bot),
         "expires_at": str(add_to_date(now_datetime(), hours=DEFAULT_TTL_HOURS)),
     }
