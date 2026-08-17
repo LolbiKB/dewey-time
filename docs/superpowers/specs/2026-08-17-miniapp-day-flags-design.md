@@ -318,11 +318,19 @@ the data says, and HR can still forgive it.
 - Create: `src/miniapp/MiniFlagButton.tsx`
 - Modify: `src/miniapp/MyDayPage.tsx` — mount the pill and sheet
 - Modify: `src/miniapp/miniStrings.ts`
+- Modify: `src/types/calendar.ts` — two optional fields join `Flag`
 
-`src/types/calendar.ts` is **not** touched. Its `Flag` is the full HR row and
-stays that way for the HR console; the narrowed four-field shape is its own
-`MiniFlag` type declared in `miniFlags.ts`, so the two cannot drift into each
-other.
+`Flag` in `calendar.ts` currently under-describes the payload:
+`hr_calendar.py:738-739` puts `decision` and `decision_state` on every flag row
+and the type does not mention them. They are added as optional, typed as the
+narrower `{outcome, decided_at}` shape a non-HR viewer actually receives —
+`FlagDecision` in `types/flags.ts` is the unredacted HR row and stays that way.
+
+A separate `MiniFlag` type was the first plan and is not worth it: `Flag` is
+already a partial description of the row (`evidence?`, `is_provisional?`,
+`severity?` are all optional), so a second type would describe the same thing
+twice, and reading `day.flags` into it would need a cast — which silences the
+compiler rather than telling it anything.
 
 **Tests**
 - Create: `src/miniapp/miniFlags.test.ts`
