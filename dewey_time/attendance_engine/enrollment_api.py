@@ -14,6 +14,7 @@ import frappe
 from frappe.query_builder.functions import Count
 from frappe.utils import add_days, getdate
 
+from dewey_time.attendance_engine import finger_slots
 from dewey_time.attendance_engine.enrollment import ENROLLMENT_DOCTYPE, SETTINGS_DOCTYPE
 from dewey_time.attendance_engine.enrollment_buckets import (
     ENROLLED_NOT_PUNCHING,
@@ -248,10 +249,17 @@ def enrollment_status(employee: str) -> dict:
     # leaves the row's name behind, so a by-name lookup would find nothing and
     # this seam would answer "not enrolled" for someone who is. The same reason
     # enrollment.upsert_enrollment_row stopped keying on the docname.
+    fields = ["employee", "is_registered", "fingerprint_count", "face_count", "synced_at"]
+    # Guarded, the way _identity guards the Khmer name pair: on a site whose
+    # migrate has not run, an unknown column makes the whole select raise --
+    # which would take the Mini App's Profile tab down to lose one optional row.
+    if frappe.db.has_column(ENROLLMENT_DOCTYPE, "finger_ids"):
+        fields.append("finger_ids")
+
     row = frappe.db.get_value(
         ENROLLMENT_DOCTYPE,
         {"employee": employee},
-        ["employee", "is_registered", "fingerprint_count", "face_count", "synced_at"],
+        fields,
         as_dict=True,
     )
     return {
@@ -259,6 +267,9 @@ def enrollment_status(employee: str) -> dict:
         "is_registered": bool(row and row.get("is_registered")),
         "fingerprint_count": int((row or {}).get("fingerprint_count") or 0),
         "face_count": int((row or {}).get("face_count") or 0),
+        # PARSED here rather than at each consumer: "3,6" is a storage detail,
+        # and every caller re-parsing it is one caller getting it wrong.
+        "finger_ids": finger_slots.ids_from_field((row or {}).get("finger_ids")),
         "synced_at": (row or {}).get("synced_at"),
         "last_snapshot_at": _last_snapshot_at(),
     }

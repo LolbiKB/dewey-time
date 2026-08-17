@@ -11,6 +11,7 @@ import json
 import frappe
 from frappe.utils import cint
 
+from dewey_time.attendance_engine import finger_slots
 from dewey_time.attendance_engine.bridge_auth import validate_bridge_request
 
 ENROLLMENT_DOCTYPE = "Employee Biometric Enrollment"
@@ -35,6 +36,7 @@ def upsert_enrollment_row(
     is_registered: bool = False,
     fingerprint_count=None,
     face_count=None,
+    finger_ids=None,
     synced_at=None,
     bridge_env=None,
 ) -> str:
@@ -63,6 +65,11 @@ def upsert_enrollment_row(
         # compares badly in db filters such as {"is_registered": 1}.
         "is_registered": 1 if is_registered else 0,
         "fingerprint_count": _coerce_int(fingerprint_count),
+        # Sorted and deduped on the way in, so a snapshot that changed nothing
+        # does not rewrite `modified` on hundreds of rows. "" for nothing, never
+        # None -- _clear_absent_rows writes "" too, and the two paths must not
+        # leave a row's emptiness depending on which one last touched it.
+        "finger_ids": finger_slots.field_from_ids(finger_ids),
         "face_count": _coerce_int(face_count),
         "synced_at": synced_at,
         "bridge_env": bridge_env,
@@ -178,6 +185,7 @@ def _aggregate_by_employee(linked) -> tuple:
                 "is_registered": _coerce_bool(user.get("is_registered")),
                 "fingerprint_count": _coerce_int(user.get("fingerprint_count")),
                 "face_count": _coerce_int(user.get("face_count")),
+                "finger_ids": finger_slots.normalize_ids(user.get("finger_ids")),
             }
             continue
 
@@ -190,6 +198,12 @@ def _aggregate_by_employee(linked) -> tuple:
         )
         current["face_count"] = max(
             current["face_count"], _coerce_int(user.get("face_count"))
+        )
+        # UNION, not replace -- the same rule as OR-ing the flags. A template
+        # that exists only on the other device is still one of this person's
+        # fingers, and taking the last row's list would silently drop it.
+        current["finger_ids"] = finger_slots.normalize_ids(
+            current["finger_ids"] + finger_slots.normalize_ids(user.get("finger_ids"))
         )
         if not current["pin"]:
             current["pin"] = user.get("pin")
@@ -224,6 +238,10 @@ def _clear_absent_rows(docnames, *, synced_at=None, bridge_env=None) -> int:
                 "is_registered": 0,
                 "fingerprint_count": 0,
                 "face_count": 0,
+                # Cleared with the counts, and this is the load-bearing one: a
+                # surviving "3,6" beside is_registered=0 would have the Mini App
+                # naming two fingers directly under the words "Not set up".
+                "finger_ids": "",
                 "synced_at": synced_at,
                 "bridge_env": bridge_env,
             },
@@ -328,6 +346,7 @@ def notify_enrollment_snapshot(bridge_env=None, scanned_at=None, users=None, all
             is_registered=entry["is_registered"],
             fingerprint_count=entry["fingerprint_count"],
             face_count=entry["face_count"],
+            finger_ids=entry["finger_ids"],
             synced_at=scanned_at,
             bridge_env=bridge_env,
         )
