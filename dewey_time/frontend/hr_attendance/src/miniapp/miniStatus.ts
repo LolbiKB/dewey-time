@@ -55,6 +55,28 @@ function inOrder(day: Day | undefined) {
   return [...(day?.checkins ?? [])].sort((a, b) => String(a.time).localeCompare(String(b.time)));
 }
 
+/**
+ * Is the last punch an arrival that has not been closed?
+ *
+ * NOT "the last punch is not an OUT". That was the rule here, and it claims
+ * someone is at work on any evidence short of an explicit departure —
+ * including a blank `log_type`, which is a legitimate state: Employee
+ * Checkin's `log_type` is an optional Select, and a device that reports only
+ * a timestamp leaves it empty on every row. Every punch then reads as an
+ * arrival and the chip says "In" for the rest of the person's life.
+ *
+ * An explicit label is believed. Without one, the punches are PAIRED — the
+ * same thing `deriveSegments` does to draw the timeline directly below this
+ * chip, so an odd count is an open run in both places and the two surfaces
+ * cannot disagree about the same day.
+ */
+function stillInside(punches: { log_type?: string | null }[]): boolean {
+  const last = String(punches[punches.length - 1]?.log_type || "").toUpperCase();
+  if (last === "IN") return true;
+  if (last === "OUT") return false;
+  return punches.length % 2 === 1;
+}
+
 export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniStatus {
   // Day-level facts first, and for ANY day rather than only today. A holiday
   // is a holiday whether or not it is this morning, and leave is the state the
@@ -79,7 +101,7 @@ export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniSta
   if (!punches.length) return { kind: "notIn" };
 
   const last = punches[punches.length - 1]!;
-  if (String(last.log_type || "").toUpperCase() !== "OUT") {
+  if (stillInside(punches)) {
     return { kind: "in", branch: (last.custom_device_branch || "").trim() || null };
   }
 

@@ -77,6 +77,31 @@ test("out before the shift opens is not 'during' it", () => {
   assert.equal(miniStatus(day(punches), DAY, at(7)).kind, "out");
 });
 
+test("an unlabelled punch stream is paired, not assumed to be an arrival", () => {
+  // Employee Checkin's `log_type` is an OPTIONAL Select, and a device that
+  // reports only a timestamp leaves it empty on every row. The rule here used
+  // to be "the last punch is not an OUT", which claims someone is at work on
+  // any evidence short of an explicit departure -- so an unlabelled stream
+  // read "In" forever, including after they had gone home.
+  //
+  // Paired instead, the way deriveSegments pairs them to draw the timeline
+  // directly below this chip, so the two surfaces cannot disagree.
+  const blank = (time: string): Punch => [time, "" as never];
+  const home = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00"), blank("17:06:00")]);
+  assert.notEqual(miniStatus(home, DAY, at(17, 30)).kind, "in", "four punches is two closed runs");
+
+  const working = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00")]);
+  assert.equal(miniStatus(working, DAY, at(14)).kind, "in", "three punches leaves one open");
+
+  assert.equal(miniStatus(day([blank("07:58:00")]), DAY, at(9)).kind, "in");
+});
+
+test("an explicit label always wins over the pairing", () => {
+  // Pairing is the fallback, not the rule. A single punch explicitly marked
+  // OUT is someone who left, however odd the count.
+  assert.notEqual(miniStatus(day([["17:06:00", "OUT"]]), DAY, at(17, 30)).kind, "in");
+});
+
 test("the LAST punch decides, whatever order the payload arrived in", () => {
   // The basis of in-versus-out. One out-of-order row would invert the answer,
   // and the payload's order is the query's order, not a guarantee.
