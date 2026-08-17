@@ -12,8 +12,11 @@ import {
   bindBackButton,
   safeAreaInsets,
   initTelegramChrome,
+  isAppActive,
   isHexColor,
+  onActiveChange,
   onViewportChange,
+  signalReady,
   tabHaptic,
   themeFrom,
 } from "@/miniapp/telegramChrome";
@@ -116,7 +119,7 @@ test("every chrome call is feature-detected, so an old client cannot crash", () 
   assert.doesNotThrow(() => tabHaptic({} as never));
 });
 
-test("init readies, expands, and stops a scroll from closing the app", () => {
+test("init expands and stops a scroll from closing the app", () => {
   const calls: string[] = [];
   const w = {
     Telegram: {
@@ -135,7 +138,8 @@ test("init readies, expands, and stops a scroll from closing the app", () => {
   const doc = fakeDoc();
   const teardown = initTelegramChrome(w, doc);
 
-  assert.deepEqual(calls, ["ready", "expand", "disableVerticalSwipes", "on:themeChanged"]);
+  // No "ready" — it moved to signalReady, on the frame after the first paint.
+  assert.deepEqual(calls, ["expand", "disableVerticalSwipes", "on:themeChanged"]);
   assert.equal(doc._has("dark"), true, "theme applied on launch, not only on change");
   teardown();
   assert.equal(calls.at(-1), "off:themeChanged", "listener is removable");
@@ -368,3 +372,87 @@ test("a CloudStorage failure opens the app anyway", async () => {
   assert.equal(await loadLastTab(throwing, () => true), null);
 });
 
+
+// ---------------------------------------------------------------------------
+// ready(), and the activity signal
+// ---------------------------------------------------------------------------
+
+test("ready() is deferred to a frame, not fired during import", () => {
+  // It hides Telegram's loading placeholder. Called at module scope — where it
+  // used to be — that happens before React has painted, so the branded splash
+  // is replaced by a blank sheet in the app's background colour.
+  const calls: string[] = [];
+  let frame: (() => void) | null = null;
+  const w = {
+    requestAnimationFrame: (cb: () => void) => { frame = cb; return 1; },
+    Telegram: { WebApp: { ready: () => calls.push("ready") } },
+  } as unknown as Window;
+
+  signalReady(w);
+  assert.deepEqual(calls, [], "nothing may fire before the frame");
+  frame!();
+  assert.deepEqual(calls, ["ready"]);
+});
+
+test("ready() still fires where there are no frames to wait for", () => {
+  // Telegram Desktop's webview, a test runner, anything without rAF. Never
+  // calling ready() leaves the placeholder up forever, which is a white screen
+  // rather than a slightly early one.
+  const calls: string[] = [];
+  const w = { Telegram: { WebApp: { ready: () => calls.push("ready") } } } as unknown as Window;
+  signalReady(w);
+  assert.deepEqual(calls, ["ready"]);
+  assert.doesNotThrow(() => signalReady({} as Window));
+});
+
+test("a client too old to report activity is treated as active", () => {
+  // isActive is Bot API 8.0. Reading `undefined` as "not active" would switch
+  // the 60s poll off permanently on exactly the old phones this roster runs.
+  assert.equal(isAppActive({} as Window), true);
+  assert.equal(isAppActive({ Telegram: { WebApp: {} } } as unknown as Window), true);
+});
+
+test("activity follows Telegram's own pair of events", () => {
+  // NOT document.visibilityState: a minimised Mini App drops behind the chat
+  // and keeps running, and the webview is not reliably marked hidden. That is
+  // the gap `activated`/`deactivated` were added in 8.0 to close.
+  const handlers: Record<string, (() => void)[]> = {};
+  const w = { Telegram: { WebApp: {
+    isActive: false,
+    onEvent: (e: string, h: () => void) => { (handlers[e] ??= []).push(h); },
+    offEvent: (e: string, h: () => void) => {
+      handlers[e] = (handlers[e] ?? []).filter((x) => x !== h);
+    },
+  } } } as unknown as Window;
+
+  assert.equal(isAppActive(w), false, "a minimised app reports itself minimised");
+
+  const seen: boolean[] = [];
+  const stop = onActiveChange(w, (active) => seen.push(active));
+  handlers.activated![0]!();
+  handlers.deactivated![0]!();
+  assert.deepEqual(seen, [true, false]);
+
+  // Both unsubscribed, not just one. A stray `deactivated` outliving the
+  // component would switch the poll off with nothing left to switch it back.
+  stop();
+  assert.equal((handlers.activated ?? []).length, 0);
+  assert.equal((handlers.deactivated ?? []).length, 0);
+});
+
+test("initTelegramChrome does not call ready", () => {
+  // It runs at module scope, before React mounts. This is the regression the
+  // signalReady tests above only half-cover: putting ready() back here would
+  // leave them all green while the blank sheet returns.
+  const calls: string[] = [];
+  const w = { Telegram: { WebApp: {
+    ready: () => calls.push("ready"),
+    expand: () => calls.push("expand"),
+    disableVerticalSwipes: () => calls.push("swipes"),
+  } } } as unknown as Window;
+  const doc = { documentElement: { classList: { toggle() {} }, style: { setProperty() {} } } } as unknown as Document;
+
+  initTelegramChrome(w, doc)();
+  assert.ok(calls.includes("expand"), "the rest of the launch setup still runs");
+  assert.ok(!calls.includes("ready"), "ready belongs after the first frame");
+});

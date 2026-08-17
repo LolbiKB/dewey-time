@@ -19,9 +19,20 @@
          Ordering still holds: deferred classic scripts and module scripts both
          run after parsing, in document order, so the SDK is on `window` before
          main.tsx reads it. -->
-    <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script type="module" crossorigin src="/assets/dewey_time/miniapp/assets/index.js?v=1786940494999"></script>
-    <link rel="stylesheet" crossorigin href="/assets/dewey_time/miniapp/assets/index.css?v=1786940494999">
+    <!--
+         `?63` is the SDK's own version stamp, and it is the cache key. Without
+         it a phone that loaded this app once keeps whatever copy of
+         telegram-web-app.js it cached then — and an older copy simply does not
+         define the newer surface. `safeAreaInset`, `contentSafeAreaInset` and
+         the `activated` event are all Bot API 8.0; on a stale SDK they are
+         `undefined`, every guard in telegramChrome.ts reads that as "old
+         client", and the app quietly renders with zero insets on a phone whose
+         Telegram is perfectly current. Telegram's own docs ship the number in
+         the snippet for exactly this reason. Bump it when they do.
+    -->
+    <script defer src="https://telegram.org/js/telegram-web-app.js?63"></script>
+    <script type="module" crossorigin src="/assets/dewey_time/miniapp/assets/index.js?v=1786941007409"></script>
+    <link rel="stylesheet" crossorigin href="/assets/dewey_time/miniapp/assets/index.css?v=1786941007409">
       <script>window.csrf_token = "{{ frappe.session.csrf_token }}";</script>
   </head>
   <body>
