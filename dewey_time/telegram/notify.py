@@ -179,9 +179,23 @@ def delivery_gates(employee: str | None = None) -> dict:
         "rollout_configured": rollout.phases_configured(),
     }
     if employee:
-        link = _link_for(employee)
         gates["employee"] = employee
-        gates["employee_linked"] = bool(link)
+        # EXISTENCE FIRST. Without this the report answers confidently about a
+        # record that is not there: `_link_for` finds no link for a name that
+        # cannot have one, and `phase_for_employee` resolves no branch and so
+        # falls back to the site-wide phase -- so a typo returns
+        # `employee_linked: false` and a plausible-looking `PRELAUNCH`, which
+        # reads exactly like a real employee who is blocked.
+        #
+        # That happened: a placeholder id from a instructions was pasted into
+        # a real query, and the answer sent two people looking for a binding
+        # fault that did not exist.
+        if not frappe.db.exists("Employee", employee):
+            gates["employee_exists"] = False
+            return gates
+
+        gates["employee_exists"] = True
+        gates["employee_linked"] = bool(_link_for(employee))
         gates["employee_phase"] = rollout.phase_for_employee(
             employee=employee, attendance_date=nowdate()
         )
