@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 import { plannedDaysFromSchedule, type PlannedDay } from "@/lib/plannedDays";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { formatMinuteOfDay } from "@/miniapp/miniDay";
-import { weekForOffset, weekRangeLabel, WeekNav } from "@/miniapp/MyWeekPage";
+import { weekForOffset, weekRangeLabel } from "@/miniapp/miniWeek";
+import { WeekNav } from "@/miniapp/MiniWeekNav";
 import { MiniState } from "@/miniapp/MiniState";
 import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
 
@@ -113,11 +114,11 @@ export function MySchedulePage(props: {
     format(week[6]!, "yyyy-MM-dd"),
   );
 
-  // The same navigator the Week tab uses, and deliberately the same component:
-  // the two tabs answer "what did I work" and "what am I rostered for" about
-  // THE SAME WEEK, and two different ways of choosing it would be two things
-  // to learn. This tab did not offer one at all, so it was permanently stuck
-  // on the current week while its neighbour paged.
+  // Extracted from the Week tab when the calendar sheet replaced it. This is
+  // now its only caller, and it stays a separate component rather than being
+  // inlined: the roster is the one surface that pages FORWARD (forwardLimit
+  // false), and that argument is easier to see at a call site than buried in
+  // a page body.
   const nav = (
     <WeekNav
       label={weekRangeLabel(week, fmt)}

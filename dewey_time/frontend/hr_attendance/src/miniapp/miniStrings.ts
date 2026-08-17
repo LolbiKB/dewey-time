@@ -24,7 +24,6 @@ export type StringKey = keyof typeof EN;
 const EN = {
   // Tabs
   tabToday: "Today",
-  tabWeek: "Week",
   tabSchedule: "Schedule",
 
   // Day states — records, never judgements. See the note above.
@@ -65,9 +64,19 @@ const EN = {
   previousWeek: "Previous week",
   nextWeek: "Next week",
   backToThisWeek: "Back to this week",
-  workedThisWeek: "Worked this week, net of lunch",
   rosteredThisWeek: "Rostered this week, net of lunch",
   noShiftsThisWeek: "No shifts are assigned to you this week.",
+
+  // Calendar sheet. The four marks are ACCESSIBLE TEXT, not decoration: the
+  // grid is otherwise a field of identical circles to a screen reader, and the
+  // marks are the reason the grid exists. Each says what the RECORD is, never
+  // what the day was worth.
+  chooseDate: "Choose a date",
+  workedInMonth: "Worked this month, net of lunch",
+  markComplete: "complete record",
+  markIncomplete: "no clock-out recorded",
+  markMissing: "no record",
+  markOff: "not a working day",
 
   // Chrome
   yourRecord: "Your record",
@@ -76,16 +85,13 @@ const EN = {
 
   // States
   loadingDay: "Loading your day…",
-  loadingWeek: "Loading your week…",
   loadingSchedule: "Loading your schedule…",
   errorDay: "Couldn't load your day. Try again in a moment.",
-  errorWeek: "Couldn't load your week. Try again in a moment.",
   errorSchedule: "Couldn't load your schedule. Try again in a moment.",
 } as const;
 
 const KM: Record<StringKey, string> = {
   tabToday: "ថ្ងៃនេះ",
-  tabWeek: "សប្តាហ៍",
   tabSchedule: "កាលវិភាគ",
 
   stateDayOff: "ថ្ងៃឈប់",
@@ -114,19 +120,23 @@ const KM: Record<StringKey, string> = {
   previousWeek: "សប្តាហ៍មុន",
   nextWeek: "សប្តាហ៍ក្រោយ",
   backToThisWeek: "ត្រឡប់ទៅសប្តាហ៍នេះ",
-  workedThisWeek: "ម៉ោងធ្វើការសប្តាហ៍នេះ (ដកម៉ោងសម្រាក)",
   rosteredThisWeek: "ម៉ោងតាមកាលវិភាគសប្តាហ៍នេះ (ដកម៉ោងសម្រាក)",
   noShiftsThisWeek: "សប្តាហ៍នេះ អ្នកមិនមានវេនការងារទេ។",
+
+  chooseDate: "ជ្រើសរើសថ្ងៃ",
+  workedInMonth: "ម៉ោងធ្វើការខែនេះ (ដកម៉ោងសម្រាក)",
+  markComplete: "កំណត់ត្រាពេញលេញ",
+  markIncomplete: "មិនមានកំណត់ត្រាចេញ",
+  markMissing: "មិនមានកំណត់ត្រា",
+  markOff: "មិនមែនថ្ងៃធ្វើការ",
 
   yourRecord: "កំណត់ត្រារបស់អ្នក",
   openFromTelegram: "សូមបើកពី Telegram",
   openFromTelegramBody: "កំណត់ត្រាវត្តមានរបស់អ្នកអាចមើលបានតែតាម Dewey Time bot ប៉ុណ្ណោះ។",
 
   loadingDay: "កំពុងផ្ទុក…",
-  loadingWeek: "កំពុងផ្ទុក…",
   loadingSchedule: "កំពុងផ្ទុក…",
   errorDay: "មិនអាចផ្ទុកបានទេ។ សូមព្យាយាមម្ដងទៀត។",
-  errorWeek: "មិនអាចផ្ទុកបានទេ។ សូមព្យាយាមម្ដងទៀត។",
   errorSchedule: "មិនអាចផ្ទុកបានទេ។ សូមព្យាយាមម្ដងទៀត។",
 };
 

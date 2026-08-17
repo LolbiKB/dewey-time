@@ -234,37 +234,72 @@ test("the day header does not wrap in Khmer at a narrow width", async ({ page })
     .toBeLessThanOrEqual(wide);
 });
 
-test("the week tab pages between weeks and cannot go past this one", async ({ page }) => {
+test("the calendar pages back three months and never forward of this one", async ({ page }) => {
+  // Three months TOTAL, this one included. The bound reads two ways and the
+  // difference is a whole month, so it is exercised rather than described.
   await openMiniApp(page);
-  await page.getByRole("button", { name: "Week", exact: true }).click();
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
 
-  await expect(page.getByText("This week", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Next week" })).toBeDisabled();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
 
-  await page.getByRole("button", { name: "Previous week" }).click();
-  await expect(page.getByRole("button", { name: "Back to this week" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Next week" })).toBeEnabled();
+  const back = sheet.getByRole("button", { name: /previous month/i });
+  const forward = sheet.getByRole("button", { name: /next month/i });
 
-  await page.getByRole("button", { name: "Back to this week" }).click();
-  await expect(page.getByText("This week", { exact: true })).toBeVisible();
+  await expect(forward, "nothing is recorded in the future").toBeDisabled();
+
+  await back.click();
+  await expect(forward).toBeEnabled();
+  await back.click();
+  await expect(back, "three months of reach, and no more").toBeDisabled();
 });
 
-test("tapping a day in the week opens that day, and Telegram's back button returns", async ({ page }) => {
+test("the calendar opens as a bottom sheet and picking a day lands on it", async ({ page }) => {
   await openMiniApp(page);
-  await page.getByRole("button", { name: "Week", exact: true }).click();
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
 
-  // NOT today. The heading reads "Today" for the current date by design, so a
-  // hardcoded Monday made this test fail every Monday — it asserted the
-  // heading names the day, and on one day in seven the correct heading does
-  // not. Pick any other day of the same week instead.
-  const todayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  const other = todayName === "Monday" ? "Tuesday" : "Monday";
-  const row = page.getByRole("button", { name: new RegExp(`^${other} .*:`) });
-  await expect(row).toBeVisible();
-  await row.click();
+  const sheet = page.getByRole("dialog");
+  // A BOTTOM sheet, not a centre dialog: it must sit against the bottom edge
+  // at every width, which is why ResponsiveModal was not used.
+  //
+  // Retried rather than measured once. The sheet SLIDES UP, so a single
+  // reading lands mid-animation — the first version of this failed by exactly
+  // the distance still left to travel, which looks identical to a sheet
+  // rendered in the wrong place.
+  const viewport = page.viewportSize()!;
+  await expect(async () => {
+    const box = (await sheet.boundingBox())!;
+    expect(
+      Math.abs(box.y + box.height - viewport.height),
+      "the sheet must be anchored to the bottom edge",
+    ).toBeLessThanOrEqual(2);
+  }).toPass({ timeout: 5_000 });
+
+  // A day that is not today, so the heading has to name it.
+  const todayNum = new Date().getDate();
+  const pick = todayNum > 3 ? todayNum - 2 : todayNum + 2;
+  await sheet.getByRole("button", { name: new RegExp(`^\\w+day ${pick} \\w+`) }).first().click();
+
+  await expect(sheet).not.toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(String(pick));
+});
+
+test("tapping a day in the calendar opens it, and Telegram's back button returns", async ({ page }) => {
+  await openMiniApp(page);
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
+
+  // NOT today. The heading reads "Today" for the current date by design, so
+  // asserting it names the weekday would fail on whichever day was hardcoded.
+  const now = new Date();
+  const pickDay = now.getDate() > 3 ? now.getDate() - 2 : now.getDate() + 2;
+  const picked = new Date(now.getFullYear(), now.getMonth(), pickDay);
+  const weekday = picked.toLocaleDateString("en-US", { weekday: "long" });
+
+  await page.getByRole("dialog")
+    .getByRole("button", { name: new RegExp(`^${weekday} ${pickDay} \\w+`) }).first().click();
 
   // The day tab, showing that day rather than today.
-  await expect(page.getByRole("heading", { level: 1 })).toContainText(other);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(weekday);
   // Telegram's own back button is the way out — not one we drew ourselves.
   const shown = await page.evaluate(
     () => (window as unknown as { Telegram: { WebApp: { BackButton: { isVisible: boolean } } } })
@@ -273,11 +308,33 @@ test("tapping a day in the week opens that day, and Telegram's back button retur
   expect(shown, "a drill-in with no way back strands the reader").toBe(true);
 });
 
+test("every day announces its mark, not just draws it", async ({ page }) => {
+  // THE GRID IS FORTY IDENTICAL CIRCLES TO A SCREEN READER, and the circles
+  // are the entire reason it exists. This has to be asserted on the RENDERED
+  // accessible name: react-day-picker sets its own aria-label on each day
+  // button, which beats name-from-content, so the visually-hidden span that
+  // looked right in the source announced nothing at all. A source-read test
+  // passed the whole time it was broken.
+  await openMiniApp(page, { punched: "full" });
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
+
+  const sheet = page.getByRole("dialog");
+  const names = await sheet.getByRole("button").evaluateAll((els) =>
+    els.map((el) => el.getAttribute("aria-label")).filter(Boolean) as string[],
+  );
+  const days = names.filter((n) => /\d/.test(n) && /day/i.test(n));
+  expect(days.length, "no day buttons found — the locator is wrong").toBeGreaterThan(20);
+
+  // Every fixture day is a full 4-punch day, so each past one is complete.
+  const withMark = days.filter((n) => /complete record|no clock-out|no record|not a working day/.test(n));
+  expect(withMark.length, `no day named its mark: ${days[0]}`).toBeGreaterThan(0);
+});
+
 test("nothing overflows the viewport at a phone width", async ({ page }) => {
   // The sheet is the whole app. A page that scrolls sideways inside Telegram
   // reads as broken, and the tab bar is the row that gets pushed off.
   await openMiniApp(page);
-  for (const tab of ["Today", "Week", "Schedule"]) {
+  for (const tab of ["Today", "Schedule"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
     const overflow = await page.evaluate(() => ({
       scroll: document.documentElement.scrollWidth,
@@ -318,7 +375,7 @@ test("the schedule tab reads in 12-hour time and names the break", async ({ page
 });
 
 test("the schedule tab can look forward, because a roster is published ahead", async ({ page }) => {
-  // The Week tab is capped at the current week — attendance has not happened
+  // The calendar is capped at the current month — attendance has not happened
   // yet. A roster has, and looking at next week is the main reason to open
   // this tab at all.
   await openMiniApp(page);
@@ -401,13 +458,14 @@ test("a Khmer interface has no Latin digits left anywhere in it", async ({ page 
   expect(await header.innerText(), "the Day heading kept Latin numerals")
     .not.toMatch(/[0-9]/);
 
-  await page.getByRole("button", { name: "សប្តាហ៍", exact: true }).click();
-  const week = page.getByRole("list");
-  await expect(week).toBeVisible();
-  expect(await week.innerText(), "a Week row kept Latin numerals").not.toMatch(/[0-9]/);
-  // And the total under it, which is a duration rather than a date.
-  const weekTotal = page.getByText("ម៉ោងធ្វើការសប្តាហ៍នេះ (ដកម៉ោងសម្រាក)");
-  await expect(weekTotal.locator("xpath=..")).not.toContainText(/[0-9]/);
+  // The calendar sheet: month caption, weekday headers, every day number and
+  // the month total. The caption is the one date-fns does NOT localise — it
+  // gives សីហា and then "2026" — so it is inside this sweep deliberately.
+  await page.getByRole("button", { name: /ជ្រើសរើសថ្ងៃ/ }).first().click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  expect(await sheet.innerText(), "the calendar kept Latin numerals").not.toMatch(/[0-9]/);
+  await page.keyboard.press("Escape");
 
   await page.getByRole("button", { name: "កាលវិភាគ", exact: true }).click();
   const schedule = page.getByRole("list");
@@ -424,10 +482,10 @@ test("the same screens in English are unchanged, digits and all", async ({ page 
   await expect(header).toContainText("August");
   expect(await header.innerText()).toMatch(/[0-9]/);
 
-  await page.getByRole("button", { name: "Week", exact: true }).click();
-  const week = page.getByRole("list");
-  await expect(week).toContainText("8h 11m");
-  await expect(week).toContainText("7:58 AM – 5:06 PM");
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toContainText("August");
+  expect(await sheet.innerText(), "the English calendar must show digits").toMatch(/[0-9]/);
 });
 
 test("an English client is not given a Khmer interface it did not ask for", async ({ page }) => {
