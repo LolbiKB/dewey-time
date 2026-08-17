@@ -1,4 +1,4 @@
-import type { RolloutPhase } from "@/types/flags";
+import type { DecisionState, Outcome, RolloutPhase } from "@/types/flags";
 
 export type Severity = "INFO" | "WARNING" | "CRITICAL";
 export type FlagStatus = "OPEN" | "EXPLAINED" | "APPROVED" | "REJECTED" | "CLOSED";
@@ -53,6 +53,18 @@ export type Flag = {
   is_provisional?: boolean;
   rule_version?: string;
   evidence?: unknown;
+  /**
+   * HR's live decision, or null while undecided.
+   *
+   * NARROWER than `FlagDecision` in types/flags.ts on purpose: hr_calendar
+   * redacts this to {outcome, decided_at} for a non-HR viewer
+   * (hr_calendar.py:729), so the note, the reason and who decided are absent
+   * in the employee's own view. Typed as the intersection both callers can
+   * rely on.
+   */
+  decision?: { outcome?: Outcome | null; decided_at?: string | null } | null;
+  /** Whether HR's decision still matches this flag's identity. */
+  decision_state?: DecisionState;
 };
 
 export type ObservedLunch = {

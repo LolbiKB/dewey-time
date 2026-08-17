@@ -78,6 +78,48 @@ const EN = {
   markMissing: "no record",
   markOff: "not a working day",
 
+  // Day flags. The engine's findings, in the second person, as RECORDS rather
+  // than verdicts — the same rule the day states above follow.
+  //
+  // No numbers anywhere: `evidence` is never sent to this app (grace minutes
+  // are HR-only), so there is no duration here that could be trusted against
+  // what HR sees. The timeline directly behind the sheet draws the times.
+  flagsToCheck: "{n} to check",
+  flagsSheetTitle: "Things to check",
+  flagsNone: "Nothing to check on this day.",
+
+  flagLateStart: "Late start",
+  flagLateStartBody: "Your first check-in was after your shift started.",
+  flagLeftEarly: "Left early",
+  flagLeftEarlyBody: "Your last check-out was before your shift ended.",
+  flagLateFromLunch: "Late back from lunch",
+  flagLateFromLunchBody: "You checked back in after your lunch break ended.",
+  flagMissingTime: "Gap in your record",
+  flagMissingTimeBody: "There's a stretch of your shift with no check-in covering it.",
+  flagMissingInOrOut: "Only one check-in",
+  flagMissingInOrOutBody:
+    "Only one check-in was recorded, so there's no start-and-finish pair.",
+  // UNNOTIFIED_ABSENCE maps here. "Unnotified absence" is a verdict word and
+  // this app has no standing to use it; "no record" is what the data says, and
+  // HR can still forgive it.
+  flagNoRecord: "No record for this day",
+  flagNoRecordBody: "This was a working day and no check-ins were recorded.",
+  flagOffShiftPunch: "Checked in on a non-working day",
+  flagOffShiftPunchBody:
+    "Check-ins were recorded on a day you weren't scheduled to work.",
+  flagMissingLunch: "Lunch not recorded",
+  flagMissingLunchBody:
+    "Your lunch break couldn't be matched to a check-out and check-in pair.",
+  flagAttendanceIssue: "Record couldn't be matched up",
+  flagAttendanceIssueBody:
+    "Your check-ins for this day couldn't be paired into complete sessions.",
+
+  flagStatusAwaiting: "Awaiting HR review",
+  flagStatusExcused: "Excused by HR",
+  flagStatusUpheld: "Upheld by HR",
+  flagStatusRereview:
+    "Awaiting HR review again — this day changed after it was reviewed",
+
   // Chrome
   yourRecord: "Your record",
   openFromTelegram: "Open this from Telegram",
@@ -129,6 +171,41 @@ const KM: Record<StringKey, string> = {
   markIncomplete: "មិនមានកំណត់ត្រាចេញ",
   markMissing: "មិនមានកំណត់ត្រា",
   markOff: "មិនមែនថ្ងៃធ្វើការ",
+
+  flagsToCheck: "{n} ត្រូវពិនិត្យ",
+  flagsSheetTitle: "អ្វីដែលត្រូវពិនិត្យ",
+  flagsNone: "គ្មានអ្វីត្រូវពិនិត្យសម្រាប់ថ្ងៃនេះទេ។",
+
+  flagLateStart: "ចាប់ផ្តើមយឺត",
+  flagLateStartBody: "ការស្កេនចូលដំបូងរបស់អ្នកគឺក្រោយពេលវេនចាប់ផ្តើម។",
+  flagLeftEarly: "ចេញមុនម៉ោង",
+  flagLeftEarlyBody: "ការស្កេនចេញចុងក្រោយរបស់អ្នកគឺមុនពេលវេនបញ្ចប់។",
+  flagLateFromLunch: "ត្រឡប់ពីអាហារថ្ងៃត្រង់យឺត",
+  flagLateFromLunchBody: "អ្នកបានស្កេនចូលវិញក្រោយពេលសម្រាកអាហារថ្ងៃត្រង់បានបញ្ចប់។",
+  flagMissingTime: "មានចន្លោះក្នុងកំណត់ត្រា",
+  flagMissingTimeBody: "មានរយៈពេលមួយក្នុងវេនរបស់អ្នកដែលគ្មានការស្កេនគ្របដណ្តប់។",
+  flagMissingInOrOut: "មានតែការស្កេនម្តង",
+  flagMissingInOrOutBody:
+    "មានតែការស្កេនមួយប៉ុណ្ណោះត្រូវបានកត់ត្រា ដូច្នេះគ្មានគូចូល និងចេញទេ។",
+  // "No record for this day" — never "អវត្តមាន" (absent). The same rule
+  // markMissing follows: the app reports the record, HR decides what it means.
+  flagNoRecord: "គ្មានកំណត់ត្រាសម្រាប់ថ្ងៃនេះ",
+  flagNoRecordBody: "នេះជាថ្ងៃធ្វើការ ហើយគ្មានការស្កេនណាមួយត្រូវបានកត់ត្រាទេ។",
+  flagOffShiftPunch: "ស្កេនក្នុងថ្ងៃមិនធ្វើការ",
+  flagOffShiftPunchBody: "មានការស្កេនត្រូវបានកត់ត្រាក្នុងថ្ងៃដែលអ្នកមិនមានវេនធ្វើការ។",
+  flagMissingLunch: "មិនមានកំណត់ត្រាអាហារថ្ងៃត្រង់",
+  flagMissingLunchBody:
+    "ការសម្រាកអាហារថ្ងៃត្រង់របស់អ្នកមិនអាចផ្គូផ្គងនឹងការស្កេនចេញ និងចូលបានទេ។",
+  flagAttendanceIssue: "កំណត់ត្រាមិនអាចផ្គូផ្គងបាន",
+  flagAttendanceIssueBody:
+    "ការស្កេនរបស់អ្នកសម្រាប់ថ្ងៃនេះមិនអាចផ្គូផ្គងជាវគ្គពេញលេញបានទេ។",
+
+  flagStatusAwaiting: "រង់ចាំការពិនិត្យពី HR",
+  flagStatusExcused: "បានអនុគ្រោះដោយ HR",
+  // "HR confirmed this note" — NOT "HR punished you". The single string on
+  // this surface most likely to be wrong; see the file header.
+  flagStatusUpheld: "បានបញ្ជាក់ដោយ HR",
+  flagStatusRereview: "រង់ចាំការពិនិត្យឡើងវិញ — ថ្ងៃនេះមានការផ្លាស់ប្តូរក្រោយពេលពិនិត្យ។",
 
   yourRecord: "កំណត់ត្រារបស់អ្នក",
   openFromTelegram: "សូមបើកពី Telegram",
