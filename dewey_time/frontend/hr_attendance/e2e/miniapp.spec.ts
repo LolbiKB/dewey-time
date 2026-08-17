@@ -66,7 +66,7 @@ function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] =
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[] } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown> } = {}) {
   await page.addInitScript(
     ({ theme, themeParams, languageCode, fullscreen }) => {
       const handlers: Record<string, (() => void)[]> = {};
@@ -157,8 +157,63 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
     });
   });
 
+  await page.route("**/api/method/dewey_time.telegram.miniapp_api.get_my_profile", async (route) => {
+    // The narrowed shape miniapp_api.get_my_profile produces — never a richer
+    // one. A fixture the server cannot send lets the page read a field that
+    // does not exist in production.
+    //
+    // `fingers: []` is not laziness: the bridge collapses templates to a count
+    // before Frappe sees them, so an empty list IS what production returns for
+    // everybody today.
+    await route.fulfill({
+      json: {
+        message: opts.profile ?? {
+          employee: "HR-EMP-00042",
+          employee_name: "Sok Dara",
+          khmer_name: "សុខ ដារា",
+          designation: "Cashier",
+          image: null,
+          department: "Retail",
+          employment_type: "Full-time",
+          date_of_joining: "2024-03-12",
+          branch: "DIS Iconic",
+          reports_to_name: "Chan Sophea",
+          cell_number: "012 345 678",
+          personal_email: "dara.sok@gmail.com",
+          biometric: {
+            state: "enrolled",
+            fingers: [],
+            fingerprint_count: 2,
+            face: false,
+            checked_at: "2026-08-17 06:00:00",
+          },
+        },
+      },
+    });
+  });
+
   await page.setViewportSize({ width: 390, height: 780 });
   await page.goto(MINIAPP);
+}
+
+/** A record with almost nothing filled in — the state that decides whether the
+ *  page reads as deliberate or broken. */
+function sparseProfile(biometric: Record<string, unknown>) {
+  return {
+    employee: "HR-EMP-00311",
+    employee_name: "Kim Veasna",
+    khmer_name: null,
+    designation: null,
+    image: null,
+    department: null,
+    employment_type: null,
+    date_of_joining: "2026-08-02",
+    branch: null,
+    reports_to_name: null,
+    cell_number: null,
+    personal_email: null,
+    biometric,
+  };
 }
 
 test("the identity header names the record the server resolved", async ({ page }) => {
@@ -338,7 +393,7 @@ test("nothing overflows the viewport at a phone width", async ({ page }) => {
   // The sheet is the whole app. A page that scrolls sideways inside Telegram
   // reads as broken, and the tab bar is the row that gets pushed off.
   await openMiniApp(page);
-  for (const tab of ["Today", "Schedule"]) {
+  for (const tab of ["Today", "Profile"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
     const overflow = await page.evaluate(() => ({
       scroll: document.documentElement.scrollWidth,
@@ -369,7 +424,7 @@ test("the schedule tab reads in 12-hour time and names the break", async ({ page
   // tell whether "8h" already had lunch taken out — the single most asked
   // question about a roster.
   await openMiniApp(page);
-  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
 
   const list = page.getByRole("list");
   await expect(list).toContainText("8:00 AM – 5:00 PM");
@@ -383,7 +438,7 @@ test("the schedule tab can look forward, because a roster is published ahead", a
   // yet. A roster has, and looking at next week is the main reason to open
   // this tab at all.
   await openMiniApp(page);
-  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
   await expect(page.getByRole("button", { name: "Next week" })).toBeEnabled();
 });
 
@@ -394,7 +449,7 @@ test("a Khmer client opens in Khmer, and can switch back", async ({ page }) => {
   await openMiniApp(page, { languageCode: "km" });
 
   await expect(page.getByRole("button", { name: "ថ្ងៃនេះ", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "កាលវិភាគ", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ប្រវត្តិរូប", exact: true })).toBeVisible();
 
   // The toggle is labelled in the language it switches TO: someone stuck in a
   // language they cannot read needs the way out to be the thing they can read.
@@ -412,7 +467,7 @@ test("content scrolls clear of the tab bar on a half-height sheet", async ({ pag
   // first attempt at this measurement read -74px and looked like a failure.
   await openMiniApp(page, { punched: "full" });
   await page.setViewportSize({ width: 390, height: 520 });
-  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("list").waitFor();
 
   const main = page.locator("main");
@@ -471,11 +526,23 @@ test("a Khmer interface has no Latin digits left anywhere in it", async ({ page 
   expect(await sheet.innerText(), "the calendar kept Latin numerals").not.toMatch(/[0-9]/);
   await page.keyboard.press("Escape");
 
-  await page.getByRole("button", { name: "កាលវិភាគ", exact: true }).click();
-  const schedule = page.getByRole("list");
-  await expect(schedule).toBeVisible();
-  expect(await schedule.innerText(), "a Schedule row kept Latin numerals")
-    .not.toMatch(/[0-9]/);
+  // The whole Profile tab, not just its roster. It carries a joining date, a
+  // length of service, a fingerprint count, three month statistics and the
+  // roster — five more places to forget a formatter than the roster alone, and
+  // scoping this to the <ul> would have watched none of them.
+  await page.getByRole("button", { name: "ប្រវត្តិរូប", exact: true }).click();
+  const profile = page.getByRole("main");
+  await expect(profile.getByRole("list")).toBeVisible();
+
+  // TWO deliberate exceptions, both IDENTIFIERS rather than quantities — the
+  // rule MiniIdentity already applies to the employee code in the header. You
+  // dial a phone number and you read an employee id out to HR; neither is
+  // counted, and a phone number in Khmer numerals has to be converted back
+  // before it can be typed into a phone.
+  const text = (await profile.innerText())
+    .replace(/HR-EMP-\d+/g, "")
+    .replace(/\d[\d ]{6,}/g, "");
+  expect(text, "the Profile tab kept Latin numerals").not.toMatch(/[0-9]/);
 });
 
 test("the same screens in English are unchanged, digits and all", async ({ page }) => {
@@ -580,4 +647,67 @@ test("the pill counts in Khmer digits", async ({ page }) => {
   const pill = page.getByRole("button", { name: /ត្រូវពិនិត្យ/ });
   await expect(pill).toBeVisible();
   await expect(pill).not.toContainText(/[0-9]/);
+});
+
+test("the Profile tab shows the record, the devices and the roster", async ({ page }) => {
+  await openMiniApp(page);
+  await page.getByRole("button", { name: "Profile" }).click();
+
+  await expect(page.getByText("Retail")).toBeVisible();
+  await expect(page.getByText("Full-time")).toBeVisible();
+  await expect(page.getByText("Chan Sophea")).toBeVisible();
+  await expect(page.getByText("012 345 678")).toBeVisible();
+  // No finger names — the bridge sends no slots, so a count is the honest form
+  // and this is what every employee sees today.
+  await expect(page.getByText("2 recorded")).toBeVisible();
+  await expect(page.getByText("Your roster")).toBeVisible();
+});
+
+test("the roster inside Profile still pages forward past today", async ({ page }) => {
+  // The reason the dated roster survived the tab it used to own: the calendar
+  // sheet is disabled={{ after: today }}, so this is the app's only
+  // forward-looking surface. Asserting the button merely EXISTS would pass
+  // against a WeekNav rendered with forwardLimit — the week has to actually
+  // move.
+  await openMiniApp(page);
+  await page.getByRole("button", { name: "Profile" }).click();
+
+  await expect(page.getByText("This week", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Next week" }).click();
+
+  await expect(page.getByText("This week", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Back to this week" })).toBeVisible();
+});
+
+test("a device that does not know you says so, and says why it matters", async ({ page }) => {
+  await openMiniApp(page, {
+    profile: sparseProfile({
+      state: "not_enrolled", fingers: [], fingerprint_count: 0,
+      face: false, checked_at: "2026-08-17 06:00:00",
+    }),
+  });
+  await page.getByRole("button", { name: "Profile" }).click();
+
+  await expect(page.getByText("Not set up")).toBeVisible();
+  await expect(page.getByText(/marked absent/)).toBeVisible();
+  // A thin record drops whole blocks rather than dashing them.
+  await expect(page.getByText("Contact HR has for you")).toHaveCount(0);
+  await expect(page.getByText("Reports to")).toHaveCount(0);
+  await expect(page.getByText("Department")).toHaveCount(0);
+});
+
+test("never having heard from the devices is not the same as not enrolled", async ({ page }) => {
+  // The honesty rule, end to end: saying "not set up" when the truth is that
+  // our snapshot is missing is the same failure as showing a provisional flag.
+  await openMiniApp(page, {
+    profile: sparseProfile({
+      state: "unknown", fingers: [], fingerprint_count: 0,
+      face: false, checked_at: null,
+    }),
+  });
+  await page.getByRole("button", { name: "Profile" }).click();
+
+  await expect(page.getByText("Not checked yet")).toBeVisible();
+  await expect(page.getByText(/can't tell you either way/)).toBeVisible();
+  await expect(page.getByText("Not set up")).toHaveCount(0);
 });

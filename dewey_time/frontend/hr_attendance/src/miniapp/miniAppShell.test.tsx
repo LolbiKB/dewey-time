@@ -4,7 +4,9 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MiniIdentity, initialsOf, subtitleOf } from "@/miniapp/MiniIdentity";
 
-import { MiniTabBar, OutsideTelegramNotice, TAB_BAR_FLOOR_PX } from "@/miniapp/MiniAppShell";
+import {
+  isMiniTab, MiniTabBar, OutsideTelegramNotice, TAB_BAR_FLOOR_PX,
+} from "@/miniapp/MiniAppShell";
 
 test("outside Telegram the app explains itself instead of erroring", () => {
   const html = renderToStaticMarkup(<OutsideTelegramNotice />);
@@ -16,21 +18,36 @@ test("the shell offers exactly the two employee views", () => {
   // to share components. An HR tab appearing here is a scope failure, not a
   // styling one, and that half of this test is the load-bearing half.
   //
-  // Two, not three: "Week" was replaced by the calendar sheet, which answers
+  // Two, not three. "Week" was the first casualty — the calendar sheet answers
   // "which day do I want?" at four times the density from inside Today.
+  // "Schedule" was the second: it answered one question about an employee's own
+  // record, and Profile answers the rest while keeping that roster whole at the
+  // bottom of itself.
   const html = renderToStaticMarkup(<MiniTabBar active="day" onSelect={() => {}} />);
-  for (const label of ["Today", "Schedule"]) {
+  for (const label of ["Today", "Profile"]) {
     assert.match(html, new RegExp(label));
   }
   assert.doesNotMatch(html, /Week/);
+  assert.doesNotMatch(html, /Schedule/);
   for (const forbidden of ["Flags", "Coverage", "Import", "Biometric"]) {
     assert.doesNotMatch(html, new RegExp(forbidden));
   }
 });
 
 test("the active tab is marked for assistive tech, not only coloured", () => {
-  const html = renderToStaticMarkup(<MiniTabBar active="schedule" onSelect={() => {}} />);
+  const html = renderToStaticMarkup(<MiniTabBar active="profile" onSelect={() => {}} />);
   assert.match(html, /aria-current="page"[^>]*>|aria-current="page"/);
+});
+
+test("a tab key from a previous version is rejected rather than trusted", () => {
+  // Someone whose last session ended on Schedule has "schedule" in
+  // CloudStorage. The guard IS the migration: an unknown value is refused and
+  // the shell falls back to Today. This is the second time it has done that
+  // job — "week" went the same way when the calendar sheet replaced it.
+  assert.equal(isMiniTab("day"), true);
+  assert.equal(isMiniTab("profile"), true);
+  assert.equal(isMiniTab("schedule"), false);
+  assert.equal(isMiniTab("week"), false);
 });
 
 test("the tab bar renders without a window, and pads when told to", () => {

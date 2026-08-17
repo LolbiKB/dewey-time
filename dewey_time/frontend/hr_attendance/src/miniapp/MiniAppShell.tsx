@@ -5,7 +5,7 @@ import { format, isSameDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { MiniCalendarSheet } from "@/miniapp/MiniCalendarSheet";
 import { MyDayPage } from "@/miniapp/MyDayPage";
-import { MySchedulePage } from "@/miniapp/MySchedulePage";
+import { MyProfilePage } from "@/miniapp/MyProfilePage";
 import { MiniIdentity } from "@/miniapp/MiniIdentity";
 import { MiniLocaleProvider, useT } from "@/miniapp/MiniLocale";
 import {
@@ -31,24 +31,32 @@ import {
   tabHaptic,
 } from "@/miniapp/telegramChrome";
 
-export type MiniTab = "day" | "schedule";
+export type MiniTab = "day" | "profile";
 
 /** Guards what comes back out of CloudStorage — it is data, not a promise. */
 export function isMiniTab(value: string): value is MiniTab {
-  return value === "day" || value === "schedule";
+  return value === "day" || value === "profile";
 }
 
-// TWO TABS. "Week" was the third and the calendar sheet replaced it: it
-// answered "which day do I want?" seven days at a time, for a whole tab of
-// permanent chrome, and the month grid answers it at four times the density
-// from inside the tab the reader is already on.
+// TWO TABS, and both of the departed ones left for the same kind of reason.
 //
-// A reader whose last session ended on Week has "week" in CloudStorage. It
-// needs no migration — `isMiniTab` already rejects an unknown value and the
+// "Week" was replaced by the calendar sheet: it answered "which day do I
+// want?" seven days at a time, for a whole tab of permanent chrome, and the
+// month grid answers it at four times the density from inside the tab the
+// reader is already on.
+//
+// "Schedule" was replaced by Profile. It answered "when am I working", which is
+// one of several questions about an employee's own record and the only one the
+// app could answer; Profile answers the rest — whether the fingerprint devices
+// know them, what HR has on file — and keeps that roster whole at the bottom of
+// itself, dated and still paging forward.
+//
+// A reader whose last session ended on either has a stale key in CloudStorage.
+// Neither needs a migration — `isMiniTab` rejects an unknown value and the
 // shell falls back to "day", which is the reason that guard exists.
 const TABS = [
   { key: "day", label: "tabToday" },
-  { key: "schedule", label: "tabSchedule" },
+  { key: "profile", label: "tabProfile" },
 ] as const satisfies readonly { key: MiniTab; label: StringKey }[];
 
 export function OutsideTelegramNotice() {
@@ -130,7 +138,7 @@ export function MiniTabBar(props: {
 
 export function MiniAppShell() {
   const [tab, setTab] = useState<MiniTab>("day");
-  /** Which week the Schedule tab is showing, relative to today's. */
+  /** Which week the Profile tab's roster is showing, relative to today's. */
   const [weekOffset, setWeekOffset] = useState(0);
   /** A day chosen from the calendar. Null means "today". */
   const [openDay, setOpenDay] = useState<Date | null>(null);
@@ -305,7 +313,7 @@ export function MiniAppShell() {
             flagLift={TAB_BAR_HEIGHT_PX + TAB_BAR_FLOOR_PX}
           />
         ) : (
-          <MySchedulePage offset={weekOffset} onOffsetChange={setWeekOffset} />
+          <MyProfilePage offset={weekOffset} onOffsetChange={setWeekOffset} />
         )}
       </main>
 

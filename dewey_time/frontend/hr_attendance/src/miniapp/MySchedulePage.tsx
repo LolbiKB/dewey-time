@@ -114,11 +114,14 @@ export function MySchedulePage(props: {
     format(week[6]!, "yyyy-MM-dd"),
   );
 
-  // Extracted from the Week tab when the calendar sheet replaced it. This is
-  // now its only caller, and it stays a separate component rather than being
-  // inlined: the roster is the one surface that pages FORWARD (forwardLimit
-  // false), and that argument is easier to see at a call site than buried in
-  // a page body.
+  // Extracted from the Week tab when the calendar sheet replaced it. It stays
+  // a separate component rather than being inlined: the roster is the one
+  // surface that pages FORWARD (forwardLimit false), and that argument is
+  // easier to see at a call site than buried in a page body.
+  //
+  // No page padding on the wrappers below — MyProfilePage, this file's only
+  // caller since Profile replaced the Schedule tab, supplies it. Keeping p-3
+  // here would nest it inside Profile's own.
   const nav = (
     <WeekNav
       label={weekRangeLabel(week, fmt)}
@@ -130,7 +133,7 @@ export function MySchedulePage(props: {
 
   if (query.isLoading) {
     return (
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex flex-col gap-3">
         {nav}
         <MiniState>{t("loadingSchedule")}</MiniState>
       </div>
@@ -138,7 +141,7 @@ export function MySchedulePage(props: {
   }
   if (query.isError) {
     return (
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex flex-col gap-3">
         {nav}
         <MiniState>{t("errorSchedule")}</MiniState>
       </div>
@@ -149,7 +152,7 @@ export function MySchedulePage(props: {
   const total = fmt.worked(weekRosteredMinutes(planned));
 
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div className="flex flex-col gap-3">
       {nav}
 
       {planned.every((d) => !d.works) ? (

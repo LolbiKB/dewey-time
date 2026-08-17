@@ -24,7 +24,6 @@ export type StringKey = keyof typeof EN;
 const EN = {
   // Tabs
   tabToday: "Today",
-  tabSchedule: "Schedule",
 
   // Day states — records, never judgements. See the note above.
   //
@@ -195,7 +194,6 @@ const EN = {
 
 const KM: Record<StringKey, string> = {
   tabToday: "ថ្ងៃនេះ",
-  tabSchedule: "កាលវិភាគ",
 
   stateDayOff: "ថ្ងៃឈប់",
   stateOnLeave: "ច្បាប់ឈប់សម្រាក",
