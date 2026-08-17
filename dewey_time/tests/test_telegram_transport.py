@@ -232,6 +232,46 @@ class TestDiagnostics(unittest.TestCase):
         self.assertFalse(report["menu_button"]["is_miniapp"])
         self.assertEqual(report["menu_button"]["type"], "commands")
 
+    def _getme(self, username):
+        def answer(method):
+            if method == "getMe":
+                return {"ok": True, "result": {"username": username}}
+            return {"ok": True, "result": {}}
+
+        return answer
+
+    def test_a_username_that_names_a_different_bot_than_the_token_is_flagged(self):
+        # Two independent settings that must name the same bot: the TOKEN
+        # decides who sends the messages, the USERNAME builds the invite deep
+        # link. A mismatch is silent on both sides -- notifications arrive
+        # normally while every invite link opens "user not found" -- and
+        # nothing else in this report compares them.
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value="old_bot"), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", side_effect=self._getme("dewey_time_bot")):
+            report = transport.diagnostics()
+
+        self.assertEqual(report["invite_username"], "old_bot")
+        self.assertEqual(report["invite_username_mismatch"], "dewey_time_bot")
+
+    def test_the_at_form_is_not_reported_as_a_mismatch(self):
+        # "@dewey_time_bot" IS the same bot -- it is how Telegram displays the
+        # name. Comparing it raw would raise an alarm on a setting that now
+        # works, and send someone editing the one field that is correct.
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value="@Dewey_Time_Bot"), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", side_effect=self._getme("dewey_time_bot")):
+            report = transport.diagnostics()
+
+        self.assertEqual(report["invite_username"], "Dewey_Time_Bot")
+        self.assertNotIn("invite_username_mismatch", report)
+
     def test_the_webhook_last_error_is_surfaced(self):
         # Telegram records the last delivery failure here and nowhere else, so
         # a bot that "does nothing" is explained by this field or by no field.

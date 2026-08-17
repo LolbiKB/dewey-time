@@ -39,6 +39,61 @@ class TestTokenShape(unittest.TestCase):
         )
 
 
+class TestBotUsernameNormalisation(unittest.TestCase):
+    """The @ is how Telegram shows a username and the one thing a deep link
+    cannot contain. Everything here is a form somebody can plausibly paste."""
+
+    def test_the_at_form_loses_its_at(self):
+        # THE REPORTED BUG. "@deweytimebot" in Settings produced
+        # https://t.me/@deweytimebot?start=... -- Telegram: "user not found".
+        self.assertEqual(binding.normalise_bot_username("@deweytimebot"), "deweytimebot")
+
+    def test_surrounding_whitespace_goes(self):
+        self.assertEqual(binding.normalise_bot_username("  @dewey_time_bot \n"), "dewey_time_bot")
+
+    def test_a_pasted_profile_url_is_reduced_to_the_username(self):
+        for pasted in (
+            "https://t.me/dewey_time_bot",
+            "http://t.me/dewey_time_bot",
+            "t.me/dewey_time_bot",
+            "https://telegram.me/dewey_time_bot",
+            "HTTPS://T.ME/dewey_time_bot",
+            "https://t.me/dewey_time_bot/",
+            "https://t.me/dewey_time_bot?start=abc",
+        ):
+            with self.subTest(pasted=pasted):
+                self.assertEqual(binding.normalise_bot_username(pasted), "dewey_time_bot")
+
+    def test_an_unset_value_normalises_to_empty_rather_than_none(self):
+        # `_bot_username` distinguishes "not configured" from "misconfigured"
+        # by emptiness, so None must not arrive there as the string "None".
+        self.assertEqual(binding.normalise_bot_username(None), "")
+        self.assertEqual(binding.normalise_bot_username("   "), "")
+
+
+class TestBotUsernameValidation(unittest.TestCase):
+    def _configured(self, value):
+        return patch.object(binding.frappe, "get_cached_value", return_value=value)
+
+    def test_the_at_form_is_read_out_of_settings_and_cleaned(self):
+        with self._configured("@deweytimebot"):
+            self.assertEqual(binding._bot_username(), "deweytimebot")
+
+    def test_an_unset_username_is_refused(self):
+        with self._configured(""):
+            with self.assertRaises(Exception):
+                binding._bot_username()
+
+    def test_something_that_cannot_be_a_username_is_refused(self):
+        # A space, a dash, or four characters all make a link that resolves to
+        # nothing. Failing here beats failing in the employee's chat a week
+        # later with the token already spent.
+        for bad in ("dewey time bot", "dewey-time-bot", "bot", "a" * 33, "dewey.time.bot"):
+            with self.subTest(bad=bad), self._configured(bad):
+                with self.assertRaises(Exception):
+                    binding._bot_username()
+
+
 class TestResolverFailsClosed(unittest.TestCase):
     def test_unknown_telegram_user_raises(self):
         with patch.object(binding.frappe.db, "get_value", return_value=None):
@@ -268,6 +323,29 @@ class TestInvite(unittest.TestCase):
             invite = binding.create_link_invite("HR-EMP-00001")
         self.assertEqual(invite["url"], "https://t.me/dewey_time_bot?start=tok123")
         self.assertEqual(invite["employee"], "HR-EMP-00001")
+
+    def test_an_invite_link_never_carries_an_at(self):
+        # End to end from the setting a person typed to the URL HR copies.
+        # The unit test above pins the helper; this pins that the helper is
+        # actually on the path -- `link_url(token, _bot_username())` reads the
+        # same either way.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "issue_link_token", return_value="tok123"), \
+             patch.object(binding.frappe, "get_cached_value", return_value="@deweytimebot"):
+            invite = binding.create_link_invite("HR-EMP-00001")
+        self.assertEqual(invite["url"], "https://t.me/deweytimebot?start=tok123")
+        self.assertNotIn("@", invite["url"])
+
+    def test_a_misconfigured_username_does_not_burn_a_token(self):
+        # The token row is written and its 7-day clock starts on `insert`, so
+        # minting before the username is resolved leaves live tokens behind on
+        # every failed attempt.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "issue_link_token") as issue, \
+             patch.object(binding.frappe, "get_cached_value", return_value="not a username"):
+            with self.assertRaises(Exception):
+                binding.create_link_invite("HR-EMP-00001")
+        issue.assert_not_called()
 
     def test_invite_refuses_a_blank_employee(self):
         with patch.object(binding, "_require_hr_role"), \

@@ -24,7 +24,9 @@ shifts.
    update later.
 
 3. In Desk → **Dewey Time Settings → Telegram**, fill in **Telegram Bot Token**,
-   **Telegram Webhook Secret**, and **Telegram Bot Username** (no `@`).
+   **Telegram Webhook Secret**, and **Telegram Bot Username** (the `@`, and a
+   pasted `https://t.me/…` profile URL, are both stripped — the deep link is
+   built from the bare name, which is the one place Telegram rejects the `@`).
    Leave **Enable Telegram** OFF until step 5.
 4. Register the webhook with Telegram:
 
@@ -185,6 +187,7 @@ from Frappe, so losing Telegram loses a convenience and not data.
 | Bot never replies to `/start` | Webhook not registered, or the secret in Settings does not match the one given to `setWebhook`. Check `getWebhookInfo`. |
 | "That link didn't work" | Token expired, already used, or unknown. Issue a fresh invite. The bot deliberately does not say which — that distinction is useful to someone probing tokens. |
 | "Use the link or QR code HR gave you" after a bare `/start` | No usable recorded id: none on file, two employees share it, they are already bound to another account, or their link was revoked. Issue a link instead. |
+| Invite link opens "user not found" in Telegram | **Telegram Bot Username** names a bot that does not exist. The `@` and a pasted profile URL are stripped, and anything that cannot be a username is refused when the link is created — so what is left is a real typo, or a username belonging to a different bot than the token. `transport.diagnostics()` reports `invite_username` beside `bot` and flags `invite_username_mismatch` when they disagree. |
 | Coverage shows "—" for the whole Telegram column | The backend lookup failed. Check the error log; the register reports silence rather than guessing everyone is unlinked. |
 | Linked, but no notifications | **Enable Telegram** is off, or the link's **Enabled** is 0. The branch's rollout phase is NOT a factor — a link is the whole permission, because the employee opted in by sending `/start` and the message carries no engine determination. Run `transport.diagnostics(employee="DI-1234")` to see every gate at once. |
 | Notifications stopped for one person | They blocked the bot — the link auto-disabled. |
