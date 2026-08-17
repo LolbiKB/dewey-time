@@ -186,7 +186,7 @@ from Frappe, so losing Telegram loses a convenience and not data.
 | "That link didn't work" | Token expired, already used, or unknown. Issue a fresh invite. The bot deliberately does not say which — that distinction is useful to someone probing tokens. |
 | "Use the link or QR code HR gave you" after a bare `/start` | No usable recorded id: none on file, two employees share it, they are already bound to another account, or their link was revoked. Issue a link instead. |
 | Coverage shows "—" for the whole Telegram column | The backend lookup failed. Check the error log; the register reports silence rather than guessing everyone is unlinked. |
-| Linked, but no notifications | Branch not LIVE in Dewey Time Branch Rollout; or **Enable Telegram** is off; or the link's **Enabled** is 0. |
+| Linked, but no notifications | **Enable Telegram** is off, or the link's **Enabled** is 0. The branch's rollout phase is NOT a factor — a link is the whole permission, because the employee opted in by sending `/start` and the message carries no engine determination. Run `transport.diagnostics(employee="DI-1234")` to see every gate at once. |
 | Notifications stopped for one person | They blocked the bot — the link auto-disabled. |
 | `Telegram bot token is not configured` | Expected when the field is blank. The feature fails closed instead of running with an empty key. |
 | `setWebhook` → "secret token contains unallowed characters" | The secret is outside `A-Za-z0-9_-`. Usually a trailing newline from copying it, or `openssl rand -base64`. Regenerate with `secrets.token_urlsafe` and update BOTH Settings and the curl. |

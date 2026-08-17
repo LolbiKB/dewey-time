@@ -27,7 +27,7 @@ FAILED results in the Error Log rather than silent loss.
 from __future__ import annotations
 
 import frappe
-from frappe.utils import get_datetime, getdate, nowdate
+from frappe.utils import get_datetime, nowdate
 
 from dewey_time.attendance_engine import rollout
 from dewey_time.telegram import transport
@@ -137,10 +137,24 @@ def send_checkin_notification(employee: str, checkin_name: str) -> str:
     if not row:
         return "no-checkin"
 
-    if rollout.phase_for_employee(
-        employee=employee, attendance_date=getdate(row["time"])
-    ) != rollout.LIVE:
-        return "not-live"
+    # NO ROLLOUT GATE. This used to require the branch to be LIVE, and that
+    # was the wrong gate at the wrong granularity.
+    #
+    # The engine's rollout phase governs when its DETERMINATIONS -- lateness,
+    # absence, flags -- become real for a branch. This message contains none
+    # of them, by a decision recorded at the top of this module: the punch
+    # time and the branch, and nothing evaluative. It is true the moment the
+    # punch row exists, whatever the engine is allowed to conclude that day.
+    #
+    # And the consent is already here, per person and explicit. A Telegram
+    # Link exists only because that employee opened the bot and sent /start,
+    # or redeemed a link handed to them. Silencing someone who opted in
+    # because of a branch-wide date they had no part in is the wrong unit
+    # entirely -- and it made a small pilot impossible without changing engine
+    # behaviour for everyone at that branch.
+    #
+    # The exit stays per person too: blocking the bot returns BLOCKED below
+    # and disables the link.
 
     # PLAIN TEXT, no inline button. The Mini App is reached from the bot's own
     # Main Mini App button and from the chat menu button, both of which are
@@ -174,8 +188,9 @@ def delivery_gates(employee: str | None = None) -> dict:
     gates: dict = {
         "telegram_enabled": transport.telegram_enabled(),
         "links_enabled": frappe.db.count(LINK_DT, {"enabled": 1}),
-        # False means no rollout date is set anywhere, so every employee reads
-        # LIVE and this gate cannot be what is stopping delivery.
+        # Engine context, not a notification gate. Left in the report because
+        # it explains what the ENGINE is doing for these employees, which is
+        # the next question after "did the message arrive".
         "rollout_configured": rollout.phases_configured(),
     }
     if employee:
@@ -196,6 +211,10 @@ def delivery_gates(employee: str | None = None) -> dict:
 
         gates["employee_exists"] = True
         gates["employee_linked"] = bool(_link_for(employee))
+        # Reported as CONTEXT, not as a gate -- notifications no longer
+        # consult it. Kept because it still governs what the engine concludes
+        # about this employee's days, which is worth seeing next to their
+        # notification state.
         gates["employee_phase"] = rollout.phase_for_employee(
             employee=employee, attendance_date=nowdate()
         )
@@ -204,7 +223,7 @@ def delivery_gates(employee: str | None = None) -> dict:
 
 @frappe.whitelist()
 def send_test_notification(employee: str | None = None) -> dict:
-    """The real check-in message, sent now, ignoring ONLY the rollout phase.
+    """The real check-in message, sent on demand.
 
     Rollout exists so a branch can be watched before its employees are told
     anything, and that is right -- but it also means the notification cannot
@@ -213,10 +232,13 @@ def send_test_notification(employee: str | None = None) -> dict:
     branch LIVE.
 
     So this is the real path, not a mock of it: the same link lookup, the same
-    `direction_of`, the same `compose`, the same transport. Only
-    `phase_for_employee` is skipped, and the response says so. If this works
-    and a punch does not, the difference is the rollout phase and nothing
-    else.
+    `direction_of`, the same `compose`, the same transport, against the
+    employee's most recent actual punch.
+
+    It began as a way around the rollout gate, which no longer exists on this
+    path -- a link is now the whole permission. What it still does, and a
+    punch cannot, is fire on demand and hand the text back, so wording can be
+    checked without waiting at a terminal or holding the linked phone.
 
     IT DOES NOT DISABLE A BLOCKED LINK. `send_checkin_notification` does,
     correctly -- a person who blocked the bot should stop being written to.
@@ -240,7 +262,7 @@ def send_test_notification(employee: str | None = None) -> dict:
             "?employee=HR-EMP-00042"
         )
 
-    report = {"employee": employee, "rollout_phase_ignored": True}
+    report = {"employee": employee}
     if not transport.telegram_enabled():
         return {**report, "result": "disabled"}
 

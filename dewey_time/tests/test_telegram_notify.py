@@ -63,14 +63,28 @@ class TestGating(unittest.TestCase):
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
         send.assert_not_called()
 
-    def test_no_send_when_the_branch_is_not_live(self):
+    def test_a_linked_employee_is_notified_whatever_the_rollout_phase(self):
+        # THE LINK IS THE PERMISSION. This used to require the branch to be
+        # LIVE, which is the wrong gate at the wrong granularity: the engine's
+        # phase governs when its DETERMINATIONS become real, and this message
+        # carries none of them -- just the punch time and the branch, true the
+        # moment the row exists.
+        #
+        # Meanwhile the consent is already per person and explicit: a link
+        # exists only because that employee sent /start or redeemed one. A
+        # branch-wide date they had no part in should not silence them, and it
+        # made a small pilot impossible without moving a whole branch.
         with patch.object(notify.transport, "telegram_enabled", return_value=True), \
-             patch.object(notify, "_link_for", return_value={"chat_id": "1", "name": "1"}), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
-             patch.object(notify.rollout, "phase_for_employee", return_value="TESTING"), \
-             patch.object(notify.transport, "send_message") as send:
-            notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
-        send.assert_not_called()
+             patch.object(notify.rollout, "phase_for_employee",
+                          side_effect=AssertionError("the phase must not be consulted")), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT) as send:
+            result = notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
+
+        self.assertEqual(result, notify.transport.SENT)
+        self.assertEqual(send.call_args[0][0], "77702")
 
     def test_live_and_linked_sends(self):
         with patch.object(notify.transport, "telegram_enabled", return_value=True), \
@@ -281,20 +295,22 @@ class TestSendTestNotification(unittest.TestCase):
         self.assertIn("បានចេញ", result["text"])
         self.assertIn("DIS Iconic", result["text"])
 
-    def test_the_rollout_phase_is_never_consulted(self):
-        # The entire point. If this asked, it would refuse for exactly the
-        # branches that most need testing.
+    def test_it_returns_the_text_so_wording_can_be_checked_without_a_phone(self):
+        # What this still does that a punch cannot: fire on demand and hand
+        # the text back. Eleven Khmer strings are unreviewed, and they cannot
+        # be read by anyone who is not holding the linked account otherwise.
         with self._hr(), self._me(), \
              patch.object(notify.transport, "telegram_enabled", return_value=True), \
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "L1"}), \
              patch.object(notify.frappe.db, "get_value", return_value={
                  "name": "CKIN-9", "log_type": "IN",
                  "time": datetime(2026, 8, 17, 7, 58), "custom_device_branch": "DIS Iconic"}), \
-             patch.object(notify.rollout, "phase_for_employee",
-                          side_effect=AssertionError("must not be consulted")), \
              patch.object(notify.transport, "send_message", return_value=notify.transport.SENT):
             result = notify.send_test_notification()
-        self.assertTrue(result["rollout_phase_ignored"])
+
+        self.assertIn("បានចូល", result["text"])
+        self.assertIn("Checked in", result["text"])
+        self.assertEqual(result["checkin"], "CKIN-9")
 
     def test_every_other_gate_still_reports_honestly(self):
         with self._hr(), self._me(), \
