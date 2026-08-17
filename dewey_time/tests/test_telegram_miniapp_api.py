@@ -47,12 +47,48 @@ HR_PAYLOAD = {
                 {
                     "name": "AUTO-emp-1-2026-08-14-late-start",
                     "flag_code": "LATE_START",
-                    "evidence": {"first_in": "07:58"},
+                    "severity": "WARNING",
+                    "is_provisional": False,
+                    "evidence": {"first_in": "07:58", "grace_minutes": 15},
+                    "decision": None,
+                    "decision_state": "undecided",
                 }
             ],
         }
     ],
 }
+
+
+def _flag(code, **over):
+    """A full HR flag row -- including everything an employee must never see."""
+    row = {
+        "name": f"AUTO-emp-1-2026-08-14-{code.lower()}",
+        "flag_code": code,
+        "severity": "CRITICAL",
+        "status": "OPEN",
+        "source": "AUTO",
+        "day_closed": 1,
+        "is_provisional": False,
+        "hr_note": "spoke to the supervisor",
+        "rule_version": "v3",
+        "linked_checkin": "EMP-CKIN-1",
+        "evidence": {"first_in": "07:58", "grace_minutes": 15},
+        "decision": None,
+        "decision_state": "undecided",
+    }
+    row.update(over)
+    return row
+
+
+def _day(flags, checkins=()):
+    return {
+        "employee": "HR-EMP-00001",
+        "days": [{
+            "date": "2026-08-14",
+            "checkins": [{"time": t} for t in checkins],
+            "flags": flags,
+        }],
+    }
 
 
 class TestSignatureGuard(unittest.TestCase):
@@ -106,7 +142,7 @@ class TestProjection(unittest.TestCase):
         self.assertEqual(
             set(day),
             {"date", "shift", "checkins", "holiday", "leave", "observed_lunch",
-             "first_in", "last_out"},
+             "first_in", "last_out", "flags"},
         )
 
     def test_the_top_level_key_set_is_exactly_the_allowlist(self):
@@ -159,14 +195,22 @@ class TestProjection(unittest.TestCase):
         self.assertNotIn("device_id", checkin)
         self.assertNotIn("name", checkin)
 
-    def test_no_flags_reach_the_employee(self):
-        # Intraday deletes and re-inserts AUTO flags on every checkin, so an
-        # employee watching them would see provisional judgments appear and
-        # vanish all day.
+    def test_flags_reach_the_employee_stripped_of_everything_hr_only(self):
+        # This test used to assert that NO flag reached the employee, and the
+        # reason it gave was sound: intraday deletes and re-inserts AUTO flags
+        # on every checkin, so an employee watching them would see provisional
+        # judgments appear and vanish all day. The day-flags design keeps that
+        # reasoning and answers it differently -- see the certainty rules in
+        # TestFlagProjection, which withhold exactly the provisional flags that
+        # can withdraw themselves. What must never come back is the payload
+        # AROUND the flag.
         payload = self._narrowed()
-        self.assertNotIn("flags", payload["days"][0])
-        self.assertNotIn("LATE_START", repr(payload))
+        self.assertEqual(
+            set(payload["days"][0]["flags"][0]),
+            {"flag_code", "is_provisional", "decision", "decision_state"},
+        )
         self.assertNotIn("AUTO-emp-1", repr(payload))
+        self.assertNotIn("grace_minutes", repr(payload))
 
     def test_no_device_internals_reach_the_employee(self):
         payload = repr(self._narrowed())
@@ -185,6 +229,118 @@ class TestProjection(unittest.TestCase):
             day = miniapp_api.get_my_calendar("d", "2026-08-15", "2026-08-15")["days"][0]
         self.assertNotIn("shift", day)
         self.assertEqual(day["checkins"], [])
+
+
+class TestFlagProjection(unittest.TestCase):
+    def _flags(self, payload):
+        with patch.object(miniapp_api.miniapp_auth, "employee_from_init_data",
+                          return_value="HR-EMP-00001"), \
+             patch.object(miniapp_api.hr_calendar, "build_employee_calendar",
+                          return_value=payload):
+            got = miniapp_api.get_my_calendar("d", "2026-08-14", "2026-08-14")
+        return got["days"][0]["flags"]
+
+    def test_a_visible_flag_carries_exactly_four_fields(self):
+        # Equality, not absence. An absence assertion passes forever while a
+        # newly added field leaks.
+        flags = self._flags(_day([_flag("LATE_START")]))
+        self.assertEqual(len(flags), 1)
+        self.assertEqual(
+            set(flags[0]),
+            {"flag_code", "is_provisional", "decision", "decision_state"},
+        )
+
+    def test_hr_internals_never_reach_the_employee(self):
+        payload = repr(self._flags(_day([_flag("LATE_START")])))
+        self.assertNotIn("grace_minutes", payload)
+        self.assertNotIn("spoke to the supervisor", payload)
+        self.assertNotIn("AUTO-emp-1", payload)
+        self.assertNotIn("CRITICAL", payload)
+        self.assertNotIn("EMP-CKIN-1", payload)
+
+    def test_infrastructure_codes_are_not_the_employees_business(self):
+        # Ours failing, not their day, and none of it actionable by them.
+        flags = self._flags(_day([
+            _flag("UNKNOWN_DEVICE_BRANCH"),
+            _flag("DELIVERY_FAILED"),
+            _flag("NON_PRIMARY_SITE_PUNCH"),
+        ]))
+        self.assertEqual(flags, [])
+
+    def test_a_code_invented_later_is_hidden_by_default(self):
+        # THE POINT OF THE ALLOWLIST. Written as a denylist this test would
+        # pass only until somebody added a code to the engine.
+        self.assertEqual(self._flags(_day([_flag("SOME_FUTURE_CODE")])), [])
+
+    def test_a_provisional_absence_is_withheld(self):
+        # intraday.py:175 raises it the moment the first MISSING_TIME interval
+        # would have appeared and withdraws it when a punch lands. Somebody
+        # whose approved leave is not keyed in yet would otherwise carry "no
+        # record for this day" from mid-morning until closeout cleared it.
+        flags = self._flags(_day([
+            _flag("UNNOTIFIED_ABSENCE", is_provisional=True, day_closed=0),
+        ]))
+        self.assertEqual(flags, [])
+
+    def test_a_closed_out_absence_is_shown(self):
+        flags = self._flags(_day([_flag("UNNOTIFIED_ABSENCE")]))
+        self.assertEqual([f["flag_code"] for f in flags], ["UNNOTIFIED_ABSENCE"])
+
+    def test_a_provisional_gap_that_is_still_running_is_withheld(self):
+        # The engine measures today's gaps up to the present minute, so an
+        # untracked lunch is a 31-minute gap at 12:31 while the person eats.
+        flags = self._flags(_day(
+            [_flag("MISSING_TIME", is_provisional=True, day_closed=0,
+                   evidence={"interval_start": "2026-08-14T12:00:00",
+                             "interval_end": "2026-08-14T12:31:00"})],
+            checkins=["2026-08-14 08:02:00", "2026-08-14 12:00:00"],
+        ))
+        self.assertEqual(flags, [])
+
+    def test_a_provisional_gap_that_ended_is_shown(self):
+        # A punch landed after it, so the gap is closed and certain.
+        flags = self._flags(_day(
+            [_flag("MISSING_TIME", is_provisional=True, day_closed=0,
+                   evidence={"interval_start": "2026-08-14T12:00:00",
+                             "interval_end": "2026-08-14T12:31:00"})],
+            checkins=["2026-08-14 12:00:00", "2026-08-14 12:58:00"],
+        ))
+        self.assertEqual([f["flag_code"] for f in flags], ["MISSING_TIME"])
+
+    def test_a_final_gap_needs_no_later_punch(self):
+        flags = self._flags(_day(
+            [_flag("MISSING_TIME",
+                   evidence={"interval_end": "2026-08-14T12:31:00"})],
+            checkins=[],
+        ))
+        self.assertEqual([f["flag_code"] for f in flags], ["MISSING_TIME"])
+
+    def test_the_gap_comparison_parses_instead_of_comparing_strings(self):
+        # THE TEST THAT EARNS ITS PLACE. evidence stores an ISO datetime with a
+        # "T" and Frappe stores checkin times with a space. Compared as
+        # strings, " " < "T", so "2026-08-14 12:58:00" sorts BEFORE
+        # "2026-08-14T12:31:00" and a genuinely closed gap is withheld forever.
+        # The naive implementation passes every other test in this class.
+        flags = self._flags(_day(
+            [_flag("MISSING_TIME", is_provisional=True, day_closed=0,
+                   evidence={"interval_end": "2026-08-14T12:31:00"})],
+            checkins=["2026-08-14 12:58:00"],
+        ))
+        self.assertEqual([f["flag_code"] for f in flags], ["MISSING_TIME"],
+                         "a space-separated punch time must parse, not sort")
+
+    def test_a_gap_with_no_interval_end_is_withheld_while_provisional(self):
+        # Nothing to compare against is not the same as certain.
+        flags = self._flags(_day(
+            [_flag("MISSING_TIME", is_provisional=True, day_closed=0, evidence={})],
+            checkins=["2026-08-14 12:58:00"],
+        ))
+        self.assertEqual(flags, [])
+
+    def test_a_day_with_no_flags_gets_an_empty_list_not_a_missing_key(self):
+        # The client counts len(flags); a missing key would make every day need
+        # a guard, and one of them would be forgotten.
+        self.assertEqual(self._flags(_day([])), [])
 
 
 class TestAuth(unittest.TestCase):
