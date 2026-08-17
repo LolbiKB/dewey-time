@@ -52,9 +52,15 @@ export function MyProfilePage(props: {
   const profile = useMyProfile();
   // The SAME key MiniCalendarSheet uses for the current month, so on a launch
   // where the calendar has already been opened this costs nothing.
+  //
+  // Not polled. The 60s interval exists for the Day tab's claim about the
+  // present ("In"), and nothing on this page makes one — a month of days
+  // re-fetched every minute would buy a days-worked count that changes twice a
+  // day. Resuming the app invalidates this key anyway.
   const month = useMiniAppCalendar(
     format(startOfMonth(today), "yyyy-MM-dd"),
     format(endOfMonth(today), "yyyy-MM-dd"),
+    { poll: false },
   );
 
   if (profile.isLoading) return <MiniState>{t("loadingProfile")}</MiniState>;

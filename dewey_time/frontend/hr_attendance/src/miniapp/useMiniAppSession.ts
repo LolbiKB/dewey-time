@@ -91,7 +91,14 @@ async function fetchCalendar(
   return (await response.json()).message as MiniCalendar;
 }
 
-export function useMiniAppCalendar(startDate: string, endDate: string) {
+export function useMiniAppCalendar(
+  startDate: string,
+  endDate: string,
+  /** `poll: false` for a caller that makes no claim about the present. Not part
+   *  of the query key — the cache stays shared with every other caller of the
+   *  same range, and only this observer's interval changes. */
+  opts?: { poll?: boolean },
+) {
   const initData = initDataFromTelegram(window);
   const active = useIsAppActive();
   return useQuery({
@@ -115,7 +122,13 @@ export function useMiniAppCalendar(startDate: string, endDate: string) {
     // marked hidden -- it drops behind the chat and keeps running. Left to
     // that default this polls all afternoon on an employee's mobile data
     // against a sheet nobody is looking at.
-    refetchInterval: active ? 60_000 : false,
+    //
+    // Opt-out for callers whose number does not move with the wall clock. The
+    // Profile tab's month range is one: a month of days re-fetched every minute
+    // on an employee's mobile data, to keep a count of days worked that changes
+    // twice a day. Resuming the app already invalidates this key, which is the
+    // moment the figure can actually be stale.
+    refetchInterval: active && (opts?.poll ?? true) ? 60_000 : false,
   });
 }
 
