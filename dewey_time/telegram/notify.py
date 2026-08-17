@@ -188,6 +188,76 @@ def delivery_gates(employee: str | None = None) -> dict:
     return gates
 
 
+@frappe.whitelist()
+def send_test_notification(employee: str | None = None) -> dict:
+    """The real check-in message, sent now, ignoring ONLY the rollout phase.
+
+    Rollout exists so a branch can be watched before its employees are told
+    anything, and that is right -- but it also means the notification cannot
+    be proven until the moment it starts going to everyone. Nobody should
+    have to discover a wording or a binding fault on the day they flip a
+    branch LIVE.
+
+    So this is the real path, not a mock of it: the same link lookup, the same
+    `direction_of`, the same `compose`, the same transport. Only
+    `phase_for_employee` is skipped, and the response says so. If this works
+    and a punch does not, the difference is the rollout phase and nothing
+    else.
+
+    IT DOES NOT DISABLE A BLOCKED LINK. `send_checkin_notification` does,
+    correctly -- a person who blocked the bot should stop being written to.
+    Doing it from a test would let HR switch off an employee's notifications
+    by checking whether they work.
+
+    Returns the text it sent, so the wording can be reviewed from the response
+    without a phone in hand -- which is the only way the Khmer gets checked by
+    someone who is not holding the linked account.
+    """
+    from dewey_time.attendance_engine.hr_calendar import (
+        _employee_linked_to_user,
+        _require_hr_role,
+    )
+
+    _require_hr_role()
+    employee = (employee or _employee_linked_to_user() or "").strip()
+    if not employee:
+        frappe.throw(
+            "No employee to test with. Pass one explicitly: "
+            "?employee=HR-EMP-00042"
+        )
+
+    report = {"employee": employee, "rollout_phase_ignored": True}
+    if not transport.telegram_enabled():
+        return {**report, "result": "disabled"}
+
+    link = _link_for(employee)
+    if not link:
+        return {**report, "result": "unlinked"}
+
+    # Their most recent punch, whenever it was -- a real row rather than a
+    # fabricated time, so `direction_of` is exercised against the same
+    # unlabelled stream production has.
+    latest = frappe.db.get_value(
+        "Employee Checkin",
+        {"employee": employee},
+        ["name", "log_type", "time", "custom_device_branch"],
+        order_by="time desc",
+        as_dict=True,
+    )
+    if not latest:
+        return {**report, "result": "no-checkin"}
+
+    text = compose(
+        direction_of(employee, latest), latest["time"], latest.get("custom_device_branch")
+    )
+    return {
+        **report,
+        "checkin": latest["name"],
+        "text": text,
+        "result": transport.send_message(link["chat_id"], text),
+    }
+
+
 def on_employee_checkin_after_insert(doc, method=None):
     employee = (getattr(doc, "employee", "") or "").strip()
     if not employee:

@@ -244,3 +244,95 @@ class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
         self.assertIn("Checked out", message)
         self.assertIn("បានចេញ", message)
         self.assertNotIn("Checked in", message)
+
+
+class TestSendTestNotification(unittest.TestCase):
+    """Proving the message works without moving a branch to LIVE.
+
+    Rollout exists so a branch can be watched before its employees are told
+    anything. It also means the notification cannot be proven until the moment
+    it starts going to everyone, so a wording or binding fault is discovered
+    on the day of the flip.
+    """
+
+    def _hr(self):
+        return patch("dewey_time.attendance_engine.hr_calendar._require_hr_role")
+
+    def _me(self, employee="HR-EMP-00042"):
+        return patch("dewey_time.attendance_engine.hr_calendar._employee_linked_to_user",
+                     return_value=employee)
+
+    def test_it_sends_the_real_message_for_the_latest_punch(self):
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "L1"}), \
+             patch.object(notify.frappe.db, "get_value", return_value={
+                 "name": "CKIN-9", "log_type": "OUT",
+                 "time": datetime(2026, 8, 17, 17, 6), "custom_device_branch": "DIS Iconic"}), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT) as send:
+            result = notify.send_test_notification()
+
+        self.assertEqual(result["result"], notify.transport.SENT)
+        self.assertEqual(send.call_args[0][0], "77702")
+        # The text comes back so the wording can be reviewed from the response
+        # rather than from the phone that happens to be linked.
+        self.assertIn("Checked out", result["text"])
+        self.assertIn("បានចេញ", result["text"])
+        self.assertIn("DIS Iconic", result["text"])
+
+    def test_the_rollout_phase_is_never_consulted(self):
+        # The entire point. If this asked, it would refuse for exactly the
+        # branches that most need testing.
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "L1"}), \
+             patch.object(notify.frappe.db, "get_value", return_value={
+                 "name": "CKIN-9", "log_type": "IN",
+                 "time": datetime(2026, 8, 17, 7, 58), "custom_device_branch": "DIS Iconic"}), \
+             patch.object(notify.rollout, "phase_for_employee",
+                          side_effect=AssertionError("must not be consulted")), \
+             patch.object(notify.transport, "send_message", return_value=notify.transport.SENT):
+            result = notify.send_test_notification()
+        self.assertTrue(result["rollout_phase_ignored"])
+
+    def test_every_other_gate_still_reports_honestly(self):
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=False):
+            self.assertEqual(notify.send_test_notification()["result"], "disabled")
+
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value=None):
+            self.assertEqual(notify.send_test_notification()["result"], "unlinked")
+
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "7", "name": "L1"}), \
+             patch.object(notify.frappe.db, "get_value", return_value=None):
+            self.assertEqual(notify.send_test_notification()["result"], "no-checkin")
+
+    def test_a_blocked_link_is_reported_but_not_disabled(self):
+        # send_checkin_notification disables a blocked link, correctly. Doing
+        # it from a TEST would let HR switch off an employee's notifications
+        # by checking whether they work.
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "L1"}), \
+             patch.object(notify.frappe.db, "get_value", return_value={
+                 "name": "CKIN-9", "log_type": "IN",
+                 "time": datetime(2026, 8, 17, 7, 58), "custom_device_branch": None}), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.BLOCKED), \
+             patch.object(notify, "_disable_link") as disable:
+            result = notify.send_test_notification()
+
+        self.assertEqual(result["result"], notify.transport.BLOCKED)
+        disable.assert_not_called()
+
+    def test_it_refuses_rather_than_guessing_whose_record_to_use(self):
+        with self._hr(), \
+             patch("dewey_time.attendance_engine.hr_calendar._employee_linked_to_user",
+                   return_value=None):
+            with self.assertRaises(Exception):
+                notify.send_test_notification()
