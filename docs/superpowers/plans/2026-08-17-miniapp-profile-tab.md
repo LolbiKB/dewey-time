@@ -1,5 +1,28 @@
 # Mini App Profile Tab Implementation Plan
 
+> **COMPLETE — 2026-08-17. Do not re-execute.** All six tasks are implemented
+> and committed on `feat/miniapp-profile-tab`, `83f5b318..735cf04e`. The
+> step checkboxes below were never ticked; this line is the completion record.
+>
+> | Task | Commit |
+> |---|---|
+> | 1 · finger-slot table | `1ee9c953` |
+> | 2 · `finger_ids` through the register | `9d685e4e` |
+> | 3 · `get_my_profile` endpoint | `cae592fd` |
+> | 4 · strings + pure client logic | `125d3062` |
+> | 5 · the Profile page | `12437109` |
+> | 6 · swap the tab | `72ae2942` |
+> | follow-ups from the branch review | `35feddf0`, `734756a0`, `735cf04e` |
+>
+> **Executed INLINE, not via subagent-driven-development** — the user chose
+> that mode, so there is no `.superpowers/sdd/` workspace for this plan, no
+> per-task dispatch and no independent task reviewer. The whole-branch review
+> was a SELF-review by the implementing session and is not a substitute for
+> one. Three defects it found are fixed in the follow-up commits above;
+> `/code-review ultra` has still not run against this branch.
+>
+> Final state: backend 1068 tests, web 1218, miniapp+flags e2e 114, `tsc` clean.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the Mini App's Schedule tab with a Profile tab that shows an employee their own record — biometric enrolment, work details, contact on file, month stats — with the existing week roster kept intact at the bottom.
