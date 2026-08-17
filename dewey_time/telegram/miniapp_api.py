@@ -403,8 +403,20 @@ def _biometric(employee: str) -> dict:
     showing a provisional flag: the app stating something it does not know.
     """
     status = enrollment_api.enrollment_status(employee)
-    last_snapshot = status.get("last_snapshot_at")
-    if not last_snapshot:
+
+    # ONE value drives both the state and the timestamp, so they cannot
+    # contradict each other on screen.
+    #
+    # `last_snapshot_at` alone is not the question. It is a Single, and clearing
+    # it in Desk stores 0001-01-01, which _last_snapshot_at normalises to None
+    # -- a path its own docstring records as observed on a real bench. Every
+    # register row would still carry its own synced_at, so keying "unknown" off
+    # the marker alone rendered "Not checked yet" directly above "Last checked
+    # 17 Aug". This person's OWN snapshot time is the stronger evidence that we
+    # have heard about them; the bridge's last contact of any kind is the
+    # weaker answer that is still true.
+    heard_at = status.get("synced_at") or status.get("last_snapshot_at")
+    if not heard_at:
         state = "unknown"
     elif status.get("is_registered"):
         state = "enrolled"
@@ -421,7 +433,8 @@ def _biometric(employee: str) -> dict:
         # A yes/no, not a count. Nobody enrols two faces, and a number invites
         # the reader to wonder what the other one is.
         "face": bool(status.get("face_count") or 0),
-        "checked_at": status.get("synced_at") or last_snapshot,
+        # Null exactly when the state is "unknown", by construction.
+        "checked_at": heard_at,
     }
 
 

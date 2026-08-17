@@ -627,12 +627,44 @@ class TestProfileBiometric(_ProfileHarness):
         )
 
     def test_never_heard_from_the_bridge_is_not_the_same_as_not_enrolled(self):
-        # THE HONESTY GUARD. enrollment_status returns last_snapshot_at
-        # precisely so these two can be told apart. Telling somebody they are
-        # not set up when the truth is that our snapshot is missing is the same
-        # failure as showing a provisional flag.
-        status = dict(ENROLLED, is_registered=True, last_snapshot_at=None)
+        # THE HONESTY GUARD. enrollment_status reports feed health precisely so
+        # these two can be told apart. Telling somebody they are not set up when
+        # the truth is that our snapshot is missing is the same failure as
+        # showing a provisional flag.
+        status = dict(ENROLLED, is_registered=True, last_snapshot_at=None, synced_at=None)
         self.assertEqual(self._profile(status=status)["biometric"]["state"], "unknown")
+
+    def test_a_cleared_marker_does_not_erase_this_persons_own_snapshot(self):
+        # last_enrollment_snapshot_at is a Single. Clearing it in Desk stores
+        # 0001-01-01, which _last_snapshot_at normalises to None -- a path that
+        # module's docstring records as OBSERVED ON A REAL BENCH. Every register
+        # row still carries its own synced_at.
+        #
+        # Keying "unknown" off the marker alone rendered "Not checked yet"
+        # directly above "Last checked 17 Aug" on the same card.
+        status = dict(ENROLLED, last_snapshot_at=None, synced_at="2026-08-17 06:00:00")
+        bio = self._profile(status=status)["biometric"]
+        self.assertEqual(bio["state"], "enrolled")
+        self.assertEqual(bio["checked_at"], "2026-08-17 06:00:00")
+
+    def test_a_timestamp_and_the_unknown_state_are_mutually_exclusive(self):
+        # THE INVARIANT, stated directly rather than left implicit in the two
+        # cases above: one value drives both fields, so the card cannot claim a
+        # last-checked time it has just said it does not have.
+        cases = [
+            dict(ENROLLED, last_snapshot_at=None, synced_at=None),
+            dict(ENROLLED, last_snapshot_at=None, synced_at="2026-08-17 06:00:00"),
+            dict(ENROLLED, last_snapshot_at="2026-08-17 06:05:00", synced_at=None),
+            dict(ENROLLED, is_registered=False, last_snapshot_at=None, synced_at=None),
+        ]
+        for status in cases:
+            with self.subTest(snapshot=status["last_snapshot_at"], synced=status["synced_at"]):
+                bio = self._profile(status=status)["biometric"]
+                self.assertEqual(
+                    bio["state"] == "unknown",
+                    bio["checked_at"] is None,
+                    "state and checked_at disagree about whether we have heard",
+                )
 
     def test_a_snapshot_that_does_not_know_this_person_is_not_enrolled(self):
         status = dict(ENROLLED, is_registered=False, fingerprint_count=0, finger_ids=[])

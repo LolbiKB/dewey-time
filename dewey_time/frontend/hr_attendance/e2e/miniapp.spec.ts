@@ -196,6 +196,24 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
   await page.goto(MINIAPP);
 }
 
+/**
+ * Ten days ago, as a date string.
+ *
+ * RELATIVE, not a literal. A hard-coded joining date is measured against the
+ * real clock, so "joined less than a month ago" quietly becomes false a few
+ * weeks after it is written — and the assertion that no "0mo" is rendered then
+ * passes because the page says "1mo", which is not what it is guarding.
+ */
+function recentlyJoined(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 10);
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 /** A record with almost nothing filled in — the state that decides whether the
  *  page reads as deliberate or broken. */
 function sparseProfile(biometric: Record<string, unknown>) {
@@ -207,7 +225,7 @@ function sparseProfile(biometric: Record<string, unknown>) {
     image: null,
     department: null,
     employment_type: null,
-    date_of_joining: "2026-08-02",
+    date_of_joining: recentlyJoined(),
     branch: null,
     reports_to_name: null,
     cell_number: null,
@@ -694,8 +712,11 @@ test("a device that does not know you says so, and says why it matters", async (
   await expect(page.getByText("Contact HR has for you")).toHaveCount(0);
   await expect(page.getByText("Reports to")).toHaveCount(0);
   await expect(page.getByText("Department")).toHaveCount(0);
-  // This fixture joined a fortnight ago, so the length of service is zero whole
-  // months. "0mo" under the joining date says nothing the date does not.
+  // This fixture joined ten days ago, so the length of service is zero whole
+  // months and "0mo" under the joining date would say nothing the date does
+  // not. Asserting the row IS there first, so this cannot pass by the joining
+  // date having vanished for some unrelated reason.
+  await expect(page.getByText("Joined")).toBeVisible();
   await expect(page.getByText("0mo")).toHaveCount(0);
 });
 
