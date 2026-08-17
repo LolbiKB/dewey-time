@@ -1,9 +1,10 @@
 # Telegram employee layer — operator runbook
 
 What this covers: an employee links their Telegram account once. From then on
-they get a message when they check in or out, and can open a Mini App showing
-today's timeline, what they actually worked this week, and their assigned
-shifts.
+they get a message when they check in or out, and can open a Mini App with two
+tabs — **Today**, their timeline for a day plus a month calendar to reach any
+past one, and **Profile**, what HR's record says about them alongside their
+rostered week.
 
 ## One-time setup
 
@@ -163,9 +164,24 @@ it tries the Telegram id recorded on the Employee record. It does not answer
 attendance is the Mini App's job, so the bot stays a notifier and a door.
 
 The Mini App is READ-ONLY. There is nothing in it an employee can submit,
-change or delete, and it shows no attendance flags — the engine's verdict on a
-day is provisional until HR reviews it, so surfacing it to the person it
-concerns would be showing them a judgment nobody has made yet.
+change or delete — not their contact details, not an explanation of a flag.
+
+It DOES show attendance flags, which it did not when this runbook was first
+written. Two rules keep that honest, and an operator fielding "why does it say
+that?" should know both:
+
+- **Only nine codes reach a phone**, and only the ones about the person's own
+  day. Infrastructure failures and cover-shift notices are not an employee's
+  business (`miniapp_api.EMPLOYEE_FLAG_CODES`).
+- **A provisional flag is withheld until it is certain.** The engine deletes
+  and re-writes AUTO flags on every punch, so one can appear at 09:00 and be
+  gone by closeout; showing those would make the app an accusation that
+  withdraws itself. HR's decision, when there is one, is shown as an outcome
+  and a date — never a reason.
+
+The same principle governs Profile's enrolment block: "not set up" and "we
+have not heard from the fingerprint devices" are separate states, so nobody is
+told they are unenrolled on the strength of a missing snapshot.
 
 The bot **ignores every non-private chat**. Adding it to a group does nothing,
 by design: otherwise one add would broadcast a person's attendance to their

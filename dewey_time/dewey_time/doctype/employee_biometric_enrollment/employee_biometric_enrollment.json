@@ -17,6 +17,7 @@
   "is_registered",
   "column_break_1",
   "fingerprint_count",
+  "finger_ids",
   "face_count",
   "synced_at",
   "bridge_env"
@@ -54,6 +55,13 @@
    "label": "Fingerprint Templates"
   },
   {
+   "description": "Comma-separated ZKTeco finger indexes, e.g. \"3,6\". Written by the bridge snapshot; empty until the bridge sends finger_id.",
+   "fieldname": "finger_ids",
+   "fieldtype": "Small Text",
+   "label": "Fingerprint Slots",
+   "read_only": 1
+  },
+  {
    "fieldname": "face_count",
    "fieldtype": "Int",
    "label": "Face Templates"
@@ -71,7 +79,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-08-16 00:00:00.000000",
+ "modified": "2026-08-17 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Dewey Time",
  "name": "Employee Biometric Enrollment",

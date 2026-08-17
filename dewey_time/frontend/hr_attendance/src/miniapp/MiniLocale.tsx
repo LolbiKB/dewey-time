@@ -17,6 +17,7 @@ import {
   formatClockSpan,
   formatIn,
   formatPunchTime,
+  formatServiceLength,
   formatWorkedMinutes,
 } from "@/miniapp/miniIntl";
 import { translator, type Locale, type Translate } from "@/miniapp/miniStrings";
@@ -64,6 +65,8 @@ export type MiniFormat = {
   worked: (minutes: number | null | undefined) => string | null;
   /** Latin digits to the reader's script, for a string formatted elsewhere. */
   digits: (text: string) => string;
+  /** Length of service, in the reader's language. */
+  service: (service: { years: number; months: number } | null) => string | null;
 };
 
 export function useFormat(): MiniFormat {
@@ -77,6 +80,11 @@ export function useFormat(): MiniFormat {
       worked: (minutes) =>
         formatWorkedMinutes(locale, minutes, { hour: t("unitHour"), minute: t("unitMinute") }),
       digits: digitsFor(locale),
+      service: (service) =>
+        formatServiceLength(locale, service, {
+          year: t("unitYear"),
+          month: t("unitMonth"),
+        }),
     }),
     [locale, t],
   );

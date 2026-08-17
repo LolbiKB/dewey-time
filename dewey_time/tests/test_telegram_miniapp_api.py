@@ -460,3 +460,275 @@ class TestEmployeePhoto(unittest.TestCase):
         for empty in (None, "", "   "):
             with self.subTest(value=repr(empty)):
                 self.assertIsNone(miniapp_api._public_image(empty))
+
+
+#: An Employee row as the DB would hand it back, including columns this app
+#: must never ship. All three of the last ones live on the real doctype.
+EMPLOYEE_ROW = {
+    "employee_name": "Sok Dara",
+    "designation": "Cashier",
+    "image": "/files/dara.jpg",
+    "custom_khmer_last_name": "សុខ",
+    "custom_khmer_first_name": "ដារា",
+    "department": "Retail",
+    "employment_type": "Full-time",
+    "date_of_joining": "2024-03-12",
+    "branch": "DIS Iconic",
+    "cell_number": "012 345 678",
+    "personal_email": "dara.sok@gmail.com",
+    "reports_to": "HR-EMP-00002",
+    "date_of_birth": "1994-02-02",
+    "passport_number": "N1234567",
+    "salary_mode": "Bank",
+}
+
+ENROLLED = {
+    "employee": "HR-EMP-00001",
+    "is_registered": True,
+    "fingerprint_count": 2,
+    "face_count": 0,
+    "finger_ids": [3, 6],
+    "synced_at": "2026-08-17 06:00:00",
+    "last_snapshot_at": "2026-08-17 06:05:00",
+}
+
+
+class _ProfileHarness(unittest.TestCase):
+    """Drive get_my_profile with the DB and the enrolment seam stubbed out."""
+
+    def _profile(self, row=None, status=None, has_column=None):
+        row = EMPLOYEE_ROW if row is None else row
+        status = ENROLLED if status is None else status
+        self.asked_for = []
+
+        def _get_value(doctype, name, fields, as_dict=False):
+            if doctype != "Employee":
+                return None
+            if as_dict:
+                self.asked_for.append(tuple(fields))
+                return {k: row[k] for k in fields if k in row}
+            # The single-field reads: reports_to, then the manager's name.
+            if fields == "reports_to":
+                return row.get("reports_to")
+            if fields == "employee_name":
+                return "Chan Sophea"
+            return None
+
+        column = (lambda _dt, field: True) if has_column is None else has_column
+
+        with patch.object(miniapp_api.miniapp_auth, "employee_from_init_data",
+                          return_value="HR-EMP-00001"), \
+             patch.object(miniapp_api.enrollment_api, "enrollment_status",
+                          return_value=status), \
+             patch.object(miniapp_api.frappe.db, "get_value", side_effect=_get_value), \
+             patch.object(miniapp_api.frappe.db, "has_column", side_effect=column):
+            return miniapp_api.get_my_profile("initdata")
+
+
+class TestProfileSignatureGuard(unittest.TestCase):
+    def test_the_endpoint_accepts_no_employee_selecting_parameter(self):
+        # The same property, and the same reason, as get_my_calendar's guard:
+        # this dies to a reasonable-looking edit adding `employee=None` for a
+        # manager view, not to an attack. Resolving another employee needs its
+        # own authorization design, not a new parameter.
+        params = set(inspect.signature(miniapp_api.get_my_profile).parameters)
+        self.assertEqual(params, {"init_data"})
+
+    def test_both_endpoints_are_post_only(self):
+        # A GET would carry init_data -- the whole authentication credential --
+        # in the query string, into the access log and the webview's history.
+        src = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "telegram" / "miniapp_api.py"
+        ).read_text()
+        self.assertEqual(
+            src.count('@frappe.whitelist(allow_guest=True, methods=["POST"])'), 2
+        )
+
+
+class TestProfileProjection(_ProfileHarness):
+    def test_the_key_set_is_exactly_the_allowlist(self):
+        self.assertEqual(
+            set(self._profile()),
+            {
+                "employee", "employee_name", "khmer_name", "designation", "image",
+                "department", "employment_type", "date_of_joining", "branch",
+                "reports_to_name", "cell_number", "personal_email", "biometric",
+            },
+        )
+
+    def test_the_select_never_asks_for_a_field_outside_the_allowlist(self):
+        # Stronger than checking the response: this fails if somebody widens
+        # the query "just to have it", before anything renders it.
+        self._profile()
+        asked = {field for fields in self.asked_for for field in fields}
+        for forbidden in ("date_of_birth", "passport_number", "salary_mode"):
+            self.assertNotIn(forbidden, asked)
+
+    def test_a_row_wider_than_the_allowlist_is_narrowed_on_the_way_out(self):
+        # DEFENCE IN DEPTH, and it needs its own harness to be a real guard.
+        #
+        # The select above is the first defence: get_value returns only the
+        # columns it was asked for, so a wider row cannot normally exist and a
+        # test feeding one through the ordinary path proves nothing -- it passes
+        # whether or not the projection narrows. Verified by mutation: replacing
+        # the projection with `**row` left the key-set assertion green.
+        #
+        # This patches _employee_row directly, which is the shape a future edit
+        # would take: someone reaching for frappe.get_doc, or get_value with
+        # "*", to add one field. Then the dict comprehension is the only thing
+        # between this doctype's salary and passport columns and a phone.
+        wide = dict(EMPLOYEE_ROW, custom_disciplinary_note="final warning")
+        with patch.object(miniapp_api.miniapp_auth, "employee_from_init_data",
+                          return_value="HR-EMP-00001"), \
+             patch.object(miniapp_api.enrollment_api, "enrollment_status",
+                          return_value=ENROLLED), \
+             patch.object(miniapp_api, "_employee_row", return_value=wide), \
+             patch.object(miniapp_api, "_reports_to_name", return_value=None), \
+             patch.object(miniapp_api.frappe.db, "get_value", return_value={}), \
+             patch.object(miniapp_api.frappe.db, "has_column", return_value=True):
+            profile = miniapp_api.get_my_profile("initdata")
+
+        for forbidden in (
+            "custom_disciplinary_note", "date_of_birth", "passport_number", "salary_mode",
+        ):
+            self.assertNotIn(forbidden, profile)
+
+    def test_the_manager_is_named_and_never_identified(self):
+        # A docname is another employee's identifier. The NAME answers "who do
+        # I tell if I'm sick"; the id answers nothing an employee needs.
+        profile = self._profile()
+        self.assertEqual(profile["reports_to_name"], "Chan Sophea")
+        self.assertNotIn("reports_to", profile)
+
+    def test_no_manager_is_none_rather_than_an_error(self):
+        row = dict(EMPLOYEE_ROW, reports_to=None)
+        self.assertIsNone(self._profile(row=row)["reports_to_name"])
+
+    def test_an_empty_field_is_none_so_the_client_can_drop_the_row(self):
+        row = dict(EMPLOYEE_ROW, department="", personal_email=None)
+        profile = self._profile(row=row)
+        self.assertIsNone(profile["department"])
+        self.assertIsNone(profile["personal_email"])
+
+    def test_a_site_missing_columns_still_answers(self):
+        # Mid-migration. Losing one row is acceptable; raising is not.
+        profile = self._profile(has_column=lambda _dt, field: field == "branch")
+        self.assertEqual(profile["branch"], "DIS Iconic")
+        self.assertIsNone(profile["employment_type"])
+        self.assertIsNone(profile["reports_to_name"])
+
+
+class TestProfileBiometric(_ProfileHarness):
+    def test_the_biometric_key_set_is_exactly_the_allowlist(self):
+        self.assertEqual(
+            set(self._profile()["biometric"]),
+            {"state", "fingers", "fingerprint_count", "face", "checked_at"},
+        )
+
+    def test_never_heard_from_the_bridge_is_not_the_same_as_not_enrolled(self):
+        # THE HONESTY GUARD. enrollment_status reports feed health precisely so
+        # these two can be told apart. Telling somebody they are not set up when
+        # the truth is that our snapshot is missing is the same failure as
+        # showing a provisional flag.
+        status = dict(ENROLLED, is_registered=True, last_snapshot_at=None, synced_at=None)
+        self.assertEqual(self._profile(status=status)["biometric"]["state"], "unknown")
+
+    def test_a_cleared_marker_does_not_erase_this_persons_own_snapshot(self):
+        # last_enrollment_snapshot_at is a Single. Clearing it in Desk stores
+        # 0001-01-01, which _last_snapshot_at normalises to None -- a path that
+        # module's docstring records as OBSERVED ON A REAL BENCH. Every register
+        # row still carries its own synced_at.
+        #
+        # Keying "unknown" off the marker alone rendered "Not checked yet"
+        # directly above "Last checked 17 Aug" on the same card.
+        status = dict(ENROLLED, last_snapshot_at=None, synced_at="2026-08-17 06:00:00")
+        bio = self._profile(status=status)["biometric"]
+        self.assertEqual(bio["state"], "enrolled")
+        self.assertEqual(bio["checked_at"], "2026-08-17 06:00:00")
+
+    def test_a_timestamp_and_the_unknown_state_are_mutually_exclusive(self):
+        # THE INVARIANT, stated directly rather than left implicit in the two
+        # cases above: one value drives both fields, so the card cannot claim a
+        # last-checked time it has just said it does not have.
+        cases = [
+            dict(ENROLLED, last_snapshot_at=None, synced_at=None),
+            dict(ENROLLED, last_snapshot_at=None, synced_at="2026-08-17 06:00:00"),
+            dict(ENROLLED, last_snapshot_at="2026-08-17 06:05:00", synced_at=None),
+            dict(ENROLLED, is_registered=False, last_snapshot_at=None, synced_at=None),
+        ]
+        for status in cases:
+            with self.subTest(snapshot=status["last_snapshot_at"], synced=status["synced_at"]):
+                bio = self._profile(status=status)["biometric"]
+                self.assertEqual(
+                    bio["state"] == "unknown",
+                    bio["checked_at"] is None,
+                    "state and checked_at disagree about whether we have heard",
+                )
+
+    def test_a_snapshot_that_does_not_know_this_person_is_not_enrolled(self):
+        status = dict(ENROLLED, is_registered=False, fingerprint_count=0, finger_ids=[])
+        self.assertEqual(
+            self._profile(status=status)["biometric"]["state"], "not_enrolled"
+        )
+
+    def test_a_snapshot_that_knows_them_is_enrolled(self):
+        self.assertEqual(self._profile()["biometric"]["state"], "enrolled")
+
+    def test_the_device_integers_are_translated_and_never_shipped(self):
+        self.assertEqual(
+            self._profile()["biometric"]["fingers"], ["left_index", "right_index"]
+        )
+
+    def test_a_slot_the_table_does_not_know_is_named_not_dropped(self):
+        # Dropping would make len(fingers) < fingerprint_count, and the client
+        # then shows a bare number instead of the names it does have.
+        status = dict(ENROLLED, finger_ids=[3, 99], fingerprint_count=2)
+        self.assertEqual(
+            self._profile(status=status)["biometric"]["fingers"],
+            ["left_index", "other_finger"],
+        )
+
+    def test_face_is_a_yes_or_no_and_never_a_count(self):
+        self.assertIs(self._profile()["biometric"]["face"], False)
+        status = dict(ENROLLED, face_count=1)
+        self.assertIs(self._profile(status=status)["biometric"]["face"], True)
+
+    def test_checked_at_prefers_this_persons_own_snapshot_time(self):
+        self.assertEqual(
+            self._profile()["biometric"]["checked_at"], "2026-08-17 06:00:00"
+        )
+
+    def test_checked_at_falls_back_to_the_bridges_last_contact(self):
+        # "When did we last hear about you" is the better answer; "when did we
+        # last hear at all" is the weaker one that is still true.
+        status = dict(ENROLLED, synced_at=None)
+        self.assertEqual(
+            self._profile(status=status)["biometric"]["checked_at"],
+            "2026-08-17 06:05:00",
+        )
+
+
+class TestProfileAuth(unittest.TestCase):
+    def test_auth_runs_before_any_read(self):
+        calls = []
+        with patch.object(
+            miniapp_api.miniapp_auth, "employee_from_init_data",
+            side_effect=lambda _d: (calls.append("auth"), "HR-EMP-00001")[1],
+        ), patch.object(
+            miniapp_api.enrollment_api, "enrollment_status",
+            side_effect=lambda _e: (calls.append("enrol"), ENROLLED)[1],
+        ), patch.object(
+            miniapp_api.frappe.db, "get_value",
+            side_effect=lambda *a, **k: (calls.append("db"), None)[1],
+        ), patch.object(miniapp_api.frappe.db, "has_column", return_value=True):
+            miniapp_api.get_my_profile("initdata")
+        self.assertEqual(calls[0], "auth")
+
+    def test_a_rejected_initdata_never_reaches_the_database(self):
+        with patch.object(miniapp_api.miniapp_auth, "employee_from_init_data",
+                          side_effect=Exception("nope")), \
+             patch.object(miniapp_api.frappe.db, "get_value") as get_value:
+            with self.assertRaises(Exception):
+                miniapp_api.get_my_profile("forged")
+        get_value.assert_not_called()

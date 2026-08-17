@@ -45,6 +45,7 @@ class UpsertTest(unittest.TestCase):
                 "pin": "1042",
                 "is_registered": 1,
                 "fingerprint_count": 2,
+                "finger_ids": "",
                 "face_count": 0,
                 "synced_at": "2026-08-11 09:14:03",
                 "bridge_env": "prod",
@@ -52,6 +53,29 @@ class UpsertTest(unittest.TestCase):
         self.assertEqual(name, "HR-EMP-0042")
         doc.insert.assert_called_once_with(ignore_permissions=True)
         doc.save.assert_not_called()
+
+    def test_a_list_of_slots_is_stored_as_the_sorted_string(self):
+        # The update path writes by setattr on the fetched doc, so the stored
+        # form reads straight off the mock.
+        doc = MagicMock()
+        with patch.object(mod.frappe.db, "get_value", return_value="HR-EMP-0042"), \
+                patch.object(mod.frappe, "get_doc", return_value=doc):
+            mod.upsert_enrollment_row(
+                employee="HR-EMP-0042", is_registered=True,
+                fingerprint_count=2, finger_ids=[6, 3],
+            )
+
+        self.assertEqual(doc.finger_ids, "3,6")
+
+    def test_no_slots_is_stored_as_an_empty_string_not_none(self):
+        # _clear_absent_rows writes "". These two must not diverge, or whether a
+        # row reads as empty would depend on which path last touched it.
+        doc = MagicMock()
+        with patch.object(mod.frappe.db, "get_value", return_value="HR-EMP-0042"), \
+                patch.object(mod.frappe, "get_doc", return_value=doc):
+            mod.upsert_enrollment_row(employee="HR-EMP-0042", is_registered=False)
+
+        self.assertEqual(doc.finger_ids, "")
 
     def test_an_existing_row_is_loaded_not_recreated(self):
         doc = MagicMock()
@@ -309,6 +333,27 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual({u["employee"] for u in self.upserts}, {"E1", "E2"})
         self.assertEqual(result["registered"], 2)
 
+    def test_a_snapshot_carrying_finger_slots_stores_them(self):
+        self._run([dict(_user("E1", fp=2), finger_ids=[6, 3])])
+        self.assertEqual(self.upserts[0]["finger_ids"], [3, 6])
+
+    def test_a_snapshot_without_finger_slots_stores_none(self):
+        # What the bridge sends TODAY. Absent means empty, exactly as an absent
+        # count means 0 -- never "leave whatever was there".
+        self._run([_user("E1", fp=2)])
+        self.assertEqual(self.upserts[0]["finger_ids"], [])
+
+    def test_two_pins_for_one_person_union_their_slots(self):
+        # The same rule the flags and counts already follow: enrolled on any
+        # device is enrolled. Taking the last row's list would drop a template
+        # that only exists on the other device.
+        self._run([
+            dict(_user("E1"), pin="1", finger_ids=[6]),
+            dict(_user("E1"), pin="2", finger_ids=[3]),
+        ])
+        self.assertEqual(len(self.upserts), 1)
+        self.assertEqual(self.upserts[0]["finger_ids"], [3, 6])
+
     def test_bridge_only_users_are_skipped_not_failed(self):
         """The device admin has no frappe_employee_id. It is not an error."""
         users = [_user("E1"), {"pin": "9999", "frappe_employee_id": None}]
@@ -536,12 +581,30 @@ class ClearAbsentRowsTest(unittest.TestCase):
                 "is_registered": 0,
                 "fingerprint_count": 0,
                 "face_count": 0,
+                "finger_ids": "",
                 "synced_at": "2026-08-11 09:14:03",
                 "bridge_env": "prod",
             },
             update_modified=True,
         )
         self.assertEqual(count, 1)
+
+    def test_clearing_a_row_also_clears_its_finger_slots(self):
+        """THE STALE-LIST GUARD.
+
+        A cleared row keeps its pin for provenance -- but it must NOT keep its
+        finger list. is_registered goes to 0 and the counts go to 0; a
+        surviving "3,6" would have the Mini App naming two fingers directly
+        under the words "Not set up". The equality assertion above would catch
+        this too; it is named separately because the reason is not obvious from
+        a dict literal, and a future edit to that dict should have to read it.
+        """
+        with patch.object(mod.frappe.db, "set_value") as set_value:
+            mod._clear_absent_rows(
+                ["E2"], synced_at="2026-08-11 09:14:03", bridge_env="prod"
+            )
+
+        self.assertEqual(set_value.call_args[0][2]["finger_ids"], "")
 
     def test_clearing_a_row_does_not_go_through_the_full_doc_save_helper(self):
         """The point of writing via db.set_value is to skip doc.save()'s Link

@@ -35,8 +35,15 @@ test("the poll is gated on Telegram's activity, not on document visibility", () 
   //
   // Source read rather than a rendered query: this suite has no react-query
   // harness, so the option object is only inspectable here.
+  //
+  // `active` must be a CONJUNCT of the interval, not merely mentioned nearby.
+  // A caller opt-out was added for the Profile tab's month range, so the
+  // expression is no longer the bare ternary this once pinned — but a caller
+  // must not be able to opt back IN while minimised, and `false` must remain
+  // the else branch rather than some smaller interval.
   const src = readFileSync(new URL("./useMiniAppSession.ts", import.meta.url), "utf8");
-  assert.match(src, /refetchInterval:\s*active \? 60_000 : false/);
+  const interval = /refetchInterval:\s*active\b([^;]*?)\?\s*60_000\s*:\s*false/.exec(src);
+  assert.ok(interval, "the 60s poll must still be gated on `active` and fall back to false");
   assert.match(src, /isAppActive|onActiveChange/);
 });
 

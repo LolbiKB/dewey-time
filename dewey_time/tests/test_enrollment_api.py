@@ -370,6 +370,44 @@ class SeamTest(unittest.TestCase):
             status = mod.enrollment_status("E1")
         self.assertIsNone(status["last_snapshot_at"])
 
+    def test_the_seam_returns_parsed_slots_not_the_stored_string(self):
+        """The stored "3,6" is a storage detail. Every consumer would otherwise
+        re-parse it, and one of them would get it wrong."""
+        with patch.object(mod.frappe.db, "get_value", return_value={
+            "employee": "E1", "is_registered": 1, "fingerprint_count": 2,
+            "face_count": 0, "synced_at": "2026-08-17 06:00:00",
+            "finger_ids": "3,6",
+        }), patch.object(mod, "_last_snapshot_at", return_value="2026-08-17 06:00:00"):
+            status = mod.enrollment_status("E1")
+        self.assertEqual(status["finger_ids"], [3, 6])
+
+    def test_a_row_with_no_slots_yields_an_empty_list_not_none(self):
+        with patch.object(mod.frappe.db, "get_value", return_value={
+            "employee": "E1", "is_registered": 1, "fingerprint_count": 2,
+            "face_count": 0, "synced_at": None, "finger_ids": None,
+        }), patch.object(mod, "_last_snapshot_at", return_value=None):
+            status = mod.enrollment_status("E1")
+        self.assertEqual(status["finger_ids"], [])
+
+    def test_a_site_whose_migrate_has_not_run_still_answers(self):
+        """The column does not exist yet. An unknown column makes the whole
+        select raise, which would take the Mini App's Profile tab down to lose
+        one optional row -- the same guard _identity applies to the Khmer name
+        pair."""
+        asked = []
+
+        def _get_value(doctype, filters, fields, as_dict=False):
+            asked.append(list(fields))
+            return None
+
+        with patch.object(mod.frappe.db, "has_column", return_value=False), \
+                patch.object(mod.frappe.db, "get_value", side_effect=_get_value), \
+                patch.object(mod, "_last_snapshot_at", return_value=None):
+            status = mod.enrollment_status("E1")
+
+        self.assertEqual(status["finger_ids"], [])
+        self.assertNotIn("finger_ids", asked[0])
+
 
 class TestEnrollmentCacheKey(unittest.TestCase):
     def test_the_key_is_v2(self):

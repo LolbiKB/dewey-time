@@ -1,20 +1,29 @@
-"""The Mini App's only read endpoint.
+"""The Mini App's read endpoints.
 
-Two properties carry this module, and both are structural rather than vigilant:
+Two: `get_my_calendar` for the days, `get_my_profile` for the record behind
+them. They are separate because the calendar is fetched once per range -- a day
+for Today, a week for the roster, a month for the stats -- while the record
+changes for nobody during a session, and because one function holding two
+allowlists is one careless edit away from widening both.
 
-1. It takes NO employee-selecting parameter. An attacker cannot name a victim
-   because there is no field to put one in. A test guards the signature, and
-   exists because that property will die to a reasonable future edit -- a
-   manager view adding `employee=` -- rather than to an attack.
+Two properties carry this module, and BOTH ENDPOINTS MUST HAVE BOTH. They are
+structural rather than vigilant:
 
-2. The projection is an ALLOWLIST. Written as removals it would fail open: a
-   field added to the calendar builder for an HR need would reach every
-   employee silently, with no test failing. Built this way, a new field is
-   hidden by default and exposing one is a deliberate edit.
+1. Neither takes an employee-selecting parameter. An attacker cannot name a
+   victim because there is no field to put one in. A test guards each
+   signature, and they exist because that property will die to a reasonable
+   future edit -- a manager view adding `employee=` -- rather than to an attack.
 
-The payload this narrows is HR-shaped -- device serials, `last_error`, flag
-evidence, internal flag names, grace minutes. None of it is an employee's to
-see, and `build_employee_calendar` says so at its own definition.
+2. Every projection is an ALLOWLIST. Written as removals they would fail open:
+   a field added to the calendar builder, or to Employee, for an HR need would
+   reach every employee silently, with no test failing. Built this way, a new
+   field is hidden by default and exposing one is a deliberate edit.
+
+What each narrows is HR-shaped. The calendar payload carries device serials,
+`last_error`, flag evidence, internal flag names and grace minutes;
+`build_employee_calendar` says so at its own definition. The Employee doctype
+carries date_of_birth, passport_number and salary fields. None of it is an
+employee's to see.
 """
 
 from __future__ import annotations
@@ -24,7 +33,7 @@ from datetime import datetime
 import frappe
 from frappe.utils import date_diff, getdate
 
-from dewey_time.attendance_engine import hr_calendar
+from dewey_time.attendance_engine import enrollment_api, finger_slots, hr_calendar
 from dewey_time.telegram import miniapp_auth
 
 #: One launch cannot pull more than this. Wide enough for a month view, narrow
@@ -110,6 +119,19 @@ FLAG_KEYS = ("flag_code", "is_provisional", "decision", "decision_state")
 #: is the point: two independent narrowings of the same object, and this one
 #: cannot be widened from somewhere else.
 DECISION_KEYS = ("outcome", "decided_at")
+
+
+#: Employee fields an employee may see about their own record, on the Profile
+#: tab.
+#:
+#: An ALLOWLIST for the same reason DAY_KEYS is one. This doctype also carries
+#: date_of_birth, passport_number and salary fields; written as removals, the
+#: next one added for an HR need would reach every phone with nothing failing.
+PROFILE_FIELDS = ("department", "employment_type", "date_of_joining", "branch")
+
+#: Their own contact details, so they can see what HR will actually be dialling.
+#: A separate tuple from PROFILE_FIELDS only so the PII reads as PII at a glance.
+CONTACT_FIELDS = ("cell_number", "personal_email")
 
 
 def _pick(source, keys):
@@ -340,3 +362,107 @@ def get_my_calendar(init_data: str, start_date: str, end_date: str) -> dict:
     # what it is handed, and identity is a separate lookup. Keeping it pure is
     # what lets the allowlist tests feed it a fabricated HR payload.
     return {**payload, **_identity(employee)}
+
+
+def _employee_row(employee: str, fields: tuple) -> dict:
+    """Read only the columns this site actually has.
+
+    An unknown column makes the whole select raise, which would take the
+    Profile tab down to lose one optional row. `_identity` already guards the
+    Khmer pair this way and hr_calendar.py:346 guards `employment_type` for the
+    same reason.
+    """
+    present = [field for field in fields if frappe.db.has_column("Employee", field)]
+    if not present:
+        return {}
+    return frappe.db.get_value("Employee", employee, present, as_dict=True) or {}
+
+
+def _reports_to_name(employee: str):
+    """The manager's NAME.
+
+    Never the docname. That is another employee's identifier, and "who do I
+    tell if I'm sick" is answered by a name. A dangling link yields None rather
+    than raising -- Employee records get deleted and this row is optional.
+    """
+    if not frappe.db.has_column("Employee", "reports_to"):
+        return None
+    manager = frappe.db.get_value("Employee", employee, "reports_to")
+    if not manager:
+        return None
+    return frappe.db.get_value("Employee", manager, "employee_name") or None
+
+
+def _biometric(employee: str) -> dict:
+    """Enrolment, as THREE states rather than two.
+
+    "Not enrolled" and "we have never heard from the bridge" are different
+    facts. `enrollment_status` returns last_snapshot_at precisely so they can be
+    told apart -- its own docstring says so -- and telling somebody they are not
+    set up when the truth is that our snapshot is missing is the same failure as
+    showing a provisional flag: the app stating something it does not know.
+    """
+    status = enrollment_api.enrollment_status(employee)
+
+    # ONE value drives both the state and the timestamp, so they cannot
+    # contradict each other on screen.
+    #
+    # `last_snapshot_at` alone is not the question. It is a Single, and clearing
+    # it in Desk stores 0001-01-01, which _last_snapshot_at normalises to None
+    # -- a path its own docstring records as observed on a real bench. Every
+    # register row would still carry its own synced_at, so keying "unknown" off
+    # the marker alone rendered "Not checked yet" directly above "Last checked
+    # 17 Aug". This person's OWN snapshot time is the stronger evidence that we
+    # have heard about them; the bridge's last contact of any kind is the
+    # weaker answer that is still true.
+    heard_at = status.get("synced_at") or status.get("last_snapshot_at")
+    if not heard_at:
+        state = "unknown"
+    elif status.get("is_registered"):
+        state = "enrolled"
+    else:
+        state = "not_enrolled"
+
+    return {
+        "state": state,
+        # SLUGS, never the device's integers -- see finger_slots for why the
+        # mapping is there and not in TypeScript. Empty for everyone today: the
+        # bridge collapses templates to a count before Frappe ever sees them.
+        "fingers": [finger_slots.slug_for(fid) for fid in status.get("finger_ids") or []],
+        "fingerprint_count": int(status.get("fingerprint_count") or 0),
+        # A yes/no, not a count. Nobody enrols two faces, and a number invites
+        # the reader to wonder what the other one is.
+        "face": bool(status.get("face_count") or 0),
+        # Null exactly when the state is "unknown", by construction.
+        "checked_at": heard_at,
+    }
+
+
+# POST-only for the same reason get_my_calendar is: a GET would carry init_data
+# -- the entire authentication credential -- in the query string.
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def get_my_profile(init_data: str) -> dict:
+    """The employee's own record, resolved from their Telegram binding.
+
+    A SEPARATE endpoint rather than more keys on get_my_calendar. That one is
+    fetched once per range -- a day for Today, a week for the roster, a month
+    for the stats -- and none of this changes between them, so bundling would
+    ship the whole record three times a launch. One function holding two
+    allowlists is also one careless edit away from widening both.
+    """
+    # FIRST, before any read. Same property as get_my_calendar.
+    employee = miniapp_auth.employee_from_init_data(init_data)
+
+    fields = PROFILE_FIELDS + CONTACT_FIELDS
+    row = _employee_row(employee, fields)
+    # `or None` so an empty string reaches the client as null: the client drops
+    # a row that has no value, and "" would render an empty line under a label.
+    picked = {key: row.get(key) or None for key in fields}
+
+    return {
+        "employee": employee,
+        **_identity(employee),
+        **picked,
+        "reports_to_name": _reports_to_name(employee),
+        "biometric": _biometric(employee),
+    }
