@@ -22,7 +22,7 @@ Copied from the spec. Every task's requirements implicitly include these.
 - **Secrets live in `Password` fields on `Dewey Time Settings`**, read with `get_decrypted_password`. Never in code, never in `site_config` for this feature, never logged.
 - **Constant-time comparison** (`hmac.compare_digest`) for every secret comparison.
 - **Private chats only.** The bot refuses to act when `chat.type != "private"`.
-- **Notifications are gated on `rollout.phase_for_employee(...) == "LIVE"`** and on an enabled `Telegram Link`.
+- ~~**Notifications are gated on `rollout.phase_for_employee(...) == "LIVE"`** and on an enabled `Telegram Link`.~~ **SUPERSEDED 2026-08-17 by `bdbe4478`** — notifications are gated on an enabled `Telegram Link` ALONE. The phase governs the engine's determinations, and this message carries none of them; the link is already an explicit per-person opt-in, and a branch-wide date silenced exactly the people who had asked to be told. Do not reinstate the gate from this line.
 - **Notification content is minimal**: the punch time and the branch. No flags, no lateness, no judgment.
 - **Never send synchronously inside a doc event.** `webpush.py` states this rule for this codebase; a Telegram outage must never fail a checkin.
 - **Existing `Employee.custom_telegram_chat_id` values are NOT imported, read, or written** by any code in this plan. They are the hand-transcribed ids this design exists to stop trusting.
