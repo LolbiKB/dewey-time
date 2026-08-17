@@ -250,6 +250,34 @@ class TestFlagProjection(unittest.TestCase):
             {"flag_code", "is_provisional", "decision", "decision_state"},
         )
 
+    def test_the_decision_is_narrowed_here_and_not_upstream(self):
+        # hr_calendar redacts this too, but only `if not hr_view` -- a
+        # frappe.session.user check in another module. THIS test is what makes
+        # miniapp_api's promise true on its own: add a field to that upstream
+        # dict for an HR need and it must not reach a phone.
+        #
+        # The fixture deliberately hands over an UNREDACTED decision, i.e. what
+        # hr_calendar produces for an HR viewer.
+        flags = self._flags(_day([_flag("LATE_START", decision={
+            "name": "FD-0007",
+            "outcome": "UPHELD",
+            "reason": "GENUINE_VIOLATION",
+            "note": "third time this month, verbal warning given",
+            "decided_by": "hr.manager@dewey.example",
+            "decided_at": "2026-08-15 09:14:00",
+        }, decision_state="matched")]))
+        self.assertEqual(set(flags[0]["decision"]), {"outcome", "decided_at"})
+        payload = repr(flags)
+        self.assertNotIn("verbal warning", payload)
+        self.assertNotIn("hr.manager", payload)
+        self.assertNotIn("GENUINE_VIOLATION", payload)
+
+    def test_an_undecided_flag_keeps_a_null_decision_not_an_empty_one(self):
+        # The client reads decision?.outcome. Fabricating {} would be a lie
+        # about whether HR has looked at this.
+        flags = self._flags(_day([_flag("LATE_START")]))
+        self.assertIsNone(flags[0]["decision"])
+
     def test_hr_internals_never_reach_the_employee(self):
         payload = repr(self._flags(_day([_flag("LATE_START")])))
         self.assertNotIn("grace_minutes", payload)

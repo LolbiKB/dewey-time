@@ -1,8 +1,22 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { flagCount, flagStatusKey, flagText, visibleFlags } from "@/miniapp/miniFlags";
+import {
+  flagCount, flagStatusKey, flagText, KNOWN_FLAG_CODES, visibleFlags,
+} from "@/miniapp/miniFlags";
 import type { Day, Flag } from "@/types/calendar";
+
+/** The server's half of the allowlist, read out of the Python it lives in. */
+function serverFlagCodes(): string[] {
+  const src = readFileSync(
+    new URL("../../../../telegram/miniapp_api.py", import.meta.url),
+    "utf8",
+  );
+  const block = /EMPLOYEE_FLAG_CODES\s*=\s*frozenset\(\{([\s\S]*?)\}\)/.exec(src);
+  assert.ok(block, "EMPLOYEE_FLAG_CODES not found — has miniapp_api.py moved?");
+  return [...block[1]!.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]!);
+}
 
 const flag = (over: Partial<Flag> = {}): Flag =>
   ({ name: "f", flag_code: "LATE_START", ...over }) as Flag;
@@ -31,15 +45,21 @@ test("a code with no employee wording is not rendered as a blank row", () => {
   assert.deepEqual(visibleFlags(d).map((f) => f.flag_code), ["LATE_START"]);
 });
 
+test("the client and server halves of the allowlist are the same list", () => {
+  // READ OUT OF THE PYTHON, not copied from it. The first version of this test
+  // hard-coded the nine codes and carried a comment asking the next editor to
+  // keep them in step — which is not a guard: the server list could gain a code
+  // and this would still pass, and that code would arrive on a phone as a flag
+  // the sheet silently drops.
+  assert.deepEqual(
+    [...KNOWN_FLAG_CODES].sort(),
+    serverFlagCodes().sort(),
+    "miniapp_api.EMPLOYEE_FLAG_CODES and miniFlags.FLAG_TEXT have drifted",
+  );
+});
+
 test("every allowlisted code has both a title and a body", () => {
-  // The one test that fails when the server list and the client table drift.
-  // Keep this array identical to miniapp_api.EMPLOYEE_FLAG_CODES.
-  const codes = [
-    "LATE_START", "LEFT_EARLY", "LATE_FROM_LUNCH", "MISSING_TIME",
-    "MISSING_IN_OR_OUT", "UNNOTIFIED_ABSENCE", "OFF_SHIFT_PUNCH",
-    "MISSING_LUNCH", "ATTENDANCE_ISSUE",
-  ];
-  for (const code of codes) {
+  for (const code of serverFlagCodes()) {
     const text = flagText(flag({ flag_code: code }));
     assert.ok(text, `${code} has no wording`);
     assert.ok(text.title && text.body, `${code} is missing a title or body`);

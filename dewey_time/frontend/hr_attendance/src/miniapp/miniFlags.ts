@@ -28,6 +28,15 @@ const FLAG_TEXT: Record<string, { title: StringKey; body: StringKey }> = {
   ATTENDANCE_ISSUE: { title: "flagAttendanceIssue", body: "flagAttendanceIssueBody" },
 };
 
+/**
+ * The codes this app has words for.
+ *
+ * Exported so a test can compare it against `miniapp_api.EMPLOYEE_FLAG_CODES`
+ * in the Python source. The two lists are the two halves of one allowlist and a
+ * comment asking a future editor to keep them in step is not a guard.
+ */
+export const KNOWN_FLAG_CODES = Object.keys(FLAG_TEXT);
+
 export function flagText(flag: Flag): { title: StringKey; body: StringKey } | null {
   return FLAG_TEXT[flag.flag_code] ?? null;
 }

@@ -93,9 +93,23 @@ EMPLOYEE_FLAG_CODES = frozenset({
 #: `evidence` is NOT here, and that is the load-bearing omission -- it carries
 #: grace minutes, thresholds and rule internals. `severity` is not here either:
 #: it is HR's triage order, not a measure of what matters to the person.
-#: `decision` arrives already redacted to {outcome, decided_at} for a non-HR
-#: viewer (hr_calendar.py:729), which is why it is safe to pass through whole.
 FLAG_KEYS = ("flag_code", "is_provisional", "decision", "decision_state")
+
+#: What an employee may see of HR's decision. A SECOND allowlist, because
+#: `decision` is a nested dict and FLAG_KEYS only guards the level above it.
+#:
+#: hr_calendar.py:725 already redacts this to the same two fields -- but only
+#: `if not hr_view`, which is a `frappe.session.user` check in another module.
+#: Depending on it would put this module's whole promise ("the projection is an
+#: allowlist, so a field added to the calendar builder for an HR need is hidden
+#: by default") in the hands of a predicate that knows nothing about the Mini
+#: App. Add `reason` to that dict upstream for an HR need and every phone gets
+#: HR's rejection reasons, with no test in this file failing.
+#:
+#: So it is re-projected here, and pinned by an equality test. The duplication
+#: is the point: two independent narrowings of the same object, and this one
+#: cannot be widened from somewhere else.
+DECISION_KEYS = ("outcome", "decided_at")
 
 
 def _pick(source, keys):
@@ -183,11 +197,22 @@ def _certain(flag: dict, checkins: list[dict]) -> bool:
 
 def _pick_flags(day: dict) -> list[dict]:
     checkins = day.get("checkins") or []
-    return [
-        _pick(flag, FLAG_KEYS)
-        for flag in (day.get("flags") or [])
-        if flag.get("flag_code") in EMPLOYEE_FLAG_CODES and _certain(flag, checkins)
-    ]
+    picked = []
+    for flag in day.get("flags") or []:
+        if flag.get("flag_code") not in EMPLOYEE_FLAG_CODES:
+            continue
+        if not _certain(flag, checkins):
+            continue
+        narrowed = _pick(flag, FLAG_KEYS)
+        # Only when there IS one. `_pick` of a None decision would fabricate an
+        # empty dict, and the client reads `decision?.outcome` to mean "HR has
+        # not looked at this yet" -- an empty object is truthy and would still
+        # resolve to the same "awaiting" branch today, but it is a lie about the
+        # data that the next reader of this code would have to re-derive.
+        if narrowed.get("decision"):
+            narrowed["decision"] = _pick(narrowed["decision"], DECISION_KEYS)
+        picked.append(narrowed)
+    return picked
 
 
 #: Top-level keys an employee may see about themselves.
