@@ -39,10 +39,6 @@ NEEDS_TOKEN_REPLY = (
     "ដើម្បីភ្ជាប់គណនី សូមប្រើតំណ ឬ QR code ដែលផ្នែកធនធានមនុស្សបានផ្ដល់ជូន។\n"
     "To connect your account, use the link or QR code HR gave you."
 )
-# The button label stays English-only: Telegram caps inline button text, and a
-# two-language label wraps or truncates rather than reading as either.
-OPEN_BUTTON_TEXT = "Open my attendance"
-
 
 def _secret_ok(supplied) -> bool:
     """Constant-time compare. A missing header rejects rather than skips."""
@@ -104,20 +100,14 @@ def _handle(update: dict) -> None:
 
 
 def _confirm_linked(chat_id) -> None:
-    """Tell them they're linked, and offer the Mini App if that is possible.
+    """Tell them they're linked. Shared by both binding paths.
 
-    Shared by both binding paths. A Mini App failure must never look like a
-    link failure: the binding is already written and the employee IS linked.
+    No inline button any more. The bot's Main Mini App button and its chat
+    menu button are permanent and always in reach, where this one scrolled out
+    of the chat and never came back -- it was carrying the app's discoverability
+    at the exact moment it was least able to.
     """
-    try:
-        transport.send_message_with_webapp_button(
-            chat_id, LINKED_REPLY, button_text=OPEN_BUTTON_TEXT, url=transport.miniapp_url()
-        )
-    except Exception:
-        frappe.log_error(
-            title="Telegram Mini App button unavailable", message=frappe.get_traceback()
-        )
-        transport.send_message(chat_id, LINKED_REPLY)
+    transport.send_message(chat_id, LINKED_REPLY)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

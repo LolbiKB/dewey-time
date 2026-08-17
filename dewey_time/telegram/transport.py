@@ -4,6 +4,8 @@ Sole caller by design: one place to add rate pacing, one place to stub in
 tests, and one place where the bot token is read.
 """
 
+from __future__ import annotations
+
 import re
 
 import frappe
@@ -137,35 +139,6 @@ def miniapp_url() -> str:
     return url
 
 
-def send_message_with_webapp_button(chat_id: str, text: str, *, button_text: str, url: str) -> str:
-    """send_message, plus an inline button that launches the Mini App."""
-    try:
-        response = requests.post(
-            f"{API_BASE}/bot{bot_token()}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "reply_markup": {
-                    "inline_keyboard": [[{"text": button_text, "web_app": {"url": url}}]]
-                },
-            },
-            timeout=TIMEOUT_SECONDS,
-        )
-    except Exception:
-        frappe.log_error(title="Telegram send failed", message=frappe.get_traceback())
-        return FAILED
-
-    if response.status_code == 403:
-        return BLOCKED
-    if response.status_code != 200:
-        frappe.log_error(
-            title="Telegram send rejected",
-            message=f"status={response.status_code} body={response.text[:500]}",
-        )
-        return FAILED
-    return SENT
-
-
 MENU_BUTTON_TEXT = "My attendance"
 
 
@@ -215,6 +188,83 @@ def configure_menu_button() -> dict:
     return {"status": set_default_menu_button(url), "url": url}
 
 
+#: The inbound endpoint's own path. Derived rather than configured for the
+#: same reason the Mini App URL now is: it is this app's own route, and a
+#: field for it is a field to get wrong.
+WEBHOOK_PATH = "/api/method/dewey_time.telegram.webhook.telegram_webhook"
+
+
+def webhook_url() -> str:
+    """Absolute https URL Telegram should deliver updates to."""
+    url = (get_url(WEBHOOK_PATH) or "").strip()
+    if not url.startswith("https://"):
+        frappe.throw(f"The webhook URL must be https; the site resolved to {url or '(nothing)'}.")
+    return url
+
+
+def set_webhook(url: str, secret: str) -> str:
+    """Tell Telegram where to deliver updates. Idempotent.
+
+    WITHOUT THIS NOTHING INBOUND EXISTS. The handler, the constant-time secret
+    check and both binding paths were all written and none of them had ever
+    run, because Telegram had never been told the endpoint was there. `/start`
+    went nowhere, no Telegram Link was ever created, and every employee was
+    therefore "unlinked" -- which the notifier reports as a normal rollout
+    state rather than as a fault, so nothing looked broken anywhere.
+
+    `allowed_updates` is narrowed to messages: `_handle` reads
+    `update["message"]` and deliberately ignores edited_message and
+    callback_query, so asking for them is asking Telegram to spend deliveries
+    on updates we drop.
+    """
+    try:
+        response = requests.post(
+            f"{API_BASE}/bot{bot_token()}/setWebhook",
+            json={
+                "url": url,
+                "secret_token": secret,
+                "allowed_updates": ["message"],
+            },
+            timeout=TIMEOUT_SECONDS,
+        )
+    except Exception:
+        frappe.log_error(title="Telegram setWebhook failed", message=frappe.get_traceback())
+        return FAILED
+
+    if response.status_code != 200:
+        frappe.log_error(
+            title="Telegram setWebhook rejected",
+            message=f"status={response.status_code} body={response.text[:500]}",
+        )
+        return FAILED
+    return SENT
+
+
+@frappe.whitelist()
+def setup_telegram() -> dict:
+    """Everything that has to be told to Telegram once, in one call.
+
+    Two separate pieces of state live on Telegram's servers rather than in
+    this site, and no deploy can touch either: where to deliver updates, and
+    what the chat menu button opens. Both were one-time manual steps, one of
+    which was never written at all -- so this is the call that makes a fresh
+    bot work, and re-running it is harmless.
+
+    Not in `after_migrate`: it needs a bot token and a webhook secret, and a
+    site that has neither would either fail the migrate or log a confusing
+    error on every deploy.
+    """
+    from dewey_time.attendance_engine.hr_calendar import _require_hr_role
+
+    _require_hr_role()
+    hook = webhook_url()
+    app = miniapp_url()
+    return {
+        "webhook": {"status": set_webhook(hook, webhook_secret()), "url": hook},
+        "menu_button": {"status": set_default_menu_button(app), "url": app},
+    }
+
+
 def _get(method: str) -> dict:
     """One GET against the Bot API, reported rather than raised."""
     try:
@@ -228,7 +278,7 @@ def _get(method: str) -> dict:
 
 
 @frappe.whitelist()
-def diagnostics() -> dict:
+def diagnostics(employee: str | None = None) -> dict:
     """Why is there no button? Answered in one call.
 
     Every Mini App entry point fails SILENTLY by design -- notify.py and the
@@ -244,12 +294,20 @@ def diagnostics() -> dict:
       getChatMenuButton -- is the persistent entry point actually a web_app,
                            and pointed where we think
 
+    It also reports the check-in notification's own gates, which are a
+    separate question with separate silent failures: pass an `employee` to
+    test one person's link and rollout phase.
+
     NO SECRETS ARE RETURNED, only whether each is set. The token and webhook
     secret are the whole security of this integration; a diagnostic that
     printed them would put them in a browser's network log to save one glance
     at Settings.
     """
     from dewey_time.attendance_engine.hr_calendar import _require_hr_role
+    # Imported here rather than at module scope: this module's whole point is
+    # that it is the only one talking to api.telegram.org, and notify imports
+    # it. A top-level import back would make that circular.
+    from dewey_time.telegram import notify
 
     _require_hr_role()
 
@@ -267,6 +325,13 @@ def diagnostics() -> dict:
     except Exception as exc:
         report["miniapp_url"] = None
         report["miniapp_url_error"] = str(exc)
+
+    # Why no check-in notification, which is a different question from why no
+    # button and has its own four silent gates. See notify.delivery_gates.
+    try:
+        report["notifications"] = notify.delivery_gates(employee)
+    except Exception as exc:
+        report["notifications"] = {"error": str(exc)}
 
     if not report["bot_token_set"]:
         # Everything below needs the token. Saying so beats three identical

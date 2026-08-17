@@ -56,21 +56,15 @@ class TestPrivateChatsOnly(unittest.TestCase):
 
 class TestStartCommand(unittest.TestCase):
     def test_start_with_token_redeems_and_confirms(self):
-        # The happy path now sends via the web-app button, so both senders are
-        # patched: leaving either real would fire an actual HTTP request.
         with patch.object(webhook.binding, "redeem_link_token",
                           return_value="HR-EMP-00001") as redeem, \
-             patch.object(webhook.transport, "miniapp_url",
-                          return_value="https://site/hr-me"), \
-             patch.object(webhook.transport,
-                          "send_message_with_webapp_button") as button, \
-             patch.object(webhook.transport, "send_message"):
+             patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
 
         self.assertEqual(redeem.call_args[0][0], "abc123")
         # The Telegram user id must come off the update, not the message text.
         self.assertEqual(redeem.call_args[0][1], "55501")
-        self.assertIn("linked", button.call_args[0][1].lower())
+        self.assertIn("linked", send.call_args[0][1].lower())
 
     def test_failed_redemption_replies_without_leaking_why(self):
         with patch.object(webhook.binding, "redeem_link_token",
@@ -99,13 +93,12 @@ class TestStartCommand(unittest.TestCase):
         with patch.object(webhook.binding, "claim_by_recorded_id",
                           return_value="HR-EMP-00001") as claim, \
              patch.object(webhook.binding, "redeem_link_token") as redeem, \
-             patch.object(webhook.transport, "miniapp_url", return_value="https://x/hr-me"), \
-             patch.object(webhook.transport, "send_message_with_webapp_button") as button:
+             patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start"))
         redeem.assert_not_called(), "a bare /start has no token to redeem"
         self.assertEqual(claim.call_args[0][0], "55501", "the id comes off the update")
         self.assertEqual(claim.call_args[0][1], "77702")
-        self.assertIn("linked", button.call_args[0][1].lower())
+        self.assertIn("linked", send.call_args[0][1].lower())
 
     def test_a_token_start_never_takes_the_recorded_id_path(self):
         # The two paths must not blur: a token names ONE employee, and falling
@@ -114,8 +107,7 @@ class TestStartCommand(unittest.TestCase):
         with patch.object(webhook.binding, "redeem_link_token",
                           return_value="HR-EMP-00001"), \
              patch.object(webhook.binding, "claim_by_recorded_id") as claim, \
-             patch.object(webhook.transport, "miniapp_url", return_value="https://x/hr-me"), \
-             patch.object(webhook.transport, "send_message_with_webapp_button"):
+             patch.object(webhook.transport, "send_message"):
             webhook._handle(_update(text="/start tok123"))
         claim.assert_not_called()
 
@@ -155,38 +147,41 @@ class TestStartCommand(unittest.TestCase):
         send.assert_not_called()
 
 
-class TestMiniAppButton(unittest.TestCase):
-    def test_a_successful_link_offers_the_mini_app(self):
-        with patch.object(webhook.binding, "redeem_link_token",
-                          return_value="HR-EMP-00001"), \
-             patch.object(webhook.transport, "miniapp_url",
-                          return_value="https://site/hr-me"), \
-             patch.object(webhook.transport,
-                          "send_message_with_webapp_button") as button:
-            webhook._handle(_update(text="/start abc123"))
-        self.assertEqual(button.call_args[1]["url"], "https://site/hr-me")
+class TestLinkConfirmation(unittest.TestCase):
+    """The reply carries no inline button any more.
 
-    def test_an_unconfigured_mini_app_url_still_confirms_the_link(self):
-        # The binding is already written and the employee IS linked. Failing to
-        # offer a button must not read as "linking failed".
+    It used to offer one, and that button was the app's discoverability at the
+    exact moment it was least able to carry it: the confirmation scrolls out of
+    the chat and never comes back. The bot's Main Mini App button and its chat
+    menu button are permanent, so this message is text again.
+    """
+
+    def test_a_successful_link_is_confirmed_in_plain_text(self):
         with patch.object(webhook.binding, "redeem_link_token",
                           return_value="HR-EMP-00001"), \
-             patch.object(webhook.transport, "miniapp_url",
-                          side_effect=Exception("not configured")), \
              patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
         self.assertIn("linked", send.call_args[0][1].lower())
 
-    def test_a_failed_link_offers_no_button(self):
-        # Negative control. Without it, moving the button call outside the
-        # success path would go unnoticed and hand a launch button to someone
-        # whose token was rejected.
+    def test_the_confirmation_does_not_depend_on_the_mini_app_url(self):
+        # It used to: an unset URL made the button path throw, and the reply
+        # only survived because of a fallback. There is nothing left to fail,
+        # so a broken Mini App URL cannot touch the one message that tells an
+        # employee their account is bound.
+        with patch.object(webhook.binding, "redeem_link_token",
+                          return_value="HR-EMP-00001"), \
+             patch.object(webhook.transport, "miniapp_url",
+                          side_effect=AssertionError("must not be consulted")), \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/start abc123"))
+        self.assertIn("linked", send.call_args[0][1].lower())
+
+    def test_a_failed_link_is_not_confirmed(self):
+        # Negative control. Without it, moving the confirmation outside the
+        # success path would go unnoticed and tell someone whose token was
+        # rejected that they are linked.
         with patch.object(webhook.binding, "redeem_link_token",
                           side_effect=Exception("bad token")), \
-             patch.object(webhook.transport, "miniapp_url",
-                          return_value="https://site/hr-me"), \
-             patch.object(webhook.transport,
-                          "send_message_with_webapp_button") as button, \
-             patch.object(webhook.transport, "send_message"):
+             patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
-        button.assert_not_called()
+        self.assertNotIn("linked", send.call_args[0][1].lower())
