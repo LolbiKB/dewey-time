@@ -2,10 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  addToHomeScreen,
   applyTelegramPalette,
   atLeast,
-  homeScreenStatus,
   loadLastTab,
   onResume,
   openHaptic,
@@ -291,7 +289,6 @@ test("none of the newer APIs throw on a client that has none of them", () => {
   const doc = { addEventListener() {}, removeEventListener() {} } as unknown as Document;
   assert.doesNotThrow(() => onResume(bare, doc, () => {})());
   assert.doesNotThrow(() => saveLastTab(bare, "week"));
-  assert.doesNotThrow(() => addToHomeScreen(bare));
   assert.doesNotThrow(() => openHaptic(bare));
   assert.equal(atLeast(bare, "8.0"), false, "a client that cannot answer is too old");
 });
@@ -371,18 +368,3 @@ test("a CloudStorage failure opens the app anyway", async () => {
   assert.equal(await loadLastTab(throwing, () => true), null);
 });
 
-test("the home-screen offer is only made where it can work", async () => {
-  assert.equal(await homeScreenStatus({} as Window), "unsupported");
-
-  const added = { Telegram: { WebApp: {
-    checkHomeScreenStatus: (cb: (s: string) => void) => cb("added"),
-  } } } as unknown as Window;
-  assert.equal(await homeScreenStatus(added), "added");
-
-  // An answer nobody recognises is treated as unsupported rather than
-  // offered — drawing a button that cannot work is worse than not drawing it.
-  const odd = { Telegram: { WebApp: {
-    checkHomeScreenStatus: (cb: (s: string) => void) => cb("wat"),
-  } } } as unknown as Window;
-  assert.equal(await homeScreenStatus(odd), "unsupported");
-});

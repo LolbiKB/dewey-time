@@ -272,37 +272,11 @@ function cloudSet(w: Window, key: string, value: string): void {
   }
 }
 
-/**
- * Whether the app can offer "add to home screen", and whether it already is.
- *
- * Worth offering for exactly this app: an employee opens it most working days,
- * and the alternative is finding the bot in a chat list first. Resolves to
- * "unsupported" on anything that cannot answer, so the affordance simply is
- * not drawn rather than being drawn and failing.
- */
-export type HomeScreenStatus = "unsupported" | "unknown" | "added" | "missed";
-
-export function homeScreenStatus(w: Window): Promise<HomeScreenStatus> {
-  return new Promise((resolve) => {
-    const app = w?.Telegram?.WebApp;
-    if (!app?.checkHomeScreenStatus) return resolve("unsupported");
-    try {
-      app.checkHomeScreenStatus((status) =>
-        resolve(
-          status === "added" || status === "missed" || status === "unknown"
-            ? status
-            : "unsupported",
-        ),
-      );
-    } catch {
-      resolve("unsupported");
-    }
-  });
-}
-
-export function addToHomeScreen(w: Window): void {
-  w?.Telegram?.WebApp?.addToHomeScreen?.();
-}
+// NO homeScreenStatus / addToHomeScreen. The shell's "add to your home
+// screen" row was removed, and these had no other caller. Kept out rather
+// than kept around: `checkHomeScreenStatus` frequently answers "unknown",
+// which is what made the row re-offer itself to people who had already
+// tapped it. Telegram's own SDK is two lines away if it is ever wanted back.
 
 /** A heavier tick than a tab change, for opening something. */
 export function openHaptic(w: Window): void {

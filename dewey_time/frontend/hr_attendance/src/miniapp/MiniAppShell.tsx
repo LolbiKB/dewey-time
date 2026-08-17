@@ -19,9 +19,7 @@ import {
   useMiniAppCalendar,
 } from "@/miniapp/useMiniAppSession";
 import {
-  addToHomeScreen,
   bindBackButton,
-  homeScreenStatus,
   loadLastTab,
   loadLocale,
   onResume,
@@ -31,7 +29,6 @@ import {
   saveLastTab,
   saveLocale,
   tabHaptic,
-  type HomeScreenStatus,
 } from "@/miniapp/telegramChrome";
 
 export type MiniTab = "day" | "week" | "schedule";
@@ -59,6 +56,17 @@ export function OutsideTelegramNotice() {
   );
 }
 
+/**
+ * Breathing room under the tab bar, on top of whatever the device asks for.
+ *
+ * The safe-area inset is a CLEARANCE, not a margin: it is exactly the strip
+ * the home indicator occupies, so honouring it alone leaves the labels
+ * touching the hardware. On a phone with no inset at all it leaves them
+ * touching the bottom edge of the sheet. This is the gap that makes the bar
+ * read as a bar rather than as the screen running out.
+ */
+export const TAB_BAR_FLOOR_PX = 12;
+
 export function MiniTabBar(props: {
   active: MiniTab;
   onSelect: (tab: MiniTab) => void;
@@ -69,12 +77,13 @@ export function MiniTabBar(props: {
 }) {
   const t = useT();
   return (
-    // Inline style, not a class: the value is only known at runtime. Without
-    // it the tab bar sits under the home indicator on a notched phone — the
+    // Inline style, not a class: the value is only known at runtime, and an
+    // inline padding-bottom would override a Tailwind pb-* anyway. Without the
+    // inset the tab bar sits under the home indicator on a notched phone — the
     // bottom row of buttons being the exact thing that gets covered.
     <nav
       className="flex shrink-0 border-t border-border bg-background"
-      style={{ paddingBottom: props.insetBottom ?? 0 }}
+      style={{ paddingBottom: (props.insetBottom ?? 0) + TAB_BAR_FLOOR_PX }}
     >
       {TABS.map((tab) => (
         <button
@@ -157,15 +166,6 @@ export function MiniAppShell() {
       saveLocale(window, next);
       return next;
     });
-  }, []);
-
-  const [homeScreen, setHomeScreen] = useState<HomeScreenStatus>("unsupported");
-  useEffect(() => {
-    let cancelled = false;
-    void homeScreenStatus(window).then((status) => {
-      if (!cancelled) setHomeScreen(status);
-    });
-    return () => { cancelled = true; };
   }, []);
 
   const closeDay = useCallback(() => setOpenDay(null), []);
@@ -279,28 +279,13 @@ export function MiniAppShell() {
           <MySchedulePage />
         )}
       </main>
-      {/* Offered only where Telegram says it is possible AND not already
-          done. An employee opens this most working days, and the alternative
-          is finding the bot in a chat list first. `unknown` counts as
-          offerable: the client supports it but cannot tell whether the icon
-          exists, and a duplicate is a far smaller cost than never offering. */}
-      {homeScreen === "missed" || homeScreen === "unknown" ? (
-        <button
-          type="button"
-          onClick={() => {
-            openHaptic(window);
-            addToHomeScreen(window);
-            // Optimistic, and one-way: whether it worked is not reliably
-            // reported, and re-offering after a tap reads as the button
-            // having failed.
-            setHomeScreen("added");
-          }}
-          className="shrink-0 border-t border-border bg-card px-3 py-2 text-left text-[11px] text-muted-foreground"
-        >
-          Add <span className="font-medium text-foreground">My Attendance</span> to your home screen
-        </button>
-      ) : null}
-
+      {/* NO "add to home screen" ROW. There was one, sitting between the
+          content and the tab bar. It was a permanent strip of chrome offering
+          a one-time action, on the shortest axis this app has, and Telegram
+          cannot reliably say whether the icon already exists — so `unknown`
+          re-offered it to people who had already done it, every launch. The
+          bot's Main Mini App button and the chat menu button are both always
+          there, which is the durable way back in. */}
       <MiniTabBar active={tab} onSelect={selectTab} insetBottom={insets.bottom} />
     </div>
     </MiniLocaleProvider>
