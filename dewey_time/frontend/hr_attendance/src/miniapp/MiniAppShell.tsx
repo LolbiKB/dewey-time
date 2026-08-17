@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { format, isSameDay } from "date-fns";
 
 import { cn } from "@/lib/utils";
+import { MiniCalendarSheet } from "@/miniapp/MiniCalendarSheet";
 import { MyDayPage } from "@/miniapp/MyDayPage";
 import { MySchedulePage } from "@/miniapp/MySchedulePage";
-import { MyWeekPage } from "@/miniapp/MyWeekPage";
 import { MiniIdentity } from "@/miniapp/MiniIdentity";
 import { MiniLocaleProvider, useT } from "@/miniapp/MiniLocale";
 import {
@@ -31,16 +31,23 @@ import {
   tabHaptic,
 } from "@/miniapp/telegramChrome";
 
-export type MiniTab = "day" | "week" | "schedule";
+export type MiniTab = "day" | "schedule";
 
 /** Guards what comes back out of CloudStorage — it is data, not a promise. */
 export function isMiniTab(value: string): value is MiniTab {
-  return value === "day" || value === "week" || value === "schedule";
+  return value === "day" || value === "schedule";
 }
 
+// TWO TABS. "Week" was the third and the calendar sheet replaced it: it
+// answered "which day do I want?" seven days at a time, for a whole tab of
+// permanent chrome, and the month grid answers it at four times the density
+// from inside the tab the reader is already on.
+//
+// A reader whose last session ended on Week has "week" in CloudStorage. It
+// needs no migration — `isMiniTab` already rejects an unknown value and the
+// shell falls back to "day", which is the reason that guard exists.
 const TABS = [
   { key: "day", label: "tabToday" },
-  { key: "week", label: "tabWeek" },
   { key: "schedule", label: "tabSchedule" },
 ] as const satisfies readonly { key: MiniTab; label: StringKey }[];
 
@@ -107,10 +114,11 @@ export function MiniTabBar(props: {
 
 export function MiniAppShell() {
   const [tab, setTab] = useState<MiniTab>("day");
-  /** Which week the Week tab is showing, relative to today's. */
+  /** Which week the Schedule tab is showing, relative to today's. */
   const [weekOffset, setWeekOffset] = useState(0);
-  /** A day drilled into from the week list. Null means "today". */
+  /** A day chosen from the calendar. Null means "today". */
   const [openDay, setOpenDay] = useState<Date | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Insets are held in state and refreshed on Telegram's own events. Read once
   // at mount they are whatever they were before the sheet was dragged or the
@@ -189,8 +197,12 @@ export function MiniAppShell() {
     // A heavier tick than a tab change: this opens something rather than
     // switching between peers, and Telegram's own UI makes that distinction.
     openHaptic(window);
-    setOpenDay(date);
+    // Today clears the drill-in rather than setting it, so the heading reads
+    // "Today" and not the date — picking today from the calendar and tapping
+    // the Today tab must land in the same place.
+    setOpenDay(isSameDay(date, new Date()) ? null : date);
     setTab("day");
+    setPickerOpen(false);
   }, []);
 
   // Today's one-day range, which is the SAME query key the Day tab uses, so on
@@ -268,17 +280,24 @@ export function MiniAppShell() {
           page that fits gains a margin rather than a hairline. */}
       <main className="min-h-0 flex-1 overflow-y-auto pb-6">
         {tab === "day" ? (
-          <MyDayPage date={openDay ?? undefined} />
-        ) : tab === "week" ? (
-          <MyWeekPage
-            offset={weekOffset}
-            onOffsetChange={setWeekOffset}
-            onOpenDay={openDayFrom}
+          <MyDayPage
+            date={openDay ?? undefined}
+            onPickDate={() => {
+              openHaptic(window);
+              setPickerOpen(true);
+            }}
           />
         ) : (
-          <MySchedulePage />
+          <MySchedulePage offset={weekOffset} onOffsetChange={setWeekOffset} />
         )}
       </main>
+
+      <MiniCalendarSheet
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        selected={openDay ?? new Date()}
+        onSelect={openDayFrom}
+      />
       {/* NO "add to home screen" ROW. There was one, sitting between the
           content and the tab bar. It was a permanent strip of chrome offering
           a one-time action, on the shortest axis this app has, and Telegram

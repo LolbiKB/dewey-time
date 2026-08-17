@@ -11,21 +11,25 @@ test("outside Telegram the app explains itself instead of erroring", () => {
   assert.match(html, /Telegram/);
 });
 
-test("the shell offers exactly the three employee views", () => {
+test("the shell offers exactly the two employee views", () => {
   // Not the HR console with things hidden — a different surface that happens
   // to share components. An HR tab appearing here is a scope failure, not a
-  // styling one.
+  // styling one, and that half of this test is the load-bearing half.
+  //
+  // Two, not three: "Week" was replaced by the calendar sheet, which answers
+  // "which day do I want?" at four times the density from inside Today.
   const html = renderToStaticMarkup(<MiniTabBar active="day" onSelect={() => {}} />);
-  for (const label of ["Today", "Week", "Schedule"]) {
+  for (const label of ["Today", "Schedule"]) {
     assert.match(html, new RegExp(label));
   }
+  assert.doesNotMatch(html, /Week/);
   for (const forbidden of ["Flags", "Coverage", "Import", "Biometric"]) {
     assert.doesNotMatch(html, new RegExp(forbidden));
   }
 });
 
 test("the active tab is marked for assistive tech, not only coloured", () => {
-  const html = renderToStaticMarkup(<MiniTabBar active="week" onSelect={() => {}} />);
+  const html = renderToStaticMarkup(<MiniTabBar active="schedule" onSelect={() => {}} />);
   assert.match(html, /aria-current="page"[^>]*>|aria-current="page"/);
 });
 

@@ -4,8 +4,9 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  canGoForward, WeekNav, WeekRow, weekDatesFor, weekForOffset, weekRangeLabel,
-} from "@/miniapp/MyWeekPage";
+  canGoForward, weekDatesFor, weekForOffset, weekRangeLabel,
+} from "@/miniapp/miniWeek";
+import { WeekNav } from "@/miniapp/MiniWeekNav";
 import { dayFacts } from "@/miniapp/miniDay";
 import type { Day } from "@/types/calendar";
 
@@ -118,22 +119,4 @@ test("an offset week offers the way back to this one", () => {
   );
   assert.match(html, /Back to this week/);
   assert.doesNotMatch(html, /aria-label="Next week"[^>]*\sdisabled=""/);
-});
-
-test("a week row is a real button naming the whole day", () => {
-  // The row IS the affordance. A <li> with an onClick is invisible to a
-  // keyboard and to a screen reader, and "Tuesday" alone tells a screen-reader
-  // user nothing about which of the seven they are on.
-  let opened: Date | null = null;
-  const facts = dayFacts(worked("2026-08-10"), MON, FRI);
-  const element = (
-    <WeekRow date={MON} facts={facts} isToday onOpen={(d) => { opened = d; }} />
-  );
-  const html = renderToStaticMarkup(element);
-  assert.match(html, /<button/);
-  assert.match(html, /aria-label="Monday 10 August: [^"]*7:58/);
-
-  const button = (element.props as { onOpen: (d: Date) => void });
-  button.onOpen(MON);
-  assert.equal(opened, MON);
 });

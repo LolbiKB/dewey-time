@@ -1,0 +1,233 @@
+/**
+ * Pick a day, and see at a glance which days need looking at.
+ *
+ * REPLACES THE WEEK TAB. That tab answered "which day do I want?" seven days
+ * at a time and spent a whole tab of permanent chrome doing it. A month grid
+ * answers the same question at four times the density, from inside the tab the
+ * reader is already on.
+ *
+ * It also picks up the one thing the Week tab carried that nothing else does —
+ * a worked total — as a month figure rather than a weekly one. The month's
+ * days are already fetched to draw the marks, so it costs nothing.
+ *
+ * The primitives are the shared ones. `Calendar` is dewey-ui's react-day-picker
+ * wrapper, and `CalendarDayButton` is WRAPPED rather than replaced, so
+ * selection, keyboard handling and disabled days stay the primitive's problem.
+ * Not `ResponsiveModal`: it swaps to a centre Dialog above a width breakpoint,
+ * and a Telegram Desktop Mini App is wide enough to trip it. This has to be a
+ * bottom sheet everywhere.
+ */
+import { useMemo, useState } from "react";
+import { addMonths, format, isSameDay, startOfMonth, endOfMonth, subMonths } from "date-fns";
+import { enUS, km } from "date-fns/locale";
+
+import { cn } from "@/lib/utils";
+import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
+import { dayFacts, totalWorkedMinutes } from "@/miniapp/miniDay";
+import { dayMark, MARK_LABEL, type DayMark } from "@/miniapp/miniDayMark";
+import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
+
+/**
+ * How far back the grid pages: THREE MONTHS IN TOTAL, this one included.
+ *
+ * So in August it reaches June and no further. Two, not three, because
+ * "three months back" reads both ways and the difference is a whole month —
+ * and the wrong reading is the one that silently works.
+ *
+ * Far enough to cover the current and previous payroll periods, which is while
+ * a missing punch is still worth disputing.
+ */
+export const MONTHS_BACK = 2;
+
+export function earliestMonth(today: Date): Date {
+  return startOfMonth(subMonths(today, MONTHS_BACK));
+}
+
+/** Never forward of this month: nothing is recorded in the future. */
+export function latestMonth(today: Date): Date {
+  return startOfMonth(today);
+}
+
+/**
+ * The dot under a day number.
+ *
+ * `aria-hidden`, always. The words that carry it live in the button's own
+ * accessible name — see the day button below — because a grid of forty
+ * identical circles tells a screen-reader user nothing, and the circles are
+ * the entire reason the grid exists.
+ */
+function Mark(props: { mark: DayMark }) {
+  if (props.mark === "none") {
+    // A spacer, not nothing. Without it the days that DO carry a mark are
+    // taller than the ones that do not, and every row of the grid sits at a
+    // slightly different height.
+    return <span aria-hidden="true" className="block size-2" />;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "block size-2 rounded-full border-2",
+        {
+          // `current`, not a fixed grey: the selected day is a filled primary
+          // pill, and a muted-foreground dot on it is grey on green. Inheriting
+          // the button's own text colour keeps the mark legible in both states
+          // without this component knowing which one it is in.
+          complete: "border-current bg-current opacity-45",
+          // AMBER FOR BOTH PROBLEM STATES, never `destructive`. Red is the
+          // loudest colour in the palette and this surface has never spent it;
+          // it reads as "you are in trouble" on a day HR may still forgive.
+          //
+          // HOLLOW versus SOLID, not two ring weights. Two weights of the same
+          // 8px circle are indistinguishable at arm's length on a phone —
+          // measured, in a screenshot, which is the only way that claim can be
+          // made. Filled reads as heavier than outlined at any size.
+          incomplete: "border-amber-500",
+          missing: "border-amber-500 bg-amber-500",
+          off: "border-muted-foreground/35",
+        }[props.mark],
+      )}
+    />
+  );
+}
+
+export function MiniCalendarSheet(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The day currently shown on the Day tab. */
+  selected: Date;
+  onSelect: (date: Date) => void;
+  today?: Date;
+  now?: Date;
+}) {
+  const t = useT();
+  const fmt = useFormat();
+  const locale = useLocale();
+  const today = props.today ?? new Date();
+  const now = props.now ?? today;
+  const [month, setMonth] = useState(() => startOfMonth(props.selected));
+
+  // The visible month only. A month grid shows at most 42 cells, inside the
+  // API's 62-day cap, and the query key is the same shape the Day and Schedule
+  // tabs use — so a month already fetched costs nothing to revisit.
+  const from = startOfMonth(month);
+  const to = endOfMonth(month);
+  const query = useMiniAppCalendar(
+    props.open ? format(from, "yyyy-MM-dd") : "",
+    props.open ? format(to, "yyyy-MM-dd") : "",
+  );
+
+  const byDate = useMemo(() => daysByDate(query.data), [query.data]);
+  const marks = useMemo(() => {
+    const map = new Map<string, DayMark>();
+    for (const [key, day] of byDate) {
+      const date = new Date(`${key}T00:00:00`);
+      map.set(key, dayMark(dayFacts(day, date, today), day, date, now));
+    }
+    return map;
+  }, [byDate, today, now]);
+
+  const monthTotal = useMemo(() => {
+    const facts = [...byDate].map(([key, day]) =>
+      dayFacts(day, new Date(`${key}T00:00:00`), today),
+    );
+    return fmt.worked(totalWorkedMinutes(facts));
+  }, [byDate, today, fmt]);
+
+  return (
+    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+      <SheetContent side="bottom" className="gap-0 rounded-t-xl px-2 pb-6">
+        <SheetHeader className="pb-0">
+          <SheetTitle className="text-base">{t("chooseDate")}</SheetTitle>
+        </SheetHeader>
+
+        <Calendar
+          mode="single"
+          selected={props.selected}
+          month={month}
+          onMonthChange={setMonth}
+          // The reader's own script, from the same date-fns locale the rest of
+          // the app formats with — so the month name and the weekday headers
+          // are Khmer without this file knowing a word of it.
+          locale={locale === "km" ? km : enUS}
+          // THE CAPTION IS THE ONE THING THE LOCALE DOES NOT FIX. date-fns's
+          // `km` gives Khmer month names — សីហា — and then renders the year as
+          // "2026", because date-fns emits Latin digits in every locale. So a
+          // Khmer month grid whose every cell says ១៧ was captioned in Latin,
+          // which is the exact leak miniIntl exists to close and which the
+          // Khmer e2e guard forbids.
+          //
+          // Merged, not replaced: the wrapper spreads `formatters` over its
+          // own, so this overrides the caption and leaves its month dropdown
+          // alone.
+          formatters={{
+            formatCaption: (date) =>
+              `${fmt.date(date, "LLLL")} ${fmt.digits(String(date.getFullYear()))}`,
+          }}
+          // THE PRIMITIVE ALREADY SETS aria-label ON EVERY DAY — "Monday,
+          // August 3rd, 2026". An aria-label beats name-from-content
+          // unconditionally, so the visually-hidden span this file used to
+          // rely on was never announced: the marks, which are the entire
+          // reason this grid exists, were silent to a screen reader while the
+          // source looked correct. A source-read test passed the whole time;
+          // only dumping the rendered DOM showed it.
+          //
+          // So the words go through the primitive's own label API, where they
+          // compose with the date instead of fighting it.
+          labels={{
+            labelDayButton: (date, modifiers) => {
+              const base = fmt.date(date, "EEEE d MMMM");
+              if (modifiers.hidden || modifiers.outside) return base;
+              const mark = marks.get(format(date, "yyyy-MM-dd")) ?? "none";
+              return mark === "none" ? base : `${base}, ${t(MARK_LABEL[mark])}`;
+            },
+          }}
+          weekStartsOn={1}
+          // Nothing from the neighbouring months. They are disabled and
+          // unmarked, so they are five greyed numbers of pure noise on the
+          // row the eye lands on first.
+          showOutsideDays={false}
+          startMonth={earliestMonth(today)}
+          endMonth={latestMonth(today)}
+          disabled={{ after: today }}
+          onSelect={(date) => date && props.onSelect(date)}
+          className="w-full bg-transparent p-0 [&_[data-day]]:aspect-auto [&_[data-day]]:h-11"
+          components={{
+            DayButton: ({ day, modifiers, ...rest }) => {
+              const key = format(day.date, "yyyy-MM-dd");
+              const mark = marks.get(key) ?? "none";
+              return (
+                <CalendarDayButton day={day} modifiers={modifiers} {...rest}>
+                  {/* The number in the reader's digits. react-day-picker
+                      renders Latin ones and has no opinion about Khmer. */}
+                  <span aria-hidden="true">{fmt.digits(String(day.date.getDate()))}</span>
+                  <Mark mark={mark} />
+                  {/* No visually-hidden span here. It was the obvious place to
+                      put the words and it did nothing: react-day-picker sets
+                      its own aria-label on this button, which wins over
+                      content. The words live in `labels.labelDayButton`
+                      above. */}
+                </CalendarDayButton>
+              );
+            },
+          }}
+        />
+
+        {/* Net of lunch, and said so — the same wording the roster total uses,
+            because "142h" against a rostered month invites exactly one
+            question and the answer is the word "net". */}
+        <div className="flex items-baseline justify-between px-3 pt-2">
+          <span className="text-xs text-muted-foreground">{t("workedInMonth")}</span>
+          <span className="text-sm font-semibold tabular-nums text-foreground">
+            {monthTotal ?? "—"}
+          </span>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/** Exported for the tests, which assert the paging bounds without a DOM. */
+export { addMonths, isSameDay };

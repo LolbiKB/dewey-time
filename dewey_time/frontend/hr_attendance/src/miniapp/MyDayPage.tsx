@@ -8,20 +8,21 @@
  * between the two runs. Three lines of text above a picture that already says
  * it is three lines of text to read past.
  *
- * What the canvas does NOT say is recorded at the top of MyWeekPage and in
- * this file's git history, because it is the cost of this decision:
+ * What the canvas does NOT say is recorded here and in this file's git
+ * history, because it is the cost of this decision:
  *
  *   - the NET TOTAL. The canvas gives 4h 3m and 4h 8m; nobody adds those in
- *     their head. The Week tab totals the week and each row carries its day's
- *     figure, so the number is one tap away rather than absent.
+ *     their head. The calendar sheet totals the month, which is where that
+ *     number went when the Week tab was replaced.
  *   - LEAVE. DayCell reads holiday and punches; it does not read `leave` at
- *     all, so a leave day draws as a dashed band or as "Day off". The Week tab
- *     names the leave type on that day's row.
+ *     all, so a leave day draws as a dashed band or as "Day off". The status
+ *     chip beside this heading names the leave type.
  *
  * Both are deliberate, both are the owner's call, and both are recoverable by
  * restoring DaySummary from history.
  */
 import { format, isSameDay } from "date-fns";
+import { ChevronDownIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { DayCell } from "@/ui/DayTimeline";
@@ -84,7 +85,13 @@ function StatusChip(props: { status: MiniStatus }) {
   );
 }
 
-export function MyDayPage(props: { today?: Date; date?: Date; now?: Date }) {
+export function MyDayPage(props: {
+  today?: Date;
+  date?: Date;
+  now?: Date;
+  /** Opens the calendar sheet. Omitted in tests that render the page alone. */
+  onPickDate?: () => void;
+}) {
   const t = useT();
   const fmt = useFormat();
   const today = props.today ?? new Date();
@@ -111,11 +118,33 @@ export function MyDayPage(props: { today?: Date; date?: Date; now?: Date }) {
     // timeline has to take what is left after the heading rather than assume.
     <div className="flex h-full min-h-0 flex-col gap-3 p-3">
       <header className="flex items-baseline justify-between gap-3 px-1">
+        {/* THE HEADING IS THE DATE PICKER. A real button, not a click handler
+            on the h1 — the latter is invisible to a keyboard and announces
+            nothing.
+
+            It is the heading rather than a separate icon because this row is
+            the app's most contested horizontal space: measured in Khmer at
+            320px the date already truncates and the chip is capped at 58%, so
+            a third element takes room from one of the two. The date is also
+            where people look for a date. */}
         <h1 className="min-w-0 truncate text-base font-semibold text-foreground">
-          {isSameDay(date, today) ? t("tabToday") : fmt.date(date, "EEEE")}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">
-            {fmt.date(date, "d MMMM")}
-          </span>
+          <button
+            type="button"
+            onClick={() => props.onPickDate?.()}
+            className="inline-flex max-w-full items-baseline gap-1 truncate rounded-md text-left transition-colors active:text-primary"
+          >
+            <span className="truncate">
+              {isSameDay(date, today) ? t("tabToday") : fmt.date(date, "EEEE")}
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                {fmt.date(date, "d MMMM")}
+              </span>
+            </span>
+            <ChevronDownIcon
+              aria-hidden="true"
+              className="size-3.5 shrink-0 self-center text-muted-foreground"
+            />
+            <span className="sr-only">{t("chooseDate")}</span>
+          </button>
         </h1>
         <StatusChip status={miniStatus(info, date, now)} />
       </header>
