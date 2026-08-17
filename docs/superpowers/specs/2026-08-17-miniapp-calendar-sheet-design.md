@@ -81,9 +81,9 @@ export type DayMark =
 
 | mark | when | drawn as |
 |---|---|---|
-| `complete` | punches present and they pair up | solid dot, `muted-foreground` |
-| `incomplete` | odd punch count on a finished day | amber ring, light weight |
-| `missing` | rostered, day is over, zero punches | amber ring, heavy + filled |
+| `complete` | punches present and they pair up | solid dot, inheriting the button's text colour |
+| `incomplete` | odd punch count on a finished day | hollow amber ring |
+| `missing` | rostered, day is over, **zero** punches | solid amber |
 | `off` | day off, holiday, or on leave | hollow grey ring |
 | `none` | any future day, **and today while it is still running** | nothing |
 
@@ -91,8 +91,19 @@ export type DayMark =
 
 `destructive` is the loudest colour in the palette and this surface has never
 spent it. Red reads as "you are in trouble" even when the sentence is only "no
-record" — and HR may still forgive the day. The two problem states are
-distinguished by ring weight, not by hue.
+record" — and HR may still forgive the day.
+
+The two are told apart by FILL, not by ring weight. This spec first said "light
+ring" versus "heavy ring", and at 8px on a phone those are the same circle —
+visible only once it was screenshotted. Hollow versus solid reads at arm's
+length.
+
+### `missing` is a punch COUNT of zero, not a tone
+
+`dayFacts` cannot separate these two: a day with one punch has no range (a
+range needs both ends), so its tone is `"nothing"` — the same tone a day nobody
+came to gets. Reading the mark off the tone called a forgotten clock-out an
+absence, which are opposite problems to go and fix. The mark counts punches.
 
 ### Today is never marked as a problem
 
@@ -154,6 +165,19 @@ week view and `weekDatesFor`). The day cell is a wrapper around the exported
 `CalendarDayButton` that renders the number plus the mark beneath it — wrapping
 rather than replacing, so keyboard handling, selection state and disabled days
 stay the primitive's.
+
+### Grid details settled during implementation
+
+`showOutsideDays={false}` — neighbouring-month days are disabled and unmarked,
+so they are five greyed numbers of noise on the row the eye lands on first.
+
+The primitive's day cell is `aspect-square`, which at 390px is a 53px square
+and 320px of grid — enough to push the month total off a half-height Telegram
+sheet. Overridden to `h-11`, still a comfortable target.
+
+`formatters.formatCaption` — date-fns's `km` gives `សីហា` and then `2026`,
+because it emits Latin digits in **every** locale. Without the override the one
+line above a grid of Khmer numerals is Latin.
 
 ### Range
 
@@ -262,15 +286,23 @@ accessible text on each day cell.
 
 ## 5. Accessibility
 
-Colour and weight alone do not carry the mark. Each day button's accessible name
-states the date and the mark in words — "Thursday 6 August, no record" — because
-the whole grid is otherwise a field of identical circles to a screen-reader user,
-and the marks are the reason the grid exists.
+Colour and fill alone do not carry the mark. Each day button's accessible name
+states the date and the mark in words — "Thursday 6 August, no record" —
+because the whole grid is otherwise a field of identical circles to a
+screen-reader user, and the marks are the reason the grid exists.
 
-The dot itself is `aria-hidden`; the words go in visually-hidden content inside
-the button, not in `aria-label`. `aria-label` beats name-from-content
-unconditionally and would silence the day number — the same trap
-`date-picker-input.tsx` documents at its `srLabel` prop.
+**Through `labels.labelDayButton`, not a visually-hidden span.** This spec
+originally called for the span, reasoning that an `aria-label` would beat
+name-from-content and silence the day number. That reasoning was right and the
+conclusion was wrong, because it missed who else sets one: **react-day-picker
+puts its own `aria-label` on every day button** (`"Monday, August 3rd, 2026"`).
+The span was therefore never announced — the marks were silent while the source
+looked correct, and a source-read test passed the entire time. Only dumping the
+rendered DOM showed it.
+
+So the guard for this is an e2e test reading the **rendered accessible name**.
+A unit test that greps the source for `sr-only` is precisely the test that
+passed while this was broken.
 
 ---
 
@@ -283,6 +315,8 @@ input set, so it is table-driven:
 - an odd punch count on a past day is `incomplete`; an even one is `complete`
 - **an odd punch count on TODAY, mid-shift, is `none`** — the regression that
   matters most, because it is the difference between a live day and an accusation
+- a single lone punch on a past day is `incomplete`, never `missing`
+- no day after today is marked at all, including weekends and holidays
 - a rostered today whose `end_time` has passed, with no punches, is `missing`
 - a rostered today whose `end_time` has NOT passed, with no punches, is `none`
 - an unrostered day with no punches is `off`, never `missing`
