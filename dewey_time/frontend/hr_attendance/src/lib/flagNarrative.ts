@@ -136,6 +136,10 @@ const EMITTED_CODES: ReadonlySet<string> = new Set([
   "LATE_FROM_LUNCH",
   "MISSING_TIME",
   "UNNOTIFIED_ABSENCE",
+  // The intraday half of the pair above. Emitted since intraday stopped
+  // raising a provisional UNNOTIFIED_ABSENCE for a day nobody has finished —
+  // same situation, same evidence, different tense.
+  "NO_CHECKIN_YET",
   "OFF_SHIFT_PUNCH",
   "NON_PRIMARY_SITE_PUNCH",
   "ATTENDANCE_ISSUE",
@@ -153,17 +157,20 @@ const EMITTED_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The three codes the spec's treatment table names under "no detector".
+ * The codes the spec's treatment table names under "no detector".
  *
  * This is a NAMED SUBSET for the copy and the tests, not the gate —
  * `isEmittedCode` is the gate. UNKNOWN_DEVICE_BRANCH is declared in
  * `AUTO_FLAG_CODES` but no detector ever writes it as a flag_code (unknown
  * branches fold into ATTENDANCE_ISSUE reason `unknown_device_branch`), so it
  * takes the no-detector path without being listed here.
+ *
+ * NO_CHECKIN_YET was the third entry and has left: intraday writes it now, so
+ * telling HR it "isn't a rule this engine currently checks automatically"
+ * would be false about a row the engine had just raised.
  */
 export const NO_DETECTOR_CODES: readonly string[] = [
   "MISSING_IN_OR_OUT",
-  "NO_CHECKIN_YET",
   "MISSING_LUNCH",
 ];
 
@@ -970,10 +977,24 @@ function narrateUnnotifiedAbsence(flag: Flag, day: NarrativeDay, dateKey: string
     return boundaryFallback(flag, genericEvidence, day, dateKey);
   }
 
+  // NO_CHECKIN_YET is the same situation on a day that is STILL RUNNING, so it
+  // shares this builder and must not share this sentence. "Never checked in —
+  // zero punches all day" is a claim about a finished day, and the intraday
+  // pass raises its row from about half an hour after shift start: at 08:31 the
+  // headline was a statement HR could disprove by looking out of the window.
+  //
+  // Keyed on the flag_code rather than the reason now that the code itself
+  // carries running-versus-finished — the "Caught by" line below still keys on
+  // the reason because it distinguishes three producers, not two states.
+  const running = flag.flag_code === "NO_CHECKIN_YET";
   const shiftName = unnotifiedAbsenceHeadlineShiftLabel(day.shift);
-  const headline = shiftName
-    ? `Scheduled for the ${shiftName} shift, but never checked in — zero punches all day.`
-    : "Scheduled to work, but never checked in — zero punches all day.";
+  const headline = running
+    ? shiftName
+      ? `Scheduled for the ${shiftName} shift, and no check-in has been recorded yet.`
+      : "Scheduled to work, and no check-in has been recorded yet."
+    : shiftName
+      ? `Scheduled for the ${shiftName} shift, but never checked in — zero punches all day.`
+      : "Scheduled to work, but never checked in — zero punches all day.";
 
   const band = narrativeShiftBand(day.shift);
 
@@ -1601,6 +1622,10 @@ export function flagNarrative(flag: Flag, day: NarrativeDay, dateKey: string): F
     case "MISSING_TIME":
       return narrateMissingTime(flag, day, dateKey);
     case "UNNOTIFIED_ABSENCE":
+    // Same builder, on purpose: one situation, two tenses. The builder reads
+    // flag_code to pick the headline, and the evidence shape is identical
+    // because intraday writes the same dict it always did.
+    case "NO_CHECKIN_YET":
       return narrateUnnotifiedAbsence(flag, day, dateKey);
     case "OFF_SHIFT_PUNCH":
       return buildOffShiftPunchNarrative(flag, day, dateKey);

@@ -89,7 +89,7 @@ Callers: `hr_calendar.py`, `intraday.py`, `closeout.py`.
 | Flag | Status |
 |------|--------|
 | `MISSING_LUNCH` | **Suppressed** — assume scheduled lunch when no valid observed pair |
-| `NO_CHECKIN_YET` | Doctype constant only; engine does not generate |
+| `NO_CHECKIN_YET` | Intraday: rostered day still running, zero punches. Provisional; closeout's `UNNOTIFIED_ABSENCE` is the settled form |
 
 ### Rules doc aliases
 

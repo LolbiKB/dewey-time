@@ -29,6 +29,14 @@ from dewey_time.attendance_engine.closeout import (
 INTRADAY_FLAG_CODES = [
     "MISSING_TIME",
     "NON_PRIMARY_SITE_PUNCH",
+    "NO_CHECKIN_YET",
+    # STILL HERE THOUGH INTRADAY NO LONGER WRITES IT. This is the delete list,
+    # not the write list, and every site running this app has open provisional
+    # UNNOTIFIED_ABSENCE rows from before NO_CHECKIN_YET took that job. Removing
+    # it would strand them: nothing else deletes a provisional row, so a no-show
+    # raised yesterday morning would sit in the queue as a CRITICAL forever,
+    # surviving the punch that disproved it. The first pass after deploy clears
+    # them, which is the whole migration.
     "UNNOTIFIED_ABSENCE",
 ]
 
@@ -173,26 +181,35 @@ def refresh_intraday_flags_for_employee_date(employee: str, attendance_date):
         )
 
         if checkins_count == 0 and missing:
-            # Nobody turned up. Closeout says exactly this and skips
-            # MISSING_TIME the same way (closeout.py:568); intraday could not,
-            # because it withholds UNNOTIFIED_ABSENCE for a day that is not
-            # over yet. So it says it PROVISIONALLY, and withdraws it the
-            # moment a punch lands -- this function re-runs on every checkin
-            # edit and deletes its own previous rows first, which is why
-            # UNNOTIFIED_ABSENCE has to be in INTRADAY_FLAG_CODES.
+            # Nobody has turned up yet. Closeout says UNNOTIFIED_ABSENCE and
+            # skips MISSING_TIME the same way (closeout.py:568); intraday says
+            # NO_CHECKIN_YET, because the difference between the two codes is
+            # exactly the difference between a finished day and a running one.
             #
-            # Gated on `missing` rather than on a threshold of its own: the
-            # row must appear when the first MISSING_TIME would have, not
-            # sooner. Below absence_threshold_minutes there is no interval to
-            # report and this list is empty, so the timing is identical to
-            # what shipped before by construction rather than by arithmetic
-            # repeated in two places. Both codes are CRITICAL, so nothing
-            # gets louder either.
+            # This used to raise a PROVISIONAL UNNOTIFIED_ABSENCE, and the cost
+            # of that is still visible in flag_triage: it needed a special case
+            # above _FIXED_RANKS to stop a 31-minute no-show ranking 150 and
+            # burying every real finding until the person badged. That is a
+            # workaround for using a closeout VERDICT to describe a morning
+            # nobody has finished yet. NO_CHECKIN_YET is the code the doctype
+            # and ARCHITECTURE.md always reserved for this ("intraday
+            # placeholder") and it carries WARNING rather than CRITICAL, so the
+            # weight is right without anything downstream compensating.
+            #
+            # Withdrawn the moment a punch lands: this function re-runs on every
+            # checkin edit and deletes its own previous rows first, which is why
+            # NO_CHECKIN_YET has to be in INTRADAY_FLAG_CODES.
+            #
+            # Gated on `missing` rather than on a threshold of its own: the row
+            # must appear when the first MISSING_TIME would have, not sooner.
+            # Below absence_threshold_minutes there is no interval to report and
+            # this list is empty, so the timing is unchanged by construction
+            # rather than by arithmetic repeated in two places.
             _insert_flag(
                 employee=employee,
                 company=employee_company,
                 attendance_date=attendance_date,
-                flag_code="UNNOTIFIED_ABSENCE",
+                flag_code="NO_CHECKIN_YET",
                 evidence={
                     **evidence,
                     "reason": "on_shift_no_checkins_intraday",

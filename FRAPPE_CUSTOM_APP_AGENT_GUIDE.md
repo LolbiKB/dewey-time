@@ -144,7 +144,9 @@ Never mutate historical **Employee Checkin** rows.
 
 **Intraday provisional:** `MISSING_TIME`, `NON_PRIMARY_SITE_PUNCH`.
 
-**Not emitted:** `MISSING_LUNCH` (suppressed); `NO_CHECKIN_YET` (doctype only).
+**Not emitted:** `MISSING_LUNCH` (suppressed).
+`NO_CHECKIN_YET` is emitted by the intraday pass — a rostered day still running with no
+punches yet; `UNNOTIFIED_ABSENCE` is the same situation once closeout has settled it.
 
 **HR UI (`/hr-attendance`):** read-only flag review panel in day inspector; approve/reject in Desk (P1 for SPA actions).
 

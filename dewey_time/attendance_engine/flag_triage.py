@@ -84,11 +84,26 @@ def _missing_time_band(minutes: int | None) -> int:
 
 def triage_rank(flag_code: str, evidence) -> int:
     """Additive rank, computed on read. Never stored. Unknown code -> 5."""
-    # Before the _FIXED_RANKS lookup: a no-show the day has not confirmed is
-    # not the 150 a closed-out one is. It stands in for MISSING_TIME rows that
-    # ranked 60 until two hours had elapsed, and promoting it to the top of act
-    # at 31 minutes would put someone who walks in at 08:45 above every real
-    # ATTENDANCE_ISSUE until they badge.
+    # A no-show the day has not confirmed is not the 150 a closed-out one is.
+    # It stands in for MISSING_TIME rows that ranked 60 until two hours had
+    # elapsed, and promoting it to the top of act at 31 minutes would put
+    # someone who walks in at 08:45 above every real ATTENDANCE_ISSUE until
+    # they badge.
+    #
+    # NO_CHECKIN_YET is the code intraday writes for this now. It is banded the
+    # same way rather than given a _FIXED_RANK, because "nobody has arrived" at
+    # 31 minutes and at four hours are not the same finding and the queue has to
+    # order them apart.
+    if flag_code == "NO_CHECKIN_YET":
+        return _missing_time_band(_minutes(evidence))
+
+    # LEGACY ONLY, and deliberately kept. Intraday stopped writing provisional
+    # UNNOTIFIED_ABSENCE rows, but every site has some already in the table and
+    # they stay visible until the first intraday pass after deploy deletes them.
+    # Removing this branch would spike them all to 150 for that window --
+    # top of act, above every confirmed finding -- which is the exact failure
+    # the branch was added to prevent. Safe to delete once no provisional
+    # UNNOTIFIED_ABSENCE rows remain.
     if flag_code == "UNNOTIFIED_ABSENCE" and isinstance(evidence, dict) and evidence.get(
         "provisional"
     ):

@@ -159,7 +159,10 @@ AUTO-generated flag values (stored in `Attendance Flag.flag_code`):
 - `OFF_SHIFT_PUNCH` — checkins present but employee is off-shift or on holiday; not emitted for clock-based employees (employment type outside the Weekly-Schedule allowlist) on a non-holiday unscheduled day, where only punch-integrity flags apply
 - `NON_PRIMARY_SITE_PUNCH` — employee branch ≠ checkin device branch
 - `LATE_FROM_LUNCH` — returned late from observed lunch
-- `NO_CHECKIN_YET` — *declared/reserved but not currently emitted*
+- `NO_CHECKIN_YET` — raised by the intraday pass when a rostered day is running and
+  nothing has been punched yet. WARNING, provisional, withdrawn the moment a punch
+  lands. Closeout raises `UNNOTIFIED_ABSENCE` for the same situation once the day is
+  over — one situation, two tenses; intraday never writes the absence itself.
 
 Additional codes are declared in `AUTO_FLAG_CODES` but produced outside the normal detectors:
 

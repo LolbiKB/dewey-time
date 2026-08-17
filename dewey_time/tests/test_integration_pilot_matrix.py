@@ -463,8 +463,14 @@ class TestPilotMatrix(_Base):
         refresh_intraday_flags_for_employee_date(emp, d)
 
         rows = self._rows(day, employee=emp)
-        absences = [r for r in rows if r["flag_code"] == "UNNOTIFIED_ABSENCE"]
+        # NO_CHECKIN_YET: the intraday tense of the same situation. The absence
+        # itself is closeout's verdict and must not appear while the day runs.
+        absences = [r for r in rows if r["flag_code"] == "NO_CHECKIN_YET"]
         missing = [r for r in rows if r["flag_code"] == "MISSING_TIME"]
+        self.assertEqual(
+            [r for r in rows if r["flag_code"] == "UNNOTIFIED_ABSENCE"], [],
+            "the closeout verdict must not be raised mid-day",
+        )
 
         self.assertEqual(len(absences), 1, f"exactly one no-show, got {rows}")
         self.assertEqual(missing, [], f"the no-show replaces the gap rows, got {missing}")

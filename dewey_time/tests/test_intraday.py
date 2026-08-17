@@ -395,7 +395,32 @@ class TestIntradayNoShow(unittest.TestCase):
     def test_zero_punches_raises_one_no_show_and_no_missing_time(self):
         insert_flag, _ = self._run()
 
-        self.assertEqual(self._codes(insert_flag), ["UNNOTIFIED_ABSENCE"])
+        # NO_CHECKIN_YET, not UNNOTIFIED_ABSENCE. The intraday pass describes a
+        # day nobody has finished; the absence is closeout's verdict. Writing
+        # the verdict early is what forced flag_triage to carry a special case
+        # downranking it, and what the Mini App had to filter out so an employee
+        # whose leave was not yet keyed in did not carry an accusation all
+        # morning.
+        self.assertEqual(self._codes(insert_flag), ["NO_CHECKIN_YET"])
+
+    def test_the_absence_is_left_to_closeout(self):
+        # The pairing this whole code exists for. If intraday ever writes
+        # UNNOTIFIED_ABSENCE again, a CRITICAL verdict about a finished day
+        # reappears on a morning that is still running.
+        insert_flag, _ = self._run()
+
+        self.assertNotIn("UNNOTIFIED_ABSENCE", self._codes(insert_flag))
+
+    def test_the_old_provisional_absence_is_still_deleted(self):
+        # INTRADAY_FLAG_CODES is the DELETE list, not the write list. Every site
+        # has open provisional UNNOTIFIED_ABSENCE rows from before this change,
+        # and nothing else removes a provisional row -- drop the code from the
+        # list and yesterday's no-show sits in the queue as a CRITICAL forever,
+        # surviving the punch that disproved it.
+        from dewey_time.attendance_engine.intraday import INTRADAY_FLAG_CODES
+
+        self.assertIn("UNNOTIFIED_ABSENCE", INTRADAY_FLAG_CODES)
+        self.assertIn("NO_CHECKIN_YET", INTRADAY_FLAG_CODES)
 
     def test_the_no_show_is_provisional_and_names_its_origin(self):
         insert_flag, _ = self._run()
@@ -408,13 +433,11 @@ class TestIntradayNoShow(unittest.TestCase):
         # The frontend's "Punches: 0" fact reads this, and the zero IS the
         # finding (flagNarrative.test.ts:1198).
         self.assertEqual(kwargs["evidence"]["checkins_count"], 0)
-        # The seam between this writer and flag_triage's reader. triage_rank
-        # bands a provisional no-show only when evidence["provisional"] is
-        # truthy (flag_triage.py, the branch above _FIXED_RANKS); drop or rename
-        # this key in any evidence cleanup and every suite still passes while
-        # every provisional no-show silently ranks 150 — top of act, above
-        # ATTENDANCE_ISSUE — which is the exact defect that branch exists to
-        # prevent. Nothing else asserts it on a real insert.
+        # `provisional` no longer drives the rank -- triage_rank bands
+        # NO_CHECKIN_YET on the code alone now, which is the point of using the
+        # right code. It stays in the evidence because the frontend reads it and
+        # because the legacy UNNOTIFIED_ABSENCE branch in flag_triage still keys
+        # on it while old rows drain.
         self.assertIs(kwargs["evidence"]["provisional"], True)
 
     def test_below_the_threshold_nothing_is_raised_at_all(self):
