@@ -1,20 +1,29 @@
-"""The Mini App's only read endpoint.
+"""The Mini App's read endpoints.
 
-Two properties carry this module, and both are structural rather than vigilant:
+Two: `get_my_calendar` for the days, `get_my_profile` for the record behind
+them. They are separate because the calendar is fetched once per range -- a day
+for Today, a week for the roster, a month for the stats -- while the record
+changes for nobody during a session, and because one function holding two
+allowlists is one careless edit away from widening both.
 
-1. It takes NO employee-selecting parameter. An attacker cannot name a victim
-   because there is no field to put one in. A test guards the signature, and
-   exists because that property will die to a reasonable future edit -- a
-   manager view adding `employee=` -- rather than to an attack.
+Two properties carry this module, and BOTH ENDPOINTS MUST HAVE BOTH. They are
+structural rather than vigilant:
 
-2. The projection is an ALLOWLIST. Written as removals it would fail open: a
-   field added to the calendar builder for an HR need would reach every
-   employee silently, with no test failing. Built this way, a new field is
-   hidden by default and exposing one is a deliberate edit.
+1. Neither takes an employee-selecting parameter. An attacker cannot name a
+   victim because there is no field to put one in. A test guards each
+   signature, and they exist because that property will die to a reasonable
+   future edit -- a manager view adding `employee=` -- rather than to an attack.
 
-The payload this narrows is HR-shaped -- device serials, `last_error`, flag
-evidence, internal flag names, grace minutes. None of it is an employee's to
-see, and `build_employee_calendar` says so at its own definition.
+2. Every projection is an ALLOWLIST. Written as removals they would fail open:
+   a field added to the calendar builder, or to Employee, for an HR need would
+   reach every employee silently, with no test failing. Built this way, a new
+   field is hidden by default and exposing one is a deliberate edit.
+
+What each narrows is HR-shaped. The calendar payload carries device serials,
+`last_error`, flag evidence, internal flag names and grace minutes;
+`build_employee_calendar` says so at its own definition. The Employee doctype
+carries date_of_birth, passport_number and salary fields. None of it is an
+employee's to see.
 """
 
 from __future__ import annotations
