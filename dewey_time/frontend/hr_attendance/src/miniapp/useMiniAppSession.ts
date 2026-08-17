@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import type { Day } from "@/types/calendar";
+import type { Biometric } from "@/miniapp/miniProfile";
 import { isAppActive, onActiveChange } from "@/miniapp/telegramChrome";
 
 /** Sentinel for "this page is not running inside Telegram". */
@@ -129,6 +130,62 @@ function useIsAppActive(): boolean {
     return onActiveChange(window, setActive);
   }, []);
   return active;
+}
+
+/**
+ * What get_my_profile returns.
+ *
+ * Every field but `employee` and `biometric` is nullable BY CONTRACT rather
+ * than by oversight: HR records are unevenly filled, and Profile drops a row
+ * rather than rendering a dash under a label.
+ */
+export type MiniProfile = {
+  employee: string;
+  employee_name?: string | null;
+  khmer_name?: string | null;
+  designation?: string | null;
+  image?: string | null;
+  department?: string | null;
+  employment_type?: string | null;
+  date_of_joining?: string | null;
+  branch?: string | null;
+  reports_to_name?: string | null;
+  cell_number?: string | null;
+  personal_email?: string | null;
+  biometric: Biometric;
+};
+
+async function fetchProfile(initData: string): Promise<MiniProfile> {
+  const response = await fetch(
+    "/api/method/dewey_time.telegram.miniapp_api.get_my_profile",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Frappe-CSRF-Token": window.csrf_token ?? "",
+      },
+      body: JSON.stringify({ init_data: initData }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`profile request failed: ${response.status}`);
+  }
+  return (await response.json()).message as MiniProfile;
+}
+
+export function useMyProfile() {
+  const initData = initDataFromTelegram(window);
+  return useQuery({
+    queryKey: ["mini-profile"],
+    // Outside Telegram there is nothing to authenticate with, so the request
+    // is never fired -- the shell shows an explanation instead of a 403.
+    enabled: initData !== MISSING_INIT_DATA,
+    queryFn: () => fetchProfile(initData),
+    // NO POLL, unlike the calendar. That one polls because it makes a claim
+    // about the PRESENT ("In") which goes false while somebody walks to the
+    // terminal. Nothing here changes during a session, and polling an
+    // unchanging record on an employee's mobile data buys nothing.
+  });
 }
 
 /** Index a payload's days by date, the shape every timeline helper wants. */
