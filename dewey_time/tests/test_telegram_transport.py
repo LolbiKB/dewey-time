@@ -288,6 +288,7 @@ class TestNotificationGates(unittest.TestCase):
         with patch.object(notify.transport, "telegram_enabled", return_value=True), \
              patch.object(notify.frappe.db, "count", return_value=3), \
              patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "exists", return_value="HR-EMP-00042"), \
              patch.object(notify.rollout, "phase_for_employee", return_value="TESTING"), \
              patch.object(notify, "_link_for", return_value=None):
             gates = notify.delivery_gates("HR-EMP-00042")
@@ -377,3 +378,46 @@ class TestWebhookRegistration(unittest.TestCase):
         menu.assert_called_once_with("https://site/hr-me")
         self.assertEqual(result["webhook"]["status"], transport.SENT)
         self.assertEqual(result["menu_button"]["status"], transport.SENT)
+
+
+class TestGatesRefuseToGuessAboutAnUnknownEmployee(unittest.TestCase):
+    """A typo used to come back looking like a real, blocked employee.
+
+    `_link_for` finds no link for a name that cannot have one, and
+    `phase_for_employee` resolves no branch and falls back to the site-wide
+    phase -- so an id that does not exist returned `employee_linked: false`
+    and a plausible `PRELAUNCH`. That is indistinguishable from a genuine
+    employee whose branch is gated, and it sent a real diagnosis down the
+    wrong path.
+    """
+
+    def test_an_unknown_id_says_so_instead_of_answering(self):
+        from dewey_time.telegram import notify
+
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=2), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "exists", return_value=False), \
+             patch.object(notify.rollout, "phase_for_employee",
+                          side_effect=AssertionError("must not be asked")):
+            gates = notify.delivery_gates("HR-EMP-1168")
+
+        self.assertFalse(gates["employee_exists"])
+        # The two fields that previously looked like an answer are simply absent.
+        self.assertNotIn("employee_linked", gates)
+        self.assertNotIn("employee_phase", gates)
+
+    def test_a_real_employee_is_still_answered_in_full(self):
+        from dewey_time.telegram import notify
+
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=2), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "exists", return_value="DI-1221"), \
+             patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "1", "name": "L"}):
+            gates = notify.delivery_gates("DI-1221")
+
+        self.assertTrue(gates["employee_exists"])
+        self.assertTrue(gates["employee_linked"])
+        self.assertEqual(gates["employee_phase"], "LIVE")
