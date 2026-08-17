@@ -6,12 +6,12 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "@/lib/queryClient";
 import { MiniAppShell } from "@/miniapp/MiniAppShell";
-import { initTelegramChrome } from "@/miniapp/telegramChrome";
+import { initTelegramChrome, signalReady } from "@/miniapp/telegramChrome";
 import "@/index.css";
 
-// ready/expand, match Telegram's light or dark theme, and stop a downward
-// scroll from closing the app. Safe outside Telegram: every call is
-// feature-detected, so a plain browser just renders the notice.
+// expand, match Telegram's light or dark theme, and stop a downward scroll
+// from closing the app. Safe outside Telegram: every call is feature-detected,
+// so a plain browser just renders the notice.
 initTelegramChrome(window, document);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -29,3 +29,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </React.StrictMode>,
 );
+
+// AFTER render is scheduled, on the next frame. `ready()` takes down
+// Telegram's loading placeholder — the one BotFather lets you brand with an
+// icon and per-theme colours — so calling it before anything has painted swaps
+// a branded splash for a blank sheet. Deliberately not a component effect: a
+// render that threw would never mount, and the placeholder would then sit on
+// top of the ErrorBoundary's message forever.
+signalReady(window);

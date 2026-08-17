@@ -71,7 +71,6 @@ const EN = {
 
   // Chrome
   yourRecord: "Your record",
-  addToHomeScreen: "Add to your home screen",
   openFromTelegram: "Open this from Telegram",
   openFromTelegramBody: "Your attendance is only available through the Dewey Time bot.",
 
@@ -120,7 +119,6 @@ const KM: Record<StringKey, string> = {
   noShiftsThisWeek: "សប្តាហ៍នេះ អ្នកមិនមានវេនការងារទេ។",
 
   yourRecord: "កំណត់ត្រារបស់អ្នក",
-  addToHomeScreen: "បន្ថែមទៅអេក្រង់ដើម",
   openFromTelegram: "សូមបើកពី Telegram",
   openFromTelegramBody: "កំណត់ត្រាវត្តមានរបស់អ្នកអាចមើលបានតែតាម Dewey Time bot ប៉ុណ្ណោះ។",
 

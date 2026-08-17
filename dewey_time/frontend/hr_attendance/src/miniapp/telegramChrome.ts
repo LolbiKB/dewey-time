@@ -174,11 +174,35 @@ export function bindBackButton(w: Window, visible: boolean, onBack: () => void):
 }
 
 /**
+ * Tell Telegram the app is worth showing — AFTER the first frame.
+ *
+ * `ready()` hides Telegram's loading placeholder, which BotFather lets you
+ * brand with an icon and per-theme colours. Calling it at import time threw
+ * that away and replaced it with a blank sheet: nothing had rendered yet.
+ *
+ * Scheduled on a frame rather than tied to a React effect on purpose. An
+ * effect only fires if the tree mounts, so a render that threw would leave the
+ * placeholder up forever with the ErrorBoundary's message hidden behind it —
+ * the one moment the reader most needs to see the screen. A frame callback
+ * fires either way.
+ */
+export function signalReady(w: Window): void {
+  const fire = () => w?.Telegram?.WebApp?.ready?.();
+  if (typeof w?.requestAnimationFrame === "function") w.requestAnimationFrame(fire);
+  else fire();
+}
+
+/**
  * Is this client at least this Bot API version?
  *
  * The SDK's own comparison, when it has one. Falling back to `false` is the
  * safe answer: a client too old to answer the question is too old to have
  * whatever is being asked about.
+ *
+ * Nothing calls this. Kept because it is the correct way to ask the question
+ * and the alternative — a caller inventing its own version parse — is the
+ * mistake it exists to prevent. Every other helper here feature-detects the
+ * method it needs instead, which is better still.
  */
 export function atLeast(w: Window, version: string): boolean {
   return Boolean(w?.Telegram?.WebApp?.isVersionAtLeast?.(version));
@@ -207,6 +231,43 @@ export function onResume(w: Window, doc: Document, handler: () => void): () => v
   return () => {
     app?.offEvent?.("activated", handler);
     doc?.removeEventListener?.("visibilitychange", onVisible);
+  };
+}
+
+/**
+ * Is the Mini App the thing the user is looking at?
+ *
+ * NOT `document.visibilityState`. A Mini App is minimised rather than closed —
+ * it drops behind the chat and keeps running — and the webview is not reliably
+ * marked hidden when that happens. react-query's `refetchIntervalInBackground:
+ * false` is built on exactly that signal, so a 60s poll set up to stop when
+ * nobody is looking can instead run all afternoon against a sheet behind a
+ * chat list, on an employee's mobile data.
+ *
+ * Bot API 8.0 added `isActive` and the `activated`/`deactivated` pair for this
+ * precise gap. Older clients have neither; `true` is the right default there,
+ * because that is the behaviour those clients already had and a poll that
+ * never runs is worse than one that runs too often.
+ *
+ * `subscribe` returns a teardown, and reports the CURRENT value on
+ * subscription rather than waiting for the next transition — the app can be
+ * launched, minimised and resumed before React has finished mounting.
+ */
+export function isAppActive(w: Window): boolean {
+  const app = w?.Telegram?.WebApp;
+  if (!app) return true;
+  return app.isActive === undefined ? true : Boolean(app.isActive);
+}
+
+export function onActiveChange(w: Window, handler: (active: boolean) => void): () => void {
+  const app = w?.Telegram?.WebApp;
+  const activated = () => handler(true);
+  const deactivated = () => handler(false);
+  app?.onEvent?.("activated", activated);
+  app?.onEvent?.("deactivated", deactivated);
+  return () => {
+    app?.offEvent?.("activated", activated);
+    app?.offEvent?.("deactivated", deactivated);
   };
 }
 
@@ -272,37 +333,11 @@ function cloudSet(w: Window, key: string, value: string): void {
   }
 }
 
-/**
- * Whether the app can offer "add to home screen", and whether it already is.
- *
- * Worth offering for exactly this app: an employee opens it most working days,
- * and the alternative is finding the bot in a chat list first. Resolves to
- * "unsupported" on anything that cannot answer, so the affordance simply is
- * not drawn rather than being drawn and failing.
- */
-export type HomeScreenStatus = "unsupported" | "unknown" | "added" | "missed";
-
-export function homeScreenStatus(w: Window): Promise<HomeScreenStatus> {
-  return new Promise((resolve) => {
-    const app = w?.Telegram?.WebApp;
-    if (!app?.checkHomeScreenStatus) return resolve("unsupported");
-    try {
-      app.checkHomeScreenStatus((status) =>
-        resolve(
-          status === "added" || status === "missed" || status === "unknown"
-            ? status
-            : "unsupported",
-        ),
-      );
-    } catch {
-      resolve("unsupported");
-    }
-  });
-}
-
-export function addToHomeScreen(w: Window): void {
-  w?.Telegram?.WebApp?.addToHomeScreen?.();
-}
+// NO homeScreenStatus / addToHomeScreen. The shell's "add to your home
+// screen" row was removed, and these had no other caller. Kept out rather
+// than kept around: `checkHomeScreenStatus` frequently answers "unknown",
+// which is what made the row re-offer itself to people who had already
+// tapped it. Telegram's own SDK is two lines away if it is ever wanted back.
 
 /** A heavier tick than a tab change, for opening something. */
 export function openHaptic(w: Window): void {
@@ -339,7 +374,12 @@ export function onViewportChange(w: Window, handler: () => void): () => void {
 export function initTelegramChrome(w: Window, doc: Document): () => void {
   const app = w?.Telegram?.WebApp;
 
-  app?.ready?.();
+  // NO ready() HERE. It used to be this line, and it was the wrong moment.
+  // `ready()` is what tears down Telegram's own loading placeholder, and this
+  // function runs at module scope — before React has mounted, let alone
+  // painted. So the placeholder came down onto an empty page and the employee
+  // watched a blank sheet in the app's background colour until the first
+  // render landed. See signalReady, called after the first frame.
   app?.expand?.();
   app?.disableVerticalSwipes?.();
 

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MiniIdentity, initialsOf, subtitleOf } from "@/miniapp/MiniIdentity";
 
-import { MiniTabBar, OutsideTelegramNotice } from "@/miniapp/MiniAppShell";
+import { MiniTabBar, OutsideTelegramNotice, TAB_BAR_FLOOR_PX } from "@/miniapp/MiniAppShell";
 
 test("outside Telegram the app explains itself instead of erroring", () => {
   const html = renderToStaticMarkup(<OutsideTelegramNotice />);
@@ -32,12 +33,37 @@ test("the tab bar renders without a window, and pads when told to", () => {
   // It used to read `window` during render, which is unrenderable anywhere
   // without one. The safe-area value is the shell's to fetch and pass down.
   const bare = renderToStaticMarkup(<MiniTabBar active="day" onSelect={() => {}} />);
-  assert.match(bare, /padding-bottom:\s*0/);
+  assert.match(bare, new RegExp(`padding-bottom:\\s*${TAB_BAR_FLOOR_PX}px`));
 
   const padded = renderToStaticMarkup(
     <MiniTabBar active="day" onSelect={() => {}} insetBottom={34} />,
   );
-  assert.match(padded, /padding-bottom:\s*34px/);
+  assert.match(padded, new RegExp(`padding-bottom:\\s*${34 + TAB_BAR_FLOOR_PX}px`));
+});
+
+test("the inset is added to the floor, not chosen between", () => {
+  // The safe-area inset is exactly the strip the home indicator occupies — a
+  // clearance, not a margin. Taking the larger of the two would mean a 34px
+  // notch swallows the gap entirely and the labels sit on the hardware, which
+  // is the state this floor exists to prevent.
+  const padded = renderToStaticMarkup(
+    <MiniTabBar active="day" onSelect={() => {}} insetBottom={34} />,
+  );
+  assert.doesNotMatch(padded, /padding-bottom:\s*34px/);
+});
+
+test("nothing sits between the content and the tab bar", () => {
+  // The "add to your home screen" row lived here: permanent chrome on the
+  // shortest axis this app has, offering a one-time action. Telegram's
+  // checkHomeScreenStatus frequently answers "unknown", and the row treated
+  // that as offerable — so people who had already added the icon were asked
+  // again on every launch.
+  //
+  // A source read, not a render: the row was conditional on async state that
+  // never resolves under renderToStaticMarkup, so a rendered snapshot would
+  // have been clean the whole time it was shipping.
+  const shell = readFileSync(new URL("./MiniAppShell.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(shell, /addToHomeScreen|homeScreenStatus|to your home screen/);
 });
 
 // ---------------------------------------------------------------------------

@@ -23,14 +23,13 @@ declare global {
           offClick?: (handler: () => void) => void;
         };
         isVersionAtLeast?: (version: string) => boolean;
+        /** Bot API 8.0+. False while the Mini App is minimised behind the chat. */
+        isActive?: boolean;
         /** Bot API 6.9+. Per-user, follows them across devices. */
         CloudStorage?: {
           getItem?: (key: string, cb: (err: unknown, value?: string) => void) => void;
           setItem?: (key: string, value: string, cb?: (err: unknown) => void) => void;
         };
-        /** Bot API 8.0+. */
-        checkHomeScreenStatus?: (cb: (status: string) => void) => void;
-        addToHomeScreen?: () => void;
         /** Present from Bot API 8.0; absent on older clients. */
         safeAreaInset?: SafeAreaInset;
         /** Present from Bot API 8.0; absent on older clients. */

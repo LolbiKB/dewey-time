@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import type { Day } from "@/types/calendar";
+import { isAppActive, onActiveChange } from "@/miniapp/telegramChrome";
 
 /** Sentinel for "this page is not running inside Telegram". */
 export const MISSING_INIT_DATA = "";
@@ -90,23 +92,43 @@ async function fetchCalendar(
 
 export function useMiniAppCalendar(startDate: string, endDate: string) {
   const initData = initDataFromTelegram(window);
+  const active = useIsAppActive();
   return useQuery({
     queryKey: ["mini-calendar", startDate, endDate],
     // Outside Telegram there is nothing to authenticate with, so the request
     // is never fired -- the shell shows an explanation instead of a 403.
     enabled: initData !== MISSING_INIT_DATA,
     queryFn: () => fetchCalendar(initData, startDate, endDate),
-    // WHILE VISIBLE ONLY. Refetching on resume covers a minimised app coming
+    // WHILE ON SCREEN ONLY. Refetching on resume covers a minimised app coming
     // back, and misses the case this exists for: the app open on screen while
     // the person walks to the terminal and punches. Without a poll the header
     // keeps saying "In" after they have clocked out, which is not a stale
     // number but a false statement about where somebody is.
     //
     // 60s because the claim is about the present and a minute is the
-    // resolution the times are shown at. `refetchIntervalInBackground` stays
-    // off by default, so a phone in a pocket makes no requests.
-    refetchInterval: 60_000,
+    // resolution the times are shown at.
+    //
+    // Gated on Telegram's OWN activity signal, not on the interval option's
+    // default. `refetchIntervalInBackground: false` decides via
+    // document.visibilityState, and a minimised Mini App is not reliably
+    // marked hidden -- it drops behind the chat and keeps running. Left to
+    // that default this polls all afternoon on an employee's mobile data
+    // against a sheet nobody is looking at.
+    refetchInterval: active ? 60_000 : false,
   });
+}
+
+/** Telegram's activity state, as React state. See `isAppActive`. */
+function useIsAppActive(): boolean {
+  const [active, setActive] = useState(() => isAppActive(window));
+  useEffect(() => {
+    // Re-read on subscribe as well as on transition: the app can be launched,
+    // minimised and resumed before this effect first runs, and the missed
+    // transition would leave the poll off for the rest of the session.
+    setActive(isAppActive(window));
+    return onActiveChange(window, setActive);
+  }, []);
+  return active;
 }
 
 /** Index a payload's days by date, the shape every timeline helper wants. */
