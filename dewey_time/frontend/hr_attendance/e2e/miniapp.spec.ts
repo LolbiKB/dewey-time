@@ -26,7 +26,7 @@ const MINIAPP = "/index.miniapp.html";
  */
 type Punches = "none" | "open" | "partial" | "full";
 
-function rosteredDay(date: string, punches: Punches = "full") {
+function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] = []) {
   const all = [
     { time: `${date} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
     { time: `${date} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
@@ -51,6 +51,10 @@ function rosteredDay(date: string, punches: Punches = "full") {
     first_in: checkins.length ? checkins[0]!.time : null,
     last_out: outs.length ? outs[outs.length - 1]!.time : null,
     checkins,
+    // The narrowed four-field shape miniapp_api.FLAG_KEYS produces — never the
+    // HR row. A fixture richer than the server can send would let the sheet
+    // read a field that does not exist in production.
+    flags,
   };
 }
 
@@ -62,7 +66,7 @@ function rosteredDay(date: string, punches: Punches = "full") {
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[] } = {}) {
   await page.addInitScript(
     ({ theme, themeParams, languageCode, fullscreen }) => {
       const handlers: Record<string, (() => void)[]> = {};
@@ -136,7 +140,7 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
       // Every day the same, deliberately: the tests below assert on "today"
       // and on the current week, and a weekend rule would make them pass or
       // fail depending on which day of the week the suite runs.
-      days.push(rosteredDay(key, opts.punched ?? "full"));
+      days.push(rosteredDay(key, opts.punched ?? "full", opts.flags ?? []));
       cursor.setDate(cursor.getDate() + 1);
     }
     await route.fulfill({
@@ -494,4 +498,86 @@ test("an English client is not given a Khmer interface it did not ask for", asyn
   await openMiniApp(page, { languageCode: "en" });
   await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "ភាសាខ្មែរ" })).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Day flags
+//
+// The unit tests for this feature read source text. That is not enough here and
+// the reason is on the record: the calendar sheet shipped with marks that were
+// silent to a screen reader while a source-read test passed the whole time, and
+// only the rendered DOM showed it.
+// ---------------------------------------------------------------------------
+
+/** The narrowed shape miniapp_api.FLAG_KEYS produces. */
+const miniFlag = (code: string, over: Record<string, unknown> = {}) => ({
+  flag_code: code,
+  is_provisional: false,
+  decision: null,
+  decision_state: "undecided",
+  ...over,
+});
+
+test("a clean day shows no flags pill at all", async ({ page }) => {
+  // Hidden at zero, not rendered as "0 to check" — the calendar mark already
+  // says a day is clean and this is the shortest axis the app has.
+  await openMiniApp(page);
+  await expect(page.getByRole("banner")).toBeVisible();
+  await expect(page.getByRole("button", { name: /to check/ })).toHaveCount(0);
+});
+
+test("the pill's accessible name carries the count, and opens the sheet", async ({ page }) => {
+  // Asserted against the RENDERED accessible name, not against source text.
+  await openMiniApp(page, {
+    flags: [
+      miniFlag("LATE_START"),
+      miniFlag("MISSING_TIME", {
+        decision: { outcome: "EXCUSED" },
+        decision_state: "matched",
+      }),
+    ],
+  });
+
+  const pill = page.getByRole("button", { name: "2 to check" });
+  await expect(pill).toBeVisible();
+  await pill.click();
+
+  await expect(page.getByText("Late start")).toBeVisible();
+  await expect(page.getByText("Awaiting HR review")).toBeVisible();
+  await expect(page.getByText("Gap in your record")).toBeVisible();
+  await expect(page.getByText("Excused by HR")).toBeVisible();
+});
+
+test("the sheet never shows the engine's own vocabulary", async ({ page }) => {
+  await openMiniApp(page, { flags: [miniFlag("UNNOTIFIED_ABSENCE")] });
+  await page.getByRole("button", { name: /to check/ }).click();
+  const sheet = page.getByRole("dialog");
+  // "Unnotified absence" is a verdict word; the record says no punches landed.
+  await expect(sheet).toContainText("No record for this day");
+  await expect(sheet).not.toContainText("UNNOTIFIED_ABSENCE");
+  await expect(sheet).not.toContainText("CRITICAL");
+});
+
+test("a decision that no longer matches the day reads as awaiting review", async ({ page }) => {
+  await openMiniApp(page, {
+    flags: [miniFlag("LEFT_EARLY", {
+      decision: { outcome: "EXCUSED" },
+      decision_state: "needs_re_review",
+    })],
+  });
+  await page.getByRole("button", { name: /to check/ }).click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toContainText("Awaiting HR review again");
+  await expect(sheet).not.toContainText("Excused by HR");
+});
+
+test("the pill counts in Khmer digits", async ({ page }) => {
+  // A Latin "2" beside Khmer words is the exact leak miniIntl exists to close.
+  await openMiniApp(page, {
+    languageCode: "km",
+    flags: [miniFlag("LATE_START")],
+  });
+  const pill = page.getByRole("button", { name: /ត្រូវពិនិត្យ/ });
+  await expect(pill).toBeVisible();
+  await expect(pill).not.toContainText(/[0-9]/);
 });
