@@ -21,17 +21,16 @@ import {
 import {
   addToHomeScreen,
   bindBackButton,
-  bottomInset,
   homeScreenStatus,
   loadLastTab,
   loadLocale,
   onResume,
   onViewportChange,
+  safeAreaInsets,
   openHaptic,
   saveLastTab,
   saveLocale,
   tabHaptic,
-  topInset,
   type HomeScreenStatus,
 } from "@/miniapp/telegramChrome";
 
@@ -108,15 +107,9 @@ export function MiniAppShell() {
   // at mount they are whatever they were before the sheet was dragged or the
   // device rotated, which is how a tab bar ends up back under the home
   // indicator halfway through a session.
-  const [insets, setInsets] = useState(() => ({
-    top: topInset(window),
-    bottom: bottomInset(window),
-  }));
+  const [insets, setInsets] = useState(() => safeAreaInsets(window));
   useEffect(
-    () =>
-      onViewportChange(window, () =>
-        setInsets({ top: topInset(window), bottom: bottomInset(window) }),
-      ),
+    () => onViewportChange(window, () => setInsets(safeAreaInsets(window))),
     [],
   );
 
@@ -229,10 +222,22 @@ export function MiniAppShell() {
       className="flex w-full flex-col"
       style={{
         height: "var(--tg-viewport-stable-height, 100dvh)",
-        // The top inset is Telegram's header and the device's notch. Without
-        // it the first heading sits under the client's own chrome in
-        // fullscreen mode — the overlap the design guidelines call out.
+        // ALL FOUR EDGES, and the top is the device's notch PLUS Telegram's
+        // own header, which stack rather than overlap.
+        //
+        // The top-right is the one that bites: Telegram draws its close and
+        // collapse controls in that corner, and this app puts the employee's
+        // avatar row and the language toggle in exactly the same place. Under
+        // the old `Math.max` the header cleared the notch and then sat
+        // straight underneath those controls — a tap meant to switch language
+        // closed the app instead.
+        //
+        // Left and right are not decoration either: a landscape phone puts
+        // the notch on a side, and rounded corners clip a full-bleed row at
+        // both. They were previously never read at all.
         paddingTop: insets.top,
+        paddingLeft: insets.left,
+        paddingRight: insets.right,
       }}
     >
       {/* Rendered only once there is a real answer. A placeholder row saying

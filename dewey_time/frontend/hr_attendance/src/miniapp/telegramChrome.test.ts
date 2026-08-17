@@ -12,13 +12,12 @@ import {
   saveLastTab,
   applyTheme,
   bindBackButton,
-  bottomInset,
+  safeAreaInsets,
   initTelegramChrome,
   isHexColor,
   onViewportChange,
   tabHaptic,
   themeFrom,
-  topInset,
 } from "@/miniapp/telegramChrome";
 
 function fakeDoc() {
@@ -49,27 +48,65 @@ test("dark mode is the .dark class dewey-ui already ships", () => {
   assert.equal(doc._has("dark"), false);
 });
 
-test("insets take the larger of the device's and Telegram's own chrome", () => {
-  // Both exist and they measure different things; whichever intrudes further
-  // is the one the tab bar has to clear.
+test("the device inset and Telegram's own chrome ADD UP", () => {
+  // They are not two measurements of the same edge. `safeAreaInset` is the
+  // notch, measured from the screen; `contentSafeAreaInset` is Telegram's
+  // header, measured from inside that. In fullscreen on a notched phone the
+  // content starts below both.
+  //
+  // This took Math.max, which returns 56 for a 47px notch under a 56px
+  // header and puts the app's first row underneath Telegram's own controls —
+  // including the close button, in the same corner as the language toggle.
   const w = {
     Telegram: {
       WebApp: {
-        safeAreaInset: { top: 59, bottom: 34, left: 0, right: 0 },
-        contentSafeAreaInset: { top: 0, bottom: 12, left: 0, right: 0 },
+        safeAreaInset: { top: 47, bottom: 34, left: 0, right: 0 },
+        contentSafeAreaInset: { top: 56, bottom: 0, left: 0, right: 0 },
       },
     },
   } as never;
-  assert.equal(bottomInset(w), 34);
-  assert.equal(topInset(w), 59);
+  const insets = safeAreaInsets(w);
+  assert.equal(insets.top, 103, "the notch and the header stack");
+  assert.equal(insets.bottom, 34);
 });
 
-test("a client too old to report insets contributes zero, not NaN", () => {
-  // safeAreaInset arrived in Bot API 8.0. An older client has no such
-  // property, and `undefined` reaching a CSS length would break the layout it
-  // was meant to protect.
-  assert.equal(bottomInset({ Telegram: { WebApp: {} } } as never), 0);
-  assert.equal(bottomInset({} as never), 0);
+test("all four edges are reported, not just top and bottom", () => {
+  // A landscape phone puts the notch on a side, and rounded corners clip a
+  // full-bleed row at both. Left and right were previously never read.
+  const w = {
+    Telegram: {
+      WebApp: {
+        safeAreaInset: { top: 0, bottom: 21, left: 47, right: 47 },
+        contentSafeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+      },
+    },
+  } as never;
+  const insets = safeAreaInsets(w);
+  assert.equal(insets.left, 47);
+  assert.equal(insets.right, 47);
+});
+
+test("an older client reports no insets, and zero is the right answer", () => {
+  // Both arrived in Bot API 8.0. Zero is what the app rendered before either
+  // existed, which is correct rather than merely safe.
+  assert.deepEqual(safeAreaInsets({ Telegram: { WebApp: {} } } as never),
+    { top: 0, bottom: 0, left: 0, right: 0 });
+  assert.deepEqual(safeAreaInsets({} as never),
+    { top: 0, bottom: 0, left: 0, right: 0 });
+});
+
+test("a nonsense inset is treated as absent rather than trusted", () => {
+  // These values are written straight into a layout. A negative would pull
+  // content back under the chrome it exists to clear.
+  const w = {
+    Telegram: {
+      WebApp: {
+        safeAreaInset: { top: -20, bottom: "34" as never, left: NaN, right: undefined },
+        contentSafeAreaInset: { top: 10, bottom: 0, left: 0, right: 0 },
+      },
+    },
+  } as never;
+  assert.deepEqual(safeAreaInsets(w), { top: 10, bottom: 0, left: 0, right: 0 });
 });
 
 test("every chrome call is feature-detected, so an old client cannot crash", () => {

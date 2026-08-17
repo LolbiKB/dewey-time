@@ -88,23 +88,54 @@ export function applyTelegramPalette(doc: Document, params: Record<string, unkno
   return applied;
 }
 
-/**
- * Bottom inset for the tab bar, in CSS pixels.
- *
- * Two insets, and both matter: `safeAreaInset` is the device's (the home
- * indicator on a notched phone) and `contentSafeAreaInset` is Telegram's own
- * chrome. Taking the larger keeps the tab bar clear of whichever intrudes
- * further. Older clients report neither, and 0 is the right answer there.
- */
-export function bottomInset(w: Window): number {
-  const app = w?.Telegram?.WebApp;
-  return Math.max(app?.safeAreaInset?.bottom ?? 0, app?.contentSafeAreaInset?.bottom ?? 0);
+export type Insets = { top: number; bottom: number; left: number; right: number };
+
+const NO_INSETS: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
+
+function edge(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** Top inset, same reasoning as bottomInset. */
-export function topInset(w: Window): number {
+/**
+ * How much of each edge the app must keep clear, in CSS pixels.
+ *
+ * TELEGRAM REPORTS TWO INSETS AND THEY ADD UP. They are not two measurements
+ * of the same thing:
+ *
+ *   `safeAreaInset` is the DEVICE's — the notch, the home indicator, the
+ *   rounded corners. Measured from the edge of the screen.
+ *
+ *   `contentSafeAreaInset` is TELEGRAM's own chrome inside the Mini App —
+ *   most visibly the header bar in fullscreen mode. Measured from inside the
+ *   device's safe area, because Telegram already avoided the notch when it
+ *   drew that bar.
+ *
+ * So in fullscreen on a notched phone the top is a 47px notch with a 56px
+ * Telegram header BELOW it, and the content must start at 103px. This used to
+ * take `Math.max` of the pair, which returns 56 and puts the first line of
+ * the app underneath Telegram's own header — the exact overlap the docs warn
+ * about ("ensure that the app's interface respects the safe area and content
+ * safe area ... especially when using fullscreen mode").
+ *
+ * All four edges, not just top and bottom: a landscape phone puts the notch
+ * on a side, and rounded corners clip a full-bleed row at both.
+ *
+ * Older clients report neither -- both arrived in Bot API 8.0 -- and zero is
+ * the right answer there, which is what the app rendered before either
+ * existed. Non-numeric or negative values are treated as absent rather than
+ * trusted into a layout.
+ */
+export function safeAreaInsets(w: Window): Insets {
   const app = w?.Telegram?.WebApp;
-  return Math.max(app?.safeAreaInset?.top ?? 0, app?.contentSafeAreaInset?.top ?? 0);
+  if (!app) return NO_INSETS;
+  const device = app.safeAreaInset;
+  const content = app.contentSafeAreaInset;
+  return {
+    top: edge(device?.top) + edge(content?.top),
+    bottom: edge(device?.bottom) + edge(content?.bottom),
+    left: edge(device?.left) + edge(content?.left),
+    right: edge(device?.right) + edge(content?.right),
+  };
 }
 
 /** A light tick when a tab changes, the way native Telegram UI behaves. */

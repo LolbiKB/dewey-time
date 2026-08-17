@@ -62,9 +62,9 @@ function rosteredDay(date: string, punches: Punches = "full") {
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean } = {}) {
   await page.addInitScript(
-    ({ theme, themeParams, languageCode }) => {
+    ({ theme, themeParams, languageCode, fullscreen }) => {
       const handlers: Record<string, (() => void)[]> = {};
       (window as unknown as { Telegram: unknown }).Telegram = {
         WebApp: {
@@ -72,8 +72,14 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
           initDataUnsafe: { user: { id: 55501, language_code: languageCode } },
           colorScheme: theme ?? "light",
           themeParams: themeParams ?? {},
-          safeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
-          contentSafeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+          // Fullscreen on a notched phone: a 47px notch with Telegram's own
+          // 56px header BELOW it. They stack; they are not alternatives.
+          safeAreaInset: fullscreen
+            ? { top: 47, bottom: 34, left: 0, right: 0 }
+            : { top: 0, bottom: 0, left: 0, right: 0 },
+          contentSafeAreaInset: fullscreen
+            ? { top: 56, bottom: 0, left: 0, right: 0 }
+            : { top: 0, bottom: 0, left: 0, right: 0 },
           BackButton: {
             isVisible: false,
             show() { (this as { isVisible: boolean }).isVisible = true; },
@@ -97,7 +103,12 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
         },
       };
     },
-    { theme: opts.theme, themeParams: opts.themeParams, languageCode: opts.languageCode },
+    {
+      theme: opts.theme,
+      themeParams: opts.themeParams,
+      languageCode: opts.languageCode,
+      fullscreen: !!opts.fullscreen,
+    },
   );
 
   // Telegram's real SDK is a third-party CDN script and there is no network
@@ -350,6 +361,29 @@ test("content scrolls clear of the tab bar on a half-height sheet", async ({ pag
   const last = (await main.locator("> * > *").last().boundingBox())!;
   const gap = nav.y - (last.y + last.height);
   expect(gap, `the last row sits ${gap}px from the tab bar`).toBeGreaterThanOrEqual(20);
+});
+
+test("nothing sits under Telegram's own controls in fullscreen", async ({ page }) => {
+  // Telegram draws its close and collapse buttons in the TOP-RIGHT corner,
+  // and this app puts the employee's avatar row and the language toggle in
+  // exactly the same place. A tap meant to switch language closed the app.
+  //
+  // The cause was taking Math.max of the two insets. They are not two
+  // measurements of one edge: safeAreaInset is the notch, measured from the
+  // screen; contentSafeAreaInset is Telegram's header, measured from inside
+  // that. On a 47px notch under a 56px header, max returns 56 and the app's
+  // first row lands in the middle of Telegram's chrome. They add: 103.
+  await openMiniApp(page, { punched: "full", fullscreen: true });
+
+  const header = page.getByRole("banner", { name: "Your record" });
+  const box = (await header.boundingBox())!;
+  expect(box.y, `the identity row starts at ${box.y}px, inside Telegram's chrome`)
+    .toBeGreaterThanOrEqual(47 + 56);
+
+  // And the toggle specifically, since it is the rightmost thing on that row
+  // and the close button is the rightmost thing on Telegram's.
+  const toggle = (await page.getByRole("button", { name: "ភាសាខ្មែរ" }).boundingBox())!;
+  expect(toggle.y).toBeGreaterThanOrEqual(47 + 56);
 });
 
 test("a Khmer interface has no Latin digits left anywhere in it", async ({ page }) => {
