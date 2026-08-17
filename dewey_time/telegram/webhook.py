@@ -39,9 +39,6 @@ NEEDS_TOKEN_REPLY = (
     "ដើម្បីភ្ជាប់គណនី សូមប្រើតំណ ឬ QR code ដែលផ្នែកធនធានមនុស្សបានផ្ដល់ជូន។\n"
     "To connect your account, use the link or QR code HR gave you."
 )
-# The button label stays English-only: Telegram caps inline button text, and a
-# two-language label wraps or truncates rather than reading as either.
-
 
 def _secret_ok(supplied) -> bool:
     """Constant-time compare. A missing header rejects rather than skips."""

@@ -312,3 +312,68 @@ class TestNotificationGates(unittest.TestCase):
 
         gates.assert_called_once_with("HR-EMP-00042")
         self.assertEqual(report["notifications"]["links_enabled"], 0)
+
+
+class TestWebhookRegistration(unittest.TestCase):
+    """Nothing in this app had ever called setWebhook.
+
+    The handler, the constant-time secret check and both binding paths were
+    all written, and none of them had ever run: Telegram was never told the
+    endpoint existed. `/start` went nowhere, no Telegram Link was created, and
+    every employee read as "unlinked" -- which the notifier reports as a
+    normal rollout state, so nothing looked broken anywhere.
+    """
+
+    def test_it_registers_the_apps_own_endpoint_with_the_secret(self):
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            transport.set_webhook("https://site/api/method/x", "s3cret")
+
+        self.assertIn("setWebhook", post.call_args[0][0])
+        body = post.call_args[1]["json"]
+        self.assertEqual(body["url"], "https://site/api/method/x")
+        self.assertEqual(body["secret_token"], "s3cret")
+
+    def test_only_messages_are_requested(self):
+        # _handle reads update["message"] and deliberately ignores
+        # edited_message and callback_query, so asking for them is asking
+        # Telegram to spend deliveries on updates we drop.
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            transport.set_webhook("https://site/api/method/x", "s3cret")
+        self.assertEqual(post.call_args[1]["json"]["allowed_updates"], ["message"])
+
+    def test_a_rejection_is_reported_not_raised(self):
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 400
+            post.return_value.text = "Bad Request: bad webhook: HTTPS url must be provided"
+            self.assertEqual(
+                transport.set_webhook("http://site/x", "s3cret"), transport.FAILED
+            )
+
+    def test_the_url_is_derived_and_must_be_https(self):
+        with patch.object(transport, "get_url", return_value="https://site" + transport.WEBHOOK_PATH):
+            self.assertTrue(transport.webhook_url().endswith(transport.WEBHOOK_PATH))
+        with patch.object(transport, "get_url", return_value="http://localhost:8000/x"):
+            with self.assertRaises(Exception):
+                transport.webhook_url()
+
+    def test_setup_does_both_pieces_of_telegram_side_state(self):
+        # Where to deliver updates, and what the menu button opens. Neither
+        # lives in this site and no deploy can touch either.
+        with patch("dewey_time.attendance_engine.hr_calendar._require_hr_role"), \
+             patch.object(transport, "webhook_url", return_value="https://site/hook"), \
+             patch.object(transport, "miniapp_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "webhook_secret", return_value="s3cret"), \
+             patch.object(transport, "set_webhook", return_value=transport.SENT) as hook, \
+             patch.object(transport, "set_default_menu_button",
+                          return_value=transport.SENT) as menu:
+            result = transport.setup_telegram()
+
+        hook.assert_called_once_with("https://site/hook", "s3cret")
+        menu.assert_called_once_with("https://site/hr-me")
+        self.assertEqual(result["webhook"]["status"], transport.SENT)
+        self.assertEqual(result["menu_button"]["status"], transport.SENT)
