@@ -77,7 +77,7 @@ class TestGating(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
-             patch.object(notify, "_send_with_app_button",
+             patch.object(notify.transport, "send_message",
                           return_value=notify.transport.SENT) as send:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
         self.assertEqual(send.call_args[0][0], "77702")
@@ -87,7 +87,7 @@ class TestGating(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
-             patch.object(notify, "_send_with_app_button",
+             patch.object(notify.transport, "send_message",
                           return_value=notify.transport.BLOCKED), \
              patch.object(notify, "_disable_link") as disable:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
@@ -100,7 +100,7 @@ class TestGating(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
              patch.object(notify, "_checkin", return_value=_row()), \
              patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
-             patch.object(notify, "_send_with_app_button",
+             patch.object(notify.transport, "send_message",
                           return_value=notify.transport.SENT), \
              patch.object(notify, "_disable_link") as disable:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
@@ -112,7 +112,7 @@ class TestHook(unittest.TestCase):
         # A Telegram outage must never fail or slow a checkin write.
         doc = type("D", (), {"employee": "HR-EMP-00001", "name": "CKIN-1"})()
         with patch.object(notify.frappe, "enqueue") as enqueue, \
-             patch.object(notify, "_send_with_app_button") as send:
+             patch.object(notify.transport, "send_message") as send:
             notify.on_employee_checkin_after_insert(doc)
         send.assert_not_called()
         self.assertEqual(
@@ -127,44 +127,33 @@ class TestHook(unittest.TestCase):
         enqueue.assert_not_called()
 
 
-class TestCheckinCarriesTheApp(unittest.TestCase):
-    """The message an employee actually receives, several times a day."""
+class TestCheckinIsPlainText(unittest.TestCase):
+    """The message an employee actually receives, several times a day.
 
-    def test_a_checkin_message_carries_an_inline_button_into_the_mini_app(self):
-        with patch.object(notify.transport, "miniapp_url", return_value="https://x/hr-me"), \
-             patch.object(notify.transport, "send_message_with_webapp_button",
-                          return_value="SENT") as button, \
-             patch.object(notify.transport, "send_message") as plain:
-            result = notify._send_with_app_button("77702", "Checked in 07:58")
+    It used to carry an inline button into the Mini App. The bot now has a
+    Main Mini App button on its profile and a chat menu button, both permanent
+    and always in reach, so an inline copy on every check-in was a third route
+    to the same place -- repeated several times a day, on the one message that
+    should be glanceable and gone.
+    """
 
-        self.assertEqual(result, "SENT")
-        plain.assert_not_called()
-        self.assertEqual(button.call_args[0][1], "Checked in 07:58")
-        self.assertEqual(button.call_args[1]["url"], "https://x/hr-me")
+    def test_the_message_never_consults_the_mini_app_url(self):
+        # The whole class of failure this removes. The button path called
+        # miniapp_url(), which throws when unset, and only a try/except kept
+        # the notification alive -- so the message an employee depends on was
+        # one bad setting away from a caught exception on every punch.
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "55501"}), \
+             patch.object(notify, "_checkin", return_value=_row()), \
+             patch.object(notify.rollout, "phase_for_employee", return_value="LIVE"), \
+             patch.object(notify.transport, "miniapp_url",
+                          side_effect=AssertionError("must not be consulted")), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT) as send:
+            notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
 
-    def test_the_message_still_arrives_when_the_button_cannot_be_built(self):
-        # An unset Mini App URL, or a client too old for web_app buttons. The
-        # notification is the product; the button is a convenience, and losing
-        # the convenience must never cost the message.
-        with patch.object(notify.transport, "miniapp_url",
-                          side_effect=Exception("not configured")), \
-             patch.object(notify.transport, "send_message_with_webapp_button") as button, \
-             patch.object(notify.transport, "send_message", return_value="SENT") as plain:
-            result = notify._send_with_app_button("77702", "Checked in 07:58")
-
-        self.assertEqual(result, "SENT")
-        button.assert_not_called()
-        self.assertEqual(plain.call_args[0][1], "Checked in 07:58")
-
-    def test_a_blocked_user_is_still_detected_through_the_button_path(self):
-        # BLOCKED disables the link. Routing through a new send function must
-        # not swallow that status, or a blocked user is retried forever.
-        with patch.object(notify.transport, "miniapp_url", return_value="https://x/hr-me"), \
-             patch.object(notify.transport, "send_message_with_webapp_button",
-                          return_value=notify.transport.BLOCKED):
-            self.assertEqual(
-                notify._send_with_app_button("77702", "hi"), notify.transport.BLOCKED
-            )
+        self.assertEqual(send.call_args[0][0], "77702")
+        self.assertIn("Checked in", send.call_args[0][1])
 
 
 class TestBilingualNotification(unittest.TestCase):

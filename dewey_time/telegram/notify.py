@@ -24,15 +24,13 @@ Telegram answers 429 with a `retry_after`, so the symptom would be a burst of
 FAILED results in the Error Log rather than silent loss.
 """
 
+from __future__ import annotations
+
 import frappe
-from frappe.utils import get_datetime, getdate
+from frappe.utils import get_datetime, getdate, nowdate
 
 from dewey_time.attendance_engine import rollout
 from dewey_time.telegram import transport
-
-#: Worded identically to the webhook's button, because it opens the same place.
-#: Two names for one destination is two things to learn.
-OPEN_BUTTON_TEXT = "Open my attendance"
 
 LINK_DT = "Telegram Link"
 
@@ -86,35 +84,6 @@ def _disable_link(link_name: str) -> None:
     frappe.db.set_value(LINK_DT, link_name, "enabled", 0)
 
 
-def _send_with_app_button(chat_id, text: str) -> str:
-    """The check-in message, carrying an inline button into the Mini App.
-
-    This is the message an employee actually receives — several times a day,
-    every working day — and until now it was plain text with no way onward.
-    The only inline button the bot ever sent was on the one-off link
-    confirmation, which scrolls out of the chat and never comes back. So the
-    app sat behind the menu button, which is discoverable only if you already
-    know it is there.
-
-    Falls back to a plain message on ANY failure of the button path, and the
-    fallback matters more than the button: the notification is the product
-    here, and an unset Mini App URL or an older client must cost the employee a
-    convenience, never the message itself.
-    """
-    try:
-        return transport.send_message_with_webapp_button(
-            chat_id,
-            text,
-            button_text=OPEN_BUTTON_TEXT,
-            url=transport.miniapp_url(),
-        )
-    except Exception:
-        frappe.log_error(
-            title="Telegram check-in button unavailable", message=frappe.get_traceback()
-        )
-        return transport.send_message(chat_id, text)
-
-
 def send_checkin_notification(employee: str, checkin_name: str) -> str:
     """Queued job. Returns a short status string for the job log."""
     if not transport.telegram_enabled():
@@ -134,7 +103,12 @@ def send_checkin_notification(employee: str, checkin_name: str) -> str:
     ) != rollout.LIVE:
         return "not-live"
 
-    result = _send_with_app_button(
+    # PLAIN TEXT, no inline button. The Mini App is reached from the bot's own
+    # Main Mini App button and from the chat menu button, both of which are
+    # always there; an inline copy on every check-in message was a third route
+    # to the same place, repeated several times a day, on the one message that
+    # should be glanceable and gone.
+    result = transport.send_message(
         link["chat_id"],
         compose(row["log_type"], row["time"], row.get("custom_device_branch")),
     )
@@ -143,6 +117,36 @@ def send_checkin_notification(employee: str, checkin_name: str) -> str:
         # sending rather than retrying forever.
         _disable_link(link["name"])
     return result
+
+
+def delivery_gates(employee: str | None = None) -> dict:
+    """Which of `send_checkin_notification`'s gates are open.
+
+    Every gate above returns a short string into the job log and sends
+    nothing, which is right -- a punch must never fail because Telegram is
+    off, and being unlinked is the normal state through a rollout. It also
+    means "no notification arrived" has four indistinguishable causes, none of
+    which surfaces anywhere an employee or HR would look.
+
+    This reports them, in the same order the job checks them, so the answer is
+    one call rather than four guesses. Pass an employee to test that person's
+    two gates specifically.
+    """
+    gates: dict = {
+        "telegram_enabled": transport.telegram_enabled(),
+        "links_enabled": frappe.db.count(LINK_DT, {"enabled": 1}),
+        # False means no rollout date is set anywhere, so every employee reads
+        # LIVE and this gate cannot be what is stopping delivery.
+        "rollout_configured": rollout.phases_configured(),
+    }
+    if employee:
+        link = _link_for(employee)
+        gates["employee"] = employee
+        gates["employee_linked"] = bool(link)
+        gates["employee_phase"] = rollout.phase_for_employee(
+            employee=employee, attendance_date=nowdate()
+        )
+    return gates
 
 
 def on_employee_checkin_after_insert(doc, method=None):

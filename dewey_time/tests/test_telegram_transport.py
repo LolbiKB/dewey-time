@@ -93,20 +93,6 @@ class TestMiniAppUrl(unittest.TestCase):
             self.assertEqual(transport.miniapp_url(), "https://site/hr-me")
 
 
-class TestWebAppButton(unittest.TestCase):
-    def test_the_button_carries_a_web_app_url(self):
-        with patch.object(transport, "bot_token", return_value="123:ABC"), \
-             patch.object(transport.requests, "post") as post:
-            post.return_value.status_code = 200
-            transport.send_message_with_webapp_button(
-                "55501", "You're linked", button_text="Open", url="https://site/hr-me"
-            )
-        markup = post.call_args[1]["json"]["reply_markup"]
-        self.assertEqual(
-            markup["inline_keyboard"][0][0]["web_app"]["url"], "https://site/hr-me"
-        )
-
-
 class TestMenuButton(unittest.TestCase):
     def test_it_sets_the_default_button_for_every_user(self):
         # No chat_id in the payload: one call covers everyone, rather than a
@@ -268,3 +254,61 @@ class TestDiagnostics(unittest.TestCase):
 
         self.assertEqual(report["webhook"]["pending"], 7)
         self.assertIn("403", report["webhook"]["last_error"])
+
+
+class TestNotificationGates(unittest.TestCase):
+    """"No notification arrived" has four causes and none of them surfaces.
+
+    Every gate in send_checkin_notification returns a short string into the
+    job log and sends nothing. That is right -- a punch must never fail
+    because Telegram is off, and being unlinked is the normal state through a
+    rollout -- and it is also why nobody can tell which gate is shut.
+    """
+
+    def test_the_gates_are_reported_in_the_order_the_job_checks_them(self):
+        from dewey_time.telegram import notify
+
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=0), \
+             patch.object(notify.rollout, "phases_configured", return_value=False):
+            gates = notify.delivery_gates()
+
+        self.assertTrue(gates["telegram_enabled"])
+        # The likely answer during a rollout, and the one worth seeing first:
+        # nobody has completed /start, so there is nobody to notify.
+        self.assertEqual(gates["links_enabled"], 0)
+        # False means no rollout date is set anywhere, so every employee reads
+        # LIVE and this gate cannot be what is stopping delivery.
+        self.assertFalse(gates["rollout_configured"])
+        self.assertNotIn("employee", gates)
+
+    def test_one_employee_can_be_asked_about_specifically(self):
+        from dewey_time.telegram import notify
+
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=3), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.rollout, "phase_for_employee", return_value="TESTING"), \
+             patch.object(notify, "_link_for", return_value=None):
+            gates = notify.delivery_gates("HR-EMP-00042")
+
+        self.assertFalse(gates["employee_linked"])
+        # Not LIVE, so even a linked employee would get nothing -- the second
+        # of the two gates that are per-person.
+        self.assertEqual(gates["employee_phase"], "TESTING")
+
+    def test_diagnostics_carries_the_gates_alongside_the_bot_checks(self):
+        # One call for "why no button" and "why no notification": they are
+        # different questions with different silent failures, and asking them
+        # separately is how one gets forgotten.
+        with patch("dewey_time.attendance_engine.hr_calendar._require_hr_role"), \
+             patch.object(transport, "_secret", return_value=""), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch("dewey_time.telegram.notify.delivery_gates",
+                   return_value={"links_enabled": 0}) as gates:
+            report = transport.diagnostics("HR-EMP-00042")
+
+        gates.assert_called_once_with("HR-EMP-00042")
+        self.assertEqual(report["notifications"]["links_enabled"], 0)

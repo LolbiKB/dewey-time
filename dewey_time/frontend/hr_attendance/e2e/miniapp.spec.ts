@@ -330,6 +330,28 @@ test("a Khmer client opens in Khmer, and can switch back", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Today", exact: true })).toBeVisible();
 });
 
+test("content scrolls clear of the tab bar on a half-height sheet", async ({ page }) => {
+  // A Telegram sheet is frequently half the screen, and at that height the
+  // last roster row was sliced horizontally by the tab bar's top border —
+  // cut mid-row, with nothing to say more existed below.
+  //
+  // Measured SCROLLED TO THE END. Unscrolled, an overflowing list reports its
+  // last row below the fold and the number means nothing, which is how the
+  // first attempt at this measurement read -74px and looked like a failure.
+  await openMiniApp(page, { punched: "full" });
+  await page.setViewportSize({ width: 390, height: 520 });
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  await page.getByRole("list").waitFor();
+
+  const main = page.locator("main");
+  await main.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+
+  const nav = (await page.getByRole("navigation").boundingBox())!;
+  const last = (await main.locator("> * > *").last().boundingBox())!;
+  const gap = nav.y - (last.y + last.height);
+  expect(gap, `the last row sits ${gap}px from the tab bar`).toBeGreaterThanOrEqual(20);
+});
+
 test("a Khmer interface has no Latin digits left anywhere in it", async ({ page }) => {
   // The mechanical check, deliberately: a half-translated interface keeps its
   // numerals, and the numerals are the half carrying the information. Asserting

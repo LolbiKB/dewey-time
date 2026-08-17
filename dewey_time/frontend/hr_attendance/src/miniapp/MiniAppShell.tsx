@@ -255,7 +255,13 @@ export function MiniAppShell() {
         />
       ) : null}
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      {/* pb-6 on the SCROLL CONTAINER, not on the pages inside it. A Telegram
+          sheet is frequently half the screen, and at that height the last row
+          of the week or the roster was sliced horizontally by the tab bar's
+          top border — cut mid-row, with nothing to say more existed below.
+          Padding here scrolls clear of the bar on every tab at once, and a
+          page that fits gains a margin rather than a hairline. */}
+      <main className="min-h-0 flex-1 overflow-y-auto pb-6">
         {tab === "day" ? (
           <MyDayPage date={openDay ?? undefined} />
         ) : tab === "week" ? (
