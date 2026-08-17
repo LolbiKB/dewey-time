@@ -694,6 +694,9 @@ test("a device that does not know you says so, and says why it matters", async (
   await expect(page.getByText("Contact HR has for you")).toHaveCount(0);
   await expect(page.getByText("Reports to")).toHaveCount(0);
   await expect(page.getByText("Department")).toHaveCount(0);
+  // This fixture joined a fortnight ago, so the length of service is zero whole
+  // months. "0mo" under the joining date says nothing the date does not.
+  await expect(page.getByText("0mo")).toHaveCount(0);
 });
 
 test("never having heard from the devices is not the same as not enrolled", async ({ page }) => {

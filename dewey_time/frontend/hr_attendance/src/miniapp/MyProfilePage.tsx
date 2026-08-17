@@ -63,7 +63,12 @@ export function MyProfilePage(props: {
   const me = profile.data;
   const bio = me.biometric;
   const fingers = fingerKeys(bio);
-  const service = fmt.service(serviceLength(me.date_of_joining, today));
+  // Suppressed at zero. Somebody who started a fortnight ago has served no
+  // whole months, and "0mo" under their joining date is a line that adds
+  // nothing to the date directly above it. Not folded into serviceLength: null
+  // there would mean "we don't know", which is a different fact.
+  const span = serviceLength(me.date_of_joining, today);
+  const service = span && (span.years || span.months) ? fmt.service(span) : null;
   const bodyKey = biometricBodyKey(bio.state);
   const stats = monthStats(month.data?.days ?? [], today);
   const joined = parseDateOnly(me.date_of_joining);
