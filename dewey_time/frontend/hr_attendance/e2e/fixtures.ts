@@ -174,10 +174,13 @@ const COVERAGE = {
 function enrollmentPayload(): EnrollmentPayload {
   return {
     rows: [
-      { id: "EMP-001", employee_name: "Jane Doe", ...KHMER["EMP-001"], branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "OK", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: null },
-      { id: "EMP-002", employee_name: "Aaron Wells", ...KHMER["EMP-002"], branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "ENROLLED_NOT_PUNCHING", is_registered: true, fingerprint_count: 1, face_count: 0, days_since_relieving: null },
-      { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], branch: "BRANCH-A", department: "Warehouse", status: "Active", bucket: "NEEDS_ENROLLMENT", is_registered: false, fingerprint_count: 0, face_count: 0, days_since_relieving: null },
-      { id: "EMP-900", employee_name: "Nora Vance", ...KHMER["EMP-900"], branch: "BRANCH-B", department: "Retail", status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true, fingerprint_count: 2, face_count: 0, days_since_relieving: 42 },
+      // `fingers` mirrors the v3 payload: slugs, only meaningful when they
+      // account for fingerprint_count. Jane's two names render; Aaron's single
+      // template is the amber fragile case the cell spec pins.
+      { id: "EMP-001", employee_name: "Jane Doe", ...KHMER["EMP-001"], branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "OK", is_registered: true, fingerprint_count: 2, fingers: ["right_thumb", "right_index"], face_count: 0, days_since_relieving: null },
+      { id: "EMP-002", employee_name: "Aaron Wells", ...KHMER["EMP-002"], branch: "BRANCH-A", department: "Retail", status: "Active", bucket: "ENROLLED_NOT_PUNCHING", is_registered: true, fingerprint_count: 1, fingers: ["right_index"], face_count: 0, days_since_relieving: null },
+      { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], branch: "BRANCH-A", department: "Warehouse", status: "Active", bucket: "NEEDS_ENROLLMENT", is_registered: false, fingerprint_count: 0, fingers: [], face_count: 0, days_since_relieving: null },
+      { id: "EMP-900", employee_name: "Nora Vance", ...KHMER["EMP-900"], branch: "BRANCH-B", department: "Retail", status: "Left", bucket: "LEAVER_STILL_ENROLLED", is_registered: true, fingerprint_count: 2, fingers: ["right_thumb", "right_index"], face_count: 0, days_since_relieving: 42 },
     ],
     counts: {
       reported: 4, needs_enrollment: 1, enrolled_not_punching: 1, ok: 1,

@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  applyFilterChange, columnIdForSort, composeRegister, describeRegisterFilters, feedHealth,
-  filterRegisterRows, isNotReady, joinRegisterRows, paginateRegisterRows, registerAlert,
-  registerCsvColumns, registerFacets, registerFeedState, REGISTER_PAGE_SIZE, sortFromColumnId,
-  SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts, visibleColumnIds,
-  type RegisterFilters, type RegisterRow,
+  accountedFingers, applyFilterChange, columnIdForSort, composeRegister, describeRegisterFilters,
+  feedHealth, filterRegisterRows, isFragileEnrollment, isNotReady, joinRegisterRows,
+  paginateRegisterRows, registerAlert, registerCsvColumns, registerFacets, registerFeedState,
+  REGISTER_PAGE_SIZE, sortFromColumnId, SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts,
+  visibleColumnIds, type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
 import { toRegisterCsv } from "@/lib/registerCsv";
 import type { ScheduleCoveragePayload } from "@/lib/scheduleCoverage";
@@ -238,6 +238,102 @@ test("ENROLLED_NOT_PUNCHING stays distinct from OK", () => {
   assert.equal(byId.get("E4")?.biometric, "enrolled");
 });
 
+test("the finger slugs and the face flag ride the join", () => {
+  const rows = joinRegisterRows(
+    coverage(),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, fingers: ["right_thumb", "right_index"],
+               face_count: 1, days_since_relieving: null }],
+    }),
+  );
+  assert.deepEqual(rows[0].fingers, ["right_thumb", "right_index"]);
+  assert.equal(rows[0].face, true, "face is derived from face_count once, at the join");
+});
+
+test("a payload that predates the fingers field yields null, not an empty list", () => {
+  // An old cached body did not say "no names" — it said nothing. A site
+  // without the column sends a real [] and keeps it: the two shapes are
+  // different statements and only one of them is silence.
+  const legacy = joinRegisterRows(
+    coverage(),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, face_count: 0, days_since_relieving: null }],
+    }),
+  );
+  assert.equal(legacy[0].fingers, null);
+  assert.equal(legacy[0].face, false, "face_count 0 IS a report — no face");
+
+  const noColumn = joinRegisterRows(
+    coverage(),
+    enrollment({
+      rows: [{ id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
+               status: "Active", bucket: "OK", is_registered: true,
+               fingerprint_count: 2, fingers: [], face_count: 0, days_since_relieving: null }],
+    }),
+  );
+  assert.deepEqual(noColumn[0].fingers, []);
+});
+
+test("accountedFingers names fingers only when they account for every template", () => {
+  // The Mini App's honesty guard (miniProfile.fingerKeys), applied to a
+  // register row. Null is the fall-back-to-the-count answer everywhere the
+  // bridge sends counts without ids.
+  assert.deepEqual(
+    accountedFingers(row({ fingerprint_count: 2, fingers: ["right_thumb", "right_index"] })),
+    ["right_thumb", "right_index"],
+  );
+  assert.equal(accountedFingers(row({ fingerprint_count: 2, fingers: ["right_thumb"] })), null);
+  assert.equal(accountedFingers(row({ fingerprint_count: 2, fingers: [] })), null);
+  assert.equal(accountedFingers(row({ fingerprint_count: 2, fingers: null })), null);
+});
+
+test("fragile means a single template on someone expected to punch", () => {
+  assert.equal(isFragileEnrollment(row({ biometric: "enrolled", fingerprint_count: 1 })), true);
+  assert.equal(
+    isFragileEnrollment(row({ biometric: "enrolled_not_punching", fingerprint_count: 1 })),
+    true,
+  );
+  assert.equal(isFragileEnrollment(row({ biometric: "enrolled", fingerprint_count: 2 })), false);
+  // Leavers are excluded: the remedy for still_enrolled is revocation, not a
+  // second finger.
+  assert.equal(
+    isFragileEnrollment(row({ biometric: "still_enrolled", fingerprint_count: 1 })),
+    false,
+  );
+  assert.equal(isFragileEnrollment(row({ biometric: null, fingerprint_count: 1 })), false);
+});
+
+test("fragility never joins the attention count", () => {
+  // The scope decision this feature shipped under: a quality nudge, not a
+  // coverage failure. Production sits ~100 rows deep in single fingers, and
+  // folding them in would drown the two findings the alert exists for.
+  assert.equal(isNotReady(row({ biometric: "enrolled", fingerprint_count: 1 })), false);
+});
+
+test("the single-finger filter narrows to the fragile enrollments across both enrolled buckets", () => {
+  const rows = [
+    row({ id: "FRAGILE", biometric: "enrolled", fingerprint_count: 1 }),
+    row({ id: "FRAGILE-NP", biometric: "enrolled_not_punching", fingerprint_count: 1 }),
+    row({ id: "FINE", biometric: "enrolled", fingerprint_count: 2 }),
+    row({ id: "LEAVER", biometric: "still_enrolled", fingerprint_count: 1 }),
+    row({ id: "UNKNOWN", biometric: null, fingerprint_count: null }),
+  ];
+  assert.deepEqual(
+    filterRegisterRows(rows, { biometric: "single_finger" }).map((r) => r.id),
+    ["FRAGILE", "FRAGILE-NP"],
+  );
+});
+
+test("the single-finger narrowing is described in its option's words", () => {
+  assert.deepEqual(describeRegisterFilters({ biometric: "single_finger" }), [
+    { label: "Biometric", value: "Only one finger" },
+  ]);
+});
+
 const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   id: "E1", employee_name: "Sok Dara", branch: "DIU", department: "Finance",
   // No Khmer name is the common case for these fixtures — only the tests
@@ -250,6 +346,9 @@ const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   telegram: "none",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
+  // No names and no face is the ordinary row wherever the bridge sends counts
+  // without ids — the finger tests override these.
+  fingers: null, face: null,
   // Both feeds know this employee — the ordinary row. Override it to build the
   // one-witness rows suppressUnusableFacts has to drop.
   sources: { schedule: true, biometric: true }, ...over,
@@ -942,10 +1041,13 @@ test("feed health reflects the schedule feed independently of biometric health",
 
 test("suppressUnusableFacts nulls exactly the biometric fields when that feed is unhealthy", () => {
   const input = [row({ biometric: "none", fingerprint_count: 3, status: "Active",
+                       fingers: ["right_thumb"], face: true,
                        days_since_relieving: 5, image: "/files/sok.jpg" })];
   const [got] = suppressUnusableFacts(input, { schedule: true, biometric: false });
   assert.equal(got.biometric, null);
   assert.equal(got.fingerprint_count, null);
+  assert.equal(got.fingers, null, "finger names are biometric facts and go with the feed");
+  assert.equal(got.face, null, "so is the face flag");
   assert.equal(got.status, null);
   assert.equal(got.days_since_relieving, null);
   assert.equal(got.schedule, "assigned", "schedule facts survive a biometric-only outage");
@@ -1339,7 +1441,7 @@ test("registerCsvColumns.included IS the file's header row", () => {
 test("registerCsvColumns names what each downed feed takes away", () => {
   assert.deepEqual(registerCsvColumns(HEALTHY).omitted, [], "nothing is lost while both are up");
   assert.deepEqual(registerCsvColumns({ schedule: true, biometric: false }).omitted, [
-    "Employment status", "Biometric", "Fingerprints", "Days since leaving",
+    "Employment status", "Biometric", "Fingerprints", "Fingers", "Face", "Days since leaving",
   ]);
   assert.deepEqual(registerCsvColumns({ schedule: false, biometric: true }).omitted, [
     "Schedule", "Weekly minutes", "Telegram",

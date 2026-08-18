@@ -16,6 +16,9 @@ const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   telegram: "none",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
+  // Named fingers and a face by default, so the pinned header/data-row tests
+  // below exercise the new fields with real values rather than blanks.
+  fingers: ["right_thumb", "right_index"], face: false,
   // Both feeds know this employee — the ordinary row. Override it to build the
   // one-witness rows suppressUnusableFacts has to drop.
   sources: { schedule: true, biometric: true }, ...over,
@@ -41,6 +44,8 @@ test("the healthy header line is pinned whole, so no field can be mislabelled or
     "Weekly minutes",
     "Biometric",
     "Fingerprints",
+    "Fingers",
+    "Face",
     "Days since leaving",
     "Telegram",
   ]);
@@ -51,9 +56,11 @@ test("a data row is pinned whole, in the header's order", () => {
     [row({ biometric: "still_enrolled", status: "Left", days_since_relieving: 42 })],
     HEALTHY,
   );
+  // The Fingers field is quoted by the serializer: the names join on a comma,
+  // and an unquoted one would shift every later field a column right.
   assert.equal(
     csv.split("\n")[1],
-    "E1,Sok Dara,DIU,Finance,Left,Assigned,2400,Still enrolled,2,42,Not linked",
+    'E1,Sok Dara,DIU,Finance,Left,Assigned,2400,Still enrolled,2,"Right thumb, Right index",No,42,Not linked',
   );
 });
 
@@ -152,12 +159,32 @@ test("a null cell is an empty field, never a zero or a placeholder", () => {
   const csv = toRegisterCsv(
     [row({ branch: null, department: null, weekly_minutes: null, fingerprint_count: null,
            status: null, schedule: null, biometric: null, days_since_relieving: null,
-           telegram: null })],
+           telegram: null, fingers: null, face: null })],
     HEALTHY,
   );
-  assert.equal(csv.split("\n")[1], "E1,Sok Dara,,,,,,,,,");
+  assert.equal(csv.split("\n")[1], "E1,Sok Dara,,,,,,,,,,,");
   assert.doesNotMatch(csv.split("\n")[1], /0/, "an absent number must not export as 0");
   assert.doesNotMatch(csv, /—/, "the table's em dash is a rendering, not a value");
+});
+
+test("the Fingers field obeys the accounted rule — a partial list exports as blank, not as a lie", () => {
+  // A file naming two fingers on a count-of-three row states something false
+  // about the third, and a spreadsheet is where that outlives the page. The
+  // Fingerprints column beside it still carries the number.
+  const line = toRegisterCsv(
+    [row({ fingerprint_count: 3, fingers: ["right_thumb", "right_index"] })],
+    HEALTHY,
+  ).split("\n")[1].split(",");
+  assert.equal(line[8], "3", "the count survives");
+  assert.equal(line[9], "", "the names do not — they cannot account for it");
+});
+
+test("a face template exports as Yes; feed silence exports as empty", () => {
+  const withFace = toRegisterCsv([row({ face: true })], HEALTHY).split("\n")[1];
+  assert.match(withFace, /,Yes,/);
+  const unknown = toRegisterCsv([row({ face: null })], HEALTHY).split("\n")[1].split(",");
+  // The Fingers field before it is quoted, so index from the end instead.
+  assert.equal(unknown[unknown.length - 3], "", "null face is silence, never No");
 });
 
 test("a real zero still exports as 0 — it is a finding, not an absence", () => {
@@ -187,7 +214,7 @@ test("a field containing a comma is quoted", () => {
   // the count holds whichever way the field went out.
   assert.equal(
     csv.split("\n")[1],
-    'E1,"Reyes, Ana",DIU,Finance,Active,Assigned,2400,Enrolled,2,,Not linked',
+    'E1,"Reyes, Ana",DIU,Finance,Active,Assigned,2400,Enrolled,2,"Right thumb, Right index",No,,Not linked',
   );
 });
 
@@ -227,7 +254,7 @@ test("a field a spreadsheet would run as a formula is marked as text", () => {
     const line = toRegisterCsv([row({ employee_name: value })], HEALTHY).split("\n")[1];
     assert.equal(
       line,
-      `E1,'${value},DIU,Finance,Active,Assigned,2400,Enrolled,2,,Not linked`,
+      `E1,'${value},DIU,Finance,Active,Assigned,2400,Enrolled,2,"Right thumb, Right index",No,,Not linked`,
       `${value} must go out marked as text`,
     );
   }

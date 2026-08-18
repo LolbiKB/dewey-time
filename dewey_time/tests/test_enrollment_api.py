@@ -21,13 +21,18 @@ def _emp(emp_id, *, status="Active", branch="ACES", dept="Ops", relieving=None):
     }
 
 
-def _reg(emp_id, *, registered=True, fp=1):
-    return {
+def _reg(emp_id, *, registered=True, fp=1, finger_ids=None, face=0):
+    row = {
         "employee": emp_id,
         "is_registered": 1 if registered else 0,
         "fingerprint_count": fp,
-        "face_count": 0,
+        "face_count": face,
     }
+    # Only present when passed: a row read from a site without the column has
+    # no such key at all, and the builder must survive that shape.
+    if finger_ids is not None:
+        row["finger_ids"] = finger_ids
+    return row
 
 
 class BuildPayloadTest(unittest.TestCase):
@@ -124,6 +129,44 @@ class BuildPayloadTest(unittest.TestCase):
         row = payload["rows"][0]
         self.assertIsNone(row["custom_khmer_last_name"])
         self.assertIsNone(row["custom_khmer_first_name"])
+
+    def test_the_stored_finger_ids_reach_the_row_as_slugs(self):
+        """SLUGS, never the device's integers — the same boundary miniapp_api
+        draws. "5,6" is a storage detail; the register's tooltip and CSV must
+        not each re-parse it."""
+        payload = self._build([_emp("E1")], [_reg("E1", fp=2, finger_ids="5,6")], {"E1": 3})
+        self.assertEqual(payload["rows"][0]["fingers"], ["right_thumb", "right_index"])
+
+    def test_a_row_without_the_finger_column_yields_an_empty_list(self):
+        """A site mid-migration returns rows with no finger_ids key at all.
+        The builder must emit [] — the client's accounted-fingers rule then
+        falls back to the bare count — rather than KeyError the payload."""
+        payload = self._build([_emp("E1")], [_reg("E1", fp=2)], {"E1": 3})
+        self.assertEqual(payload["rows"][0]["fingers"], [])
+
+    def test_the_finger_column_is_selected_only_when_it_exists(self):
+        """The guard _register_rows shares with enrollment_status: asking a
+        site whose migrate has not run for the column raises and takes the
+        whole report down. Both branches, so deleting the guard fails here
+        rather than on a production bench."""
+        for present in (True, False):
+            with self.subTest(present=present):
+                get_all = MagicMock(return_value=[])
+                with patch.object(mod.frappe, "get_all", get_all), patch.object(
+                    mod.frappe.db, "has_column", return_value=present
+                ):
+                    mod._register_rows()
+                fields = get_all.call_args.kwargs["fields"]
+                if present:
+                    self.assertIn("finger_ids", fields)
+                else:
+                    self.assertNotIn("finger_ids", fields)
+
+    def test_the_face_count_reaches_the_row(self):
+        """Emitted, not merely selected — the register's Face marker and CSV
+        field read it, so a dropped key is a production no-op forever."""
+        payload = self._build([_emp("E1")], [_reg("E1", fp=2, face=1)], {"E1": 3})
+        self.assertEqual(payload["rows"][0]["face_count"], 1)
 
     def test_a_leaver_with_a_live_template_reports_days_since(self):
         payload = self._build(
@@ -410,16 +453,16 @@ class SeamTest(unittest.TestCase):
 
 
 class TestEnrollmentCacheKey(unittest.TestCase):
-    def test_the_key_is_v2(self):
-        # enrollment_api.py:29-37: a deploy does not clear Redis, so for a whole
+    def test_the_key_is_v3(self):
+        # enrollment_api.py:29-38: a deploy does not clear Redis, so for a whole
         # TTL after one a key written by the old code can still answer the new
         # frontend. The comment there says to bump the suffix whenever a field
-        # is added, renamed or removed anywhere in the payload -- v2 is the
-        # Khmer name fields arriving on every row -- and this is what turns that
+        # is added, renamed or removed anywhere in the payload -- v3 is the
+        # finger slugs arriving on every row -- and this is what turns that
         # instruction into something a change has to walk past. The queue's
         # prefix has the same pin in test_flag_queue_api.TestQueueCachePrefix,
         # and coverage's is pinned by its invalidate test.
-        self.assertEqual(mod._CACHE_KEY, "enrollment_report:v2")
+        self.assertEqual(mod._CACHE_KEY, "enrollment_report:v3")
 
     def test_invalidate_deletes_that_exact_key(self):
         # The pin above is a literal in a test; this is the literal actually
@@ -428,7 +471,7 @@ class TestEnrollmentCacheKey(unittest.TestCase):
         cache = MagicMock()
         with patch.object(mod.frappe, "cache", cache):
             mod.invalidate_enrollment_cache()
-        cache.return_value.delete_value.assert_called_once_with("enrollment_report:v2")
+        cache.return_value.delete_value.assert_called_once_with("enrollment_report:v3")
 
 
 class PermissionTest(unittest.TestCase):

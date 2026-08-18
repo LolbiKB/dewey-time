@@ -23,7 +23,7 @@ import {
 
 import {
   applyFilterChange,
-  BIOMETRIC_LABELS,
+  BIOMETRIC_FILTER_LABELS,
   registerFacets,
   SCHEDULE_LABELS,
   TELEGRAM_LABELS,
@@ -49,11 +49,17 @@ const SCHEDULE_OPTIONS: { value: NonNullable<RegisterFilters["schedule"]>; label
   { value: "missing", label: SCHEDULE_LABELS.missing },
 ];
 
+/**
+ * "Only one finger" last: the four buckets keep the enum's order, and the one
+ * predicate option — the re-enrollment drive's worklist, since the cell shows
+ * fragility but a colour cannot be narrowed to — reads as the addition it is.
+ */
 const BIOMETRIC_OPTIONS: { value: NonNullable<RegisterFilters["biometric"]>; label: string }[] = [
-  { value: "enrolled", label: BIOMETRIC_LABELS.enrolled },
-  { value: "enrolled_not_punching", label: BIOMETRIC_LABELS.enrolled_not_punching },
-  { value: "none", label: BIOMETRIC_LABELS.none },
-  { value: "still_enrolled", label: BIOMETRIC_LABELS.still_enrolled },
+  { value: "enrolled", label: BIOMETRIC_FILTER_LABELS.enrolled },
+  { value: "enrolled_not_punching", label: BIOMETRIC_FILTER_LABELS.enrolled_not_punching },
+  { value: "none", label: BIOMETRIC_FILTER_LABELS.none },
+  { value: "still_enrolled", label: BIOMETRIC_FILTER_LABELS.still_enrolled },
+  { value: "single_finger", label: BIOMETRIC_FILTER_LABELS.single_finger },
 ];
 
 /**

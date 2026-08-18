@@ -21,7 +21,13 @@ export type EnrollmentRow = {
   bucket: EnrollmentBucket;
   is_registered: boolean;
   fingerprint_count: number;
-  /** Carried because the bridge computes it; no UI column — nobody enrolls faces. */
+  /**
+   * The enrolled fingers as `finger_slots` slugs (`right_thumb`, …), already
+   * translated server-side. Optional because an older cached payload predates
+   * the field; a site without the column sends `[]`.
+   */
+  fingers?: string[];
+  /** Non-zero when a face template exists on some device — the register's face marker. */
   face_count: number;
   days_since_relieving: number | null;
   /**
