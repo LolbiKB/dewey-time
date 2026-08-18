@@ -225,6 +225,8 @@ class TestRedeem(unittest.TestCase):
     def test_valid_token_creates_the_link_and_returns_the_employee(self):
         with patch.object(binding, "_load_token", return_value=self._token_doc()), \
              patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(binding, "_existing_link", return_value=None), \
              patch.object(binding, "_create_link") as create, \
              patch.object(binding, "_mark_redeemed"):
             employee = binding.redeem_link_token("tok", "55501", "77702")
@@ -460,7 +462,12 @@ class TestInvite(unittest.TestCase):
         gate.assert_called_once()
 
     def test_invite_returns_a_tappable_url(self):
+        # `_live_link_names` is pinned, not inherited. Several test modules
+        # replace the shared `frappe.get_all` mock by bare assignment rather
+        # than through `patch`, so its default survives into this module under
+        # `unittest discover` and an unpinned collaborator decides the result.
         with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
              patch.object(binding, "issue_link_token",
                           return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
              patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
@@ -474,6 +481,7 @@ class TestInvite(unittest.TestCase):
         # actually on the path -- `link_url(token, _bot_username())` reads the
         # same either way.
         with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
              patch.object(binding, "issue_link_token",
                           return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
              patch.object(binding.frappe, "get_cached_value", return_value="@deweytimebot"):
@@ -486,6 +494,7 @@ class TestInvite(unittest.TestCase):
         # minting before the username is resolved leaves live tokens behind on
         # every failed attempt.
         with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
              patch.object(binding, "issue_link_token") as issue, \
              patch.object(binding.frappe, "get_cached_value", return_value="not a username"):
             with self.assertRaises(Exception):
@@ -498,3 +507,88 @@ class TestInvite(unittest.TestCase):
             with self.assertRaises(Exception):
                 binding.create_link_invite("  ")
         issue.assert_not_called()
+
+
+class TestInviteRefusesALinkedEmployee(unittest.TestCase):
+    def test_an_already_linked_employee_gets_no_new_link(self):
+        # The register hides its control for a linked employee; this is the
+        # guard that makes that true rather than cosmetic. A stale tab, or any
+        # direct call, would otherwise mint a credential that can bind a
+        # second account to someone already bound.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "issue_link_token") as issue:
+            with self.assertRaises(Exception):
+                binding.create_link_invite("HR-EMP-00001")
+        issue.assert_not_called()
+
+    def test_the_invite_reports_a_one_day_window(self):
+        # An integer duration, not a datetime string: the browser cannot turn
+        # a naive site-local datetime into an instant without knowing the
+        # site's timezone, and the countdown needs an instant.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
+             patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
+            invite = binding.create_link_invite("HR-EMP-00001")
+        self.assertEqual(invite["expires_in_seconds"], 86400)
+        self.assertEqual(invite["expires_at"], "2026-08-19 09:00:00")
+
+
+class TestRevokeLink(unittest.TestCase):
+    def test_revoking_requires_hr(self):
+        with patch.object(binding, "_require_hr_role",
+                          side_effect=Exception("Not permitted")) as gate, \
+             patch.object(binding, "_live_link_names") as names:
+            with self.assertRaises(Exception):
+                binding.revoke_link("HR-EMP-00001")
+        gate.assert_called_once()
+        names.assert_not_called()
+
+    def test_revoking_disables_the_link_and_kills_outstanding_tokens(self):
+        import frappe
+
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=2) as tokens, \
+             patch.object(frappe.db, "set_value") as set_value:
+            result = binding.revoke_link("HR-EMP-00001")
+
+        self.assertEqual(result, {
+            "employee": "HR-EMP-00001", "unlinked": 1, "tokens_revoked": 2,
+        })
+        set_value.assert_called_once_with(binding.LINK_DT, "55501", "enabled", 0)
+        tokens.assert_called_once_with("HR-EMP-00001")
+
+    def test_the_row_is_disabled_never_deleted(self):
+        # The row and its version history are the audit trail, and the
+        # `enabled` field's own description promises they survive the unlink.
+        import frappe
+
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0), \
+             patch.object(frappe.db, "set_value"), \
+             patch.object(frappe, "delete_doc", create=True) as delete_doc, \
+             patch.object(frappe.db, "delete") as db_delete:
+            binding.revoke_link("HR-EMP-00001")
+        delete_doc.assert_not_called()
+        db_delete.assert_not_called()
+
+    def test_revoking_an_unlinked_employee_is_not_an_error(self):
+        # Idempotent on purpose. A second press from a stale tab would
+        # otherwise put a red message in front of HR for doing nothing wrong.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0):
+            result = binding.revoke_link("HR-EMP-00001")
+        self.assertEqual(result["unlinked"], 0)
+
+    def test_revoking_refuses_a_blank_employee(self):
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names") as names:
+            with self.assertRaises(Exception):
+                binding.revoke_link("  ")
+        names.assert_not_called()
+

@@ -458,7 +458,20 @@ def _bot_username() -> str:
     return username
 
 
-@frappe.whitelist()
+def _live_link_names(employee: str) -> list[str]:
+    """Names of this employee's ENABLED Telegram Link rows."""
+    return [
+        row["name"]
+        for row in frappe.get_all(
+            LINK_DT,
+            filters={"employee": employee, "enabled": 1},
+            fields=["name"],
+        )
+        or []
+    ]
+
+
+@frappe.whitelist(methods=["POST"])
 def create_link_invite(employee: str) -> dict:
     """HR mints a one-time link for one employee.
 
@@ -466,11 +479,26 @@ def create_link_invite(employee: str) -> dict:
     authenticated update when the employee taps the link. That is the whole
     point: a hand-transcribed id has no checksum and no name echoed back, so a
     transposed digit silently sends one person's attendance to another.
+
+    POST-pinned. The response body IS a credential, and a GET would put the
+    employee id in the query string of every access log, proxy log and browser
+    history entry between here and the bench. The client half of that
+    agreement has always sent POST; until now nothing made the server insist.
     """
     _require_hr_role()
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
+
+    # The register hides its control for a linked employee; this is what makes
+    # that true rather than cosmetic. A stale tab or a direct call would
+    # otherwise mint a credential able to bind a SECOND account to someone
+    # already bound.
+    if _live_link_names(employee):
+        frappe.throw(
+            f"{employee} is already linked to Telegram. "
+            "Unlink first to issue a new link."
+        )
 
     # Resolved BEFORE the token is minted. Written as
     # `link_url(issue_link_token(...), _bot_username())` the mint evaluates
@@ -485,4 +513,41 @@ def create_link_invite(employee: str) -> dict:
         # a second time, so the value reported was never quite the value on the
         # row that had just been written.
         "expires_at": str(issued.expires_at),
+        # The TTL by construction, NOT a subtraction of two datetimes. A naive
+        # site-local datetime string cannot be turned into an instant by a
+        # browser that does not know the site timezone -- and the frappe test
+        # mock's get_datetime is an identity passthrough, so datetime
+        # arithmetic here would go untested.
+        "expires_in_seconds": DEFAULT_TTL_HOURS * 3600,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def revoke_link(employee: str) -> dict:
+    """HR unlinks an employee's Telegram account.
+
+    Idempotent: an employee with no live link returns `unlinked: 0` rather
+    than throwing. A second press from a stale tab is not an error, and making
+    it one would put a red message in front of HR for doing nothing wrong.
+    """
+    _require_hr_role()
+    employee = (employee or "").strip()
+    if not employee:
+        frappe.throw("employee is required")
+
+    names = _live_link_names(employee)
+    for name in names:
+        # `enabled = 0`, never a delete. The row and its version history are
+        # the audit trail, and the field's own description promises they
+        # survive the unlink.
+        frappe.db.set_value(LINK_DT, name, "enabled", 0)
+
+    # An unlink must not leave a live credential behind: a token issued while
+    # the employee was unlinked before would otherwise still bind on
+    # redemption, undoing the unlink without HR touching anything.
+    tokens_revoked = revoke_outstanding_tokens(employee)
+    return {
+        "employee": employee,
+        "unlinked": len(names),
+        "tokens_revoked": tokens_revoked,
     }
