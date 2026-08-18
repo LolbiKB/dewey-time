@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  dayFacts, formatMinuteOfDay, formatSpan, totalWorkedMinutes,
+  dayFacts, dayNumbers, formatMinuteOfDay, formatSpan, totalWorkedMinutes,
 } from "@/miniapp/miniDay";
 import type { Day } from "@/types/calendar";
 
@@ -154,4 +154,122 @@ test("a zero-length lunch is not a lunch", () => {
     },
   } as unknown as Day;
   assert.equal(dayFacts(day, MON, FRI).lunch, null);
+});
+
+/* ── dayNumbers: the two figures under the timeline ───────────────────── */
+
+/** A day with an unclosed arrival -- somebody currently at work. */
+function stillIn(date: string, since = "07:58:00"): Day {
+  return {
+    date,
+    shift: {
+      shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00",
+      lunch_start: "12:00:00", lunch_end: "13:00:00",
+    },
+    first_in: `${date} ${since}`,
+    last_out: null,
+    checkins: [
+      { time: `${date} ${since}`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    ],
+  } as unknown as Day;
+}
+
+test("a finished day reports net worked against net rostered", () => {
+  const day = {
+    date: "2026-08-10",
+    shift: {
+      shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00",
+      lunch_start: "12:00:00", lunch_end: "13:00:00",
+    },
+    checkins: [
+      { time: "2026-08-10 07:58:00", log_type: "IN", custom_device_branch: "A" },
+      { time: "2026-08-10 12:01:00", log_type: "OUT", custom_device_branch: "A" },
+      { time: "2026-08-10 12:58:00", log_type: "IN", custom_device_branch: "A" },
+      { time: "2026-08-10 17:06:00", log_type: "OUT", custom_device_branch: "A" },
+    ],
+  } as unknown as Day;
+  const n = dayNumbers(day, MON, FRI, FRI);
+  assert.equal(n.worked, 4 * 60 + 3 + (4 * 60 + 8));
+  // Rostered is NET: nine hours of window less the rostered hour of lunch.
+  assert.equal(n.rostered, 8 * 60);
+  assert.equal(n.live, false);
+});
+
+test("an open run on TODAY accrues up to now, and says so", () => {
+  // The whole reason this function exists: netWorkedMinutes pairs punches, so
+  // somebody three hours into a shift reads as null until they clock out.
+  const today = new Date(2026, 7, 10, 11, 0, 0);
+  const n = dayNumbers(stillIn("2026-08-10"), today, today, today);
+  assert.equal(n.worked, 3 * 60 + 2);
+  assert.equal(n.live, true);
+});
+
+test("an open run on a PAST day accrues nothing", () => {
+  // An unclosed punch on a past day is a MISSING_IN_OR_OUT flag, not somebody
+  // still at work. Counting it would grow that day's total forever.
+  const date = new Date(2026, 7, 10);
+  const today = new Date(2026, 7, 14, 11, 0, 0);
+  const n = dayNumbers(stillIn("2026-08-10"), date, today, today);
+  assert.equal(n.worked, null);
+  assert.equal(n.live, false);
+});
+
+test("a clock skewed into the future never subtracts minutes", () => {
+  const today = new Date(2026, 7, 10, 7, 0, 0); // before the 07:58 punch
+  const n = dayNumbers(stillIn("2026-08-10"), today, today, today);
+  assert.equal(n.worked, 0);
+  assert.equal(n.live, true);
+});
+
+test("leave and holiday have no rostered figure to fall short of", () => {
+  const base = {
+    date: "2026-08-10",
+    shift: {
+      shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00",
+      lunch_start: "12:00:00", lunch_end: "13:00:00",
+    },
+    checkins: [],
+  };
+  const onLeave = { ...base, leave: { on_leave: true, leave_type: "Annual Leave" } };
+  const holiday = { ...base, holiday: { description: "Constitution Day" } };
+  assert.equal(dayNumbers(onLeave as unknown as Day, MON, FRI, FRI).rostered, null);
+  assert.equal(dayNumbers(holiday as unknown as Day, MON, FRI, FRI).rostered, null);
+});
+
+test("work punched on a holiday still counts, alone", () => {
+  // dayFacts answers "holiday" and returns before it looks at a punch, so its
+  // workedMinutes is null here. This is the case that made netWorkedFor exist.
+  const day = {
+    date: "2026-08-10",
+    holiday: { description: "Constitution Day" },
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    checkins: [
+      { time: "2026-08-10 09:00:00", log_type: "IN", custom_device_branch: "A" },
+      { time: "2026-08-10 11:00:00", log_type: "OUT", custom_device_branch: "A" },
+    ],
+  } as unknown as Day;
+  const n = dayNumbers(day, MON, FRI, FRI);
+  assert.equal(n.worked, 120);
+  assert.equal(n.rostered, null);
+});
+
+test("an overnight shift's rostered figure spans the wrap", () => {
+  const day = {
+    date: "2026-08-10",
+    shift: {
+      shift_assigned: true, start_time: "22:00:00", end_time: "06:00:00",
+      lunch_start: "02:00:00", lunch_end: "02:30:00",
+    },
+    checkins: [],
+  } as unknown as Day;
+  // Eight hours across midnight, less the half-hour break.
+  assert.equal(dayNumbers(day, MON, FRI, FRI).rostered, 7 * 60 + 30);
+});
+
+test("a day with no roster and no punches has neither figure", () => {
+  const day = { date: "2026-08-08", shift: { shift_assigned: false }, checkins: [] } as unknown as Day;
+  const n = dayNumbers(day, MON, FRI, FRI);
+  assert.equal(n.worked, null);
+  assert.equal(n.rostered, null);
+  assert.equal(n.live, false);
 });
