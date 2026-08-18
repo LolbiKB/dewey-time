@@ -118,7 +118,14 @@ export function MyDayPage(props: {
   const info = byDate.get(key);
   // The same window maths the HR week uses, over a single day: it keeps the
   // axis on whole hours and sized to the shift rather than to 00:00-24:00.
-  const window = resolveWeekTimelineWindow([date], byDate);
+  // NOT `window`. It was, and it shadowed the global across this whole
+  // component: a read below the declaration silently returned THIS object
+  // instead of the browser's window, and a read above it threw "Cannot access
+  // 'window' before initialization" and white-screened the app behind the
+  // error boundary. Both were hit while designing the row below — the silent
+  // one produced a layout that looked implemented and rendered in the wrong
+  // place, and looked correct in review.
+  const timelineWindow = resolveWeekTimelineWindow([date], byDate);
 
   return (
     // `h-full` and `min-h-0`, not a fixed pixel height: the sheet's height is
@@ -169,14 +176,14 @@ export function MyDayPage(props: {
           flex share alone would squeeze the axis to a few unreadable hours,
           and the page scrolls rather than the timeline collapsing. */}
       <div className="grid min-h-[16rem] flex-1 grid-cols-[3.5rem_1fr] [&>button]:border-0">
-        <HourGutter window={window} />
+        <HourGutter window={timelineWindow} />
         <DayCell
           date={date}
           outside={false}
           today={isSameDay(date, today)}
           info={info}
-          timelineStartMin={window.startMin}
-          timelineEndMin={window.endMin}
+          timelineStartMin={timelineWindow.startMin}
+          timelineEndMin={timelineWindow.endMin}
           // No inspector in the Mini App: the day sheet is HR's review
           // surface and carries flag evidence an employee must not see.
           onInspectDay={() => {}}
