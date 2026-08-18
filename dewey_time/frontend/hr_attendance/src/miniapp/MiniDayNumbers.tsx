@@ -53,17 +53,20 @@ export function MiniDayNumbers(props: {
       {spoken ? (
         <span className="flex min-w-0 items-baseline gap-1.5 text-[13px]">
           <span className="sr-only">{spoken}</span>
-          <span aria-hidden="true" className="flex min-w-0 items-baseline gap-1.5">
-            <span className="truncate font-semibold text-foreground">
-              {worked ?? "—"}
-              {/* Only while a run is open. On a closed day the total is final
-                  and "so far" would understate a finished figure. */}
-              {numbers.live ? (
-                <span className="ml-1 font-normal text-muted-foreground">{t("daySoFar")}</span>
-              ) : null}
-            </span>
+          {/* WRAPS, and never truncates. Measured at 320px in Khmer, live, with
+              a two-digit hour — "១២ ម៉ោង ៥៧ នាទី គិតត្រឹមពេលនេះ / ៨ ម៉ោង" — a
+              `truncate` here put the ellipsis on the WORKED FIGURE, which is
+              the one number the row exists to show. The marker gives way to a
+              second line instead, and only on the phones that need it. */}
+          <span aria-hidden="true" className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+            <span className="font-semibold text-foreground">{worked ?? "—"}</span>
+            {/* Only while a run is open. On a closed day the total is final and
+                "so far" would understate a finished figure. */}
+            {numbers.live ? (
+              <span className="font-normal text-muted-foreground">{t("daySoFar")}</span>
+            ) : null}
             {rostered ? (
-              <span className="shrink-0 text-muted-foreground">/ {rostered}</span>
+              <span className="text-muted-foreground">/ {rostered}</span>
             ) : null}
           </span>
         </span>
