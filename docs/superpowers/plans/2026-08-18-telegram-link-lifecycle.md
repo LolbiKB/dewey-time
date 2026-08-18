@@ -251,6 +251,26 @@ def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> Issue
     return IssuedToken(token=token, expires_at=expires_at)
 ```
 
+- [ ] **Step 4b: Adapt the only caller, or this task commits red**
+
+`create_link_invite` is the sole caller of `issue_link_token` and still treats
+its result as a string, so changing the return type breaks it until Task 3.
+Make the minimal adaptation here — the refusal, `expires_in_seconds` and the
+POST pinning all still belong to Task 3:
+
+```python
+    bot = _bot_username()
+    issued = issue_link_token(employee)
+    return {
+        "employee": employee,
+        "url": link_url(issued.token, bot),
+        # The STORED expiry. This used to recompute add_to_date(now_datetime())
+        # a second time, so the value reported was never quite the value on the
+        # row that had just been written.
+        "expires_at": str(issued.expires_at),
+    }
+```
+
 - [ ] **Step 5: Update the three existing tests that expect a bare string**
 
 In `TestTokenShape`, `issue_link_token` now returns a NamedTuple:
@@ -706,6 +726,7 @@ def create_link_invite(employee: str) -> dict:
     return {
         "employee": employee,
         "url": link_url(issued.token, bot),
+        # Already correct as of Task 1 Step 4b; only the key below is new here.
         "expires_at": str(issued.expires_at),
         # The TTL by construction, NOT a subtraction of two datetimes. A naive
         # site-local datetime string cannot be turned into an instant by a

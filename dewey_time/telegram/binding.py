@@ -16,6 +16,8 @@ an authorized Employee cannot be accidentally ignored.
 import hashlib
 import re
 import secrets
+from datetime import datetime
+from typing import NamedTuple
 
 import frappe
 from frappe.utils import add_to_date, get_datetime, now_datetime
@@ -29,7 +31,7 @@ SETTINGS = "Dewey Time Settings"
 #: 32 bytes -> 43 base64url chars, inside Telegram's 64-char `start` payload
 #: limit of [A-Za-z0-9_-].
 TOKEN_BYTES = 32
-DEFAULT_TTL_HOURS = 168  # 7 days
+DEFAULT_TTL_HOURS = 24
 
 #: Telegram's rule for a username: 5-32 of [A-Za-z0-9_]. Bot usernames also
 #: end in "bot", which is NOT enforced here -- that is Telegram's rule to
@@ -68,7 +70,7 @@ def _load_token(token_hash: str):
     return frappe.db.get_value(
         TOKEN_DT,
         token_hash,
-        ["name", "employee", "expires_at", "redeemed_at"],
+        ["name", "employee", "expires_at", "redeemed_at", "revoked_at"],
         as_dict=True,
     )
 
@@ -108,23 +110,77 @@ def _create_link(
     doc.insert(ignore_permissions=True)
 
 
-def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> str:
+class IssuedToken(NamedTuple):
+    """The raw token and the expiry that was actually written for it.
+
+    Returned together so `create_link_invite` reports the STORED expiry rather
+    than reading `now_datetime()` a second time and reporting a value that
+    disagrees with the row it just inserted.
+    """
+
+    token: str
+    expires_at: datetime
+
+
+def revoke_outstanding_tokens(employee: str) -> int:
+    """Kill every unredeemed, unrevoked token for `employee`. Returns the count.
+
+    This is what makes re-issuing SAFE rather than merely convenient. Without
+    it each click minted another independently redeemable credential, all live
+    until their own expiry, with nothing anywhere listing them.
+
+    Redeemed rows are excluded rather than stamped: a redeemed token is
+    history, and revoking it after the fact would misdescribe what happened.
+    """
+    employee = (employee or "").strip()
+    if not employee:
+        # A blank filter matches the whole table.
+        return 0
+
+    rows = (
+        frappe.get_all(
+            TOKEN_DT,
+            filters={
+                "employee": employee,
+                "redeemed_at": ["is", "not set"],
+                "revoked_at": ["is", "not set"],
+            },
+            fields=["name"],
+        )
+        or []
+    )
+    stamp = now_datetime()
+    for row in rows:
+        frappe.db.set_value(TOKEN_DT, row["name"], "revoked_at", stamp)
+    return len(rows)
+
+
+def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> IssuedToken:
     """Mint a single-use token for `employee`. Returns the RAW token, once.
 
     Only its SHA-256 reaches the database, so nothing that can read the
     database can redeem on someone's behalf.
+
+    Every previously issued, still-unredeemed token for this employee is
+    revoked FIRST. Minting is the only way a link is created, so this is the
+    single place that can guarantee "at most one live credential per
+    employee" -- and that guarantee is what makes a Regenerate button
+    something other than a way to double the exposure.
     """
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
 
+    revoke_outstanding_tokens(employee)
+
     token = secrets.token_urlsafe(TOKEN_BYTES)
+    expires_at = add_to_date(now_datetime(), hours=ttl_hours)
     _store_token(
         token_hash=_hash_token(token),
         employee=employee,
-        expires_at=add_to_date(now_datetime(), hours=ttl_hours),
+        expires_at=expires_at,
     )
-    return token
+    return IssuedToken(token=token, expires_at=expires_at)
 
 
 def normalise_bot_username(raw) -> str:
@@ -365,9 +421,12 @@ def create_link_invite(employee: str) -> dict:
     # first, so every attempt against a misconfigured username left a live
     # token row behind and still returned an error.
     bot = _bot_username()
-    token = issue_link_token(employee)
+    issued = issue_link_token(employee)
     return {
         "employee": employee,
-        "url": link_url(token, bot),
-        "expires_at": str(add_to_date(now_datetime(), hours=DEFAULT_TTL_HOURS)),
+        "url": link_url(issued.token, bot),
+        # The STORED expiry. This used to recompute add_to_date(now_datetime())
+        # a second time, so the value reported was never quite the value on the
+        # row that had just been written.
+        "expires_at": str(issued.expires_at),
     }

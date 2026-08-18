@@ -13,30 +13,78 @@ class TestTokenShape(unittest.TestCase):
         # Telegram's deep-link `start` payload allows 64 chars of
         # [A-Za-z0-9_-]. A 32-byte token base64url-encodes to 43.
         with patch.object(binding, "_store_token"):
-            token = binding.issue_link_token("HR-EMP-00001")
-        self.assertLessEqual(len(token), 64)
-        self.assertRegex(token, r"^[A-Za-z0-9_-]+$")
+            issued = binding.issue_link_token("HR-EMP-00001")
+        self.assertLessEqual(len(issued.token), 64)
+        self.assertRegex(issued.token, r"^[A-Za-z0-9_-]+$")
 
     def test_two_tokens_are_never_equal(self):
         with patch.object(binding, "_store_token"):
             a = binding.issue_link_token("HR-EMP-00001")
             b = binding.issue_link_token("HR-EMP-00001")
-        self.assertNotEqual(a, b)
+        self.assertNotEqual(a.token, b.token)
 
     def test_the_raw_token_is_never_stored(self):
         # Only its SHA-256 goes to the database, so a backup or a support
         # session never hands out a live token.
         with patch.object(binding, "_store_token") as store:
-            token = binding.issue_link_token("HR-EMP-00001")
+            issued = binding.issue_link_token("HR-EMP-00001")
         stored_hash = store.call_args[1]["token_hash"]
-        self.assertNotEqual(stored_hash, token)
-        self.assertEqual(stored_hash, binding._hash_token(token))
+        self.assertNotEqual(stored_hash, issued.token)
+        self.assertEqual(stored_hash, binding._hash_token(issued.token))
 
     def test_link_url_is_a_telegram_deep_link(self):
         self.assertEqual(
             binding.link_url("abc123", "dewey_time_bot"),
             "https://t.me/dewey_time_bot?start=abc123",
         )
+
+
+class TestTokenRevocation(unittest.TestCase):
+    """Re-issuing must REPLACE the live credential, not add a second one.
+
+    Without this, every click left another independently redeemable link alive
+    until its own expiry, and nothing anywhere listed them.
+    """
+
+    def test_issuing_revokes_the_employees_outstanding_tokens_first(self):
+        with patch.object(binding, "_store_token"), \
+             patch.object(binding, "revoke_outstanding_tokens") as revoke:
+            binding.issue_link_token("HR-EMP-00001")
+        revoke.assert_called_once_with("HR-EMP-00001")
+
+    def test_revoking_stamps_every_unredeemed_unrevoked_row(self):
+        import frappe
+
+        rows = [{"name": "hash-a"}, {"name": "hash-b"}]
+        with patch.object(frappe, "get_all", return_value=rows) as get_all, \
+             patch.object(frappe.db, "set_value") as set_value:
+            count = binding.revoke_outstanding_tokens("HR-EMP-00001")
+
+        self.assertEqual(count, 2)
+        self.assertEqual(set_value.call_count, 2)
+        # The filters ARE the behaviour: they are what excludes a token that
+        # was already redeemed (stamping that would rewrite history) and one
+        # already revoked (a no-op write on every re-issue).
+        filters = get_all.call_args[1]["filters"]
+        self.assertEqual(filters["employee"], "HR-EMP-00001")
+        self.assertEqual(filters["redeemed_at"], ["is", "not set"])
+        self.assertEqual(filters["revoked_at"], ["is", "not set"])
+        for call in set_value.call_args_list:
+            self.assertEqual(call[0][2], "revoked_at")
+
+    def test_revoking_a_blank_employee_queries_nothing(self):
+        # A blank filter would match the whole table.
+        import frappe
+
+        with patch.object(frappe, "get_all", side_effect=AssertionError("must not query")):
+            self.assertEqual(binding.revoke_outstanding_tokens("  "), 0)
+
+    def test_the_issued_expiry_is_the_one_that_was_stored(self):
+        # Two now_datetime() reads produced two different expiries: the row
+        # said one thing and the response said another.
+        with patch.object(binding, "_store_token") as store:
+            issued = binding.issue_link_token("HR-EMP-00001")
+        self.assertEqual(issued.expires_at, store.call_args[1]["expires_at"])
 
 
 class TestBotUsernameNormalisation(unittest.TestCase):
@@ -318,7 +366,8 @@ class TestInvite(unittest.TestCase):
 
     def test_invite_returns_a_tappable_url(self):
         with patch.object(binding, "_require_hr_role"), \
-             patch.object(binding, "issue_link_token", return_value="tok123"), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
              patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
             invite = binding.create_link_invite("HR-EMP-00001")
         self.assertEqual(invite["url"], "https://t.me/dewey_time_bot?start=tok123")
@@ -330,14 +379,15 @@ class TestInvite(unittest.TestCase):
         # actually on the path -- `link_url(token, _bot_username())` reads the
         # same either way.
         with patch.object(binding, "_require_hr_role"), \
-             patch.object(binding, "issue_link_token", return_value="tok123"), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
              patch.object(binding.frappe, "get_cached_value", return_value="@deweytimebot"):
             invite = binding.create_link_invite("HR-EMP-00001")
         self.assertEqual(invite["url"], "https://t.me/deweytimebot?start=tok123")
         self.assertNotIn("@", invite["url"])
 
     def test_a_misconfigured_username_does_not_burn_a_token(self):
-        # The token row is written and its 7-day clock starts on `insert`, so
+        # The token row is written and its 24-hour clock starts on `insert`, so
         # minting before the username is resolved leaves live tokens behind on
         # every failed attempt.
         with patch.object(binding, "_require_hr_role"), \
