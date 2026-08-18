@@ -122,7 +122,7 @@ test("a clock day with no punches is still a day off", () => {
  * The window is 07:00–18:00 = 660 minutes, so ten minutes is 1.515% — under
  * the old 2% floor, which is exactly the case that used to be inflated.
  * The dates are in the past, so `missingExpectedMaxEndMin` returns null and
- * the band is not clipped to the current hour.
+ * the band is not clipped to the present minute.
  */
 function shortMissingWeek(): Map<string, Day> {
   const punch = (date: string, time: string) => ({

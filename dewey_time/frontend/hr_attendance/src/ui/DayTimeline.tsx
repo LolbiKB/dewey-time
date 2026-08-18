@@ -10,6 +10,7 @@ import {
   formatDurationMinutes,
   isOffSiteSegment,
   minutesFromDateTime,
+  minutesSinceMidnight,
   parseDateTimeLocal,
   parseTimeToMinutes,
 } from "@/lib/attendanceTime";
@@ -40,7 +41,7 @@ import type { Day, ObservedLunch, ShiftContext } from "@/types/calendar";
 
 type Checkin = NonNullable<Day["checkins"]>[number];
 
-/** Expected shift window (today: from current hour; future days: full shift). Hover for label. */
+/** Expected shift window (today: from the current minute; future days: full shift). Hover for label. */
 const scheduledBandClass =
   "border-2 border-dashed border-muted-foreground/80 bg-muted/50";
 
@@ -168,6 +169,21 @@ function DayDayTrack(props: {
       ? "border-muted-foreground/40 bg-muted/40"
       : "border-destructive/40 bg-destructive/15";
 
+  /**
+   * ONE definition of "now" for this canvas.
+   *
+   * The now-line, the red missing-expected dash and the grey scheduled dash
+   * all read it. They used to disagree: the line honoured `props.now` while
+   * both dashes called `new Date()` internally and ignored the prop entirely,
+   * so the canvas could not be rendered at a pinned time — and the dashes
+   * additionally rounded down to the hour (see `presentBoundaryMin`).
+   *
+   * Memoised so the default stays one stable Date rather than a fresh one on
+   * every render, which would invalidate every memo below it.
+   */
+  const now = useMemo(() => props.now ?? new Date(), [props.now]);
+  const nowMin = minutesSinceMidnight(now);
+
   const segments = deriveSegments(props.checkins);
   const shiftEndMin =
     props.shift?.shift_assigned && props.shift.end_time
@@ -182,10 +198,11 @@ function DayDayTrack(props: {
           shiftEndMin,
           deviceSync: props.deviceSync,
           shiftAssigned: props.shift?.shift_assigned === true,
+          now,
         },
         punchHelpers
       ),
-    [props.checkins, props.dateKey, props.deviceSync, props.shift?.shift_assigned, shiftEndMin]
+    [now, props.checkins, props.dateKey, props.deviceSync, props.shift?.shift_assigned, shiftEndMin]
   );
   const errorPresentations = useMemo(
     () => punchPresentations.filter((row) => row.kind === "rogue" || row.kind === "unpairedError"),
@@ -234,11 +251,11 @@ function DayDayTrack(props: {
     [gaps]
   );
   const scheduledFuture = useMemo(
-    () => deriveScheduledFutureIntervals(props.shift, props.dateKey),
-    [props.dateKey, props.shift]
+    () => deriveScheduledFutureIntervals(props.shift, props.dateKey, now),
+    [now, props.dateKey, props.shift]
   );
   const missingExpected = useMemo(() => {
-    const maxEndMin = missingExpectedMaxEndMin(props.dateKey);
+    const maxEndMin = missingExpectedMaxEndMin(props.dateKey, now);
     const openSessionIntervals = openSessions.flatMap((row) => {
       const intervals = [{ startMin: row.startMin, endMin: row.confirmedEndMin }];
       if (row.uncertainEndMin != null && row.uncertainEndMin > row.confirmedEndMin) {
@@ -258,7 +275,7 @@ function DayDayTrack(props: {
       maxEndMin,
       excludeIntervals,
     });
-  }, [awayIntervals, openSessions, props.dateKey, props.shift, scheduledFuture, segments]);
+  }, [awayIntervals, now, openSessions, props.dateKey, props.shift, scheduledFuture, segments]);
   const lateness = computeLateness(props.shift, props.firstIn);
 
   const window = useMemo(() => {
@@ -274,11 +291,6 @@ function DayDayTrack(props: {
     }
     return computeDayTimeWindow(props.checkins ?? [], minutesFromDateTime);
   }, [props.checkins, props.windowEndMin, props.windowStartMin]);
-
-  const nowMin = useMemo(() => {
-    const d = props.now ?? new Date();
-    return d.getHours() * 60 + d.getMinutes();
-  }, [props.now]);
 
   function pctFromMinute(min: number) {
     if (!window) return clamp((min / (24 * 60)) * 100, 0, 100);
