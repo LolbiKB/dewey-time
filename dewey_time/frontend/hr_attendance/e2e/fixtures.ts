@@ -538,8 +538,11 @@ export async function stubFrappe(page: Page, overrides: FrappeStubOverrides = {}
       message = {
         employee: "EMP-002",
         url: "https://t.me/dewey_time_bot?start=e2etoken",
-        expires_at: "2026-08-17 12:00:00",
+        expires_at: "2026-08-19 12:00:00",
+        expires_in_seconds: 86400,
       };
+    } else if (p.includes("revoke_link")) {
+      message = { employee: "EMP-001", unlinked: 1, tokens_revoked: 0 };
     } else if (p.includes("get_enrollment_report")) {
       message = overrides.enrollment ?? enrollmentPayload();
     } else if (p.includes("get_flag_queue")) {

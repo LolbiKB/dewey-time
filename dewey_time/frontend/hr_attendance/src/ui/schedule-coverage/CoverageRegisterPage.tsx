@@ -14,8 +14,8 @@ import { AttentionStrip, FailureBlock } from "@/components/ui/notice";
 import { Spinner } from "@/components/ui/spinner";
 import type { HrAccessOutletContext } from "@/lib/hrAccess";
 import { useCoverageRegister } from "@/hooks/useCoverageRegister";
-import { useTelegramInvite } from "@/hooks/useTelegramInvite";
-import { TelegramLinkDialog } from "@/ui/TelegramLinkDialog";
+import { useTelegramLink } from "@/hooks/useTelegramLink";
+import { TelegramDialog } from "@/ui/telegram/TelegramDialog";
 import {
   applyFilterChange,
   columnIdForSort,
@@ -51,7 +51,7 @@ export type CoverageRegisterViewProps = {
   onRetry: () => void;
   onOpen: (row: RegisterRow) => void;
   onAddSchedule: (row: RegisterRow) => void;
-  onIssueLink: (row: RegisterRow) => void;
+  onManageTelegram: (row: RegisterRow) => void;
   /**
    * Under 768px, where dewey-ui's toolbar row runs out of room.
    *
@@ -86,15 +86,15 @@ export function CoverageRegisterView(props: CoverageRegisterViewProps) {
     onFiltersChange,
     onOpen,
     onAddSchedule,
-    onIssueLink,
+    onManageTelegram,
   } = props;
 
   // Memoised, and fed only stable callbacks: registerColumns allocates a new
   // array and new per-row closures on every call, and TanStack resets column
   // state whenever the `columns` reference changes.
   const columns = useMemo(
-    () => registerColumns(onOpen, onAddSchedule, onIssueLink),
-    [onOpen, onAddSchedule, onIssueLink],
+    () => registerColumns(onOpen, onAddSchedule, onManageTelegram),
+    [onOpen, onAddSchedule, onManageTelegram],
   );
 
   // Columns are REMOVED when their feed is absent, never blanked — an empty
@@ -586,16 +586,32 @@ export function CoverageRegisterPage() {
   );
 
   // The one control on this page that WRITES. Everything else navigates or
-  // narrows; this mints a credential, so it stays in the routed component
-  // beside the dialog that displays it rather than travelling into the view.
-  const telegramInvite = useTelegramInvite();
-  const [invitee, setInvitee] = useState<string | null>(null);
-  const handleIssueLink = useCallback(
+  // narrows; this mints and destroys credentials, so it stays in the routed
+  // component beside the dialog that operates them rather than travelling
+  // into the view.
+  //
+  // `refresh` on unlink and NOT on issue: unlinking changes the badge, issuing
+  // does not — nobody is linked until the token is redeemed, which happens on
+  // the employee's phone, minutes or hours later.
+  const telegram = useTelegramLink({ onUnlinked: refresh });
+  // `telegram.openFor`, not `telegram`. The hook returns a fresh object every
+  // render, so depending on the whole thing would give this callback a new
+  // identity every render — which invalidates the view's `registerColumns`
+  // memo, and TanStack resets column state whenever the columns reference
+  // changes. `openFor` is `useCallback(..., [])` and is stable.
+  const openTelegram = telegram.openFor;
+  const handleManageTelegram = useCallback(
     (row: RegisterRow) => {
-      setInvitee(row.employee_name);
-      telegramInvite.issue(row.id);
+      openTelegram({
+        employee: row.id,
+        employeeName: row.employee_name,
+        // `?? "none"` is unreachable — the cell draws no button for a null
+        // state — but the target type has no room for "we don't know", and
+        // defaulting to "linked" would offer Unlink for an unknown state.
+        status: row.telegram ?? "none",
+      });
     },
-    [telegramInvite],
+    [openTelegram],
   );
 
   if (sessionLoading) {
@@ -622,16 +638,9 @@ export function CoverageRegisterPage() {
         onRetry={refresh}
         onOpen={handleOpen}
         onAddSchedule={handleAddSchedule}
-        onIssueLink={handleIssueLink}
+        onManageTelegram={handleManageTelegram}
       />
-      <TelegramLinkDialog
-        open={telegramInvite.open}
-        onOpenChange={telegramInvite.setOpen}
-        employeeName={invitee}
-        invite={telegramInvite.invite}
-        error={telegramInvite.error}
-        isLoading={telegramInvite.isLoading}
-      />
+      <TelegramDialog link={telegram} />
     </>
   );
 }

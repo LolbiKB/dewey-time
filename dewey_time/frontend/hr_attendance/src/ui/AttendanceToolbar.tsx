@@ -21,8 +21,6 @@ import { AppTooltip } from "@/ui/AppTooltip";
 import { DataHealthButton } from "@/ui/DataHealthButton";
 import { DeviceHealthDetail } from "@/ui/DeviceAlerts";
 import { ClockBadge, EmployeePicker } from "@/ui/EmployeePicker";
-import { TelegramLinkButton, TelegramLinkDialog } from "@/ui/TelegramLinkDialog";
-import { useTelegramInvite } from "@/hooks/useTelegramInvite";
 import { RunEngineDialog } from "@/ui/RunEngineDialog";
 import { WeekFlagSummary } from "@/ui/WeekFlagSummary";
 import { WeeklyScheduleSummary } from "@/ui/WeeklyScheduleSummary";
@@ -63,9 +61,6 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
   const navDisabled = props.isCalendarLoading;
   const hrStaff = props.hrStaff !== false;
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  // Shared with the coverage register, which issues the same credential from
-  // any row. See useTelegramInvite for the reset-before-fetch rule.
-  const telegramInvite = useTelegramInvite();
   const selectedEmployee = props.employees.find((e) => e.id === props.employee) ?? null;
 
   return (
@@ -113,11 +108,6 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
                 }
               />
             </WeeklyScheduleSummary>
-            <div className="w-px shrink-0 self-stretch bg-border" aria-hidden="true" />
-            <TelegramLinkButton
-              disabled={!selectedEmployee || props.employeeLoading === true}
-              onClick={() => selectedEmployee && telegramInvite.issue(selectedEmployee.id)}
-            />
           </>
         ) : null}
       </div>
@@ -224,16 +214,6 @@ export function AttendanceToolbar(props: AttendanceToolbarProps) {
         ) : null}
         </nav>
       </div>
-      {/* Inside <header> but outside the control group: Radix portals it to
-          the body, so its position in the tree costs no layout. */}
-      <TelegramLinkDialog
-        open={telegramInvite.open}
-        onOpenChange={telegramInvite.setOpen}
-        employeeName={selectedEmployee?.employee_name ?? selectedEmployee?.id ?? null}
-        invite={telegramInvite.invite}
-        error={telegramInvite.error}
-        isLoading={telegramInvite.isLoading}
-      />
     </header>
   );
 }

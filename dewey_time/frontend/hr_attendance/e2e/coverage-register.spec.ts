@@ -886,66 +886,115 @@ test("a focused control's ring is never clipped by the section that holds it", a
 });
 
 /**
- * The Telegram column, and the one control on this page that WRITES.
+ * The Telegram column, and the only control on this page that WRITES.
  *
- * Everything the node suite can see about this column it already checks —
- * the three badges, the button's presence and its aria-label. What it
- * structurally cannot see is the round trip: `TelegramLinkDialog`'s body is
- * behind Radix's `DialogContent`, which resolves its portal container in a
- * layout effect and therefore server-renders to null. Under
- * `renderToStaticMarkup` the whole dialog is an empty string, so a button
- * wired to nothing, a request that never fires and a link that never reaches
- * the screen would all stay green there.
+ * Everything the node suite can see about this column it already checks — the
+ * three badges, the button's presence and its aria-label. What it structurally
+ * cannot see is the round trip: the dialog's body sits behind Radix's
+ * `DialogContent`, which resolves its portal container in a layout effect and
+ * therefore server-renders to null. Under `renderToStaticMarkup` the whole
+ * dialog is an empty string, so a button wired to nothing, a request that
+ * never fires and a link that never reaches the screen would all stay green
+ * there.
  */
-test("the Telegram column reports each state, and only the unlinked can be issued a link", async ({ page }) => {
+test("the Telegram column reports each state, and every known one can be managed", async ({ page }) => {
   await stubFrappe(page);
   await openRegister(page);
   await expect(bodyRows(page)).toHaveCount(ROSTER);
 
   const rowFor = (name: string) => bodyRows(page).filter({ hasText: name });
 
-  // Jane Doe is bound. No button, because re-issuing would mint a live
-  // credential that rebinds her record to whoever opens it.
+  // Jane Doe is bound — and now HAS a button, because unlinking lives there.
   await expect(rowFor("Jane Doe")).toContainText("Linked");
   await expect(
-    rowFor("Jane Doe").getByRole("button", { name: /^Issue a Telegram link/ }),
-  ).toHaveCount(0);
+    rowFor("Jane Doe").getByRole("button", { name: /^Manage Telegram/ }),
+  ).toBeVisible();
 
-  // Priya Nair's id was recorded by an earlier notifier but she is not bound
-  // yet, so she still needs a link today.
   await expect(rowFor("Priya Nair")).toContainText("ID on file");
   await expect(
-    rowFor("Priya Nair").getByRole("button", { name: /^Issue a Telegram link/ }),
+    rowFor("Priya Nair").getByRole("button", { name: /^Manage Telegram/ }),
   ).toBeVisible();
 
   // Tom O'Brien's state never arrived. An absent fact is an em dash and offers
   // nothing to press — guessing "Not linked" here would put him on a to-do
   // list built from a failed query.
   await expect(
-    rowFor("Tom O'Brien").getByRole("button", { name: /^Issue a Telegram link/ }),
+    rowFor("Tom O'Brien").getByRole("button", { name: /^Manage Telegram/ }),
   ).toHaveCount(0);
 });
 
-test("issuing a link from a row shows that link, named for that employee", async ({ page }) => {
+test("opening the dialog mints nothing; issuing shows the link, the QR and the countdown", async ({ page }) => {
+  const posted: string[] = [];
+  page.on("request", (req) => {
+    if (req.url().includes("create_link_invite")) posted.push(req.url());
+  });
+
   await stubFrappe(page);
   await openRegister(page);
   await expect(bodyRows(page)).toHaveCount(ROSTER);
 
   await bodyRows(page)
     .filter({ hasText: "Aaron Wells" })
-    .getByRole("button", { name: "Issue a Telegram link for Aaron Wells" })
+    .getByRole("button", { name: "Manage Telegram for Aaron Wells" })
     .click();
 
   // Named for the employee, because the dialog is how someone confirms they
-  // are about to send the right person's credential.
+  // are about to mint the right person's credential.
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("Aaron Wells");
+
+  // THE point of the manage dialog: opening it is not a write. The old row
+  // button minted a live credential on a stray click, with no confirmation.
+  await expect(dialog.getByRole("button", { name: "Issue link" })).toBeVisible();
+  expect(posted).toHaveLength(0);
+
+  await dialog.getByRole("button", { name: "Issue link" }).click();
+
   await expect(dialog.getByRole("textbox")).toHaveValue(
     "https://t.me/dewey_time_bot?start=e2etoken",
   );
+  // Rendered in the page, not fetched: the encoded value is the credential.
+  await expect(dialog.getByRole("img", { name: /QR code/ })).toBeVisible();
+  // 86400s from receipt. Asserted as a shape, not a literal — a second of
+  // wall-clock between the stub and the first tick would make "24h 0m" flaky.
+  await expect(dialog).toContainText(/Expires in 2[34]h \d+m/);
   // The warning is the point of showing the raw link at all.
   await expect(dialog).toContainText("before the employee does");
+  expect(posted).toHaveLength(1);
+});
+
+test("unlinking takes two presses and lands back on Issue link", async ({ page }) => {
+  const posted: string[] = [];
+  page.on("request", (req) => {
+    if (req.url().includes("revoke_link")) posted.push(req.url());
+  });
+
+  await stubFrappe(page);
+  await openRegister(page);
+  await expect(bodyRows(page)).toHaveCount(ROSTER);
+
+  await bodyRows(page)
+    .filter({ hasText: "Jane Doe" })
+    .getByRole("button", { name: "Manage Telegram for Jane Doe" })
+    .click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  // Issuing for someone already bound is refused by the API; offering it here
+  // would be an error message dressed as a button.
+  await expect(dialog.getByRole("button", { name: "Issue link" })).toHaveCount(0);
+
+  // First press is the confirm, not the deed.
+  await dialog.getByRole("button", { name: "Unlink" }).click();
+  await expect(dialog).toContainText("Mini App");
+  expect(posted).toHaveLength(0);
+
+  await dialog.getByRole("button", { name: "Unlink" }).click();
+  await expect.poll(() => posted.length).toBe(1);
+
+  // Unlink -> issue is one continuous flow: the changed-phone case, end to end.
+  await expect(dialog.getByRole("button", { name: "Issue link" })).toBeVisible();
 });
 
 /**

@@ -16,6 +16,8 @@ an authorized Employee cannot be accidentally ignored.
 import hashlib
 import re
 import secrets
+from datetime import datetime
+from typing import NamedTuple
 
 import frappe
 from frappe.utils import add_to_date, get_datetime, now_datetime
@@ -29,7 +31,7 @@ SETTINGS = "Dewey Time Settings"
 #: 32 bytes -> 43 base64url chars, inside Telegram's 64-char `start` payload
 #: limit of [A-Za-z0-9_-].
 TOKEN_BYTES = 32
-DEFAULT_TTL_HOURS = 168  # 7 days
+DEFAULT_TTL_HOURS = 24
 
 #: Telegram's rule for a username: 5-32 of [A-Za-z0-9_]. Bot usernames also
 #: end in "bot", which is NOT enforced here -- that is Telegram's rule to
@@ -68,7 +70,7 @@ def _load_token(token_hash: str):
     return frappe.db.get_value(
         TOKEN_DT,
         token_hash,
-        ["name", "employee", "expires_at", "redeemed_at"],
+        ["name", "employee", "expires_at", "redeemed_at", "revoked_at"],
         as_dict=True,
     )
 
@@ -108,23 +110,110 @@ def _create_link(
     doc.insert(ignore_permissions=True)
 
 
-def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> str:
+class IssuedToken(NamedTuple):
+    """The raw token and the expiry that was actually written for it.
+
+    Returned together so `create_link_invite` reports the STORED expiry rather
+    than reading `now_datetime()` a second time and reporting a value that
+    disagrees with the row it just inserted.
+    """
+
+    token: str
+    expires_at: datetime
+
+
+def revoke_outstanding_tokens(employee: str) -> int:
+    """Kill every unredeemed, unrevoked token for `employee`. Returns the count.
+
+    This is what makes re-issuing SAFE rather than merely convenient. Without
+    it each click minted another independently redeemable credential, all live
+    until their own expiry, with nothing anywhere listing them.
+
+    Redeemed rows are excluded rather than stamped: a redeemed token is
+    history, and revoking it after the fact would misdescribe what happened.
+    """
+    employee = (employee or "").strip()
+    if not employee:
+        # A blank filter matches the whole table.
+        return 0
+
+    rows = (
+        frappe.get_all(
+            TOKEN_DT,
+            filters={
+                "employee": employee,
+                "redeemed_at": ["is", "not set"],
+                "revoked_at": ["is", "not set"],
+            },
+            fields=["name"],
+        )
+        or []
+    )
+    stamp = now_datetime()
+    for row in rows:
+        frappe.db.set_value(TOKEN_DT, row["name"], "revoked_at", stamp)
+    return len(rows)
+
+
+def _revive_link(*, name: str, employee: str, chat_id: str) -> None:
+    """Re-enable a previously unlinked account and point it at `employee`.
+
+    `Telegram Link` autonames `field:telegram_user_id`, so an account's row
+    outlives every unlink -- clearing `enabled` is all an unlink does. A
+    Telegram account is keyed to a phone number, so "employee got a new phone"
+    is usually the SAME account coming back. Without this branch the
+    unlink -> re-issue flow would refuse forever for exactly the case it
+    exists to serve.
+
+    Deliberately unlike `claim_by_recorded_id`, which refuses a revoked link
+    outright. That guard protects the NO-TOKEN path, where nothing but the
+    employee reopening the bot is required, and self-restoring there would
+    make revocation theatre. A token is HR's explicit, freshly minted
+    authorisation to bind this employee -- the thing the recorded-id path
+    lacks. The two paths should not agree here.
+
+    `get_doc`/`save`, NOT `frappe.db.set_value`, for two reasons that both
+    matter here. `set_value` writes straight to SQL: it skips
+    `TelegramLink.validate`, which is the check that stops one employee
+    holding two enabled links, and it writes no Version row even though the
+    doctype is `track_changes: 1`. Reviving a credential is exactly the event
+    that audit exists to record.
+    """
+    doc = frappe.get_doc(LINK_DT, name)
+    doc.employee = employee
+    doc.chat_id = str(chat_id)
+    doc.enabled = 1
+    doc.linked_at = now_datetime()
+    doc.linked_via = "token"
+    doc.save(ignore_permissions=True)
+
+
+def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> IssuedToken:
     """Mint a single-use token for `employee`. Returns the RAW token, once.
 
     Only its SHA-256 reaches the database, so nothing that can read the
     database can redeem on someone's behalf.
+
+    Every previously issued, still-unredeemed token for this employee is
+    revoked FIRST. Minting is the only way a link is created, so this is the
+    single place that can guarantee "at most one live credential per
+    employee" -- and that guarantee is what makes a Regenerate button
+    something other than a way to double the exposure.
     """
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
 
+    revoke_outstanding_tokens(employee)
+
     token = secrets.token_urlsafe(TOKEN_BYTES)
+    expires_at = add_to_date(now_datetime(), hours=ttl_hours)
     _store_token(
         token_hash=_hash_token(token),
         employee=employee,
-        expires_at=add_to_date(now_datetime(), hours=ttl_hours),
+        expires_at=expires_at,
     )
-    return token
+    return IssuedToken(token=token, expires_at=expires_at)
 
 
 def normalise_bot_username(raw) -> str:
@@ -181,16 +270,46 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
         if str(row.get("redeemed_by_telegram_user_id") or "") == telegram_user_id:
             return row["employee"]
         frappe.throw("This link has already been used. Ask HR for a new one.")
+    if row.get("revoked_at"):
+        # A newer link superseded this one, or the employee was unlinked.
+        frappe.throw("This link is no longer valid. Ask HR for a new one.")
     if _is_expired(row["expires_at"]):
         frappe.throw("This link has expired. Ask HR for a new one.")
 
+    employee = row["employee"]
+
+    # BEFORE the account-level branches below, and LOAD-BEARING rather than
+    # belt-and-braces. `TelegramLink.validate` already refuses a second enabled
+    # link for one employee, but it only runs on the document API -- so it
+    # covers `_create_link` (which inserts) and would NOT have covered a
+    # `db.set_value` revive. `_revive_link` now saves through the document API
+    # too, which restores that backstop; this check is the one that gives the
+    # caller a legible reason instead of a controller throw, and the one that
+    # stops the revive being attempted at all.
+    if _employee_bound_elsewhere(employee, telegram_user_id):
+        frappe.throw("This employee is already linked to another Telegram account. Ask HR.")
+
+    existing = _existing_link(telegram_user_id)
+    if existing:
+        if existing.get("enabled"):
+            if existing["employee"] == employee:
+                # Already correctly bound. A second row is impossible anyway --
+                # the autoname would raise DuplicateEntryError -- so the honest
+                # outcome is to spend the token and return.
+                _mark_redeemed(row["name"], telegram_user_id)
+                return employee
+            frappe.throw("This Telegram account is already linked. Ask HR.")
+        _revive_link(name=existing["name"], employee=employee, chat_id=chat_id)
+        _mark_redeemed(row["name"], telegram_user_id)
+        return employee
+
     _create_link(
-        employee=row["employee"],
+        employee=employee,
         telegram_user_id=telegram_user_id,
         chat_id=str(chat_id),
     )
     _mark_redeemed(row["name"], telegram_user_id)
-    return row["employee"]
+    return employee
 
 
 #: The Employee column a prior Telegram notifier left behind, holding a numeric
@@ -346,7 +465,20 @@ def _bot_username() -> str:
     return username
 
 
-@frappe.whitelist()
+def _live_link_names(employee: str) -> list[str]:
+    """Names of this employee's ENABLED Telegram Link rows."""
+    return [
+        row["name"]
+        for row in frappe.get_all(
+            LINK_DT,
+            filters={"employee": employee, "enabled": 1},
+            fields=["name"],
+        )
+        or []
+    ]
+
+
+@frappe.whitelist(methods=["POST"])
 def create_link_invite(employee: str) -> dict:
     """HR mints a one-time link for one employee.
 
@@ -354,20 +486,84 @@ def create_link_invite(employee: str) -> dict:
     authenticated update when the employee taps the link. That is the whole
     point: a hand-transcribed id has no checksum and no name echoed back, so a
     transposed digit silently sends one person's attendance to another.
+
+    POST-pinned. The response body IS a credential, and a GET would put the
+    employee id in the query string of every access log, proxy log and browser
+    history entry between here and the bench. The client half of that
+    agreement has always sent POST; until now nothing made the server insist.
     """
     _require_hr_role()
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
 
+    # The register hides its control for a linked employee; this is what makes
+    # that true rather than cosmetic. A stale tab or a direct call would
+    # otherwise mint a credential able to bind a SECOND account to someone
+    # already bound.
+    if _live_link_names(employee):
+        frappe.throw(
+            f"{employee} is already linked to Telegram. "
+            "Unlink first to issue a new link."
+        )
+
     # Resolved BEFORE the token is minted. Written as
     # `link_url(issue_link_token(...), _bot_username())` the mint evaluates
     # first, so every attempt against a misconfigured username left a live
     # token row behind and still returned an error.
     bot = _bot_username()
-    token = issue_link_token(employee)
+    issued = issue_link_token(employee)
     return {
         "employee": employee,
-        "url": link_url(token, bot),
-        "expires_at": str(add_to_date(now_datetime(), hours=DEFAULT_TTL_HOURS)),
+        "url": link_url(issued.token, bot),
+        # The STORED expiry. This used to recompute add_to_date(now_datetime())
+        # a second time, so the value reported was never quite the value on the
+        # row that had just been written.
+        "expires_at": str(issued.expires_at),
+        # The TTL by construction, NOT a subtraction of two datetimes. A naive
+        # site-local datetime string cannot be turned into an instant by a
+        # browser that does not know the site timezone -- and the frappe test
+        # mock's get_datetime is an identity passthrough, so datetime
+        # arithmetic here would go untested.
+        "expires_in_seconds": DEFAULT_TTL_HOURS * 3600,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def revoke_link(employee: str) -> dict:
+    """HR unlinks an employee's Telegram account.
+
+    Idempotent: an employee with no live link returns `unlinked: 0` rather
+    than throwing. A second press from a stale tab is not an error, and making
+    it one would put a red message in front of HR for doing nothing wrong.
+    """
+    _require_hr_role()
+    employee = (employee or "").strip()
+    if not employee:
+        frappe.throw("employee is required")
+
+    names = _live_link_names(employee)
+    for name in names:
+        # `enabled = 0`, never a delete. The row and its version history are
+        # the audit trail, and the field's own description promises they
+        # survive the unlink.
+        #
+        # Through the document API, NOT `frappe.db.set_value`. Versions are
+        # written by `Document.save()`; `set_value` goes straight to SQL. This
+        # doctype is `track_changes: 1`, and clearing the checkbox by hand in
+        # the desk -- the path this endpoint replaces -- records who revoked
+        # the credential and when. Writing it programmatically must not be the
+        # version that quietly stops recording that.
+        doc = frappe.get_doc(LINK_DT, name)
+        doc.enabled = 0
+        doc.save(ignore_permissions=True)
+
+    # An unlink must not leave a live credential behind: a token issued while
+    # the employee was unlinked before would otherwise still bind on
+    # redemption, undoing the unlink without HR touching anything.
+    tokens_revoked = revoke_outstanding_tokens(employee)
+    return {
+        "employee": employee,
+        "unlinked": len(names),
+        "tokens_revoked": tokens_revoked,
     }

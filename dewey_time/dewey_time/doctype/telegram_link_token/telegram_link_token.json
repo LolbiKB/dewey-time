@@ -15,7 +15,8 @@
     "employee",
     "expires_at",
     "redeemed_at",
-    "redeemed_by_telegram_user_id"
+    "redeemed_by_telegram_user_id",
+    "revoked_at"
   ],
   "fields": [
     {
@@ -53,11 +54,19 @@
       "fieldtype": "Data",
       "label": "Redeemed By Telegram User ID",
       "read_only": 1
+    },
+    {
+      "description": "Set when a newer link superseded this one, or when the employee was unlinked. A revoked token can never be redeemed. The row is kept so the audit trail survives.",
+      "fieldname": "revoked_at",
+      "fieldtype": "Datetime",
+      "in_list_view": 1,
+      "label": "Revoked At",
+      "read_only": 1
     }
   ],
   "index_web_pages_for_search": 0,
   "links": [],
-  "modified": "2026-08-15 12:00:00.000000",
+  "modified": "2026-08-18 12:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Telegram Link Token",

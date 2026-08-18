@@ -13,30 +13,78 @@ class TestTokenShape(unittest.TestCase):
         # Telegram's deep-link `start` payload allows 64 chars of
         # [A-Za-z0-9_-]. A 32-byte token base64url-encodes to 43.
         with patch.object(binding, "_store_token"):
-            token = binding.issue_link_token("HR-EMP-00001")
-        self.assertLessEqual(len(token), 64)
-        self.assertRegex(token, r"^[A-Za-z0-9_-]+$")
+            issued = binding.issue_link_token("HR-EMP-00001")
+        self.assertLessEqual(len(issued.token), 64)
+        self.assertRegex(issued.token, r"^[A-Za-z0-9_-]+$")
 
     def test_two_tokens_are_never_equal(self):
         with patch.object(binding, "_store_token"):
             a = binding.issue_link_token("HR-EMP-00001")
             b = binding.issue_link_token("HR-EMP-00001")
-        self.assertNotEqual(a, b)
+        self.assertNotEqual(a.token, b.token)
 
     def test_the_raw_token_is_never_stored(self):
         # Only its SHA-256 goes to the database, so a backup or a support
         # session never hands out a live token.
         with patch.object(binding, "_store_token") as store:
-            token = binding.issue_link_token("HR-EMP-00001")
+            issued = binding.issue_link_token("HR-EMP-00001")
         stored_hash = store.call_args[1]["token_hash"]
-        self.assertNotEqual(stored_hash, token)
-        self.assertEqual(stored_hash, binding._hash_token(token))
+        self.assertNotEqual(stored_hash, issued.token)
+        self.assertEqual(stored_hash, binding._hash_token(issued.token))
 
     def test_link_url_is_a_telegram_deep_link(self):
         self.assertEqual(
             binding.link_url("abc123", "dewey_time_bot"),
             "https://t.me/dewey_time_bot?start=abc123",
         )
+
+
+class TestTokenRevocation(unittest.TestCase):
+    """Re-issuing must REPLACE the live credential, not add a second one.
+
+    Without this, every click left another independently redeemable link alive
+    until its own expiry, and nothing anywhere listed them.
+    """
+
+    def test_issuing_revokes_the_employees_outstanding_tokens_first(self):
+        with patch.object(binding, "_store_token"), \
+             patch.object(binding, "revoke_outstanding_tokens") as revoke:
+            binding.issue_link_token("HR-EMP-00001")
+        revoke.assert_called_once_with("HR-EMP-00001")
+
+    def test_revoking_stamps_every_unredeemed_unrevoked_row(self):
+        import frappe
+
+        rows = [{"name": "hash-a"}, {"name": "hash-b"}]
+        with patch.object(frappe, "get_all", return_value=rows) as get_all, \
+             patch.object(frappe.db, "set_value") as set_value:
+            count = binding.revoke_outstanding_tokens("HR-EMP-00001")
+
+        self.assertEqual(count, 2)
+        self.assertEqual(set_value.call_count, 2)
+        # The filters ARE the behaviour: they are what excludes a token that
+        # was already redeemed (stamping that would rewrite history) and one
+        # already revoked (a no-op write on every re-issue).
+        filters = get_all.call_args[1]["filters"]
+        self.assertEqual(filters["employee"], "HR-EMP-00001")
+        self.assertEqual(filters["redeemed_at"], ["is", "not set"])
+        self.assertEqual(filters["revoked_at"], ["is", "not set"])
+        for call in set_value.call_args_list:
+            self.assertEqual(call[0][2], "revoked_at")
+
+    def test_revoking_a_blank_employee_queries_nothing(self):
+        # A blank filter would match the whole table.
+        import frappe
+
+        with patch.object(frappe, "get_all", side_effect=AssertionError("must not query")):
+            self.assertEqual(binding.revoke_outstanding_tokens("  "), 0)
+
+    def test_the_issued_expiry_is_the_one_that_was_stored(self):
+        # Two now_datetime() reads produced two different expiries: the row
+        # said one thing and the response said another.
+        with patch.object(binding, "_store_token") as store:
+            issued = binding.issue_link_token("HR-EMP-00001")
+        self.assertEqual(issued.expires_at, store.call_args[1]["expires_at"])
 
 
 class TestBotUsernameNormalisation(unittest.TestCase):
@@ -177,6 +225,8 @@ class TestRedeem(unittest.TestCase):
     def test_valid_token_creates_the_link_and_returns_the_employee(self):
         with patch.object(binding, "_load_token", return_value=self._token_doc()), \
              patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(binding, "_existing_link", return_value=None), \
              patch.object(binding, "_create_link") as create, \
              patch.object(binding, "_mark_redeemed"):
             employee = binding.redeem_link_token("tok", "55501", "77702")
@@ -185,6 +235,101 @@ class TestRedeem(unittest.TestCase):
         self.assertEqual(create.call_args[1]["employee"], "HR-EMP-00001")
         self.assertEqual(create.call_args[1]["telegram_user_id"], "55501")
         self.assertEqual(create.call_args[1]["chat_id"], "77702")
+
+
+class TestRedeemGuards(unittest.TestCase):
+    """Every way one employee could end up with two authorised accounts.
+
+    Each refusal asserts that NO write happened, not merely that something
+    raised. A guard that raises for the wrong reason -- or a mock that raises
+    before the guard is reached -- satisfies assertRaises alone.
+
+    `_is_expired` is pinned False throughout for the reason the existing
+    TestRedeem documents: under the frappe mock `get_datetime` is an identity
+    passthrough, so a deleted guard would fall through to the expiry
+    comparison and raise a TypeError, and the mutation would survive.
+    """
+
+    def _token_doc(self, **overrides):
+        doc = {
+            "name": "hash",
+            "employee": "HR-EMP-00001",
+            "expires_at": "2099-01-01 00:00:00",
+            "redeemed_at": None,
+            "revoked_at": None,
+        }
+        doc.update(overrides)
+        return doc
+
+    def _redeem(self, *, token_doc=None, existing=None, bound_elsewhere=False):
+        with patch.object(binding, "_load_token",
+                          return_value=token_doc or self._token_doc()), \
+             patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_existing_link", return_value=existing), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=bound_elsewhere), \
+             patch.object(binding, "_create_link") as create, \
+             patch.object(binding, "_revive_link") as revive, \
+             patch.object(binding, "_mark_redeemed") as mark:
+            try:
+                employee = binding.redeem_link_token("tok", "55501", "77702")
+            except Exception:
+                employee = None
+            return employee, create, revive, mark
+
+    def test_a_revoked_token_is_refused(self):
+        employee, create, revive, mark = self._redeem(
+            token_doc=self._token_doc(revoked_at="2026-08-18 09:00:00"))
+        self.assertIsNone(employee)
+        create.assert_not_called()
+        revive.assert_not_called()
+        mark.assert_not_called()
+
+    def test_an_employee_already_bound_to_another_account_refuses(self):
+        employee, create, revive, _ = self._redeem(bound_elsewhere=True)
+        self.assertIsNone(employee)
+        create.assert_not_called()
+        revive.assert_not_called()
+
+    def test_the_same_account_already_bound_here_is_idempotent(self):
+        # No second row: Telegram Link autonames on telegram_user_id, so
+        # _create_link would raise DuplicateEntryError.
+        employee, create, revive, mark = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00001", "enabled": 1})
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+        revive.assert_not_called()
+        mark.assert_called_once()
+
+    def test_an_account_bound_to_a_different_employee_refuses(self):
+        employee, create, revive, _ = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00002", "enabled": 1})
+        self.assertIsNone(employee)
+        create.assert_not_called()
+        revive.assert_not_called()
+
+    def test_a_disabled_link_is_revived_rather_than_refused(self):
+        # The changed-phone case. A Telegram account is keyed to a phone
+        # number, so the same account coming back is the ORDINARY shape of
+        # unlink -> re-issue, not an edge case.
+        employee, create, revive, mark = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00002", "enabled": 0})
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+        self.assertEqual(revive.call_args[1]["name"], "55501")
+        self.assertEqual(revive.call_args[1]["employee"], "HR-EMP-00001")
+        self.assertEqual(revive.call_args[1]["chat_id"], "77702")
+        mark.assert_called_once()
+
+    def test_the_bound_elsewhere_guard_runs_before_the_revive(self):
+        # Order, not merely presence. Reviving into an employee who already
+        # has another live account is the two-accounts-one-employee failure
+        # arriving through the back door.
+        employee, create, revive, _ = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00002", "enabled": 0},
+            bound_elsewhere=True)
+        self.assertIsNone(employee)
+        revive.assert_not_called()
+        create.assert_not_called()
 
 
 class TestClaimByRecordedId(unittest.TestCase):
@@ -317,8 +462,14 @@ class TestInvite(unittest.TestCase):
         gate.assert_called_once()
 
     def test_invite_returns_a_tappable_url(self):
+        # `_live_link_names` is pinned, not inherited. Several test modules
+        # replace the shared `frappe.get_all` mock by bare assignment rather
+        # than through `patch`, so its default survives into this module under
+        # `unittest discover` and an unpinned collaborator decides the result.
         with patch.object(binding, "_require_hr_role"), \
-             patch.object(binding, "issue_link_token", return_value="tok123"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
              patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
             invite = binding.create_link_invite("HR-EMP-00001")
         self.assertEqual(invite["url"], "https://t.me/dewey_time_bot?start=tok123")
@@ -330,17 +481,20 @@ class TestInvite(unittest.TestCase):
         # actually on the path -- `link_url(token, _bot_username())` reads the
         # same either way.
         with patch.object(binding, "_require_hr_role"), \
-             patch.object(binding, "issue_link_token", return_value="tok123"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
              patch.object(binding.frappe, "get_cached_value", return_value="@deweytimebot"):
             invite = binding.create_link_invite("HR-EMP-00001")
         self.assertEqual(invite["url"], "https://t.me/deweytimebot?start=tok123")
         self.assertNotIn("@", invite["url"])
 
     def test_a_misconfigured_username_does_not_burn_a_token(self):
-        # The token row is written and its 7-day clock starts on `insert`, so
+        # The token row is written and its 24-hour clock starts on `insert`, so
         # minting before the username is resolved leaves live tokens behind on
         # every failed attempt.
         with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
              patch.object(binding, "issue_link_token") as issue, \
              patch.object(binding.frappe, "get_cached_value", return_value="not a username"):
             with self.assertRaises(Exception):
@@ -353,3 +507,135 @@ class TestInvite(unittest.TestCase):
             with self.assertRaises(Exception):
                 binding.create_link_invite("  ")
         issue.assert_not_called()
+
+
+class TestReviveLink(unittest.TestCase):
+    def test_reviving_goes_through_the_document_api(self):
+        # frappe.db.set_value bypasses controller validation, and
+        # TelegramLink.validate is the backstop that refuses a second enabled
+        # link for one employee. A revive written with set_value would be the
+        # single path in this module that skips it -- and it is the only path
+        # that points an EXISTING row at a DIFFERENT employee, so it is the
+        # one that most needs the check.
+        import frappe
+
+        with patch.object(frappe.db, "set_value") as set_value, \
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
+            binding._revive_link(
+                name="55501", employee="HR-EMP-00001", chat_id="77702")
+
+        get_doc.assert_called_once_with(binding.LINK_DT, "55501")
+        self.assertEqual(doc.employee, "HR-EMP-00001")
+        self.assertEqual(doc.chat_id, "77702")
+        self.assertEqual(doc.enabled, 1)
+        self.assertEqual(doc.linked_via, "token")
+        doc.save.assert_called_once_with(ignore_permissions=True)
+        set_value.assert_not_called()
+
+
+class TestInviteRefusesALinkedEmployee(unittest.TestCase):
+    def test_an_already_linked_employee_gets_no_new_link(self):
+        # The register hides its control for a linked employee; this is the
+        # guard that makes that true rather than cosmetic. A stale tab, or any
+        # direct call, would otherwise mint a credential that can bind a
+        # second account to someone already bound.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "issue_link_token") as issue:
+            with self.assertRaises(Exception):
+                binding.create_link_invite("HR-EMP-00001")
+        issue.assert_not_called()
+
+    def test_the_invite_reports_a_one_day_window(self):
+        # An integer duration, not a datetime string: the browser cannot turn
+        # a naive site-local datetime into an instant without knowing the
+        # site's timezone, and the countdown needs an instant.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
+             patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
+            invite = binding.create_link_invite("HR-EMP-00001")
+        self.assertEqual(invite["expires_in_seconds"], 86400)
+        self.assertEqual(invite["expires_at"], "2026-08-19 09:00:00")
+
+
+class TestRevokeLink(unittest.TestCase):
+    def test_revoking_requires_hr(self):
+        with patch.object(binding, "_require_hr_role",
+                          side_effect=Exception("Not permitted")) as gate, \
+             patch.object(binding, "_live_link_names") as names:
+            with self.assertRaises(Exception):
+                binding.revoke_link("HR-EMP-00001")
+        gate.assert_called_once()
+        names.assert_not_called()
+
+    def test_revoking_disables_the_link_and_kills_outstanding_tokens(self):
+        import frappe
+
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=2) as tokens, \
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
+            result = binding.revoke_link("HR-EMP-00001")
+
+        self.assertEqual(result, {
+            "employee": "HR-EMP-00001", "unlinked": 1, "tokens_revoked": 2,
+        })
+        get_doc.assert_called_once_with(binding.LINK_DT, "55501")
+        self.assertEqual(doc.enabled, 0)
+        tokens.assert_called_once_with("HR-EMP-00001")
+
+    def test_the_unlink_is_written_where_version_history_can_see_it(self):
+        # Telegram Link is track_changes:1, and Versions are written by
+        # Document.save() -- frappe.db.set_value goes straight to SQL and
+        # records nothing. Clearing the checkbox by hand in the desk, the path
+        # this endpoint replaces, DOES record who revoked the credential and
+        # when. A programmatic unlink that silently stopped doing so would be
+        # an audit regression nobody would notice until they needed the trail.
+        import frappe
+
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0), \
+             patch.object(frappe.db, "set_value") as set_value, \
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
+            binding.revoke_link("HR-EMP-00001")
+
+        doc.save.assert_called_once_with(ignore_permissions=True)
+        set_value.assert_not_called()
+
+    def test_the_row_is_disabled_never_deleted(self):
+        # The row and its version history are the audit trail, and the
+        # `enabled` field's own description promises they survive the unlink.
+        import frappe
+
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0), \
+             patch.object(frappe, "get_doc"), \
+             patch.object(frappe, "delete_doc", create=True) as delete_doc, \
+             patch.object(frappe.db, "delete") as db_delete:
+            binding.revoke_link("HR-EMP-00001")
+        delete_doc.assert_not_called()
+        db_delete.assert_not_called()
+
+    def test_revoking_an_unlinked_employee_is_not_an_error(self):
+        # Idempotent on purpose. A second press from a stale tab would
+        # otherwise put a red message in front of HR for doing nothing wrong.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=[]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0):
+            result = binding.revoke_link("HR-EMP-00001")
+        self.assertEqual(result["unlinked"], 0)
+
+    def test_revoking_refuses_a_blank_employee(self):
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names") as names:
+            with self.assertRaises(Exception):
+                binding.revoke_link("  ")
+        names.assert_not_called()
+
