@@ -3,6 +3,7 @@ import type { ShiftContext } from "@/types/calendar";
 import {
   clamp,
   minutesFromDateTime,
+  minutesSinceMidnight,
   parseTimeToMinutes,
 } from "@/lib/attendanceTime";
 
@@ -36,7 +37,7 @@ function subtractMinuteRange(
 }
 
 export type MissingExpectedOptions = {
-  /** On today: clip bands to start of present hour so they do not overlap scheduled future bands. */
+  /** On today: clip bands to the present minute so they do not overlap scheduled future bands. */
   maxEndMin?: number | null;
   /** Mid-day away gaps (segment→segment); excluded to avoid double visualization with away bands. */
   excludeIntervals?: MinuteRange[];
@@ -45,7 +46,7 @@ export type MissingExpectedOptions = {
 /**
  * On-shift work windows (shift start→end minus scheduled lunch) not covered by paired segments.
  * Leading/trailing obligation gaps (late start, early leave, no return) — not mid-day away between segments.
- * When maxEndMin is set (present-hour start on today), bands do not extend into the current hour or future.
+ * When maxEndMin is set (the present minute on today), bands do not extend into the future.
  */
 export function deriveMissingExpectedIntervals(
   shift: ShiftContext | undefined,
@@ -96,7 +97,7 @@ export function deriveMissingExpectedIntervals(
     .filter((part): part is MissingExpectedInterval => part != null && part.minutes > 0);
 }
 
-/** Past-only cap for missing-expected: start of present hour on today; full day on past; none on future. */
+/** Past-only cap for missing-expected: the present minute on today; full day on past; none on future. */
 export function missingExpectedMaxEndMin(
   dateKey: string,
   now: Date = new Date()
@@ -107,17 +108,32 @@ export function missingExpectedMaxEndMin(
   const todayKey = `${y}-${m}-${d}`;
   if (dateKey > todayKey) return 0;
   if (dateKey < todayKey) return null;
-  return presentHourStartMin(now);
+  return presentBoundaryMin(now);
 }
 
-/** Start of the current clock hour (minutes since midnight). */
-export function presentHourStartMin(now: Date = new Date()): number {
-  return now.getHours() * 60;
+/**
+ * Where today stops having happened — the single boundary both dashes tile at.
+ *
+ * `minutesSinceMidnight`, deliberately: the now-line on the same canvas is
+ * drawn from it too, so the red dash, the grey dash and the line cannot
+ * disagree about what time it is. They used to. This returned
+ * `now.getHours() * 60`, which froze both dashes for a whole hour and then
+ * moved them sixty minutes at once — and for the rest of each hour drew
+ * elapsed time as still-to-come, directly above a now-line that said
+ * otherwise.
+ *
+ * The non-overlap requirement this serves (commit 8e086aa8) never needed the
+ * hour; it needed the two bands to agree on one number. Device sync lag, the
+ * other reason a boundary might lag the clock, is modelled from real delivery
+ * data in `syncHorizonForTimeline` and does not belong here.
+ */
+export function presentBoundaryMin(now: Date = new Date()): number {
+  return minutesSinceMidnight(now);
 }
 
 /**
  * Scheduled reference band visible only in the future: full range on future days,
- * from present hour through band end on today, hidden on past days.
+ * from the present minute through band end on today, hidden on past days.
  */
 export function clipScheduledBandToFuture(
   dateKey: string,
@@ -135,7 +151,7 @@ export function clipScheduledBandToFuture(
   if (dateKey < todayKey) return null;
   if (dateKey > todayKey) return { startMin, endMin };
 
-  const clippedStart = Math.max(startMin, presentHourStartMin(now));
+  const clippedStart = Math.max(startMin, presentBoundaryMin(now));
   if (clippedStart >= endMin) return null;
   return { startMin: clippedStart, endMin };
 }
@@ -147,7 +163,7 @@ export type ScheduledFutureInterval = {
 };
 
 /**
- * Scheduled work windows (shift start→end minus lunch) from present hour through shift end on today.
+ * Scheduled work windows (shift start→end minus lunch) from the present minute through shift end on today.
  * Full future windows on future days; hidden on past days.
  */
 export function deriveScheduledFutureIntervals(
