@@ -99,6 +99,13 @@ useful one knowingly.
 
 ### Leave and holiday
 
+`dayFacts` answers leave and holiday FIRST and returns before it looks at a
+punch, so its `workedMinutes` is null on exactly the days where somebody may
+still have worked. The worked figure therefore comes from a derivation hoisted
+out of `dayFacts` and shared with it (`netWorkedFor`), not from `dayFacts`
+itself. Reading the field directly would silently drop the two hours somebody
+put in on a public holiday.
+
 The rostered figure is suppressed: on a day somebody was entitled to be away,
 there is no figure they failed to meet. The status chip beside the date already
 names the day ("Annual Leave", "Constitution Day"), so nothing is lost.
@@ -126,10 +133,12 @@ Every digit goes through `fmt.worked`, which is already locale-bound — a Latin
 `8h` beside Khmer words is the leak the e2e guard forbids. The separator `/` is
 script-neutral and stays.
 
-Two new strings, **both requiring Khmer from a native speaker**: the sr-only
-sentence, and `so far`. They join the ~50 already awaiting review; the row
-ships with machine-drafted Khmer marked as unreviewed, consistent with the
-existing backlog.
+Four new strings, **all requiring Khmer from a native speaker**: `so far`, and
+three sr-only sentences (worked against rostered, worked alone, rostered
+alone). Three rather than one because composing a sentence from fragments
+fixes English word order onto Khmer. They join the ~50 already awaiting
+review; the row ships with machine-drafted Khmer marked as unreviewed,
+consistent with the existing backlog.
 
 ## What this deletes
 
@@ -163,8 +172,10 @@ is the trap that already cost one wrong result here.
 
 - Unit, `miniDay`: each row of the table above, including a past day with an
   open punch accruing nothing, and an overnight shift's rostered figure.
-- Unit, `MyDayPage`: the row is absent on leave and on holiday; present with
-  the pill alone when a leave day has flags.
+- Unit, `MiniDayNumbers`: the row is absent on leave and on holiday; present
+  with the pill alone when a leave day has flags. Tested on the component
+  rather than through `MyDayPage`, which would need the calendar query stubbed
+  to render at all.
 - Source guard, extending `miniFlagsSheet.test.tsx`: no `position: fixed` in
   `MyDayPage.tsx` or `MiniFlagButton.tsx`. This is the defect the change
   exists to retire and the only assertion that stops it returning.
