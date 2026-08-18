@@ -10,6 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-18-miniapp-day-numbers-row-design.md`
 
+**Status: COMPLETE** — executed inline on `feat/miniapp-day-numbers-row`
+(6a07f56c, d080fd2f, 02915cf6, d7b9c49f, plus be72660a and two asset builds).
+Ledger: `.superpowers/sdd/2026-08-18-miniapp-day-numbers-row/progress.md`.
+No independent review has run; that is still owed before merge.
+
 ## Global Constraints
 
 - **Never change `netWorkedMinutes`** (`src/lib/clockDay.ts`). It is HR's payable figure and the calendar sheet's month total reads it. The open run is added on top, in the Mini App layer only.
@@ -54,7 +59,7 @@
   where `DayNumbers = { worked: number | null; rostered: number | null; live: boolean }`.
   Task 2 renders exactly this shape.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/miniapp/miniDay.test.ts`. Add `dayNumbers` to the existing import from `@/miniapp/miniDay`.
 
@@ -175,12 +180,12 @@ test("a day with no roster and no punches has neither figure", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and watch them fail**
+- [x] **Step 2: Run the tests and watch them fail**
 
 Run: `npm run test:web 2>&1 | tail -20`
 Expected: FAIL — `dayNumbers` is not exported from `@/miniapp/miniDay`.
 
-- [ ] **Step 3: Export the open run from `miniStatus.ts`**
+- [x] **Step 3: Export the open run from `miniStatus.ts`**
 
 Append to `src/miniapp/miniStatus.ts`, after `stillInside`:
 
@@ -204,7 +209,7 @@ export function openRunStartedAt(day: Day | undefined): string | null {
 }
 ```
 
-- [ ] **Step 4a: Hoist the worked-minutes derivation in `miniDay.ts`**
+- [x] **Step 4a: Hoist the worked-minutes derivation in `miniDay.ts`**
 
 `dayFacts` returns EARLY on leave and on holiday — it never reaches the branch
 that parses punches, so `workedMinutes` is null on those days. Work punched on
@@ -250,7 +255,7 @@ branch exactly as it is:
     const net = netWorkedFor(day);
 ```
 
-- [ ] **Step 4b: Add `dayNumbers` to `miniDay.ts`**
+- [x] **Step 4b: Add `dayNumbers` to `miniDay.ts`**
 
 Append at the end of the file:
 
@@ -322,12 +327,12 @@ export function dayNumbers(
 }
 ```
 
-- [ ] **Step 5: Run the tests and watch them pass**
+- [x] **Step 5: Run the tests and watch them pass**
 
 Run: `npm run test:web 2>&1 | tail -20`
 Expected: PASS, with a higher total than before — check the count moved, not just that it is green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/miniapp/miniStatus.ts src/miniapp/miniDay.ts src/miniapp/miniDay.test.ts
@@ -347,7 +352,7 @@ git commit -m "feat(miniapp): the day's worked and rostered figures, open run in
 - Consumes: `dayNumbers` / `DayNumbers` from Task 1.
 - Produces: `MiniDayNumbers` — props `{ day, date, today, now, flagCount, onOpenFlags }`.
 
-- [ ] **Step 1: Add the four strings**
+- [x] **Step 1: Add the four strings**
 
 In `src/miniapp/miniStrings.ts`, in the `en` table immediately after the `flagsNone` line:
 
@@ -373,7 +378,7 @@ And in the `km` table, at the matching position after its `flagsNone`:
   dayAriaRosteredOnly: "តាមកាលវិភាគ {rostered} មិនទាន់មានម៉ោងធ្វើការ",
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `src/miniapp/miniDayNumbers.test.tsx`:
 
@@ -465,12 +470,12 @@ test("nothing on the Day tab is positioned fixed", () => {
 });
 ```
 
-- [ ] **Step 3: Run the tests and watch them fail**
+- [x] **Step 3: Run the tests and watch them fail**
 
 Run: `npm run test:web 2>&1 | tail -20`
 Expected: FAIL — `@/miniapp/MiniDayNumbers` does not exist.
 
-- [ ] **Step 4: Strip the positioning out of `MiniFlagButton.tsx`**
+- [x] **Step 4: Strip the positioning out of `MiniFlagButton.tsx`**
 
 Replace the whole file with:
 
@@ -520,7 +525,7 @@ export function MiniFlagButton(props: { count: number; onOpen: () => void }) {
 }
 ```
 
-- [ ] **Step 5: Create `MiniDayNumbers.tsx`**
+- [x] **Step 5: Create `MiniDayNumbers.tsx`**
 
 ```tsx
 /**
@@ -601,7 +606,7 @@ export function MiniDayNumbers(props: {
 }
 ```
 
-- [ ] **Step 6: Wire it into `MyDayPage.tsx`**
+- [x] **Step 6: Wire it into `MyDayPage.tsx`**
 
 Replace the `MiniFlagButton` import with:
 
@@ -632,7 +637,7 @@ Then update the file's opening docstring — the bullet claiming the net total i
  *     calendar sheet.
 ```
 
-- [ ] **Step 7: Delete the dead constant in `MiniAppShell.tsx`**
+- [x] **Step 7: Delete the dead constant in `MiniAppShell.tsx`**
 
 Delete `TAB_BAR_HEIGHT_PX` and its entire docstring (the one beginning "The tab bar's painted height"), whose claim that the bar's padding "already absorbs" the inset is the false statement behind the overlap.
 
@@ -648,12 +653,12 @@ Then remove the `flagLift` prop from the `MyDayPage` element, leaving:
           />
 ```
 
-- [ ] **Step 8: Run the tests and the build**
+- [x] **Step 8: Run the tests and the build**
 
 Run: `npm run test:web 2>&1 | tail -20 && npm run build 2>&1 | tail -5`
 Expected: all unit tests PASS, build clean. If `miniAppShell.test.tsx` fails on a missing `TAB_BAR_HEIGHT_PX` import, remove that name from its import list — it imports `TAB_BAR_FLOOR_PX`, which stays.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/miniapp/ && git commit -m "feat(miniapp): the day's numbers row, and the end of the floating pill"
@@ -669,7 +674,7 @@ git add src/miniapp/ && git commit -m "feat(miniapp): the day's numbers row, and
 **Interfaces:**
 - Consumes: the existing `openMiniApp(page, opts)` helper. `{ fullscreen: true }` already sets `safeAreaInset.bottom = 34`, which is the device shape that produced the bug.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `e2e/miniapp.spec.ts`:
 
@@ -691,7 +696,7 @@ test("the flags pill never overlaps the tab bar on a notched phone", async ({ pa
 });
 ```
 
-- [ ] **Step 2: Prove the guard can fail**
+- [x] **Step 2: Prove the guard can fail**
 
 A geometry assertion that passes against the broken layout is worthless. Put
 the old positioning back on the pill alone, confirm the new test FAILS, then
@@ -716,12 +721,12 @@ git diff --quiet src/miniapp/MiniFlagButton.tsx && echo "RESTORED clean"
 
 Expected: `RESTORED clean`. Do not continue until that prints.
 
-- [ ] **Step 3: Run it against the new layout**
+- [x] **Step 3: Run it against the new layout**
 
 Run: `npx playwright test e2e/miniapp.spec.ts 2>&1 | tail -15`
 Expected: PASS, and the rest of the miniapp spec still green.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add e2e/miniapp.spec.ts
@@ -737,7 +742,7 @@ git commit -m "test(miniapp): pin that the flags pill clears the tab bar on a no
 
 **Interfaces:** None. A local rename with no exported surface.
 
-- [ ] **Step 1: Rename the local**
+- [x] **Step 1: Rename the local**
 
 In `src/miniapp/MyDayPage.tsx`, rename the local `window` to `timelineWindow` — the declaration and both uses:
 
@@ -765,17 +770,17 @@ Add above the declaration:
   // looked implemented and rendered in the wrong place.
 ```
 
-- [ ] **Step 2: Prove the shadow is gone**
+- [x] **Step 2: Prove the shadow is gone**
 
 Run: `grep -n "const window" src/miniapp/MyDayPage.tsx`
 Expected: no output.
 
-- [ ] **Step 3: Run the tests and the build**
+- [x] **Step 3: Run the tests and the build**
 
 Run: `npm run test:web 2>&1 | tail -10 && npm run build 2>&1 | tail -5`
 Expected: PASS and clean — this is a pure rename, so any failure means a use was missed.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/miniapp/MyDayPage.tsx
@@ -786,8 +791,8 @@ git commit -m "fix(miniapp): MyDayPage no longer shadows the global window"
 
 ## Verification before finishing
 
-- [ ] `npm run test:web` — green, and the test count is HIGHER than at the start. A glob that silently matched nothing reads exactly like a pass here.
-- [ ] `npm run build` — clean.
-- [ ] `npx playwright test e2e/miniapp.spec.ts` — green.
-- [ ] The design spike harness still exists and is git-excluded (`index.spike.html`, `spike.html`). Serve with `PORT=8099 npm run dev` and open `http://localhost:8099/index.spike.html?inset=34` to see the real layout on a notched phone. Confirm by eye that the row sits above the tab bar and that toggling `&lang=km` keeps it on one line at 390px.
-- [ ] `git log --oneline` shows four commits, one per task.
+- [x] `npm run test:web` — green, and the test count is HIGHER than at the start. A glob that silently matched nothing reads exactly like a pass here.
+- [x] `npm run build` — clean.
+- [x] `npx playwright test e2e/miniapp.spec.ts` — green.
+- [x] The design spike harness still exists and is git-excluded (`index.spike.html`, `spike.html`). Serve with `PORT=8099 npm run dev` and open `http://localhost:8099/index.spike.html?inset=34` to see the real layout on a notched phone. Confirm by eye that the row sits above the tab bar and that toggling `&lang=km` keeps it on one line at 390px.
+- [x] `git log --oneline` shows four commits, one per task.
