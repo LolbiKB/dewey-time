@@ -94,6 +94,72 @@ export function directionForCheckin(sorted: Checkin[], checkin: Checkin): "IN" |
   return "IN";
 }
 
+
+/**
+ * Which way a punch goes: its own label if it has one, its position if not.
+ *
+ * `Employee Checkin.log_type` is an optional Select and a device that reports
+ * only a timestamp leaves it empty on every row, so position has to remain the
+ * fallback — that is what `inferCheckinDirection` is for, and every all-blank
+ * day pairs exactly as it always did. What changes is that an EXPLICIT label is
+ * now believed rather than overruled by where the punch happens to sit.
+ */
+function punchDirection(punch: Checkin, index: number, runLength: number): "IN" | "OUT" {
+  const label = String(punch.log_type || "").trim().toUpperCase();
+  if (label === "IN") return "IN";
+  if (label === "OUT") return "OUT";
+  return inferCheckinDirection(index, runLength);
+}
+
+export type RunPairing = {
+  /** Arrivals matched to the departure that closed them. */
+  pairs: Array<{ start: Checkin; end: Checkin }>;
+  /** Punches that never matched: duplicates, stray departures, an open arrival. */
+  unmatched: Checkin[];
+  /** The arrival still open at the end of the run, if any. */
+  openAt: Checkin | null;
+};
+
+/**
+ * Walk one branch run and match arrivals to departures.
+ *
+ * ONE derivation, because there used to be two and they disagreed.
+ * `deriveSegments` paired positionally (`i += 2`) while `deriveUnpairedPunches`
+ * used run-length parity, so a run of two arrivals produced a sixty-minute
+ * "segment" from one of them AND no unpaired punch from the other — a stretch
+ * of work nobody did, drawn on the timeline and summed into the totals. See
+ * issue #191.
+ *
+ * A second arrival with no departure between does NOT close the first: the
+ * earlier one is when the person actually got there, and the duplicate is
+ * noise. A departure with nothing open is stray and matches nothing. Both fall
+ * through to `unmatched`, where the presentation layer already knows how to
+ * draw them.
+ */
+export function pairRun(run: Checkin[]): RunPairing {
+  const pairs: Array<{ start: Checkin; end: Checkin }> = [];
+  const unmatched: Checkin[] = [];
+  let open: Checkin | null = null;
+
+  run.forEach((punch, index) => {
+    if (punchDirection(punch, index, run.length) === "IN") {
+      // Keep the FIRST arrival; a repeat is the duplicate, not the real one.
+      if (open) unmatched.push(punch);
+      else open = punch;
+      return;
+    }
+    if (open) {
+      pairs.push({ start: open, end: punch });
+      open = null;
+      return;
+    }
+    unmatched.push(punch);
+  });
+
+  if (open) unmatched.push(open);
+  return { pairs, unmatched, openAt: open };
+}
+
 export function deriveSegments(
   checkins: Checkin[],
   helpers: {
@@ -108,9 +174,7 @@ export function deriveSegments(
   for (const run of groupCheckinsByBranchRuns(sorted)) {
     if (!run.length || !hasPunchBranch(run[0]!)) continue;
 
-    for (let i = 0; i < run.length - 1; i += 2) {
-      const start = run[i]!;
-      const end = run[i + 1]!;
+    for (const { start, end } of pairRun(run).pairs) {
       const startBranch = punchBranch(start);
       const endBranch = punchBranch(end);
 
@@ -163,9 +227,12 @@ export function deriveUnpairedPunches(
       continue;
     }
 
-    if (run.length % 2 === 1) {
-      unpaired.push(run[run.length - 1]!);
-    }
+    // The SAME pairing deriveSegments uses. Parity was the old rule and it
+    // disagreed with positional pairing the moment a run held two arrivals:
+    // an even run reported nothing unpaired while the segments quietly
+    // invented a stretch of work. Now a punch is unpaired exactly when nothing
+    // matched it.
+    unpaired.push(...pairRun(run).unmatched);
   }
 
   return unpaired;

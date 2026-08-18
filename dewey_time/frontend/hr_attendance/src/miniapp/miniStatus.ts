@@ -24,6 +24,7 @@
 import { isSameDay } from "date-fns";
 
 import { parseTimeToMinutes } from "@/lib/attendanceTime";
+import { groupCheckinsByBranchRuns, pairRun } from "@/lib/attendancePunches";
 import type { Day } from "@/types/calendar";
 import type { StringKey } from "@/miniapp/miniStrings";
 
@@ -80,20 +81,27 @@ function stillInside(punches: { log_type?: string | null }[]): boolean {
 /**
  * The unclosed arrival on this day, as the API's own datetime string.
  *
- * Exported so the day's worked figure and the status chip answer "are they
- * clocked in?" the same way. `stillInside` already reconciles with
- * `deriveSegments`' pairing -- an odd count is an open run in both places --
- * and a fourth private copy of this test is exactly the drift that puts two
- * different answers about one Tuesday on one screen.
+ * Reads `pairRun` -- the SAME matching `deriveSegments` uses to draw the
+ * timeline and to total the day -- so the status chip, the canvas and the
+ * worked figure cannot disagree about whether one Tuesday is still running.
+ *
+ * It returns the arrival that is actually still open, which is not always the
+ * last punch: a device that repeats an arrival leaves 08:00 open and 09:00 as
+ * a duplicate, and the person got there at 08:00. Taking the last punch would
+ * quietly dock them an hour (issue #191).
+ *
+ * The LAST run only. Earlier runs belong to a branch the person has left; what
+ * is open now is where they are now.
  *
  * Says nothing about WHICH day. An unclosed punch three weeks ago is a gap in
  * the record, not somebody still at work; a caller that cares must check the
  * date itself.
  */
 export function openRunStartedAt(day: Day | undefined): string | null {
-  const punches = inOrder(day);
-  if (!punches.length || !stillInside(punches)) return null;
-  return punches[punches.length - 1]!.time ?? null;
+  const runs = groupCheckinsByBranchRuns(inOrder(day));
+  const last = runs[runs.length - 1];
+  if (!last?.length) return null;
+  return pairRun(last).openAt?.time ?? null;
 }
 
 export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniStatus {
