@@ -62,6 +62,9 @@ const BASE_ROW: RegisterRow = {
   weekly_minutes: 2400,
   biometric: "enrolled",
   fingerprint_count: 2,
+  // Counts without ids is the ordinary feed shape; the finger tests override.
+  fingers: null,
+  face: null,
   days_since_relieving: null,
   // Unlinked is the ordinary row during the rollout; the Telegram tests
   // override it.
@@ -555,75 +558,131 @@ test("the table keys its header state by COLUMN ID — which is why the page tra
 // registerColumns — cell content
 // ---------------------------------------------------------------------------
 
-test("the biometric column shows the right label and variant for each of the four buckets", () => {
-  const cases: { biometric: NonNullable<RegisterRow["biometric"]>; label: string; variant: string }[] = [
-    { biometric: "enrolled", label: "Enrolled", variant: "secondary" },
-    { biometric: "enrolled_not_punching", label: "Enrolled, not punching", variant: "outline" },
-    { biometric: "none", label: "No fingerprint", variant: "destructive" },
-    { biometric: "still_enrolled", label: "Still enrolled", variant: "destructive" },
-  ];
-  for (const { biometric, label, variant } of cases) {
+test("badges survive only for the two problem states — colour in this column means look here", () => {
+  // The registration IS the ordinary state, so an enrolled row draws no badge
+  // at all: its evidence (the glyph + count) says "enrolled" by existing.
+  for (const biometric of ["none", "still_enrolled"] as const) {
     const { html } = renderRow({ ...BASE_ROW, biometric });
+    const label = biometric === "none" ? "Not enrolled" : "Still enrolled";
     assert.match(html.biometric, new RegExp(`>${label}<`), `${biometric} must show "${label}"`);
-    assert.match(html.biometric, new RegExp(`data-variant="${variant}"`), `${biometric} must use the ${variant} variant`);
+    assert.match(html.biometric, /data-variant="destructive"/, `${biometric} is a finding`);
+  }
+  for (const biometric of ["enrolled", "enrolled_not_punching"] as const) {
+    const { html } = renderRow({ ...BASE_ROW, biometric, fingerprint_count: 2 });
+    assert.doesNotMatch(html.biometric, /data-variant=/, `${biometric} must draw no badge`);
+    assert.match(html.biometric, /tabular-nums[^"]*"[^>]*>2</, "the count is the cell");
+    assert.match(html.biometric, /text-muted-foreground/, "quiet — an ordinary state does not shout");
   }
 });
 
-test("the fused biometric cell shows the count as corroboration, above zero only", () => {
-  // The print count is evidence for the state, not a fact beside it, so it
-  // rides in the same cell — in muted tabular figures, subordinate to the badge
-  // that carries the finding.
-  const enrolled = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 2 });
-  assert.match(enrolled.html.biometric, />Enrolled</);
-  assert.match(enrolled.html.biometric, /tabular-nums[^"]*"[^>]*>2</, "the count, in tabular figures");
-  assert.match(enrolled.html.biometric, /text-muted-foreground/, "muted — it corroborates, it does not shout");
-
+test("ENROLLED_NOT_PUNCHING renders like ENROLLED — the distinction lives in the filter, not a badge", () => {
+  // Punch behaviour is an attendance question, not a registration one. The
+  // bucket itself survives (the filter and CSV still carry it — the retired
+  // Punches-30d column's constraint); only the badge is gone, so it cannot
+  // out-shout the two real findings.
+  const enrolled = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 1 });
   const notPunching = renderRow({
     ...BASE_ROW, biometric: "enrolled_not_punching", fingerprint_count: 1,
   });
-  assert.match(notPunching.html.biometric, />Enrolled, not punching</);
-  assert.match(notPunching.html.biometric, />1</);
+  assert.equal(enrolled.html.biometric, notPunching.html.biometric);
+  assert.doesNotMatch(notPunching.html.biometric, /not punching/i);
 });
 
-test("a zero count is not printed beside the badge — an absent one is not printed either", () => {
-  // Above zero only. A trailing "0" reads as a finding of its own next to a
-  // badge that is not reporting one, and an em dash where a count would be is
-  // the same rendered non-fact the rest of this page refuses.
-  const zero = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 0 });
-  assert.match(zero.html.biometric, />Enrolled</);
-  assert.doesNotMatch(zero.html.biometric, />0</, "no zero beside the badge");
+test("a single template renders amber — the fragility signal, explained in words", () => {
+  // One cut or burnt finger and this person cannot punch. Amber, not
+  // destructive: a quality nudge, never counted with the findings (see
+  // isFragileEnrollment). The words ride in the accessible name so colour
+  // never carries the meaning alone.
+  const fragile = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 1 });
+  assert.match(fragile.html.biometric, /text-amber-700/);
+  assert.match(fragile.html.biometric, /font-semibold/);
+  assert.match(fragile.html.biometric, /Only one finger — a cut means no punching/);
 
-  const unknown = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: null });
-  assert.match(unknown.html.biometric, />Enrolled</);
-  assert.doesNotMatch(unknown.html.biometric, /—/, "and no em dash inside the cell either");
+  const fine = renderRow({ ...BASE_ROW, biometric: "enrolled", fingerprint_count: 2 });
+  assert.doesNotMatch(fine.html.biometric, /text-amber-700/);
+  assert.doesNotMatch(fine.html.biometric, /Only one finger/);
 });
 
-test("\"No fingerprint\" carries no count, even when the payload sends one", () => {
-  // Zero is exactly what the label already says, so printing it is a second
-  // and weaker claim about the same fact. The gate is on the STATE as well as
-  // the number: an inconsistent payload — `none` with a non-zero count — must
-  // show the label alone rather than contradict itself inside one cell, and a
-  // count-only gate would print "3" beside "No fingerprint".
+test("the cell names the fingers only when they account for every template", () => {
+  // The Mini App's honesty guard, applied here: two names beside a count of
+  // three states something false about the third. The names live in the
+  // trigger's accessible name (and the tooltip renders the same lines).
+  const accounted = renderRow({
+    ...BASE_ROW, biometric: "enrolled", fingerprint_count: 2,
+    fingers: ["right_thumb", "right_index"],
+  });
+  assert.match(accounted.html.biometric, /Right thumb, Right index/);
+
+  const mismatch = renderRow({
+    ...BASE_ROW, biometric: "enrolled", fingerprint_count: 2, fingers: ["right_thumb"],
+  });
+  assert.doesNotMatch(mismatch.html.biometric, /Right thumb/, "names that cannot account for the count must not render");
+  assert.match(mismatch.html.biometric, /2 fingerprints/, "the bare count is the honest fallback");
+
+  const noIds = renderRow({
+    ...BASE_ROW, biometric: "enrolled", fingerprint_count: 3, fingers: null,
+  });
+  assert.match(noIds.html.biometric, /3 fingerprints/);
+});
+
+test("a face template draws its own quiet mark, and its own line of words", () => {
+  const withFace = renderRow({ ...BASE_ROW, biometric: "enrolled", face: true });
+  assert.match(withFace.html.biometric, /lucide-scan-face/);
+  assert.match(withFace.html.biometric, /Face template on device/);
+
+  const noFace = renderRow({ ...BASE_ROW, biometric: "enrolled", face: false });
+  assert.doesNotMatch(noFace.html.biometric, /lucide-scan-face/);
+  const unknownFace = renderRow({ ...BASE_ROW, biometric: "enrolled", face: null });
+  assert.doesNotMatch(unknownFace.html.biometric, /lucide-scan-face/, "feed silence is not a face");
+});
+
+test("the evidence is keyboard-reachable, and the aria-label carries the whole story", () => {
+  // The tooltip opens on focus as well as hover; a detail only a mouse can
+  // reach is detail a keyboard user is denied.
+  const { html } = renderRow({
+    ...BASE_ROW, biometric: "enrolled", fingerprint_count: 1,
+    fingers: ["right_thumb"], face: true,
+  });
+  assert.match(html.biometric, /tabindex="0"/);
+  assert.match(
+    html.biometric,
+    /aria-label="Right thumb\. Only one finger — a cut means no punching\. Face template on device"/,
+  );
+});
+
+test("a zero count renders 0 — with no badge left, the number is the cell's only claim", () => {
+  // The face-only enrollee (is_registered with no fingerprints) is exactly who
+  // this happens for; an empty cell here would collide with the em dash that
+  // means "no feed spoke".
+  const zero = renderRow({
+    ...BASE_ROW, biometric: "enrolled", fingerprint_count: 0, face: true,
+  });
+  assert.match(zero.html.biometric, /tabular-nums[^"]*"[^>]*>0</);
+  assert.doesNotMatch(zero.html.biometric, /—/);
+});
+
+test("\"Not enrolled\" carries no count, even when the payload sends one", () => {
+  // Zero is exactly what the label already says. Gated on the STATE: an
+  // inconsistent payload — `none` with a non-zero count — must show the label
+  // alone rather than contradict itself inside one cell.
   const consistent = renderRow({ ...BASE_ROW, biometric: "none", fingerprint_count: 0 });
-  assert.match(consistent.html.biometric, />No fingerprint</);
+  assert.match(consistent.html.biometric, />Not enrolled</);
   assert.doesNotMatch(consistent.html.biometric, />0</);
 
   const contradictory = renderRow({ ...BASE_ROW, biometric: "none", fingerprint_count: 3 });
-  assert.match(contradictory.html.biometric, />No fingerprint</);
+  assert.match(contradictory.html.biometric, />Not enrolled</);
   assert.doesNotMatch(contradictory.html.biometric, />3</, "the label is the claim; no count may argue with it");
 });
 
-test("a still-enrolled leaver shows the count AND the leaver age, told apart by tone", () => {
-  // Two numbers in one cell, and they mean different things: how many templates
-  // this person still holds, and how long they have held them since leaving.
-  // The age is destructive because it is the finding; the count is muted
-  // because it is the evidence.
+test("a still-enrolled leaver shows the badge and the leaver age — no template count", () => {
+  // The days are the finding and revocation is the remedy; a template count
+  // beside them is noise. (The CSV still carries the count for this row.)
   const { html } = renderRow({
     ...BASE_ROW, biometric: "still_enrolled", fingerprint_count: 2, days_since_relieving: 42,
   });
   assert.match(html.biometric, />Still enrolled</);
-  assert.match(html.biometric, /text-muted-foreground[^"]*"[^>]*>2</, "the count is the muted one");
   assert.match(html.biometric, /text-destructive[^"]*"[^>]*>42 days</, "the leaver age is the loud one");
+  assert.doesNotMatch(html.biometric, />2</, "no count beside the finding");
 });
 
 test("a still-enrolled leaver's day count is singular at 1 and plural otherwise", () => {
@@ -1605,12 +1664,17 @@ test("each single select shows the value it was given, in the column's own words
   assert.equal(selectValue(renderBar({ filters: { schedule: "missing" } }), "Schedule"), "Missing");
   assert.equal(
     selectValue(renderBar({ filters: { biometric: "none" } }), "Biometric"),
-    "No fingerprint",
+    "Not enrolled",
     "the filter must read the same as the badge it selects",
   );
   assert.equal(
     selectValue(renderBar({ filters: { biometric: "enrolled_not_punching" } }), "Biometric"),
     "Enrolled, not punching",
+  );
+  assert.equal(
+    selectValue(renderBar({ filters: { biometric: "single_finger" } }), "Biometric"),
+    "Only one finger",
+    "the predicate option reads as the worklist it narrows to",
   );
 });
 
@@ -2245,10 +2309,10 @@ test("every filter in force is listed, in the words its control uses", () => {
   assert.match(html, /BRANCH-A, BRANCH-B/, "both branches, not just the first");
   assert.match(html, /Ops/);
   assert.match(html, /Left/);
-  // The option labels, not the wire values: a reader who picked "No
-  // fingerprint" must not be shown `none`.
+  // The option labels, not the wire values: a reader who picked "Not
+  // enrolled" must not be shown `none`.
   assert.match(html, /Missing/);
-  assert.match(html, /No fingerprint/);
+  assert.match(html, /Not enrolled/);
   assert.doesNotMatch(html, />none</, "the wire value must not reach the reader");
 });
 

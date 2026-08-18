@@ -283,6 +283,46 @@ test("sorting starts again at page 1, and the fused column sorts by print count"
   ]);
 });
 
+test("the biometric cell speaks its registration facts", async ({ page }) => {
+  await stubFrappe(page);
+  await openRegister(page);
+
+  // Jane Doe's two named fingers ride the trigger's accessible name — the
+  // tooltip renders the same lines, so pinning the name pins the story.
+  await expect(page.getByLabel("Right thumb, Right index", { exact: true })).toBeVisible();
+  // Aaron Wells holds a single template: the amber case, explained in words
+  // rather than left to colour alone.
+  await expect(page.getByLabel(/Only one finger — a cut means no punching/)).toBeVisible();
+  // Marco Diaz is the positive statement of absence — still a badge, and the
+  // relabelled one: the bucket is is_registered=0, not merely "no fingerprint".
+  await expect(page.getByText("Not enrolled", { exact: true })).toBeVisible();
+});
+
+test("the tooltip stacks its facts — measured, because a class string cannot prove it", async ({
+  page,
+}) => {
+  // dewey-ui's TooltipContent is an inline-flex ROW, so handing it bare
+  // sibling spans rendered them as side-by-side columns each wrapped
+  // mid-phrase — while every string-match test and the aria-label assertion
+  // above stayed green. Only geometry can see this, so geometry is what pins
+  // it: each fact line must start below the previous one's bottom edge.
+  await page.setViewportSize(LAPTOP);
+  await stubFrappe(page);
+  await openRegister(page);
+
+  await page.getByLabel(/Only one finger — a cut means no punching/).hover();
+  const tooltip = page.locator('[data-slot="tooltip-content"]');
+  await expect(tooltip).toBeVisible();
+
+  const lines = tooltip.locator("span span");
+  await expect(lines).toHaveCount(2);
+  const first = await lines.nth(0).boundingBox();
+  const second = await lines.nth(1).boundingBox();
+  expect(first).not.toBeNull();
+  expect(second).not.toBeNull();
+  expect(second!.y).toBeGreaterThanOrEqual(first!.y + first!.height - 1);
+});
+
 test("the biometrics URL redirects to the register", async ({ page }) => {
   await stubFrappe(page);
   await page.goto("/hr-schedule/coverage/biometrics");
@@ -555,7 +595,7 @@ test("the export confirms what the file holds before writing it", async ({ page 
 
   const lines = csv.split("\n");
   expect(lines[0]).toBe(
-    "Employee ID,Name,Branch,Department,Employment status,Schedule,Weekly minutes,Biometric,Fingerprints,Days since leaving,Telegram",
+    "Employee ID,Name,Branch,Department,Employment status,Schedule,Weekly minutes,Biometric,Fingerprints,Fingers,Face,Days since leaving,Telegram",
   );
   expect(lines).toHaveLength(NOT_READY.length + 1);
   expect(lines.slice(1).map((line) => line.split(",")[1])).toEqual(NOT_READY);

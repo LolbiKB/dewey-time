@@ -1,6 +1,7 @@
 import type { BaseTableMeta } from "@lolbikb/dewey-ui";
 
 import { khmerName } from "@/lib/employeeCard";
+import { fingerLabel } from "@/lib/fingerLabels";
 import type {
   CoverageAssignedEmployee,
   CoverageEmployee,
@@ -49,6 +50,16 @@ export type RegisterRow = {
   weekly_minutes: number | null;
   biometric: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled" | null;
   fingerprint_count: number | null;
+  /**
+   * Biometric-feed fact — the enrolled fingers as `finger_slots` slugs, or
+   * null when the feed did not speak (or an older payload predates the field).
+   *
+   * Meaningful only through `accountedFingers`: a list that does not account
+   * for every template must never be shown as if it did.
+   */
+  fingers: string[] | null;
+  /** Biometric-feed fact — a face template exists on some device. */
+  face: boolean | null;
   days_since_relieving: number | null;
   /**
    * Schedule-feed fact — where this person stands in the Telegram rollout.
@@ -90,15 +101,33 @@ export type FeedHealth = { schedule: boolean; biometric: boolean };
  * The one wording for each biometric bucket.
  *
  * The column badge, the filter option and the CSV field all read from here, so
- * a reader who narrowed the table to "No fingerprint" gets a file that says the
+ * a reader who narrowed the table to "Not enrolled" gets a file that says the
  * same thing. Exhaustive by type: a fifth bucket is a compile error rather than
  * a blank badge, an unlabelled filter option and an empty CSV cell.
  */
 export const BIOMETRIC_LABELS: Record<NonNullable<RegisterRow["biometric"]>, string> = {
   enrolled: "Enrolled",
   enrolled_not_punching: "Enrolled, not punching",
-  none: "No fingerprint",
+  // "Not enrolled", not "No fingerprint": the `none` bucket is
+  // is_registered=0 — no fingerprint AND no face — so the old label
+  // under-described the state. Also the wording the Mini App ("Not set up")
+  // and the enrollment buckets already use.
+  none: "Not enrolled",
   still_enrolled: "Still enrolled",
+};
+
+/**
+ * The filter's vocabulary — every row label, plus the one option that is a
+ * PREDICATE rather than a bucket: "Only one finger" narrows to the fragile
+ * enrollments (`isFragileEnrollment`), which is how the re-enrollment drive
+ * pulls its worklist. It has no row value of its own, which is why this is a
+ * second record instead of a fifth BIOMETRIC_LABELS key — the CSV's Biometric
+ * field and the cell read row values and must not learn a label no row can
+ * carry.
+ */
+export const BIOMETRIC_FILTER_LABELS: Record<NonNullable<RegisterFilters["biometric"]>, string> = {
+  ...BIOMETRIC_LABELS,
+  single_finger: "Only one finger",
 };
 
 /** Same rule as BIOMETRIC_LABELS, for the schedule fact. */
@@ -175,6 +204,8 @@ export function joinRegisterRows(
       weekly_minutes: minutes,
       biometric: null,
       fingerprint_count: null,
+      fingers: null,
+      face: null,
       days_since_relieving: null,
       // `?? null` and not a default: the backend omits this for the whole
       // roster when its lookup fails, and "none" would read as a positive
@@ -207,6 +238,8 @@ export function joinRegisterRows(
         weekly_minutes: null,
         biometric: null,
         fingerprint_count: null,
+        fingers: null,
+        face: null,
         days_since_relieving: null,
         // The enrolment feed knows nothing about Telegram, so a row coverage
         // never returned has no state — the same silence it gets for
@@ -220,6 +253,14 @@ export function joinRegisterRows(
       merged.status = row.status ?? null;
       merged.biometric = biometricOf(row);
       merged.fingerprint_count = row.fingerprint_count;
+      // `null`, not `[]`, when the payload predates the field: an old cached
+      // body did not say "no names", it said nothing. A site without the
+      // column sends a real [] and keeps it.
+      merged.fingers = Array.isArray(row.fingers) ? row.fingers : null;
+      // Derived here, once, so the cell and the CSV cannot disagree about
+      // what counts as "has a face". Guarded the same way as `fingers`: an
+      // absent count is silence, not "no face".
+      merged.face = typeof row.face_count === "number" ? row.face_count > 0 : null;
       merged.days_since_relieving = row.days_since_relieving;
       // Coverage is authoritative for branch/department when it has the employee;
       // fall back to the enrollment copy for rows coverage never returned.
@@ -244,7 +285,12 @@ export type RegisterFilters = {
   department?: string[];
   status?: "Active" | "Left";
   schedule?: "assigned" | "missing";
-  biometric?: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled";
+  /**
+   * The four buckets, plus `single_finger` — a PREDICATE option, not a
+   * bucket: it narrows to fragile enrollments across the two enrolled
+   * buckets. See BIOMETRIC_FILTER_LABELS and `filterRegisterRows`.
+   */
+  biometric?: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled" | "single_finger";
   /**
    * The rollout filter, and the reason the column exists: narrowing to "Not
    * linked" is how the work gets done a branch at a time.
@@ -330,6 +376,43 @@ export function isNotReady(row: RegisterRow): boolean {
   return row.schedule === "missing" || row.biometric === "none" || row.biometric === "still_enrolled";
 }
 
+/**
+ * The finger names, ONLY when they account for every template.
+ *
+ * The Mini App's honesty guard (`miniProfile.fingerKeys`), applied to a
+ * register row: two names beside a count of three states something false
+ * about the third, and there is no way to render "and one more" that does
+ * not read as a bug. Null is the fall-back-to-the-count answer, and it is
+ * the ordinary one wherever the bridge sends counts without ids.
+ */
+export function accountedFingers(row: RegisterRow): string[] | null {
+  const fingers = row.fingers ?? [];
+  if (!fingers.length) return null;
+  if (fingers.length !== row.fingerprint_count) return null;
+  return fingers;
+}
+
+/**
+ * A single usable template on someone expected to punch.
+ *
+ * One cut or burnt finger and that person cannot clock in — a quality nudge,
+ * NOT a coverage failure: deliberately absent from `isNotReady` and
+ * `severity`, because an enrolled-but-fragile employee is tracked today and
+ * folding ~100 production single-finger rows into the attention count would
+ * drown the two findings the alert exists for. Leavers are excluded — the
+ * remedy for `still_enrolled` is revocation, not a second finger.
+ *
+ * Counted from `fingerprint_count`, not from `fingers`: the count is the
+ * bridge's claim about how many templates exist, and it is present even when
+ * the ids are not.
+ */
+export function isFragileEnrollment(row: RegisterRow): boolean {
+  return (
+    (row.biometric === "enrolled" || row.biometric === "enrolled_not_punching") &&
+    row.fingerprint_count === 1
+  );
+}
+
 /** Severity for the filtered view: worst first. Lower sorts earlier. */
 function severity(row: RegisterRow): number {
   if (row.biometric === "still_enrolled") return 0;
@@ -379,7 +462,11 @@ export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters
     if (filters.department?.length && !filters.department.includes(row.department ?? "")) return false;
     if (filters.status && row.status !== filters.status) return false;
     if (filters.schedule && row.schedule !== filters.schedule) return false;
-    if (filters.biometric && row.biometric !== filters.biometric) return false;
+    // `single_finger` is a predicate over the enrolled buckets, not a bucket
+    // of its own — see BIOMETRIC_FILTER_LABELS.
+    if (filters.biometric === "single_finger") {
+      if (!isFragileEnrollment(row)) return false;
+    } else if (filters.biometric && row.biometric !== filters.biometric) return false;
     if (filters.telegram && row.telegram !== filters.telegram) return false;
     if (filters.readiness === "not-ready" && !isNotReady(row)) return false;
     return true;
@@ -407,10 +494,10 @@ export type RegisterNarrowing = { label: string; value: string };
  * Ordered as the controls are met on screen, alert dot first.
  *
  * The labels are the CONTROLS' labels and the values are their option
- * labels — `BIOMETRIC_LABELS` and `SCHEDULE_LABELS`, the same two records the
- * facet menus, the table badges and the CSV read from — so a reader who picked
- * "No fingerprint" is shown "No fingerprint" here rather than the wire value
- * `none`.
+ * labels — `BIOMETRIC_FILTER_LABELS` and `SCHEDULE_LABELS`, the same records
+ * the facet menus read from — so a reader who picked "Not enrolled" is shown
+ * "Not enrolled" here rather than the wire value `none`, and one who picked
+ * "Only one finger" sees the predicate they chose.
  *
  * `search` is TRIMMED, and dropped when that leaves nothing, because
  * filterRegisterRows trims before it matches: a box holding only spaces
@@ -434,7 +521,7 @@ export function describeRegisterFilters(filters: RegisterFilters): RegisterNarro
     out.push({ label: "Schedule", value: SCHEDULE_LABELS[filters.schedule] });
   }
   if (filters.biometric) {
-    out.push({ label: "Biometric", value: BIOMETRIC_LABELS[filters.biometric] });
+    out.push({ label: "Biometric", value: BIOMETRIC_FILTER_LABELS[filters.biometric] });
   }
   if (filters.telegram) {
     out.push({ label: "Telegram", value: TELEGRAM_LABELS[filters.telegram] });
@@ -737,9 +824,26 @@ const CSV_FIELDS: CsvField[] = [
     header: "Biometric",
     value: (row) => (row.biometric === null ? null : BIOMETRIC_LABELS[row.biometric]),
   },
-  // No biometric COLUMN any more — the count lives inside the biometric badge
+  // No biometric COLUMN any more — the count lives inside the biometric cell
   // on screen. It keeps its own field here on purpose; see the note above.
   { feed: "biometric", header: "Fingerprints", value: (row) => row.fingerprint_count },
+  {
+    feed: "biometric",
+    header: "Fingers",
+    // The accounted rule, not the raw list: a file naming two fingers on a
+    // count-of-three row states something false about the third, and a
+    // spreadsheet is where that lie outlives the page. Empty when the names
+    // cannot account for every template — the count column beside it still
+    // carries the number.
+    value: (row) => accountedFingers(row)?.map(fingerLabel).join(", ") ?? null,
+  },
+  {
+    feed: "biometric",
+    header: "Face",
+    // "Yes"/"No" are both positive reports; only null — feed silence — is an
+    // empty field, per the rule below.
+    value: (row) => (row.face === null ? null : row.face ? "Yes" : "No"),
+  },
   { feed: "biometric", header: "Days since leaving", value: (row) => row.days_since_relieving },
   {
     feed: "schedule",
@@ -844,7 +948,14 @@ export function suppressUnusableFacts(rows: RegisterRow[], feeds: FeedHealth): R
         : { schedule: null, weekly_minutes: null, image: null, telegram: null }),
       ...(feeds.biometric
         ? {}
-        : { status: null, biometric: null, fingerprint_count: null, days_since_relieving: null }),
+        : {
+            status: null,
+            biometric: null,
+            fingerprint_count: null,
+            fingers: null,
+            face: null,
+            days_since_relieving: null,
+          }),
     }));
 }
 

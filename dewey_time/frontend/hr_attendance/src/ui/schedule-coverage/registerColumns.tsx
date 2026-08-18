@@ -1,31 +1,50 @@
 import type { ColumnDef, HeaderContext, SortDirection } from "@tanstack/react-table";
 
 import { Badge, Button } from "@lolbikb/dewey-ui";
-import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, LinkIcon, SendIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpDownIcon,
+  ArrowUpIcon,
+  FingerprintIcon,
+  LinkIcon,
+  ScanFaceIcon,
+  SendIcon,
+} from "lucide-react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
 import {
+  accountedFingers,
   BIOMETRIC_LABELS,
+  isFragileEnrollment,
   SCHEDULE_LABELS,
   TELEGRAM_LABELS,
   type RegisterRow,
 } from "@/lib/coverageRegister";
+import { fingerLabel } from "@/lib/fingerLabels";
 import { EmployeeAvatar } from "@/ui/EmployeeAvatar";
 import { EmployeeIdentity } from "@/ui/EmployeeIdentity";
 import type { CalendarEmployee } from "@/types/calendar";
 
 /**
- * Only a positive statement of absence is destructive. "Enrolled, not punching"
- * is neutral: they CAN clock in and simply have not, which is an attendance
- * question, not a coverage one — the same rule isNotReady applies.
+ * The tooltip's lines, and the trigger's accessible name.
+ *
+ * ONE derivation for both, so what a screen reader hears is what a hover
+ * shows. The finger names obey `accountedFingers` — names only when they
+ * account for every template, else the bare count — and the fragility line
+ * explains the amber rather than leaving colour to carry meaning alone.
  */
-const BIOMETRIC_VARIANT: Record<NonNullable<RegisterRow["biometric"]>, "secondary" | "outline" | "destructive"> = {
-  enrolled: "secondary",
-  enrolled_not_punching: "outline",
-  none: "destructive",
-  still_enrolled: "destructive",
-};
+function biometricFacts(row: RegisterRow): string[] {
+  const count = row.fingerprint_count ?? 0;
+  const fingers = accountedFingers(row);
+  return [
+    fingers
+      ? fingers.map(fingerLabel).join(", ")
+      : `${count} fingerprint${count === 1 ? "" : "s"}`,
+    ...(isFragileEnrollment(row) ? ["Only one finger — a cut means no punching"] : []),
+    ...(row.face === true ? ["Face template on device"] : []),
+  ];
+}
 
 /**
  * Only "Not linked" is drawn as a gap to close. "ID on file" is `outline` —
@@ -290,11 +309,18 @@ export function registerColumns(
       },
     },
     {
-      // The state and its evidence in ONE column. The print count is not an
-      // independent fact — it is what the biometric state is inferred from —
-      // and as its own column it cost width the register does not have at 503
-      // rows. The CSV still carries it as a field of its own: a spreadsheet has
-      // no width pressure and wants a number it can total, which is why
+      // The registration and its evidence in ONE column, and the evidence IS
+      // the ordinary state: an enrolled row draws no badge at all — a
+      // fingerprint glyph with the count (amber when a single template), a
+      // face glyph when one exists — so badges survive only for the two
+      // states that need attention and any colour here means "look here".
+      // ENROLLED_NOT_PUNCHING renders like ENROLLED on purpose: it is punch
+      // behaviour, not registration, and its distinction lives on in the
+      // filter and the CSV (the retired Punches-30d column's zero/non-zero
+      // constraint), just not as a badge out-shouting the real findings.
+      //
+      // The CSV still carries the count as a field of its own: a spreadsheet
+      // has no width pressure and wants a number it can total, which is why
       // CSV_FIELDS is keyed off feed health rather than off this column list.
       id: "biometric",
       ...SORTABLE,
@@ -306,30 +332,76 @@ export function registerColumns(
       cell: ({ row }) => {
         const value = row.original.biometric;
         if (value === null) return "—";
-        const days = row.original.days_since_relieving;
-        const count = row.original.fingerprint_count;
+        if (value === "none" || value === "still_enrolled") {
+          const days = row.original.days_since_relieving;
+          return (
+            <span className="flex items-center gap-1.5">
+              <Badge variant="destructive">{BIOMETRIC_LABELS[value]}</Badge>
+              {/* No count beside either badge. "Not enrolled" IS the zero, and
+                  a still-enrolled leaver's remedy is revocation — the days are
+                  the finding, the template count is noise beside them. */}
+              {value === "still_enrolled" && days !== null ? (
+                <span className="text-xs tabular-nums text-destructive">
+                  {days} {days === 1 ? "day" : "days"}
+                </span>
+              ) : null}
+            </span>
+          );
+        }
+        const fragile = isFragileEnrollment(row.original);
+        const facts = biometricFacts(row.original);
         return (
-          <span className="flex items-center gap-1.5">
-            <Badge variant={BIOMETRIC_VARIANT[value]}>{BIOMETRIC_LABELS[value]}</Badge>
-            {/* No count beside "No fingerprint": zero is precisely what that
-                label already says, and printing "0" next to it reads as a
-                second, weaker claim about the same fact. Gated on the state as
-                well as on the number, so an inconsistent payload — `none` with
-                a non-zero count — still shows the label alone rather than
-                contradicting itself in one cell.
-
-                Above zero only, everywhere else. A count is corroboration for
-                the badge; where there is none to give, the badge stands on its
-                own rather than trailing a "0" that reads as a finding. */}
-            {value !== "none" && count !== null && count > 0 ? (
-              <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-            ) : null}
-            {value === "still_enrolled" && days !== null ? (
-              <span className="text-xs tabular-nums text-destructive">
-                {days} {days === 1 ? "day" : "days"}
+          <AppTooltip
+            // ONE wrapper element, not an array of children: dewey-ui's
+            // TooltipContent is an inline-flex ROW (items-center, no
+            // flex-col), so bare siblings become side-by-side flex COLUMNS
+            // each wrapping mid-phrase — `block` on a flex item is a no-op.
+            // Measured in Chromium before the wrapper: two facts at the same
+            // y, 60px and 230px wide. The e2e pins the stacking by geometry,
+            // because no string-match test can see it.
+            content={
+              <span className="flex flex-col gap-0.5">
+                {facts.map((line) => (
+                  <span key={line}>{line}</span>
+                ))}
               </span>
-            ) : null}
-          </span>
+            }
+            side="bottom"
+          >
+            {/* Focusable, because a tooltip a keyboard cannot open is detail a
+                keyboard user cannot reach; the aria-label carries the same
+                facts for readers the tooltip never opens for. `w-fit` so the
+                hover target is the evidence, not the whole cell width. */}
+            <span
+              tabIndex={0}
+              className="flex w-fit items-center gap-2.5"
+              aria-label={facts.join(". ")}
+            >
+              <span
+                className={`flex items-center gap-1 ${fragile ? "text-amber-700" : "text-muted-foreground"}`}
+              >
+                {/* A zero count still renders "0" here: with no badge in this
+                    branch the number is the cell's only claim, and the
+                    face-only enrollee (is_registered with no fingerprints) is
+                    exactly who it happens for. The old no-zero rule guarded a
+                    "0" arguing with a badge; there is no badge left to argue
+                    with. */}
+                <FingerprintIcon
+                  className={`size-3.5 ${fragile ? "text-amber-600" : "opacity-70"}`}
+                  aria-hidden="true"
+                />
+                <span className={`text-xs tabular-nums ${fragile ? "font-semibold" : ""}`}>
+                  {row.original.fingerprint_count ?? 0}
+                </span>
+              </span>
+              {row.original.face === true ? (
+                <ScanFaceIcon
+                  className="size-3.5 text-muted-foreground opacity-70"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </span>
+          </AppTooltip>
         );
       },
     },

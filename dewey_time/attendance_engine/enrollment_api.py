@@ -35,7 +35,8 @@ from dewey_time.attendance_engine.hr_calendar import _require_hr_role
 # hit by pre-deploy entries.
 #
 # v2: rows gained custom_khmer_last_name / custom_khmer_first_name.
-_CACHE_KEY = "enrollment_report:v2"
+# v3: rows gained `fingers` (finger slugs).
+_CACHE_KEY = "enrollment_report:v3"
 _CACHE_TTL_SECONDS = 120
 
 #: Matches COVERAGE_EMPLOYEE_LIMIT: this is meant to be an exhaustive roster.
@@ -79,9 +80,15 @@ def _list_employees() -> list[dict]:
 
 
 def _register_rows() -> list[dict]:
+    fields = ["employee", "is_registered", "fingerprint_count", "face_count"]
+    # Guarded, the way enrollment_status guards the same column: on a site
+    # whose migrate has not run, an unknown column makes the whole select
+    # raise — which would take the register down to lose one optional fact.
+    if frappe.db.has_column(ENROLLMENT_DOCTYPE, "finger_ids"):
+        fields.append("finger_ids")
     return frappe.get_all(
         ENROLLMENT_DOCTYPE,
-        fields=["employee", "is_registered", "fingerprint_count", "face_count"],
+        fields=fields,
         limit_page_length=0,
     )
 
@@ -192,6 +199,15 @@ def _build_enrollment_payload() -> dict:
                 "bucket": bucket,
                 "is_registered": is_registered,
                 "fingerprint_count": int(reg.get("fingerprint_count") or 0),
+                # SLUGS, never the device's integers — the same boundary
+                # miniapp_api draws, and finger_slots' docstring is the
+                # contract: the integer becomes a slug HERE, once, on the
+                # server. `.get` because the SELECT above is conditional; an
+                # absent column parses to [].
+                "fingers": [
+                    finger_slots.slug_for(fid)
+                    for fid in finger_slots.ids_from_field(reg.get("finger_ids"))
+                ],
                 "face_count": int(reg.get("face_count") or 0),
                 # getdate() because a date column comes back as a string on some
                 # paths, and days_since subtracts it from `today`.
