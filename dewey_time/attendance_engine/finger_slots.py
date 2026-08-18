@@ -6,12 +6,24 @@ employee and untranslatable -- "FID 6" is the same six characters in Khmer -- so
 it is turned into a slug HERE, once, on the server. The Mini App turns a slug
 into words.
 
-THE MAPPING IS UNVERIFIED AGAINST A REAL DEVICE. It is the widely-used ZKTeco
-ordering, but nothing in this repo confirms it and no data exercises it yet: the
-bridge collapses templates to a count before Frappe ever sees them
-(frappe-merge.ts:70). Check it against a live enrolment before the bridge side
-ships, and correct it here -- being able to correct it in ONE place, in one
-language, is the entire reason this mapping is not done in TypeScript.
+VERIFIED against the vendor protocol spec, 2026-08-18. ZKTeco's "Attendance
+PUSH Communication Protocol" states the ordering twice, in two independently
+worded passages -- BIODATA `No=` (protocol-flow.txt:2737) and the unified
+template appendix (:4346): left hand little/ring/middle/index/thumb for 0-4,
+then right hand thumb/index/middle/ring/little for 5-9. The bridge parses this
+same integer straight off the device's own `FP ... FID=` operlog record
+(iclock.ts:1055), so the number is the device's claim, not our inference.
+
+Production corroborates it: of 297 enrolled templates, 266 sit on FID 5 and 25
+on FID 6 -- 98% on right thumb and right index, which is what an attendance
+terminal collects. A mirrored table would instead claim that 90% of staff
+enrolled a LEFT thumb.
+
+Correct it HERE if it is ever shown wrong -- being able to correct it in ONE
+place, in one language, is the entire reason this mapping is not done in
+TypeScript. Two other copies exist and must move with it: the operator's
+enrolment picker (frontend/adms/src/lib/zk-finger-fid.ts), which is the input
+side of the very same number, and an unused one in the bridge.
 
 frappe-free on purpose: no bench behind it, so its tests run in milliseconds and
 any module may import it.
