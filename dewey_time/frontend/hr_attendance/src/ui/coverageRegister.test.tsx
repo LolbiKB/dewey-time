@@ -88,13 +88,13 @@ function renderRow(
   row: RegisterRow,
   onOpen: (row: RegisterRow) => void = noop,
   onAddSchedule: (row: RegisterRow) => void = noop,
-  onIssueLink: (row: RegisterRow) => void = noop,
+  onManageTelegram: (row: RegisterRow) => void = noop,
 ): { html: Record<string, string>; elements: Record<string, ReactNode>; markup: string } {
   const elements: Record<string, ReactNode> = {};
   function Harness() {
     const table = useReactTable({
       data: [row],
-      columns: registerColumns(onOpen, onAddSchedule, onIssueLink),
+      columns: registerColumns(onOpen, onAddSchedule, onManageTelegram),
       getCoreRowModel: getCoreRowModel(),
     });
     const tableRow = table.getRowModel().rows[0];
@@ -991,7 +991,7 @@ function renderView(over: Partial<CoverageRegisterViewProps> = {}): string {
         onRetry={noop}
         onOpen={noop}
         onAddSchedule={noop}
-        onIssueLink={noop}
+        onManageTelegram={noop}
         {...over}
       />
     </TooltipProvider>,
@@ -2296,13 +2296,13 @@ test("an export that would match nobody says so before it is confirmed", () => {
 // The Telegram column
 // ---------------------------------------------------------------------------
 
-/** The Telegram cell's "Issue link" button props, or null when it draws none. */
-function issueLinkButton(row: RegisterRow) {
+/** The Telegram cell's manage-button props, or null when it draws none. */
+function manageButton(row: RegisterRow) {
   const { elements } = renderRow(row);
   return findProps<{ onClick?: () => void; "aria-label"?: string }>(
     elements.telegram,
     (props) => typeof props["aria-label"] === "string"
-      && props["aria-label"].startsWith("Issue a Telegram link"),
+      && props["aria-label"].startsWith("Manage Telegram"),
   );
 }
 
@@ -2317,40 +2317,39 @@ test("each Telegram state renders its own badge wording", () => {
   assert.match(seen[2], />Not linked</);
 });
 
-test("an unknown Telegram state is an em dash, not an empty cell", () => {
-  // Matches every other column on this page: no fact reads as "—", never as
-  // blank space that looks like a rendering failure.
+test("an unknown Telegram state is an em dash with nothing to press", () => {
+  // No feed vouched for the fact, so there is nothing to manage. Offering a
+  // button would put someone on a to-do list built from a failed query.
   assert.match(renderRow({ ...BASE_ROW, telegram: null }).html.telegram, /—/);
+  assert.equal(manageButton({ ...BASE_ROW, telegram: null }), null);
 });
 
-test("a linked employee gets no Issue link button", () => {
-  // Not merely redundant. Issuing a fresh link for someone already bound mints
-  // a live credential that rebinds their record to whoever opens it.
-  assert.equal(issueLinkButton({ ...BASE_ROW, telegram: "linked" }), null);
-});
-
-test("an unlinked employee gets an Issue link button wired to the row", () => {
-  for (const telegram of ["none", "id_on_file"] as const) {
+test("every known Telegram state offers a manage button wired to its own row", () => {
+  // Including "linked". That row used to draw nothing, because the only
+  // action was issuing and a fresh link would have rebound the record to
+  // whoever opened it. Unlink lives there now, and unlink -> re-issue is the
+  // changed-phone flow.
+  for (const telegram of ["linked", "id_on_file", "none"] as const) {
     const row = { ...BASE_ROW, telegram };
-    let issued: RegisterRow | null = null;
-    const { elements } = renderRow(row, noop, noop, (r) => { issued = r; });
+    let managed: RegisterRow | null = null;
+    const { elements } = renderRow(row, noop, noop, (r) => { managed = r; });
     const button = findProps<{ onClick?: () => void; "aria-label"?: string }>(
       elements.telegram,
       (props) => typeof props["aria-label"] === "string"
-        && props["aria-label"].startsWith("Issue a Telegram link"),
+        && props["aria-label"].startsWith("Manage Telegram"),
     );
-    assert.ok(button, `${telegram} must offer a link`);
+    assert.ok(button, `${telegram} must offer a manage button`);
     button.onClick?.();
-    assert.equal(issued, row, `${telegram} must pass its own row`);
+    assert.equal(managed, row, `${telegram} must pass its own row`);
   }
 });
 
-test("the Issue link button names the employee it would issue for", () => {
-  // A page of buttons all called "Issue link" gives a screen-reader user
-  // nothing to choose between, and what is being chosen is which employee
-  // receives a credential.
-  const button = issueLinkButton({ ...BASE_ROW, telegram: "none" });
-  assert.equal(button?.["aria-label"], "Issue a Telegram link for Amara Okafor");
+test("the manage button names the employee it would act on", () => {
+  // A page of buttons all called "Manage Telegram" gives a screen-reader user
+  // nothing to choose between, and what is being chosen is whose credential
+  // gets minted or destroyed.
+  const button = manageButton({ ...BASE_ROW, telegram: "none" });
+  assert.equal(button?.["aria-label"], "Manage Telegram for Amara Okafor");
 });
 
 test("nothing in the Telegram cell is drawn as destructive", () => {

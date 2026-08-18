@@ -1,7 +1,7 @@
 import type { ColumnDef, HeaderContext, SortDirection } from "@tanstack/react-table";
 
 import { Badge, Button } from "@lolbikb/dewey-ui";
-import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, SendIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, LinkIcon, SendIcon } from "lucide-react";
 
 import { AppTooltip } from "@/ui/AppTooltip";
 import { formatScheduleDuration } from "@/lib/weekSchedule";
@@ -165,7 +165,7 @@ const SORTABLE = { sortDescFirst: false, enableMultiSort: false } as const;
 export function registerColumns(
   onOpen: (row: RegisterRow) => void,
   onAddSchedule: (row: RegisterRow) => void,
-  onIssueLink: (row: RegisterRow) => void,
+  onManageTelegram: (row: RegisterRow) => void,
 ): ColumnDef<RegisterRow, unknown>[] {
   return [
     {
@@ -349,39 +349,44 @@ export function registerColumns(
         return (
           <span className="flex items-center gap-1.5">
             <Badge variant={TELEGRAM_VARIANT[value]}>{TELEGRAM_LABELS[value]}</Badge>
-            {/* Nothing to press once they are bound. Re-issuing for a linked
-                employee is not merely redundant: the fresh link would rebind
-                their record to whoever opens it. */}
-            {value === "linked" ? null : (
-              // Icon-only, and that is a width decision with a measurement
-              // behind it. As a text button this cell was 195px — as wide as
-              // Biometric — and the table had no slack to give it: the
-              // Employee column was already pinned at its 185px floor, so the
-              // 39px this column took came straight out of the name stack and
-              // pushed the Khmer name's 200px threshold from a 1330 viewport
-              // to well past 1340. Khmer names on an ordinary laptop is a
-              // deliberate, measured behaviour (see the Employee cell's own
-              // note); a Telegram column is not worth spending it.
-              //
-              // The same SendIcon the /hr-attendance toolbar already uses for
-              // this exact action, so the affordance is learned once. The
-              // tooltip and the accessible name both spell it out — the app
-              // wraps every route in TooltipProvider (main.tsx:22).
-              <AppTooltip content="Issue a Telegram link" side="bottom">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="size-7 shrink-0 p-0"
-                  onClick={() => onIssueLink(row.original)}
-                  // Named per row. A page of buttons all called "Issue link"
-                  // gives a screen-reader user nothing to choose between, and
-                  // the thing being chosen is which employee gets a credential.
-                  aria-label={`Issue a Telegram link for ${row.original.employee_name}`}
-                >
+            {/* Drawn for EVERY known state, "linked" included: that row is
+                where Unlink lives, and unlink -> re-issue is the changed-phone
+                flow. It used to draw nothing there because the only action was
+                issuing, which would have rebound the record to whoever opened
+                the new link.
+
+                Pressing this mints nothing — it opens a dialog. The old
+                one-click issue put a live credential on screen from a stray
+                click, with no confirmation anywhere.
+
+                Icon-only, and that is a width decision with a measurement
+                behind it. As a text button this cell was 195px — as wide as
+                Biometric — and the table had no slack to give it: the Employee
+                column was already pinned at its 185px floor, so the 39px this
+                column took came straight out of the name stack and pushed the
+                Khmer name's 200px threshold from a 1330 viewport to well past
+                1340. Khmer names on an ordinary laptop is a deliberate,
+                measured behaviour (see the Employee cell's own note); a
+                Telegram column is not worth spending it. */}
+            <AppTooltip content="Manage Telegram" side="bottom">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="size-7 shrink-0 p-0"
+                onClick={() => onManageTelegram(row.original)}
+                // Named per row. A page of buttons all called "Manage
+                // Telegram" gives a screen-reader user nothing to choose
+                // between, and what is being chosen is whose credential gets
+                // minted or destroyed.
+                aria-label={`Manage Telegram for ${row.original.employee_name}`}
+              >
+                {value === "linked" ? (
+                  <LinkIcon className="size-3.5" aria-hidden="true" />
+                ) : (
                   <SendIcon className="size-3.5" aria-hidden="true" />
-                </Button>
-              </AppTooltip>
-            )}
+                )}
+              </Button>
+            </AppTooltip>
           </span>
         );
       },
