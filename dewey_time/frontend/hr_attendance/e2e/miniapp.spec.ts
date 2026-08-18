@@ -735,3 +735,19 @@ test("never having heard from the devices is not the same as not enrolled", asyn
   await expect(page.getByText(/can't tell you either way/)).toBeVisible();
   await expect(page.getByText("Not set up")).toHaveCount(0);
 });
+
+test("the flags pill never overlaps the tab bar on a notched phone", async ({ page }) => {
+  // The suite asserted the pill's TEXT and its sheet, never its box — which is
+  // how a 35px overlap across the tab labels shipped and survived every run.
+  // `fullscreen` is the 34px bottom inset; the pill used to be drawn inside it.
+  await openMiniApp(page, { fullscreen: true, flags: [miniFlag("LATE_START")] });
+
+  const pill = page.getByRole("button", { name: "1 to check" });
+  await expect(pill).toBeVisible();
+
+  const pillBox = await pill.boundingBox();
+  const navBox = await page.getByRole("navigation").boundingBox();
+  if (!pillBox || !navBox) throw new Error("pill or tab bar has no box");
+
+  expect(pillBox.y + pillBox.height).toBeLessThanOrEqual(navBox.y);
+});
