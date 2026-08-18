@@ -77,6 +77,25 @@ function stillInside(punches: { log_type?: string | null }[]): boolean {
   return punches.length % 2 === 1;
 }
 
+/**
+ * The unclosed arrival on this day, as the API's own datetime string.
+ *
+ * Exported so the day's worked figure and the status chip answer "are they
+ * clocked in?" the same way. `stillInside` already reconciles with
+ * `deriveSegments`' pairing -- an odd count is an open run in both places --
+ * and a fourth private copy of this test is exactly the drift that puts two
+ * different answers about one Tuesday on one screen.
+ *
+ * Says nothing about WHICH day. An unclosed punch three weeks ago is a gap in
+ * the record, not somebody still at work; a caller that cares must check the
+ * date itself.
+ */
+export function openRunStartedAt(day: Day | undefined): string | null {
+  const punches = inOrder(day);
+  if (!punches.length || !stillInside(punches)) return null;
+  return punches[punches.length - 1]!.time ?? null;
+}
+
 export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniStatus {
   // Day-level facts first, and for ANY day rather than only today. A holiday
   // is a holiday whether or not it is this morning, and leave is the state the

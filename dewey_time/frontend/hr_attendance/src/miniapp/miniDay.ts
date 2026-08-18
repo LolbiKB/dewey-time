@@ -27,6 +27,7 @@ import { deriveSegments } from "@/lib/attendancePunches";
 import { netWorkedMinutes } from "@/lib/clockDay";
 import type { Day } from "@/types/calendar";
 import { translator, type StringKey } from "@/miniapp/miniStrings";
+import { openRunStartedAt } from "@/miniapp/miniStatus";
 
 /**
  * Which kind of day this is. Drives colour and wording, so it is a closed set
@@ -149,6 +150,26 @@ function note(
   return { ...partial, noteText: text, noteKey: key, note: text ?? inEnglish(key) };
 }
 
+/**
+ * Net worked on a day, lunch removed, from the punches alone.
+ *
+ * Hoisted out of `dayFacts` because that function answers leave and holiday
+ * FIRST and returns before it ever looks at a punch -- correct for the day's
+ * tone, useless for somebody who came in for two hours on a public holiday.
+ * `dayNumbers` needs the figure on exactly those days.
+ *
+ * One derivation, called from both, so a holiday's two hours cannot come out
+ * differently depending on which surface asked.
+ */
+export function netWorkedFor(day: Day | undefined): number | null {
+  const segments = deriveSegments(day?.checkins ?? [], {
+    parseTime: parseDateTimeLocal,
+    minutesFromDateTime,
+    clamp,
+  });
+  return netWorkedMinutes(segments);
+}
+
 export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFacts {
   const shift = shiftOf(day);
   const base = {
@@ -175,12 +196,7 @@ export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFact
 
   const range = formatDayCheckinTimeRange(day);
   if (range) {
-    const segments = deriveSegments(day?.checkins ?? [], {
-      parseTime: parseDateTimeLocal,
-      minutesFromDateTime,
-      clamp,
-    });
-    const net = netWorkedMinutes(segments);
+    const net = netWorkedFor(day);
     return {
       ...base,
       tone: "worked",
@@ -210,4 +226,71 @@ export function totalWorkedMinutes(facts: DayFacts[]): number | null {
   const known = facts.filter((f) => f.workedMinutes !== null);
   if (!known.length) return null;
   return known.reduce((sum, f) => sum + (f.workedMinutes ?? 0), 0);
+}
+
+/**
+ * The two numbers the Day tab's canvas cannot state.
+ *
+ * The canvas prints each run's own duration -- 4h 3m, then 4h 8m -- and nobody
+ * adds those in their head. It also has no way to say what the day was
+ * supposed to be, net of its lunch.
+ *
+ * SEPARATE from `dayFacts.workedMinutes`, which stays exactly as it was. That
+ * field is what `totalWorkedMinutes` sums for the calendar sheet's month
+ * figure, and what HR's surfaces read; the projection below must not reach
+ * either.
+ */
+export type DayNumbers = {
+  /** Net worked, plus any open run when the day is today. Null when none. */
+  worked: number | null;
+  /** Net rostered, lunch removed. Null when not rostered, or on leave/holiday. */
+  rostered: number | null;
+  /** A run is still open, so the worked figure is still moving. */
+  live: boolean;
+};
+
+/**
+ * Minutes since a punch, floored at zero.
+ *
+ * Never negative: a device clock running ahead of the phone would otherwise
+ * SUBTRACT from the day's total, which reads as work being taken away.
+ */
+function minutesSince(at: string, now: Date): number {
+  const started = parseDateTimeLocal(at);
+  const delta = now.getTime() - started.getTime();
+  if (!Number.isFinite(delta) || delta < 0) return 0;
+  return Math.round(delta / 60000);
+}
+
+export function dayNumbers(
+  day: Day | undefined,
+  date: Date,
+  today: Date,
+  now: Date,
+): DayNumbers {
+  // Only for the day's TONE and its roster -- the worked figure comes from
+  // netWorkedFor below, for the reason given there.
+  const facts = dayFacts(day, date, today);
+
+  // No rostered figure on a day somebody was entitled to be away: there is
+  // nothing they failed to meet, and "— / 8h" beside "Annual Leave" reads as
+  // eight hours missing. Work actually punched still counts, below.
+  const excused = facts.tone === "leave" || facts.tone === "holiday";
+  const rostered =
+    excused || facts.shiftMinutes === null
+      ? null
+      : facts.shiftMinutes - (facts.lunchMinutes ?? 0);
+
+  // `netWorkedFor`, NOT `facts.workedMinutes`: dayFacts answers leave and
+  // holiday before it looks at a punch, so its figure is null on exactly the
+  // days where somebody may still have worked.
+  const punched = netWorkedFor(day);
+
+  // TODAY only. `openRunStartedAt` reports an unclosed punch on any day, and
+  // on a past one that is a gap in the record rather than somebody at work.
+  const openedAt = isSameDay(date, today) ? openRunStartedAt(day) : null;
+  const worked =
+    openedAt === null ? punched : (punched ?? 0) + minutesSince(openedAt, now);
+
+  return { worked, rostered, live: openedAt !== null };
 }

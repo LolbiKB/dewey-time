@@ -12,8 +12,9 @@
  * history, because it is the cost of this decision:
  *
  *   - the NET TOTAL. The canvas gives 4h 3m and 4h 8m; nobody adds those in
- *     their head. The calendar sheet totals the month, which is where that
- *     number went when the Week tab was replaced.
+ *     their head. It now sits in the row beneath the canvas, beside the
+ *     rostered figure it is read against; the calendar sheet still totals the
+ *     month.
  *   - LEAVE. DayCell reads holiday and punches; it does not read `leave` at
  *     all, so a leave day draws as a dashed band or as "Day off". The status
  *     chip beside this heading names the leave type.
@@ -32,22 +33,10 @@ import { resolveWeekTimelineWindow } from "@/lib/weekTimelineWindow";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { isLive, miniStatus, statusKey, type MiniStatus } from "@/miniapp/miniStatus";
 import { MiniState } from "@/miniapp/MiniState";
-import { MiniFlagButton } from "@/miniapp/MiniFlagButton";
+import { MiniDayNumbers } from "@/miniapp/MiniDayNumbers";
 import { MiniFlagsSheet } from "@/miniapp/MiniFlagsSheet";
 import { flagCount } from "@/miniapp/miniFlags";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
-
-/**
- * Fallback lift for the flags pill, used only when nothing passes one.
- *
- * The real value comes from the shell as `flagLift`, because the shell owns the
- * tab bar and is the only thing entitled to say how tall it is. Importing that
- * number from MiniAppShell was the first attempt and it deadlocks: the shell
- * imports this file, so a module-scope read of its export hits the temporal
- * dead zone and takes the whole app down at load. The existing shell test
- * caught it immediately.
- */
-const DEFAULT_FLAG_LIFT_PX = 56;
 
 /**
  * Where you are in the day, opposite the date.
@@ -107,9 +96,6 @@ export function MyDayPage(props: {
   now?: Date;
   /** Opens the calendar sheet. Omitted in tests that render the page alone. */
   onPickDate?: () => void;
-  /** How far the flags pill must sit above the viewport bottom to clear the
-   *  tab bar. Supplied by the shell, which owns that bar. */
-  flagLift?: number;
 }) {
   const t = useT();
   const fmt = useFormat();
@@ -132,7 +118,14 @@ export function MyDayPage(props: {
   const info = byDate.get(key);
   // The same window maths the HR week uses, over a single day: it keeps the
   // axis on whole hours and sized to the shift rather than to 00:00-24:00.
-  const window = resolveWeekTimelineWindow([date], byDate);
+  // NOT `window`. It was, and it shadowed the global across this whole
+  // component: a read below the declaration silently returned THIS object
+  // instead of the browser's window, and a read above it threw "Cannot access
+  // 'window' before initialization" and white-screened the app behind the
+  // error boundary. Both were hit while designing the row below — the silent
+  // one produced a layout that looked implemented and rendered in the wrong
+  // place, and looked correct in review.
+  const timelineWindow = resolveWeekTimelineWindow([date], byDate);
 
   return (
     // `h-full` and `min-h-0`, not a fixed pixel height: the sheet's height is
@@ -183,24 +176,27 @@ export function MyDayPage(props: {
           flex share alone would squeeze the axis to a few unreadable hours,
           and the page scrolls rather than the timeline collapsing. */}
       <div className="grid min-h-[16rem] flex-1 grid-cols-[3.5rem_1fr] [&>button]:border-0">
-        <HourGutter window={window} />
+        <HourGutter window={timelineWindow} />
         <DayCell
           date={date}
           outside={false}
           today={isSameDay(date, today)}
           info={info}
-          timelineStartMin={window.startMin}
-          timelineEndMin={window.endMin}
+          timelineStartMin={timelineWindow.startMin}
+          timelineEndMin={timelineWindow.endMin}
           // No inspector in the Mini App: the day sheet is HR's review
           // surface and carries flag evidence an employee must not see.
           onInspectDay={() => {}}
         />
       </div>
 
-      <MiniFlagButton
-        count={flagCount(info)}
-        onOpen={() => setFlagsOpen(true)}
-        lift={props.flagLift ?? DEFAULT_FLAG_LIFT_PX}
+      <MiniDayNumbers
+        day={info}
+        date={date}
+        today={today}
+        now={now}
+        flagCount={flagCount(info)}
+        onOpenFlags={() => setFlagsOpen(true)}
       />
       <MiniFlagsSheet open={flagsOpen} onOpenChange={setFlagsOpen} day={info} />
     </div>

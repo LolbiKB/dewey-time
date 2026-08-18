@@ -87,6 +87,20 @@ const EN = {
   flagsSheetTitle: "Things to check",
   flagsNone: "Nothing to check on this day.",
 
+  // The day's two figures, under the timeline. `daySoFar` marks a total that
+  // is still moving, so a number below the roster does not read as a
+  // shortfall on somebody who is only halfway through the day.
+  daySoFar: "so far",
+  // Read aloud, "8h 11m / 8h" is two durations and a slash. These are what a
+  // screen reader announces instead; the visible row stays compact.
+  //
+  // Three whole sentences rather than one composed from fragments: gluing
+  // "Worked" to a duration to a preposition fixes English word order onto
+  // Khmer, and the translator cannot fix it from inside a fragment.
+  dayAriaWorkedOfRostered: "Worked {worked} of {rostered} rostered",
+  dayAriaWorkedOnly: "Worked {worked}",
+  dayAriaRosteredOnly: "Rostered {rostered}, nothing worked yet",
+
   flagLateStart: "Late start",
   flagLateStartBody: "Your first check-in was after your shift started.",
   flagLeftEarly: "Left early",
@@ -234,6 +248,14 @@ const KM: Record<StringKey, string> = {
   flagsToCheck: "{n} ត្រូវពិនិត្យ",
   flagsSheetTitle: "អ្វីដែលត្រូវពិនិត្យ",
   flagsNone: "គ្មានអ្វីត្រូវពិនិត្យសម្រាប់ថ្ងៃនេះទេ។",
+
+  // MACHINE-DRAFTED, awaiting a native speaker -- as with the ~50 already
+  // queued. `daySoFar` must read as "up to now", never as "only": the whole
+  // point of the word is that the figure is unfinished, not that it is small.
+  daySoFar: "គិតត្រឹមពេលនេះ",
+  dayAriaWorkedOfRostered: "ធ្វើការ {worked} ក្នុងចំណោម {rostered} តាមកាលវិភាគ",
+  dayAriaWorkedOnly: "ធ្វើការ {worked}",
+  dayAriaRosteredOnly: "តាមកាលវិភាគ {rostered} មិនទាន់មានម៉ោងធ្វើការ",
 
   flagLateStart: "ចាប់ផ្តើមយឺត",
   flagLateStartBody: "ការស្កេនចូលដំបូងរបស់អ្នកគឺក្រោយពេលវេនចាប់ផ្តើម។",

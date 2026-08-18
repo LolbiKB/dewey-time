@@ -82,22 +82,6 @@ export function OutsideTelegramNotice() {
  */
 export const TAB_BAR_FLOOR_PX = 12;
 
-/**
- * The tab bar's painted height: `py-3` around a `text-sm` row.
- *
- * Here rather than in MyDayPage because the bar is this file's, and the flags
- * pill on the Day tab has to clear it. Passed down as a prop rather than
- * imported the other way — this file imports MyDayPage, so a module-scope read
- * of a shell export from there hits the temporal dead zone and takes the app
- * down at load.
- *
- * A constant rather than a measurement: a fixed element cannot read a sibling's
- * box without a layout effect, and one frame of the pill in the wrong place is
- * worse than a few pixels of slack. The device inset is NOT added — the bar's
- * own padding already absorbs it, and the pill sits above the painted bar.
- */
-export const TAB_BAR_HEIGHT_PX = 44;
-
 export function MiniTabBar(props: {
   active: MiniTab;
   onSelect: (tab: MiniTab) => void;
@@ -310,7 +294,6 @@ export function MiniAppShell() {
               openHaptic(window);
               setPickerOpen(true);
             }}
-            flagLift={TAB_BAR_HEIGHT_PX + TAB_BAR_FLOOR_PX}
           />
         ) : (
           <MyProfilePage offset={weekOffset} onOffsetChange={setWeekOffset} />
