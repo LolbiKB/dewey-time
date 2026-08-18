@@ -235,6 +235,101 @@ class TestRedeem(unittest.TestCase):
         self.assertEqual(create.call_args[1]["chat_id"], "77702")
 
 
+class TestRedeemGuards(unittest.TestCase):
+    """Every way one employee could end up with two authorised accounts.
+
+    Each refusal asserts that NO write happened, not merely that something
+    raised. A guard that raises for the wrong reason -- or a mock that raises
+    before the guard is reached -- satisfies assertRaises alone.
+
+    `_is_expired` is pinned False throughout for the reason the existing
+    TestRedeem documents: under the frappe mock `get_datetime` is an identity
+    passthrough, so a deleted guard would fall through to the expiry
+    comparison and raise a TypeError, and the mutation would survive.
+    """
+
+    def _token_doc(self, **overrides):
+        doc = {
+            "name": "hash",
+            "employee": "HR-EMP-00001",
+            "expires_at": "2099-01-01 00:00:00",
+            "redeemed_at": None,
+            "revoked_at": None,
+        }
+        doc.update(overrides)
+        return doc
+
+    def _redeem(self, *, token_doc=None, existing=None, bound_elsewhere=False):
+        with patch.object(binding, "_load_token",
+                          return_value=token_doc or self._token_doc()), \
+             patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_existing_link", return_value=existing), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=bound_elsewhere), \
+             patch.object(binding, "_create_link") as create, \
+             patch.object(binding, "_revive_link") as revive, \
+             patch.object(binding, "_mark_redeemed") as mark:
+            try:
+                employee = binding.redeem_link_token("tok", "55501", "77702")
+            except Exception:
+                employee = None
+            return employee, create, revive, mark
+
+    def test_a_revoked_token_is_refused(self):
+        employee, create, revive, mark = self._redeem(
+            token_doc=self._token_doc(revoked_at="2026-08-18 09:00:00"))
+        self.assertIsNone(employee)
+        create.assert_not_called()
+        revive.assert_not_called()
+        mark.assert_not_called()
+
+    def test_an_employee_already_bound_to_another_account_refuses(self):
+        employee, create, revive, _ = self._redeem(bound_elsewhere=True)
+        self.assertIsNone(employee)
+        create.assert_not_called()
+        revive.assert_not_called()
+
+    def test_the_same_account_already_bound_here_is_idempotent(self):
+        # No second row: Telegram Link autonames on telegram_user_id, so
+        # _create_link would raise DuplicateEntryError.
+        employee, create, revive, mark = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00001", "enabled": 1})
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+        revive.assert_not_called()
+        mark.assert_called_once()
+
+    def test_an_account_bound_to_a_different_employee_refuses(self):
+        employee, create, revive, _ = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00002", "enabled": 1})
+        self.assertIsNone(employee)
+        create.assert_not_called()
+        revive.assert_not_called()
+
+    def test_a_disabled_link_is_revived_rather_than_refused(self):
+        # The changed-phone case. A Telegram account is keyed to a phone
+        # number, so the same account coming back is the ORDINARY shape of
+        # unlink -> re-issue, not an edge case.
+        employee, create, revive, mark = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00002", "enabled": 0})
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+        self.assertEqual(revive.call_args[1]["name"], "55501")
+        self.assertEqual(revive.call_args[1]["employee"], "HR-EMP-00001")
+        self.assertEqual(revive.call_args[1]["chat_id"], "77702")
+        mark.assert_called_once()
+
+    def test_the_bound_elsewhere_guard_runs_before_the_revive(self):
+        # Order, not merely presence. Reviving into an employee who already
+        # has another live account is the two-accounts-one-employee failure
+        # arriving through the back door.
+        employee, create, revive, _ = self._redeem(
+            existing={"name": "55501", "employee": "HR-EMP-00002", "enabled": 0},
+            bound_elsewhere=True)
+        self.assertIsNone(employee)
+        revive.assert_not_called()
+        create.assert_not_called()
+
+
 class TestClaimByRecordedId(unittest.TestCase):
     """The no-token path, and every way it must refuse rather than guess.
 

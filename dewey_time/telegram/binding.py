@@ -155,6 +155,36 @@ def revoke_outstanding_tokens(employee: str) -> int:
     return len(rows)
 
 
+def _revive_link(*, name: str, employee: str, chat_id: str) -> None:
+    """Re-enable a previously unlinked account and point it at `employee`.
+
+    `Telegram Link` autonames `field:telegram_user_id`, so an account's row
+    outlives every unlink -- clearing `enabled` is all an unlink does. A
+    Telegram account is keyed to a phone number, so "employee got a new phone"
+    is usually the SAME account coming back. Without this branch the
+    unlink -> re-issue flow would refuse forever for exactly the case it
+    exists to serve.
+
+    Deliberately unlike `claim_by_recorded_id`, which refuses a revoked link
+    outright. That guard protects the NO-TOKEN path, where nothing but the
+    employee reopening the bot is required, and self-restoring there would
+    make revocation theatre. A token is HR's explicit, freshly minted
+    authorisation to bind this employee -- the thing the recorded-id path
+    lacks. The two paths should not agree here.
+    """
+    frappe.db.set_value(
+        LINK_DT,
+        name,
+        {
+            "employee": employee,
+            "chat_id": str(chat_id),
+            "enabled": 1,
+            "linked_at": now_datetime(),
+            "linked_via": "token",
+        },
+    )
+
+
 def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> IssuedToken:
     """Mint a single-use token for `employee`. Returns the RAW token, once.
 
@@ -237,16 +267,42 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
         if str(row.get("redeemed_by_telegram_user_id") or "") == telegram_user_id:
             return row["employee"]
         frappe.throw("This link has already been used. Ask HR for a new one.")
+    if row.get("revoked_at"):
+        # A newer link superseded this one, or the employee was unlinked.
+        frappe.throw("This link is no longer valid. Ask HR for a new one.")
     if _is_expired(row["expires_at"]):
         frappe.throw("This link has expired. Ask HR for a new one.")
 
+    employee = row["employee"]
+
+    # BEFORE the account-level branches below. Reviving an account into an
+    # employee who already has another live account is the
+    # two-accounts-one-employee failure arriving through the back door, and
+    # `employee_for_telegram_user` would authorise both.
+    if _employee_bound_elsewhere(employee, telegram_user_id):
+        frappe.throw("This employee is already linked to another Telegram account. Ask HR.")
+
+    existing = _existing_link(telegram_user_id)
+    if existing:
+        if existing.get("enabled"):
+            if existing["employee"] == employee:
+                # Already correctly bound. A second row is impossible anyway --
+                # the autoname would raise DuplicateEntryError -- so the honest
+                # outcome is to spend the token and return.
+                _mark_redeemed(row["name"], telegram_user_id)
+                return employee
+            frappe.throw("This Telegram account is already linked. Ask HR.")
+        _revive_link(name=existing["name"], employee=employee, chat_id=chat_id)
+        _mark_redeemed(row["name"], telegram_user_id)
+        return employee
+
     _create_link(
-        employee=row["employee"],
+        employee=employee,
         telegram_user_id=telegram_user_id,
         chat_id=str(chat_id),
     )
     _mark_redeemed(row["name"], telegram_user_id)
-    return row["employee"]
+    return employee
 
 
 #: The Employee column a prior Telegram notifier left behind, holding a numeric
