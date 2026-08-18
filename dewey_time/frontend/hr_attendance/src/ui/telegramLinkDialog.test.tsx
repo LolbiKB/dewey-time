@@ -24,6 +24,10 @@ const INVITE = {
   employee: "HR-EMP-00001",
   url: "https://t.me/dewey_time_bot?start=Xk3_9pQ-rT7wLmZ2aB4cD6eF8gH0iJkL",
   expires_at: "2026-08-23 09:00:00",
+  // Required by LinkInvite as of the lifecycle work. This whole file is
+  // superseded by src/ui/telegram/telegramBodies.test.tsx and deleted there;
+  // this keeps the tree typechecking in the meantime.
+  expires_in_seconds: 86_400,
 };
 
 test("the trigger is disabled until an employee is selected", () => {

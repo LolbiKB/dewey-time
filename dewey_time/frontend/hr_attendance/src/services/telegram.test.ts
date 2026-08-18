@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createLinkInvite } from "@/services/telegram";
+import { createLinkInvite, revokeLink } from "@/services/telegram";
 
 type Recorded = { url: string; init: RequestInit };
 
@@ -24,7 +24,12 @@ function stubWindow(csrf: string) {
   return () => { g.window = original; };
 }
 
-const INVITE = { employee: "HR-EMP-00001", url: "https://t.me/bot?start=tok", expires_at: "x" };
+const INVITE = {
+  employee: "HR-EMP-00001",
+  url: "https://t.me/bot?start=tok",
+  expires_at: "2026-08-19 09:00:00",
+  expires_in_seconds: 86_400,
+};
 
 test("issuing a link is a POST, and the employee never reaches the query string", async () => {
   // The response body IS a credential: whoever opens the URL binds their
@@ -69,6 +74,50 @@ test("the invite is unwrapped from Frappe's message envelope", async () => {
   const restoreWindow = stubWindow("csrf-123");
   try {
     assert.deepEqual(await createLinkInvite("HR-EMP-00001"), INVITE);
+  } finally {
+    fetchStub.restore();
+    restoreWindow();
+  }
+});
+
+test("unlinking is a POST too, so it never lands in a URL or an access log", async () => {
+  // Same reason as issuing: the employee id names whose access is being
+  // destroyed, and a GET would leave it in every proxy log and browser history
+  // entry between here and the bench. The Python whitelist pins
+  // methods=["POST"], so a GET would also 405 in production while passing any
+  // test that only checked the returned value.
+  const fetchStub = stubFetch({ employee: "HR-EMP-00001", unlinked: 1, tokens_revoked: 2 });
+  const restoreWindow = stubWindow("csrf-123");
+  try {
+    const result = await revokeLink("HR-EMP-00001");
+    assert.equal(result.unlinked, 1);
+    assert.equal(result.tokens_revoked, 2);
+    assert.equal(fetchStub.calls.length, 1);
+    assert.equal(fetchStub.calls[0].init.method, "POST");
+    assert.equal(
+      fetchStub.calls[0].url,
+      "/api/method/dewey_time.telegram.binding.revoke_link",
+    );
+    assert.doesNotMatch(fetchStub.calls[0].url, /HR-EMP-00001/);
+    assert.deepEqual(JSON.parse(String(fetchStub.calls[0].init.body)), {
+      employee: "HR-EMP-00001",
+    });
+  } finally {
+    fetchStub.restore();
+    restoreWindow();
+  }
+});
+
+test("the invite carries a duration, not only a datetime string", async () => {
+  // `expires_at` is naive site-local. A browser cannot turn that into an
+  // instant without knowing the site's timezone, so a countdown driven from it
+  // is wrong by whatever the two differ by. The duration is what the dialog
+  // actually counts down.
+  const fetchStub = stubFetch(INVITE);
+  const restoreWindow = stubWindow("csrf-123");
+  try {
+    const invite = await createLinkInvite("HR-EMP-00001");
+    assert.equal(invite.expires_in_seconds, 86_400);
   } finally {
     fetchStub.restore();
     restoreWindow();
