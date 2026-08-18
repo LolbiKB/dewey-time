@@ -68,14 +68,26 @@ test("an expired link shows neither the URL nor the QR", () => {
   assert.match(html, /expired/i);
 });
 
-test("an id on file is reported as already bindable without a link", () => {
+test("an id on file is reported as often bindable without a link", () => {
   // claim_by_recorded_id is live in the webhook today: a bare /start binds
-  // these employees. Nothing currently tells HR, so they issue links people
-  // do not need.
+  // these employees. Nothing told HR, so they issued links people did not
+  // need.
   const html = renderToStaticMarkup(
     <TelegramNotLinkedBody status="id_on_file" onIssue={noop} />,
   );
   assert.match(html, /\/start/);
+});
+
+test("the /start advice carries the caveat that makes it true after an unlink", () => {
+  // claim_by_recorded_id refuses any account with an existing Telegram Link
+  // row, DISABLED included, so revocation is not undone by reopening the bot.
+  // An unlinked employee whose id is still on file reports as "ID on file"
+  // again, so an unqualified "just send /start" would be wrong for precisely
+  // the people this dialog just unlinked — HR would send them to a refusal.
+  const html = renderToStaticMarkup(
+    <TelegramNotLinkedBody status="id_on_file" onIssue={noop} />,
+  );
+  assert.match(html, /unlinked before/);
 });
 
 test("an employee with nothing on file is not told to try /start", () => {

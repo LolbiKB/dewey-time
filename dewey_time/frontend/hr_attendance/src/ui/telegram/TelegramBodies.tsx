@@ -31,14 +31,23 @@ export function TelegramNotLinkedBody(props: {
         employee&rsquo;s record. It works once and expires after 24 hours.
       </p>
       {/* Only for id_on_file. claim_by_recorded_id is live in the webhook, so
-          these employees can already bind themselves by sending a bare /start
-          — and until now nothing said so, which is how links get issued to
-          people who never needed one. */}
+          these employees can often bind themselves by sending a bare /start —
+          and until now nothing said so, which is how links get issued to
+          people who never needed one.
+
+          The caveat is not hedging. claim_by_recorded_id deliberately refuses
+          any account that already has a Telegram Link row, DISABLED included,
+          so that revocation is not undone by the employee simply reopening the
+          bot. After an unlink the register reports this employee as
+          "ID on file" again — the link is disabled but the id is still on the
+          record — so an unqualified "just send /start" would be wrong for
+          exactly the people this dialog just unlinked. */}
       {props.status === "id_on_file" ? (
         <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          This employee has a Telegram ID on file. They can link by opening the
-          bot and sending <span className="font-mono">/start</span> — no link
-          needed. Issue one only if that fails.
+          This employee has a Telegram ID on file. Sending{" "}
+          <span className="font-mono">/start</span> to the bot binds them with
+          no link needed — unless they were unlinked before, which the bot
+          refuses. Issue a link if that happens.
         </p>
       ) : null}
       <p className="text-xs text-muted-foreground">{LIVE_WARNING}</p>

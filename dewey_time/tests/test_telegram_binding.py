@@ -509,6 +509,31 @@ class TestInvite(unittest.TestCase):
         issue.assert_not_called()
 
 
+class TestReviveLink(unittest.TestCase):
+    def test_reviving_goes_through_the_document_api(self):
+        # frappe.db.set_value bypasses controller validation, and
+        # TelegramLink.validate is the backstop that refuses a second enabled
+        # link for one employee. A revive written with set_value would be the
+        # single path in this module that skips it -- and it is the only path
+        # that points an EXISTING row at a DIFFERENT employee, so it is the
+        # one that most needs the check.
+        import frappe
+
+        with patch.object(frappe.db, "set_value") as set_value, \
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
+            binding._revive_link(
+                name="55501", employee="HR-EMP-00001", chat_id="77702")
+
+        get_doc.assert_called_once_with(binding.LINK_DT, "55501")
+        self.assertEqual(doc.employee, "HR-EMP-00001")
+        self.assertEqual(doc.chat_id, "77702")
+        self.assertEqual(doc.enabled, 1)
+        self.assertEqual(doc.linked_via, "token")
+        doc.save.assert_called_once_with(ignore_permissions=True)
+        set_value.assert_not_called()
+
+
 class TestInviteRefusesALinkedEmployee(unittest.TestCase):
     def test_an_already_linked_employee_gets_no_new_link(self):
         # The register hides its control for a linked employee; this is the
@@ -552,14 +577,36 @@ class TestRevokeLink(unittest.TestCase):
         with patch.object(binding, "_require_hr_role"), \
              patch.object(binding, "_live_link_names", return_value=["55501"]), \
              patch.object(binding, "revoke_outstanding_tokens", return_value=2) as tokens, \
-             patch.object(frappe.db, "set_value") as set_value:
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
             result = binding.revoke_link("HR-EMP-00001")
 
         self.assertEqual(result, {
             "employee": "HR-EMP-00001", "unlinked": 1, "tokens_revoked": 2,
         })
-        set_value.assert_called_once_with(binding.LINK_DT, "55501", "enabled", 0)
+        get_doc.assert_called_once_with(binding.LINK_DT, "55501")
+        self.assertEqual(doc.enabled, 0)
         tokens.assert_called_once_with("HR-EMP-00001")
+
+    def test_the_unlink_is_written_where_version_history_can_see_it(self):
+        # Telegram Link is track_changes:1, and Versions are written by
+        # Document.save() -- frappe.db.set_value goes straight to SQL and
+        # records nothing. Clearing the checkbox by hand in the desk, the path
+        # this endpoint replaces, DOES record who revoked the credential and
+        # when. A programmatic unlink that silently stopped doing so would be
+        # an audit regression nobody would notice until they needed the trail.
+        import frappe
+
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_live_link_names", return_value=["55501"]), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0), \
+             patch.object(frappe.db, "set_value") as set_value, \
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
+            binding.revoke_link("HR-EMP-00001")
+
+        doc.save.assert_called_once_with(ignore_permissions=True)
+        set_value.assert_not_called()
 
     def test_the_row_is_disabled_never_deleted(self):
         # The row and its version history are the audit trail, and the
@@ -569,7 +616,7 @@ class TestRevokeLink(unittest.TestCase):
         with patch.object(binding, "_require_hr_role"), \
              patch.object(binding, "_live_link_names", return_value=["55501"]), \
              patch.object(binding, "revoke_outstanding_tokens", return_value=0), \
-             patch.object(frappe.db, "set_value"), \
+             patch.object(frappe, "get_doc"), \
              patch.object(frappe, "delete_doc", create=True) as delete_doc, \
              patch.object(frappe.db, "delete") as db_delete:
             binding.revoke_link("HR-EMP-00001")

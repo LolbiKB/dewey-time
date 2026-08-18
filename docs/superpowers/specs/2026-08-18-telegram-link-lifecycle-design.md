@@ -22,9 +22,16 @@ lifecycle:
    their own expiry. There is no revocation path at all.
 3. **`create_link_invite` does not refuse an already-linked employee.** The
    register hides its button when `telegram === "linked"`, but the API does
-   not. A second account redeeming a second token creates a *second* enabled
-   `Telegram Link` row for one employee, after which
-   `employee_for_telegram_user` authorises both accounts.
+   not, so a second live credential can be minted for someone already bound.
+
+   **Corrected after the whole-branch review (2026-08-18).** An earlier draft
+   of this spec claimed the second account would then get a *second* enabled
+   `Telegram Link` row and be authorised alongside the first. It would not:
+   `TelegramLink.validate` already refuses a second enabled link for one
+   employee, and `_create_link` inserts through the document API, so the
+   controller runs. The real cost of the missing refusal is a live credential
+   that should never have been minted, and a redemption that fails with a
+   controller throw rather than a legible message — not a double binding.
 4. **`expires_at` is computed twice** — once inside `issue_link_token`, again
    in `create_link_invite` — so the value returned is not the value stored,
    and it arrives as a naive site-local string the browser cannot turn into an
@@ -177,10 +184,17 @@ load-bearing: Telegram redelivers an update when it does not get a timely
    should not agree here.
 8. create the link, mark redeemed — unchanged
 
-6 and 7 are the actual security fix. Without them a second live token
-redeemed by a second account yields two enabled `Telegram Link` rows for one
-employee, and `employee_for_telegram_user` authorises both. Both reuse the
-helpers `claim_by_recorded_id` already depends on.
+Both reuse the helpers `claim_by_recorded_id` already depends on.
+
+Guard 6 is **load-bearing for the revive branch specifically**, and the
+reasoning is worth pinning because the guard reads as redundant.
+`TelegramLink.validate` refuses a second enabled link for one employee, but it
+only runs on the document API. `_create_link` inserts, so it is covered.
+`_revive_link` points an *existing* row at a *different* employee, which is
+the write that most needs the check — so it must save through the document
+API too, never `frappe.db.set_value`. Guard 6 then does two further jobs:
+it stops the revive being attempted at all, and it returns a legible reason
+instead of a controller throw.
 
 **`create_link_invite(employee)`** — POST, HR-only, same call signature.
 
@@ -216,8 +230,13 @@ arithmetic here would go untested — string-vs-datetime bugs would stay green.
 2. `employee = (employee or "").strip()`; blank → `frappe.throw("employee is
    required")`
 3. For every `Telegram Link` with this employee and `enabled = 1`: set
-   `enabled = 0`. The row and its version history are kept — the field's own
-   description already promises this.
+   `enabled = 0` **through `frappe.get_doc(...)` + `doc.save()`**, never
+   `frappe.db.set_value`. The row and its version history are kept — the
+   field's own description already promises this — but the doctype is
+   `track_changes: 1` and Versions are written by `Document.save()`.
+   `set_value` goes straight to SQL, so a programmatic unlink would silently
+   stop recording who revoked a credential and when, which the desk path this
+   endpoint replaces did record.
 4. `revoke_outstanding_tokens(employee)` — an unlink must not leave a live
    credential behind.
 5. Returns `{"employee": employee, "unlinked": <count>, "tokens_revoked":

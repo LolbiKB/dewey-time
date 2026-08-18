@@ -171,18 +171,21 @@ def _revive_link(*, name: str, employee: str, chat_id: str) -> None:
     make revocation theatre. A token is HR's explicit, freshly minted
     authorisation to bind this employee -- the thing the recorded-id path
     lacks. The two paths should not agree here.
+
+    `get_doc`/`save`, NOT `frappe.db.set_value`, for two reasons that both
+    matter here. `set_value` writes straight to SQL: it skips
+    `TelegramLink.validate`, which is the check that stops one employee
+    holding two enabled links, and it writes no Version row even though the
+    doctype is `track_changes: 1`. Reviving a credential is exactly the event
+    that audit exists to record.
     """
-    frappe.db.set_value(
-        LINK_DT,
-        name,
-        {
-            "employee": employee,
-            "chat_id": str(chat_id),
-            "enabled": 1,
-            "linked_at": now_datetime(),
-            "linked_via": "token",
-        },
-    )
+    doc = frappe.get_doc(LINK_DT, name)
+    doc.employee = employee
+    doc.chat_id = str(chat_id)
+    doc.enabled = 1
+    doc.linked_at = now_datetime()
+    doc.linked_via = "token"
+    doc.save(ignore_permissions=True)
 
 
 def issue_link_token(employee: str, ttl_hours: int = DEFAULT_TTL_HOURS) -> IssuedToken:
@@ -275,10 +278,14 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
 
     employee = row["employee"]
 
-    # BEFORE the account-level branches below. Reviving an account into an
-    # employee who already has another live account is the
-    # two-accounts-one-employee failure arriving through the back door, and
-    # `employee_for_telegram_user` would authorise both.
+    # BEFORE the account-level branches below, and LOAD-BEARING rather than
+    # belt-and-braces. `TelegramLink.validate` already refuses a second enabled
+    # link for one employee, but it only runs on the document API -- so it
+    # covers `_create_link` (which inserts) and would NOT have covered a
+    # `db.set_value` revive. `_revive_link` now saves through the document API
+    # too, which restores that backstop; this check is the one that gives the
+    # caller a legible reason instead of a controller throw, and the one that
+    # stops the revive being attempted at all.
     if _employee_bound_elsewhere(employee, telegram_user_id):
         frappe.throw("This employee is already linked to another Telegram account. Ask HR.")
 
@@ -540,7 +547,16 @@ def revoke_link(employee: str) -> dict:
         # `enabled = 0`, never a delete. The row and its version history are
         # the audit trail, and the field's own description promises they
         # survive the unlink.
-        frappe.db.set_value(LINK_DT, name, "enabled", 0)
+        #
+        # Through the document API, NOT `frappe.db.set_value`. Versions are
+        # written by `Document.save()`; `set_value` goes straight to SQL. This
+        # doctype is `track_changes: 1`, and clearing the checkbox by hand in
+        # the desk -- the path this endpoint replaces -- records who revoked
+        # the credential and when. Writing it programmatically must not be the
+        # version that quietly stops recording that.
+        doc = frappe.get_doc(LINK_DT, name)
+        doc.enabled = 0
+        doc.save(ignore_permissions=True)
 
     # An unlink must not leave a live credential behind: a token issued while
     # the employee was unlinked before would otherwise still bind on
