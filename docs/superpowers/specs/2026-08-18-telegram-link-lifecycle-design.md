@@ -96,7 +96,9 @@ lifecycle:
 |--------------|-----------|-----------------------|
 | `revoked_at` | Datetime  | `read_only: 1`        |
 
-Placed after `redeemed_at` in `field_order`. Description: *"Set when a newer
+Appended to the end of `field_order`, after
+`redeemed_by_telegram_user_id`, so the redeemed pair stays adjacent.
+Description: *"Set when a newer
 link superseded this one, or when the employee was unlinked. A revoked token
 can never be redeemed. The row is kept so the audit trail survives."*
 
@@ -181,6 +183,10 @@ employee, and `employee_for_telegram_user` authorises both. Both reuse the
 helpers `claim_by_recorded_id` already depends on.
 
 **`create_link_invite(employee)`** — POST, HR-only, same call signature.
+
+Its whitelist becomes `methods=["POST"]`. It is a bare `@frappe.whitelist()`
+today, so the GET that `services/telegram.ts` documents it as refusing is in
+fact accepted — the client sends POST, and nothing makes the server insist.
 
 - Refuses when the employee already has an enabled `Telegram Link`:
   `"{employee} is already linked to Telegram. Unlink first to issue a new
@@ -350,9 +356,10 @@ logic is tested — no timers involved:
 export function formatCountdown(secondsRemaining: number): string
 ```
 
-- `> 3600` → `"23h 41m"`
-- `<= 3600` → `"41m 12s"`
-- `<= 0` → `"Expired"`
+- `>= 3600` → `"23h 41m"` (`>` would print `"60m 0s"` at exactly an hour)
+- `< 3600` → `"41m 12s"`
+- `<= 0` → `"Expired"` — including negative input, which a laptop that slept
+  past the deadline wakes up with
 
 ### QR
 
@@ -371,12 +378,13 @@ encoded value is the credential.
 Created:
 
 ```
-src/ui/telegram/TelegramDialog.tsx       shell + state machine
-src/ui/telegram/TelegramInviteBody.tsx   issued / expired
+src/ui/telegram/TelegramDialog.tsx       shell, body switch, countdown interval
+src/ui/telegram/TelegramBodies.tsx       the four portal-free bodies
 src/ui/telegram/TelegramLinkQr.tsx       the QR panel
 src/ui/telegram/expiry.ts                formatCountdown
 src/ui/telegram/expiry.test.ts
-src/ui/telegram/telegramDialog.test.tsx
+src/ui/telegram/telegramLinkQr.test.tsx
+src/ui/telegram/telegramBodies.test.tsx
 src/hooks/useTelegramLink.ts             issue + revoke, replaces useTelegramInvite
 ```
 
