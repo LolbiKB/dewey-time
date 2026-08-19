@@ -442,6 +442,25 @@ def employee_for_telegram_user(telegram_user_id: str) -> str:
     )
     if not employee:
         frappe.throw("Not permitted", frappe.PermissionError)
+
+    # Employment status, re-read on EVERY request rather than trusted from the
+    # link row. Offboarding is the most common revocation event in an HR system,
+    # and it touches the Employee record, not this one: HR sets status to "Left"
+    # and the link is left exactly as it was, enabled. Without this check the
+    # credential outlives employment -- and the coverage register that owns
+    # Unlink enumerates only Active employees, so the single population that
+    # most needs revoking is the one HR cannot see to revoke.
+    #
+    # The rule is not new. The no-token bind path a hundred lines up already
+    # refuses a non-Active employee, for exactly the reason stated there: "a
+    # leaver whose id is still on their record could otherwise walk back in".
+    # This is that same rule, on the path every request actually takes.
+    #
+    # One indexed read per request, and it fails closed like everything else
+    # here: any status that is not exactly "Active" -- Left, Inactive,
+    # Suspended, or a value this app has never heard of -- is refused.
+    if frappe.db.get_value("Employee", employee, "status") != "Active":
+        frappe.throw("Not permitted", frappe.PermissionError)
     return employee
 
 

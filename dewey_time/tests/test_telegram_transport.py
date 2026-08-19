@@ -461,3 +461,94 @@ class TestGatesRefuseToGuessAboutAnUnknownEmployee(unittest.TestCase):
         self.assertTrue(gates["employee_exists"])
         self.assertTrue(gates["employee_linked"])
         self.assertEqual(gates["employee_phase"], "LIVE")
+
+
+#: A token shaped exactly like a real one. The digits before the colon are the
+#: bot id and the rest is base64url, which is what makes a naive "split on
+#: whitespace" scrub miss it -- it contains no whitespace and looks like a path
+#: segment.
+FAKE_TOKEN = "7123456789:AAHfakeTokenValue_that-must-never-leak"
+
+
+class TestTheBotTokenNeverLeavesThisModule(unittest.TestCase):
+    """The token is in every Bot API URL, and requests reports the URL it failed on.
+
+    These tests exist because the leak needs no attacker: a DNS blip is enough,
+    and it lands in the two places chosen for wide readability -- the
+    diagnostics response body and the Error Log, which persists into backups.
+    """
+
+    def _connection_error(self):
+        # The real shape: requests embeds the full URL, token and all.
+        return OSError(
+            "HTTPSConnectionPool(host='api.telegram.org', port=443): Max retries "
+            f"exceeded with url: /bot{FAKE_TOKEN}/getMe (Caused by NameResolutionError)"
+        )
+
+    def test_scrub_removes_the_token_and_keeps_the_error(self):
+        scrubbed = transport.scrub_token(self._connection_error())
+        self.assertNotIn(FAKE_TOKEN, scrubbed)
+        self.assertNotIn("AAHfakeTokenValue", scrubbed)
+        # An error with its cause stripped out is why nobody would notice this
+        # was here, so the diagnosis itself must survive intact.
+        self.assertIn("NameResolutionError", scrubbed)
+        self.assertIn("api.telegram.org", scrubbed)
+
+    def test_scrub_leaves_a_message_without_a_token_alone(self):
+        self.assertEqual(transport.scrub_token("status=502 body=bad gateway"),
+                         "status=502 body=bad gateway")
+
+    def test_an_unreachable_api_does_not_return_the_token_to_the_caller(self):
+        # _get is what diagnostics() puts straight into its HTTP response body.
+        with patch.object(transport, "bot_token", return_value=FAKE_TOKEN), \
+             patch.object(transport.requests, "get", side_effect=self._connection_error()):
+            result = transport._get("getMe")
+
+        self.assertFalse(result["ok"])
+        self.assertNotIn(FAKE_TOKEN, result["error"])
+        self.assertIn("NameResolutionError", result["error"])
+
+    def test_diagnostics_cannot_hand_an_hr_user_the_token(self):
+        # The whole report, serialised the way the HTTP layer would send it.
+        import json
+
+        with patch.object(transport, "_require_hr_role", create=True), \
+             patch("dewey_time.attendance_engine.hr_calendar._require_hr_role"), \
+             patch.object(transport, "_secret", return_value=FAKE_TOKEN), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport, "miniapp_url", return_value="https://s/hr-me"), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "bot_token", return_value=FAKE_TOKEN), \
+             patch.object(transport.requests, "get", side_effect=self._connection_error()):
+            report = transport.diagnostics()
+
+        self.assertNotIn(FAKE_TOKEN, json.dumps(report, default=str))
+
+    def test_a_failed_send_does_not_write_the_token_to_the_error_log(self):
+        logged = {}
+
+        def capture(title=None, message=None, **kw):
+            logged["message"] = message
+
+        with patch.object(transport, "bot_token", return_value=FAKE_TOKEN), \
+             patch.object(transport.requests, "post", side_effect=self._connection_error()), \
+             patch.object(transport.frappe, "get_traceback",
+                          return_value=f"Traceback:\n  url: /bot{FAKE_TOKEN}/sendMessage"), \
+             patch.object(transport.frappe, "log_error", side_effect=capture):
+            self.assertEqual(transport.send_message("55501", "hi"), transport.FAILED)
+
+        self.assertNotIn(FAKE_TOKEN, logged["message"])
+        self.assertIn("Traceback", logged["message"])
+
+    def test_a_failed_webhook_registration_does_not_log_the_token(self):
+        logged = {}
+
+        with patch.object(transport, "bot_token", return_value=FAKE_TOKEN), \
+             patch.object(transport.requests, "post", side_effect=self._connection_error()), \
+             patch.object(transport.frappe, "get_traceback",
+                          return_value=f"url: /bot{FAKE_TOKEN}/setWebhook"), \
+             patch.object(transport.frappe, "log_error",
+                          side_effect=lambda title=None, message=None, **kw: logged.update(m=message)):
+            self.assertEqual(transport.set_webhook("https://s/hook", "sec"), transport.FAILED)
+
+        self.assertNotIn(FAKE_TOKEN, logged["m"])

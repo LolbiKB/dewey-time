@@ -157,8 +157,38 @@ class TestResolverFailsClosed(unittest.TestCase):
         self.assertEqual(gv.call_args[0][1]["enabled"], 1)
 
     def test_resolver_returns_the_employee_id_not_a_boolean(self):
-        with patch.object(binding.frappe.db, "get_value", return_value="HR-EMP-00001"):
+        # Two reads now: the link, then the employee's status.
+        with patch.object(binding.frappe.db, "get_value",
+                          side_effect=["HR-EMP-00001", "Active"]):
             self.assertEqual(binding.employee_for_telegram_user("55501"), "HR-EMP-00001")
+
+    def test_a_leaver_is_refused_even_though_the_link_is_still_enabled(self):
+        # Offboarding sets Employee.status and never touches the link row, so
+        # without this the credential outlives employment -- and the register
+        # that owns Unlink lists only Active employees, so HR cannot even see
+        # the person to revoke them.
+        with patch.object(binding.frappe.db, "get_value",
+                          side_effect=["HR-EMP-00001", "Left"]):
+            with self.assertRaises(Exception):
+                binding.employee_for_telegram_user("55501")
+
+    def test_the_status_is_read_for_the_employee_the_link_named(self):
+        with patch.object(binding.frappe.db, "get_value",
+                          side_effect=["HR-EMP-00042", "Active"]) as gv:
+            binding.employee_for_telegram_user("55501")
+        doctype, name, field = gv.call_args[0]
+        self.assertEqual(doctype, "Employee")
+        self.assertEqual(name, "HR-EMP-00042")
+        self.assertEqual(field, "status")
+
+    def test_any_status_that_is_not_active_is_refused(self):
+        # Fails closed on values this app has never heard of, not just "Left".
+        for status in ("Inactive", "Suspended", "", None, "active"):
+            with self.subTest(status=status):
+                with patch.object(binding.frappe.db, "get_value",
+                                  side_effect=["HR-EMP-00001", status]):
+                    with self.assertRaises(Exception):
+                        binding.employee_for_telegram_user("55501")
 
     def test_blank_telegram_user_id_raises(self):
         with self.assertRaises(Exception):
