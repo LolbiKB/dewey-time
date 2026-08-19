@@ -224,9 +224,18 @@ class TestMeaningLineFormatting(unittest.TestCase):
         self.assertTrue(khmer.startswith("វេន "))
 
     def test_durations_in_both_languages(self):
+        # ថ្ងៃនេះ is the Khmer half's "today": without it the line read as
+        # a running total to anyone scrolling back through the chat.
         khmer, english = receipt.format_so_far_lines(4 * 60 + 56)
         self.assertEqual(english, "So far today 4h 56m")
-        self.assertEqual(khmer, "គិតត្រឹមពេលនេះ 4 ម៉ោង 56 នាទី")
+        self.assertEqual(khmer, "ថ្ងៃនេះ គិតត្រឹមពេលនេះ 4 ម៉ោង 56 នាទី")
+
+    def test_the_no_roster_lines_are_pinned_khmer_first(self):
+        # The only line pair stored as a constant rather than built by a
+        # formatter -- so nothing structural kept Khmer first or the words
+        # themselves from drifting in a wording pass.
+        self.assertEqual(receipt.NO_ROSTER_LINES[0], "មិនមានវេនក្នុងកាលវិភាគថ្ងៃនេះ")
+        self.assertEqual(receipt.NO_ROSTER_LINES[1], "No shift on your roster today")
 
     def test_whole_hours_and_minutes_only_read_naturally(self):
         # "4h 0m" and "0h 20m" are how a formatter says nobody proofread it.

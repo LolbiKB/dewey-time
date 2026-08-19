@@ -309,7 +309,11 @@ def format_so_far_lines(minutes: int) -> tuple[str, str]:
     ever present when every punch so far pairs cleanly and therefore always
     equals the timeline's own sum.
     """
+    # ថ្ងៃនេះ scopes the Khmer half to the day the way "today" scopes the
+    # English -- without it the line read as a running total to anyone
+    # scrolling back through the chat on Thursday. (Khmer strings across
+    # this module still await native review.)
     return (
-        f"គិតត្រឹមពេលនេះ {_duration_km(minutes)}",
+        f"ថ្ងៃនេះ គិតត្រឹមពេលនេះ {_duration_km(minutes)}",
         f"So far today {_duration_en(minutes)}",
     )

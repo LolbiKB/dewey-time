@@ -138,6 +138,44 @@ def _normalize_shift_assignment_row(row, attendance_date):
     return out
 
 
+def has_assignment_overlapping(*, employee: str, start, end) -> bool:
+    """Any submitted (Active) assignment whose range touches [start, end]?
+
+    An existence probe, not a lookup. Callers deciding whether the roster
+    was actively GENERATED around a date must use this rather than
+    `shift_assignment_bounds_by_employee`: MIN/MAX bounds are an envelope,
+    and an interior generation gap -- a missed month between two generated
+    windows -- sits inside the envelope and reads as covered, while a lone
+    far-future open-ended row nulls the max and reads as an infinite
+    horizon. Overlap with a bounded window says what it means.
+    """
+    if not frappe.db.table_exists("Shift Assignment"):
+        return False
+    start = getdate(start)
+    end = getdate(end)
+    filters: dict = {
+        "employee": employee,
+        "docstatus": 1,
+        "start_date": ["<=", end],
+    }
+    if _shift_assignment_has_status_column():
+        filters["status"] = "Active"
+    rows = (
+        frappe.get_all(
+            "Shift Assignment",
+            filters=filters,
+            or_filters=[
+                ["end_date", "is", "not set"],
+                ["end_date", ">=", start],
+            ],
+            fields=["name"],
+            limit_page_length=1,
+        )
+        or []
+    )
+    return bool(rows)
+
+
 def shift_assignment_bounds_by_employee(employee_ids: list[str]) -> dict[str, dict]:
     """
     Min/max coverage dates from submitted Active Shift Assignments (one grouped query).

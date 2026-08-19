@@ -40,7 +40,7 @@ from dewey_time.attendance_engine.employment_type import is_weekly_schedule_elig
 from dewey_time.attendance_engine.holidays import holiday_by_date_for_company
 from dewey_time.attendance_engine.shift_assignment import (
     get_shift_assignment,
-    shift_assignment_bounds_by_employee,
+    has_assignment_overlapping,
 )
 from dewey_time.attendance_engine.shift_times import shift_time_to_minutes
 from dewey_time.telegram import receipt, transport
@@ -217,6 +217,14 @@ def _meaning_for(employee: str, row, direction: str, announced: dict) -> tuple[s
         context = _day_context(employee, day)
         if context["is_holiday"] or context["is_overnight"]:
             return None
+        if _overnight_on(employee, _previous_day(day)):
+            # The night worker's 01:00-out / 01:30-in meal break lands on a
+            # fresh calendar date and pairs cleanly there -- a figure
+            # computed from it measures the break, or the gap between
+            # leaving and coming back, never a day's work. The IN branch
+            # already refuses this frame; the OUT branch must refuse it for
+            # the same reason, not just for today's own overnight roster.
+            return None
         return receipt.format_so_far_lines(announced["so_far_minutes"])
 
     if direction == receipt.IN and announced["is_first_punch_of_day"]:
@@ -231,7 +239,7 @@ def _meaning_for(employee: str, row, direction: str, announced: dict) -> tuple[s
             return None
         if context["shift_window"]:
             return receipt.format_shift_window_lines(*context["shift_window"])
-        if context["assignment"] is None and _horizon_covers(employee, day):
+        if context["assignment"] is None and _roster_opined_around(employee, day):
             return receipt.NO_ROSTER_LINES
         return None
 
@@ -298,24 +306,35 @@ def _overnight_on(employee: str, day: str) -> bool:
     return start is not None and end is not None and end < start
 
 
-def _horizon_covers(employee: str, day: str) -> bool:
-    """Has the roster actually opined about this day?
+#: How far around a day the generator must have been active before a blank
+#: day may be called a day off. A week each way spans any roster's cadence
+#: without reaching across a generation gap.
+ROSTER_OPINION_WINDOW_DAYS = 7
 
-    Four indistinguishable reasons produce "no assignment" -- a real day
-    off, a person HR never scheduled, a new hire ahead of their roster, and
-    a lapsed generation horizon. "No shift on your roster" is honest only in
-    the first case's shape: assignments exist and their generated range
-    spans the day. Everything else stays silent, the same reasoning that
-    put schedule_max_date in the Mini App payload.
+
+def _roster_opined_around(employee: str, day: str) -> bool:
+    """Has the roster actually opined about this stretch of the calendar?
+
+    Four indistinguishable reasons produce "no assignment for the day" -- a
+    real day off, a person HR never scheduled, a new hire ahead of their
+    roster, and a lapsed generation horizon. "No shift on your roster" is
+    honest only in the first shape, and MIN/MAX bounds cannot isolate it:
+    they are an envelope, so an interior generation gap (a missed month
+    between two generated windows) reads as covered, and one far-future
+    open-ended row reads as an infinite horizon. What CAN be said honestly:
+    if any assignment overlaps the window centred on the day, the generator
+    was active around this date, and a blank day inside that stretch is a
+    statement the roster is actually making. Everything else stays silent
+    -- the same reasoning that put schedule_max_date in the Mini App
+    payload instead of a "not scheduled" label.
     """
-    bounds = (shift_assignment_bounds_by_employee([employee]) or {}).get(employee) or {}
-    if not bounds.get("has_shift_assignment"):
-        return False
-    min_date = bounds.get("schedule_min_date")
-    max_date = bounds.get("schedule_max_date")
-    if not min_date or min_date > day:
-        return False
-    return max_date is None or day <= max_date
+    anchor = date.fromisoformat(day)
+    window = timedelta(days=ROSTER_OPINION_WINDOW_DAYS)
+    return has_assignment_overlapping(
+        employee=employee,
+        start=(anchor - window).isoformat(),
+        end=(anchor + window).isoformat(),
+    )
 
 
 def _link_for(employee: str):
