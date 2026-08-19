@@ -56,6 +56,32 @@
       "py_so_far_minutes": null
     },
     {
+      "name": "clean_day_with_seconds",
+      "case_comment": "Real device rows carry seconds. The timeline rounds each segment (Math.round), so the receipt must too -- flooring the summed seconds printed 540 here while the app said 541.",
+      "punches": [
+        { "name": "P0", "time": "2026-08-17 08:00:15", "log_type": "", "custom_device_branch": "DIS Iconic" },
+        { "name": "P1", "time": "2026-08-17 17:00:45", "log_type": "", "custom_device_branch": "DIS Iconic" }
+      ],
+      "ts_segments": [[0, 1]],
+      "ts_total_minutes": 541,
+      "py_verbs": ["IN", "OUT"],
+      "py_so_far_minutes": 541
+    },
+    {
+      "name": "re_entry_a_minute_after_leaving",
+      "case_comment": "Punches out, remembers something, punches back in sixty seconds later, leaves for real at 5:20. Outside the ten-second bounce window these are four genuine movements, and both sides read them identically. (Under the earlier 120-second window the return was swallowed as a duplicate and the 5:20 departure announced an arrival -- the reviewed-out regression this case pins closed.)",
+      "punches": [
+        { "name": "P0", "time": "2026-08-17 08:00:00", "log_type": "", "custom_device_branch": "DIS Iconic" },
+        { "name": "P1", "time": "2026-08-17 17:00:00", "log_type": "", "custom_device_branch": "DIS Iconic" },
+        { "name": "P2", "time": "2026-08-17 17:01:00", "log_type": "", "custom_device_branch": "DIS Iconic" },
+        { "name": "P3", "time": "2026-08-17 17:20:00", "log_type": "", "custom_device_branch": "DIS Iconic" }
+      ],
+      "ts_segments": [[0, 1], [2, 3]],
+      "ts_total_minutes": 559,
+      "py_verbs": ["IN", "OUT", "IN", "OUT"],
+      "py_so_far_minutes": 559
+    },
+    {
       "name": "clean_rotation_across_two_campuses",
       "case_comment": "Morning at one campus, afternoon at another, every punch paired. The afternoon opener's own verb is not claimable mid-stream (arriving at B looks identical to leaving through B's exit device), but it still opens the pair, so the day ends with a full hours figure both sides agree on.",
       "punches": [

@@ -82,22 +82,38 @@ class TestAnnounce(unittest.TestCase):
 
     def test_a_duplicate_is_not_the_first_punch_of_day(self):
         result = receipt.announce(
-            [_p("2026-08-17 07:58:00"), _p("2026-08-17 07:58:20")]
+            [_p("2026-08-17 07:58:00"), _p("2026-08-17 07:58:05")]
         )
         self.assertEqual(result["verb"], receipt.NO_VERB)
         self.assertFalse(result["is_first_punch_of_day"])
 
     def test_the_duplicate_window_has_an_edge(self):
-        # 120 seconds in: still a duplicate. 121: a real punch that closes
-        # the open arrival.
+        # Ten seconds in: still a duplicate. Eleven: a real punch that closes
+        # the open arrival. The window must stay this tight -- see the
+        # constant's comment; at 120s it swallowed genuine movement and the
+        # drop itself inverted the rest of the run.
         at_window = receipt.announce(
-            [_p("2026-08-17 08:00:00"), _p("2026-08-17 08:02:00")]
+            [_p("2026-08-17 08:00:00"), _p("2026-08-17 08:00:10")]
         )
         self.assertEqual(at_window["verb"], receipt.NO_VERB)
         past_window = receipt.announce(
-            [_p("2026-08-17 08:00:00"), _p("2026-08-17 08:02:01")]
+            [_p("2026-08-17 08:00:00"), _p("2026-08-17 08:00:11")]
         )
         self.assertEqual(past_window["verb"], receipt.OUT)
+
+    def test_the_window_is_measured_from_the_kept_punch_not_the_dropped_one(self):
+        # A bounce must not extend the window: the third row is 4 seconds
+        # after a DROPPED tap but 12 after the kept arrival, so it is a real
+        # punch and closes the day's arrival. Measuring from the last punch
+        # seen (dropped or not) would let a tap chain swallow it.
+        result = receipt.announce(
+            [
+                _p("2026-08-17 08:00:00"),
+                _p("2026-08-17 08:00:08"),
+                _p("2026-08-17 08:00:12"),
+            ]
+        )
+        self.assertEqual(result["verb"], receipt.OUT)
 
     def test_a_quick_punch_at_another_campus_is_not_a_duplicate(self):
         # The duplicate rule is same-branch by design: a punch at a second
@@ -162,6 +178,27 @@ class TestAnnounce(unittest.TestCase):
             [_p("garbage"), {"time": None, "custom_device_branch": "DIS Iconic"}]
         )
         self.assertIn(result["verb"], (receipt.IN, receipt.OUT, receipt.NO_VERB))
+
+    def test_a_timeless_punch_closing_an_arrival_degrades_instead_of_raising(self):
+        # The shape the test above never reaches: an arrival is OPEN when the
+        # timeless row lands, so the pairing subtraction is one deleted guard
+        # away from `None - datetime` in a queued job. The verb is still OUT
+        # (it closes the arrival) but no pair is countable, so the day's
+        # figure stays withheld.
+        unlabelled = receipt.announce(
+            [_p("2026-08-17 08:00:00"), {"time": None, "custom_device_branch": "DIS Iconic"}]
+        )
+        self.assertEqual(unlabelled["verb"], receipt.OUT)
+        self.assertIsNone(unlabelled["so_far_minutes"])
+
+        labelled = receipt.announce(
+            [
+                _p("2026-08-17 08:00:00"),
+                {"time": None, "custom_device_branch": "DIS Iconic", "log_type": "OUT"},
+            ]
+        )
+        self.assertEqual(labelled["verb"], receipt.OUT)
+        self.assertIsNone(labelled["so_far_minutes"])
 
 
 if __name__ == "__main__":

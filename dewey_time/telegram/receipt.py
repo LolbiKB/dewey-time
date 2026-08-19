@@ -24,12 +24,18 @@ module exists to end; silence beats a confident wrong sentence.
 Two deliberate departures from a literal replay, both toward saying less:
 
 - A DOUBLE TAP is dropped, not paired. An unlabelled punch within
-  DUP_WINDOW_SECONDS of the previous kept punch at the same branch is device
-  noise -- pairing it (as the retrospective rule does) closes the real
-  arrival with a seconds-long segment and inverts every later verb that day.
-  The dropped punch itself gets NO_VERB, and any day containing one never
-  reports an hours figure, because the timeline will have paired what we
-  dropped and the two surfaces must not disagree in writing.
+  DUP_WINDOW_SECONDS of the previous kept punch at the same branch is a
+  bounced read of one physical visit to one device -- pairing it (as the
+  retrospective rule does) closes the real arrival with a seconds-long
+  segment and inverts every later verb that day. Because nobody can walk out
+  through a reader and back in again inside the window, dropping the bounce
+  RESTORES the true stream, and every later verb stays claimable. That
+  reasoning is exactly why the window must stay tight: at an earlier 120
+  seconds it swallowed a genuine ninety-second errand, and the drop itself
+  then inverted the rest of the run -- the same failure, caused by the cure.
+  The dropped punch gets NO_VERB, and any day containing one never reports
+  an hours figure, because the timeline will have paired what we dropped and
+  the two surfaces must not disagree in writing.
 
 - A FRESH RUN OPENED MID-DAY gets NO_VERB. At compose time, a first punch at
   a second campus is indistinguishable from a departure through that campus's
@@ -48,11 +54,13 @@ OUT = "OUT"
 NO_VERB = ""
 
 #: An unlabelled punch this close behind the previous kept punch at the same
-#: branch is a double tap. Two minutes, not seconds: the devices' own dedup
-#: window is configurable and has been observed off, and a genuine
-#: in-and-back-out inside two minutes is not a stretch of work anyone needs
-#: announced or summed.
-DUP_WINDOW_SECONDS = 120
+#: branch is a double tap. TEN SECONDS, deliberately physical: a fingerprint
+#: read takes a second or two, and there is no way to leave through a reader
+#: and return to it inside ten -- so a punch inside the window can only be a
+#: bounce, and dropping it is safe for every verb that follows. A wider
+#: window is not more conservative, it is less: anything long enough to
+#: contain real movement turns the drop itself into the parity bug.
+DUP_WINDOW_SECONDS = 10
 
 
 def _label(punch: dict) -> str:
@@ -104,7 +112,7 @@ def announce(punches: list[dict]) -> dict:
     """
     verbs: list[str] = []
     pairs = 0
-    total_seconds = 0.0
+    total_minutes = 0
     kept = 0
     dups = 0
     branchless = 0
@@ -169,7 +177,7 @@ def announce(punches: list[dict]) -> dict:
         if label == OUT:
             if open_time is not None and when is not None:
                 pairs += 1
-                total_seconds += max(0.0, (when - open_time).total_seconds())
+                total_minutes += _pair_minutes(open_time, when)
                 open_time = None
             # A stray OUT (nothing open) matches nothing; kept != 2*pairs
             # keeps the hours figure off for the rest of the day.
@@ -184,7 +192,7 @@ def announce(punches: list[dict]) -> dict:
         elif open_time is not None:
             if when is not None:
                 pairs += 1
-                total_seconds += max(0.0, (when - open_time).total_seconds())
+                total_minutes += _pair_minutes(open_time, when)
             open_time = None
             verbs.append(OUT)
         elif not first_seen:
@@ -220,5 +228,19 @@ def announce(punches: list[dict]) -> dict:
         "is_first_punch_of_day": (
             first_kept_index is not None and first_kept_index == len(punches) - 1
         ),
-        "so_far_minutes": int(total_seconds // 60) if clean else None,
+        "so_far_minutes": total_minutes if clean else None,
     }
+
+
+def _pair_minutes(start: datetime, end: datetime) -> int:
+    """One pair's minutes, rounded the way the timeline rounds.
+
+    deriveSegments does `Math.round(delta / 60000)` PER SEGMENT and its
+    callers sum the rounded values. Flooring the summed seconds instead
+    agrees with that only when every punch lands on a whole minute -- real
+    device rows carry seconds, and a figure one minute off from the app is a
+    figure the app contradicts in writing. Math.round is floor(x + 0.5),
+    which is not Python's round() (banker's), so it is spelled out.
+    """
+    seconds = max(0.0, (end - start).total_seconds())
+    return int(seconds / 60 + 0.5)

@@ -277,7 +277,29 @@ class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
             notify.direction_of("E1", _punch("P0", "2026-08-17 07:58:00"))
         window = get_all.call_args.kwargs["filters"]["time"]
         self.assertEqual(window[0], "between")
+        self.assertEqual(window[1][0], "2026-08-17 00:00:00")
         self.assertEqual(window[1][1], "2026-08-17 07:58:00")
+
+    def test_the_query_shape_is_the_one_the_replay_depends_on(self):
+        # Every direction test stubs get_all, so nothing downstream notices
+        # if these kwargs rot -- and each is load-bearing. Without order_by,
+        # Frappe falls back to the DocType's `modified desc` and the
+        # truncation loop finds the announced punch FIRST, replaying a
+        # one-punch day: the original every-departure-says-Checked-in bug,
+        # restored with a green suite. Without the employee filter the replay
+        # reads the whole campus; without log_type/branch in fields the
+        # replay loses labels and runs.
+        with patch.object(notify.frappe, "get_all",
+                          return_value=[_punch("P0", "2026-08-17 07:58:00")]) as get_all:
+            notify.direction_of("E1", _punch("P0", "2026-08-17 07:58:00"))
+        kwargs = get_all.call_args.kwargs
+        self.assertEqual(get_all.call_args.args[0], "Employee Checkin")
+        self.assertEqual(kwargs["filters"]["employee"], "E1")
+        self.assertEqual(kwargs["order_by"], "time asc, creation asc")
+        self.assertEqual(
+            set(kwargs["fields"]),
+            {"name", "time", "log_type", "custom_device_branch"},
+        )
 
     def test_a_same_second_sibling_delivered_later_is_not_replayed(self):
         # Two rows in one second: the `between` bound cannot separate them,
@@ -291,6 +313,28 @@ class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
         with patch.object(notify.frappe, "get_all", return_value=day):
             self.assertEqual(
                 notify.direction_of("E1", _punch("P0", "2026-08-17 07:58:00")), "IN"
+            )
+        # And the cut is by NAME, not by time: announcing the second sibling
+        # must replay both rows and read the bounce as a duplicate. A
+        # time-based match would truncate at P0 again and announce a
+        # confident arrival for a bounced tap.
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            self.assertEqual(
+                notify.direction_of("E1", _punch("P1", "2026-08-17 07:58:00")), ""
+            )
+
+    def test_an_announced_punch_missing_from_the_fetch_replays_the_whole_window(self):
+        # The documented fallback: if the announced row is not in the fetched
+        # window (a mock, a deleted row, a clock skew), the replay runs over
+        # everything the bound returned rather than guessing a cut. The last
+        # fetched punch's verb is what comes back.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00"),
+            _punch("P1", "2026-08-17 12:01:00"),
+        ]
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            self.assertEqual(
+                notify.direction_of("EX", _punch("PX", "2026-08-17 12:01:00")), "OUT"
             )
 
     def test_a_cross_campus_departure_says_checked_out(self):

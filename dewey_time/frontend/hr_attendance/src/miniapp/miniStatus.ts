@@ -70,6 +70,13 @@ function inOrder(day: Day | undefined) {
  * same thing `deriveSegments` does to draw the timeline directly below this
  * chip, so an odd count is an open run in both places and the two surfaces
  * cannot disagree about the same day.
+ *
+ * KNOWN GAP: whole-day parity is blind to campus and to double taps, which
+ * is why the Telegram notifier abandoned it for a branch-run replay
+ * (dewey_time/telegram/receipt.py) that degrades to a neutral receipt when
+ * direction is not honestly callable. On exactly those days this chip can
+ * still make the confident claim the chat just declined. Aligning the chip
+ * (and miniDayMark) to the same replay is the recorded follow-up.
  */
 function stillInside(punches: { log_type?: string | null }[]): boolean {
   const last = String(punches[punches.length - 1]?.log_type || "").toUpperCase();
