@@ -397,6 +397,207 @@ class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
             )
 
 
+class TestMeaningLine(unittest.TestCase):
+    """The one optional line under the verb -- and everything it refuses.
+
+    _receipt_for is exercised directly for the gate logic, plus end-to-end
+    sends proving the lines actually reach (or stay out of) the transport.
+    The replay arithmetic behind so_far/is_first is test_telegram_receipt's
+    job; what this class owns is the GATES: holiday above assignment, no
+    roster claims off the eligible population, overnight silence, horizon
+    honesty, and nothing on a neutral verb.
+    """
+
+    DAY_SHIFT = {"start_time": "07:00:00", "end_time": "17:00:00"}
+    NIGHT_SHIFT = {"start_time": "21:00:00", "end_time": "06:00:00"}
+
+    def _env(self, *, punches, employment_type="Full-time", assignments=None,
+             shift_types=None, holiday=False, bounds=None):
+        """Patch the whole fact surface _meaning_for reads.
+
+        `assignments` maps date string -> assignment dict (missing date =
+        unrostered); `shift_types` maps shift_type name -> times row.
+        """
+        from contextlib import ExitStack
+
+        assignments = assignments if assignments is not None else {
+            "2026-08-17": {"shift_type": "DAY"}
+        }
+        shift_types = shift_types if shift_types is not None else {"DAY": self.DAY_SHIFT}
+        employee_row = {"company": "Dewey", "employment_type": employment_type}
+
+        def db_get_value(doctype, name, fields=None, as_dict=False, **kwargs):
+            if doctype == "Employee":
+                return dict(employee_row)
+            if doctype == "Shift Type":
+                return dict(shift_types.get(name) or {})
+            return None
+
+        stack = ExitStack()
+        stack.enter_context(patch.object(notify.frappe, "get_all", return_value=punches))
+        stack.enter_context(
+            patch.object(notify.frappe.db, "get_value", side_effect=db_get_value)
+        )
+        stack.enter_context(
+            patch.object(
+                notify, "get_shift_assignment",
+                side_effect=lambda *, employee, attendance_date:
+                    assignments.get(str(attendance_date)),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                notify, "holiday_by_date_for_company",
+                return_value={"2026-08-17": {"description": "Holiday"}} if holiday else {},
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                notify, "shift_assignment_bounds_by_employee",
+                return_value={"E1": bounds} if bounds else {},
+            )
+        )
+        return stack
+
+    def test_the_days_first_arrival_states_the_shift_window(self):
+        first = _punch("P0", "2026-08-17 07:58:00")
+        with self._env(punches=[first]):
+            direction, meaning = notify._receipt_for("E1", first)
+        self.assertEqual(direction, "IN")
+        self.assertEqual(
+            meaning, ("វេន 7:00 AM – 5:00 PM", "Shift 7:00 AM – 5:00 PM")
+        )
+
+    def test_a_cleanly_paired_departure_states_the_so_far_figure(self):
+        day = [_punch("P0", "2026-08-17 07:58:00"), _punch("P1", "2026-08-17 12:01:00")]
+        with self._env(punches=day):
+            direction, meaning = notify._receipt_for("E1", day[1])
+        self.assertEqual(direction, "OUT")
+        self.assertEqual(
+            meaning, ("គិតត្រឹមពេលនេះ 4 ម៉ោង 3 នាទី", "So far today 4h 3m")
+        )
+
+    def test_a_holiday_silences_every_line(self):
+        # Above the assignment check, per the map: assignments are generated
+        # with no holiday awareness, so on Khmer New Year the roster still
+        # says 07:00-17:00 -- and an hours figure there is a pay claim.
+        first = _punch("P0", "2026-08-17 07:58:00")
+        with self._env(punches=[first], holiday=True):
+            self.assertIsNone(notify._receipt_for("E1", first)[1])
+        day = [_punch("P0", "2026-08-17 07:58:00"), _punch("P1", "2026-08-17 12:01:00")]
+        with self._env(punches=day, holiday=True):
+            self.assertIsNone(notify._receipt_for("E1", day[1])[1])
+
+    def test_no_roster_claims_off_the_scheduled_population(self):
+        # A rotating hourly teacher's unrostered day IS their contract; a
+        # blank employment type is nobody-classified-them. Neither may be
+        # told anything about a roster.
+        first = _punch("P0", "2026-08-17 07:58:00")
+        for employment_type in ("Casual", ""):
+            with self._env(punches=[first], employment_type=employment_type):
+                self.assertIsNone(notify._receipt_for("E1", first)[1])
+
+    def test_hours_still_flow_to_the_clock_based(self):
+        # The so-far figure is punch arithmetic, not a roster claim -- for
+        # clock-based staff it is the most useful line of all.
+        day = [_punch("P0", "2026-08-17 07:58:00"), _punch("P1", "2026-08-17 12:01:00")]
+        with self._env(punches=day, employment_type="Casual", assignments={}):
+            direction, meaning = notify._receipt_for("E1", day[1])
+        self.assertEqual(meaning[1], "So far today 4h 3m")
+
+    def test_an_unrostered_day_speaks_only_when_the_roster_has_opined(self):
+        first = _punch("P0", "2026-08-17 07:58:00")
+        covered = {"has_shift_assignment": True,
+                   "schedule_min_date": "2026-08-01", "schedule_max_date": "2026-08-31"}
+        with self._env(punches=[first], assignments={}, bounds=covered):
+            self.assertEqual(notify._receipt_for("E1", first)[1], notify.receipt.NO_ROSTER_LINES)
+        # Horizon lapsed: the generator stopped in July. "No shift" would be
+        # a statement about generation lag dressed as one about the roster.
+        lapsed = {"has_shift_assignment": True,
+                  "schedule_min_date": "2026-06-01", "schedule_max_date": "2026-07-31"}
+        with self._env(punches=[first], assignments={}, bounds=lapsed):
+            self.assertIsNone(notify._receipt_for("E1", first)[1])
+        # Never scheduled at all: silence, not accusation.
+        with self._env(punches=[first], assignments={}, bounds=None):
+            self.assertIsNone(notify._receipt_for("E1", first)[1])
+        # Open-ended assignments elsewhere: the horizon is infinite.
+        open_ended = {"has_shift_assignment": True,
+                      "schedule_min_date": "2026-08-01", "schedule_max_date": None}
+        with self._env(punches=[first], assignments={}, bounds=open_ended):
+            self.assertEqual(notify._receipt_for("E1", first)[1], notify.receipt.NO_ROSTER_LINES)
+
+    def test_a_broken_shift_type_says_nothing_rather_than_unscheduled(self):
+        first = _punch("P0", "2026-08-17 07:58:00")
+        with self._env(punches=[first], shift_types={"DAY": {"start_time": None, "end_time": None}}):
+            self.assertIsNone(notify._receipt_for("E1", first)[1])
+
+    def test_an_overnight_shift_suppresses_everything(self):
+        # Today's roster says 21:00-06:00: the calendar-day replay cannot
+        # see across midnight, so neither line may be computed from it.
+        first = _punch("P0", "2026-08-17 21:02:00")
+        with self._env(punches=[first], shift_types={"DAY": self.NIGHT_SHIFT}):
+            self.assertIsNone(notify._receipt_for("E1", first)[1])
+
+    def test_yesterdays_overnight_shift_silences_the_morning(self):
+        # 06:02 on the 17th is punch #1 of a fresh date to the replay, but it
+        # belongs to the shift that started at 21:00 on the 16th. Announcing
+        # today's shift window under it would frame the wrong day entirely.
+        first = _punch("P0", "2026-08-17 06:02:00")
+        with self._env(
+            punches=[first],
+            assignments={"2026-08-17": {"shift_type": "DAY"},
+                         "2026-08-16": {"shift_type": "NIGHT"}},
+            shift_types={"DAY": self.DAY_SHIFT, "NIGHT": self.NIGHT_SHIFT},
+        ):
+            self.assertIsNone(notify._receipt_for("E1", first)[1])
+
+    def test_a_neutral_verb_carries_no_meaning_line(self):
+        # A line interpreting a punch whose direction the verb just declined
+        # to claim would be the claim by the back door.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00", branch="DIS Iconic"),
+            _punch("P1", "2026-08-17 17:00:00", branch="DIS Iconic"),
+            _punch("P2", "2026-08-17 17:04:00", branch="DIU"),
+        ]
+        with self._env(punches=day):
+            direction, meaning = notify._receipt_for("E1", day[2])
+        self.assertEqual(direction, "")
+        self.assertIsNone(meaning)
+
+    def test_a_lunch_return_gets_no_line(self):
+        # Not the first punch, not a departure: nothing to say, on purpose.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00"),
+            _punch("P1", "2026-08-17 12:01:00"),
+            _punch("P2", "2026-08-17 12:58:00"),
+        ]
+        with self._env(punches=day):
+            direction, meaning = notify._receipt_for("E1", day[2])
+        self.assertEqual(direction, "IN")
+        self.assertIsNone(meaning)
+
+    def test_end_to_end_the_meaning_rides_below_the_verb(self):
+        # Push previews truncate to the leading line: the verb lines must
+        # come first, the meaning after, in the message actually sent.
+        # `_checkin` hands back a DATETIME (Datetime column + passthrough
+        # get_datetime in this harness); the replay rows stay strings.
+        first = _punch("CKIN-1", "2026-08-17 07:58:00")
+        checkin_row = {**first, "time": datetime(2026, 8, 17, 7, 58)}
+        with self._env(punches=[first]), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "77702", "name": "L1"}), \
+             patch.object(notify, "_checkin", return_value=checkin_row), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT) as send:
+            notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
+        lines = send.call_args[0][1].split("\n")
+        self.assertEqual(len(lines), 4)
+        self.assertTrue(lines[0].startswith("បានចូល"))
+        self.assertTrue(lines[1].startswith("Checked in"))
+        self.assertEqual(lines[2], "វេន 7:00 AM – 5:00 PM")
+        self.assertEqual(lines[3], "Shift 7:00 AM – 5:00 PM")
+
+
 class TestSendTestNotification(unittest.TestCase):
     """Proving the message works without moving a branch to LIVE.
 
@@ -464,6 +665,61 @@ class TestSendTestNotification(unittest.TestCase):
              patch.object(notify, "_link_for", return_value={"chat_id": "7", "name": "L1"}), \
              patch.object(notify.frappe.db, "get_value", return_value=None):
             self.assertEqual(notify.send_test_notification()["result"], "no-checkin")
+
+    def test_a_stale_punch_test_message_never_carries_a_day_claim(self):
+        # The map's hazard on this endpoint: it fires against whatever the
+        # most recent punch is, and "So far today 4h 3m" about last Tuesday
+        # is a fresh-looking claim about a stale day. The verb is safe on
+        # any date; the meaning line is computed only for today -- and the
+        # roster must not even be consulted for a stale one.
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "7", "name": "L1"}), \
+             patch.object(notify.frappe.db, "get_value", return_value={
+                 "name": "CKIN-9", "log_type": "OUT",
+                 "time": datetime(2026, 8, 12, 17, 6), "custom_device_branch": "DIS Iconic"}), \
+             patch.object(notify, "nowdate", return_value="2026-08-19"), \
+             patch.object(notify, "get_shift_assignment",
+                          side_effect=AssertionError("a stale day must not consult the roster")), \
+             patch.object(notify.transport, "send_message", return_value=notify.transport.SENT):
+            result = notify.send_test_notification()
+
+        self.assertEqual(len(result["text"].split("\n")), 2)
+        self.assertNotIn("So far", result["text"])
+        self.assertNotIn("Shift", result["text"])
+
+    def test_a_same_day_punch_test_message_is_the_real_receipt(self):
+        # The endpoint's whole reason to exist: the REAL message, meaning
+        # line included, reviewable from the response without a phone.
+        latest = {"name": "CKIN-9", "log_type": "",
+                  "time": datetime(2026, 8, 17, 7, 58),
+                  "custom_device_branch": "DIS Iconic"}
+
+        def db_get_value(doctype, *args, **kwargs):
+            if doctype == "Employee Checkin":
+                return dict(latest)
+            if doctype == "Employee":
+                return {"company": "Dewey", "employment_type": "Full-time"}
+            if doctype == "Shift Type":
+                return {"start_time": "07:00:00", "end_time": "17:00:00"}
+            return None
+
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for", return_value={"chat_id": "7", "name": "L1"}), \
+             patch.object(notify.frappe.db, "get_value", side_effect=db_get_value), \
+             patch.object(notify.frappe, "get_all", return_value=[
+                 _punch("CKIN-9", "2026-08-17 07:58:00")]), \
+             patch.object(notify, "nowdate", return_value="2026-08-17"), \
+             patch.object(notify, "get_shift_assignment",
+                          return_value={"shift_type": "DAY"}), \
+             patch.object(notify, "holiday_by_date_for_company", return_value={}), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT):
+            result = notify.send_test_notification()
+
+        self.assertIn("Shift 7:00 AM – 5:00 PM", result["text"])
+        self.assertIn("វេន 7:00 AM – 5:00 PM", result["text"])
 
     def test_a_blocked_link_is_reported_but_not_disabled(self):
         # send_checkin_notification disables a blocked link, correctly. Doing
