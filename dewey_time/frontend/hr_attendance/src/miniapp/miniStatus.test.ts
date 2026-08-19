@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isLive, miniStatus, minuteOfDay, statusKey } from "@/miniapp/miniStatus";
+import {
+  isLive, miniStatus, minuteOfDay, openRunStartedAt, statusKey,
+} from "@/miniapp/miniStatus";
 import type { Day } from "@/types/calendar";
 
 const KEY = "2026-08-17";
@@ -159,4 +161,61 @@ test("minuteOfDay reads the wall clock", () => {
   assert.equal(minuteOfDay(at(0, 0)), 0);
   assert.equal(minuteOfDay(at(8, 30)), 510);
   assert.equal(minuteOfDay(at(23, 59)), 1439);
+});
+
+test("a cover shift's closing punch at a second branch is not an arrival", () => {
+  // THE DEFECT: the departure is alone in its own branch run, and a one-punch
+  // run was inferred to be an arrival by position. At 19:00 the app read
+  // "2h so far", live, counting from the moment the person went home -- beside
+  // a chip that said "Checked out".
+  const day = {
+    date: "2026-08-19",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 17:00:00", log_type: "", custom_device_branch: "DIS Toul Kork" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), null);
+});
+
+test("an unmapped device does not put everyone permanently at work", () => {
+  // Punches with no branch are never grouped, so each is its own run.
+  const day = {
+    date: "2026-08-19",
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "" },
+      { time: "2026-08-19 17:00:00", log_type: "" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), null);
+});
+
+test("a punch that says IN is still an open run", () => {
+  // The counterweight: the fix must not stop reporting somebody who IS at work.
+  const day = {
+    date: "2026-08-19",
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "IN", custom_device_branch: "DIS Iconic" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), "2026-08-19 08:00:00");
+});
+
+test("a lone unlabelled arrival is still an open run", () => {
+  // The case that must keep working, and the reason parity is the fallback
+  // rather than a flat refusal: a device that labels nothing, one punch this
+  // morning, nobody home yet. Odd parity is what "one of them is unmatched"
+  // means, and here it is the arrival.
+  const day = {
+    date: "2026-08-19",
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), "2026-08-19 08:00:00");
 });

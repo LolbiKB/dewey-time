@@ -6,7 +6,7 @@
  * accident. Words are `StringKey`s the caller looks up; formatting lives in
  * miniIntl, beside the other locale-aware formatters.
  */
-import { dayFacts, totalWorkedMinutes } from "@/miniapp/miniDay";
+import { totalWorkedMinutes, wasWorked } from "@/miniapp/miniDay";
 import { flagCount } from "@/miniapp/miniFlags";
 import type { StringKey } from "@/miniapp/miniStrings";
 import type { Day } from "@/types/calendar";
@@ -121,10 +121,12 @@ export type MonthStats = {
  * once ended up contradicting the rows beneath it.
  */
 export function monthStats(days: Day[], today: Date): MonthStats {
-  const facts = days.map((day) => dayFacts(day, parseDateOnly(day.date) ?? today, today));
   return {
-    daysWorked: facts.filter((fact) => fact.tone === "worked").length,
-    minutes: totalWorkedMinutes(facts),
+    // `wasWorked`, not tone: a leave or holiday day somebody actually came in
+    // and punched is a day they worked, and it is exactly the day they will
+    // check this number against.
+    daysWorked: days.filter((day) => wasWorked(day)).length,
+    minutes: totalWorkedMinutes(days),
     flags: days.reduce((sum, day) => sum + flagCount(day), 0),
   };
 }

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  dayFacts, dayNumbers, formatMinuteOfDay, formatSpan, totalWorkedMinutes,
+  dayFacts, dayNumbers, formatMinuteOfDay, formatSpan, netWorkedFor,
+  totalWorkedMinutes, wasWorked,
 } from "@/miniapp/miniDay";
 import type { Day } from "@/types/calendar";
 
@@ -87,20 +88,51 @@ test("nothing here ever judges a day", () => {
 });
 
 test("a week's total adds only the days that have one", () => {
-  const facts = [
-    dayFacts(worked("2026-08-10"), MON, FRI),
-    dayFacts(undefined, new Date(2026, 7, 11), FRI),
-    dayFacts(worked("2026-08-12"), new Date(2026, 7, 12), FRI),
-  ];
-  const total = totalWorkedMinutes(facts);
-  assert.equal(total, facts[0]!.workedMinutes! + facts[2]!.workedMinutes!);
+  const days = [worked("2026-08-10"), undefined, worked("2026-08-12")];
+  const total = totalWorkedMinutes(days);
+  assert.equal(total, netWorkedFor(days[0])! + netWorkedFor(days[2])!);
 });
 
 test("a week with nothing worked totals null, never zero", () => {
   // "0h" is a claim that someone worked no hours. A week nobody has reached
   // yet has not made that claim, and a zero would read as one.
-  const facts = [dayFacts(undefined, MON, FRI), dayFacts(undefined, FRI, FRI)];
-  assert.equal(totalWorkedMinutes(facts), null);
+  assert.equal(totalWorkedMinutes([undefined, undefined]), null);
+});
+
+test("hours punched on a holiday still reach the month total", () => {
+  // THE DEFECT: dayFacts answers holiday before it looks at a punch, so a
+  // total built from its facts dropped exactly the premium-paid day a worker
+  // opens the app to check. The Day tab showed the hours; the month said the
+  // day never happened.
+  const day = worked("2026-08-11");
+  (day as unknown as { holiday: unknown }).holiday = { description: "Pchum Ben" };
+
+  assert.equal(dayFacts(day, new Date(2026, 7, 11), FRI).tone, "holiday");
+  assert.equal(dayFacts(day, new Date(2026, 7, 11), FRI).workedMinutes, null);
+
+  // ...and the total counts them anyway.
+  assert.equal(totalWorkedMinutes([day]), netWorkedFor(day));
+  assert.ok(totalWorkedMinutes([day])! > 0);
+  assert.equal(wasWorked(day), true);
+});
+
+test("hours punched on approved leave still reach the month total", () => {
+  const day = worked("2026-08-11");
+  (day as unknown as { leave: unknown }).leave = {
+    on_leave: true,
+    leave_type: "Annual Leave",
+  };
+
+  assert.equal(dayFacts(day, new Date(2026, 7, 11), FRI).tone, "leave");
+  assert.equal(totalWorkedMinutes([day]), netWorkedFor(day));
+  assert.equal(wasWorked(day), true);
+});
+
+test("a day nobody punched is not a day worked", () => {
+  // The counterweight: wasWorked must not simply return true.
+  assert.equal(wasWorked(undefined), false);
+  const rostered = { date: "2026-08-11", shift: { shift_assigned: true }, checkins: [] };
+  assert.equal(wasWorked(rostered as unknown as Day), false);
 });
 
 test("times are 12-hour, matching the punches shown beside them", () => {

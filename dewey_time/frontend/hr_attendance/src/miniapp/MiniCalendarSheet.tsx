@@ -129,12 +129,13 @@ export function MiniCalendarSheet(props: {
     return map;
   }, [byDate, today, now]);
 
-  const monthTotal = useMemo(() => {
-    const facts = [...byDate].map(([key, day]) =>
-      dayFacts(day, new Date(`${key}T00:00:00`), today),
-    );
-    return fmt.worked(totalWorkedMinutes(facts));
-  }, [byDate, today, fmt]);
+  // From the DAYS, not their facts: dayFacts reports null worked minutes on a
+  // leave or holiday day, so totalling its output dropped exactly the hours a
+  // worker came in for on a day they were paid a premium for.
+  const monthTotal = useMemo(
+    () => fmt.worked(totalWorkedMinutes([...byDate.values()])),
+    [byDate, fmt],
+  );
 
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
