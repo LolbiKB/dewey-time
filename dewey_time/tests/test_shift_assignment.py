@@ -272,5 +272,83 @@ class TestShiftContextForDay(unittest.TestCase):
         self.assertFalse(ctx["shift_assigned"])
 
 
+class TestHasAssignmentOverlapping(unittest.TestCase):
+    """The existence probe behind the Telegram receipt's no-roster gate.
+
+    An overlap query, deliberately NOT the MIN/MAX bounds: the envelope
+    reads an interior generation gap as covered and a lone far-future
+    open-ended row as an infinite horizon. What these tests pin is the
+    query's actual shape -- the overlap predicate is entirely in the
+    filters, so a wrong filter is a wrong answer with a green mock.
+    """
+
+    def setUp(self):
+        # patch.object with addCleanup, NOT bare assignment: the frappe mock
+        # is shared module state under `unittest discover`, and a leaked
+        # table_exists=False from the test below broke every query test in
+        # the class above before this was written this way.
+        import frappe
+
+        for target, attr, value in (
+            (frappe, "get_all", MagicMock(return_value=[])),
+            (frappe.db, "has_column", MagicMock(return_value=True)),
+            (frappe.db, "table_exists", MagicMock(return_value=True)),
+        ):
+            patcher = patch.object(target, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _call(self):
+        from dewey_time.attendance_engine.shift_assignment import has_assignment_overlapping
+
+        return has_assignment_overlapping(
+            employee="DI-1138", start="2026-08-10", end="2026-08-24"
+        )
+
+    def test_the_overlap_predicate_is_in_the_query(self):
+        import frappe
+
+        frappe.get_all.return_value = [{"name": "HR-SHA-1"}]
+        self.assertTrue(self._call())
+
+        kwargs = frappe.get_all.call_args.kwargs
+        filters = kwargs["filters"]
+        self.assertEqual(filters["employee"], "DI-1138")
+        self.assertEqual(filters["docstatus"], 1)
+        self.assertEqual(filters["status"], "Active")
+        # Bounds compared through str(): whether getdate hands back a date
+        # or (in this harness, order-dependently) the string itself, the
+        # rendered day is the contract.
+        # Overlap: starts on or before the window's end...
+        start_op, start_bound = filters["start_date"]
+        self.assertEqual(start_op, "<=")
+        self.assertEqual(str(start_bound), "2026-08-24")
+        # ...and ends on or after its start, or never ends.
+        (end_null, end_after) = kwargs["or_filters"]
+        self.assertEqual(end_null, ["end_date", "is", "not set"])
+        self.assertEqual(end_after[:2], ["end_date", ">="])
+        self.assertEqual(str(end_after[2]), "2026-08-10")
+        # Existence only: one row is the whole answer.
+        self.assertEqual(kwargs["limit_page_length"], 1)
+
+    def test_no_rows_means_no(self):
+        self.assertFalse(self._call())
+
+    def test_without_a_status_column_the_filter_is_dropped(self):
+        import frappe
+
+        frappe.db.has_column.return_value = False
+        frappe.get_all.return_value = [{"name": "HR-SHA-1"}]
+        self.assertTrue(self._call())
+        self.assertNotIn("status", frappe.get_all.call_args.kwargs["filters"])
+
+    def test_without_the_table_it_answers_no_without_querying(self):
+        import frappe
+
+        frappe.db.table_exists.return_value = False
+        self.assertFalse(self._call())
+        frappe.get_all.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -412,26 +412,52 @@ class TestMeaningLine(unittest.TestCase):
     NIGHT_SHIFT = {"start_time": "21:00:00", "end_time": "06:00:00"}
 
     def _env(self, *, punches, employment_type="Full-time", assignments=None,
-             shift_types=None, holiday=False, bounds=None):
+             shift_types=None, holiday=False, roster_active=False, day="2026-08-17"):
         """Patch the whole fact surface _meaning_for reads.
 
         `assignments` maps date string -> assignment dict (missing date =
-        unrostered); `shift_types` maps shift_type name -> times row.
+        unrostered); `shift_types` maps shift_type name -> times row;
+        `roster_active` is _roster_opined_around's underlying answer.
+
+        The doubles ENFORCE the real call contracts rather than answering
+        any shape: db.get_value must be asked with as_dict=True (a real
+        bench returns a tuple otherwise, which the try/except would swallow
+        into permanent silence), and the holiday lookup must be asked about
+        this employee's company and the punch's own day (the real helper
+        answers {} for a wrong company, which fails OPEN through the pay-
+        claim gate).
         """
         from contextlib import ExitStack
 
         assignments = assignments if assignments is not None else {
-            "2026-08-17": {"shift_type": "DAY"}
+            day: {"shift_type": "DAY"}
         }
         shift_types = shift_types if shift_types is not None else {"DAY": self.DAY_SHIFT}
         employee_row = {"company": "Dewey", "employment_type": employment_type}
+        case = self
 
         def db_get_value(doctype, name, fields=None, as_dict=False, **kwargs):
+            if doctype in ("Employee", "Shift Type"):
+                case.assertTrue(
+                    as_dict, f"{doctype} lookup must pass as_dict=True"
+                )
             if doctype == "Employee":
                 return dict(employee_row)
             if doctype == "Shift Type":
                 return dict(shift_types.get(name) or {})
             return None
+
+        def fake_holiday(*, company, start, end):
+            case.assertEqual(company, "Dewey", "the punching employee's company")
+            case.assertEqual(str(start), str(end), "a single-day window")
+            if holiday and str(start) == day:
+                return {day: {"description": "Holiday"}}
+            return {}
+
+        def fake_overlap(*, employee, start, end):
+            case.assertLessEqual(str(start), day, "window must reach back past the day")
+            case.assertLessEqual(day, str(end), "window must reach forward past the day")
+            return roster_active
 
         stack = ExitStack()
         stack.enter_context(patch.object(notify.frappe, "get_all", return_value=punches))
@@ -446,16 +472,10 @@ class TestMeaningLine(unittest.TestCase):
             )
         )
         stack.enter_context(
-            patch.object(
-                notify, "holiday_by_date_for_company",
-                return_value={"2026-08-17": {"description": "Holiday"}} if holiday else {},
-            )
+            patch.object(notify, "holiday_by_date_for_company", side_effect=fake_holiday)
         )
         stack.enter_context(
-            patch.object(
-                notify, "shift_assignment_bounds_by_employee",
-                return_value={"E1": bounds} if bounds else {},
-            )
+            patch.object(notify, "has_assignment_overlapping", side_effect=fake_overlap)
         )
         return stack
 
@@ -474,7 +494,7 @@ class TestMeaningLine(unittest.TestCase):
             direction, meaning = notify._receipt_for("E1", day[1])
         self.assertEqual(direction, "OUT")
         self.assertEqual(
-            meaning, ("គិតត្រឹមពេលនេះ 4 ម៉ោង 3 នាទី", "So far today 4h 3m")
+            meaning, ("ថ្ងៃនេះ គិតត្រឹមពេលនេះ 4 ម៉ោង 3 នាទី", "So far today 4h 3m")
         )
 
     def test_a_holiday_silences_every_line(self):
@@ -506,25 +526,39 @@ class TestMeaningLine(unittest.TestCase):
         self.assertEqual(meaning[1], "So far today 4h 3m")
 
     def test_an_unrostered_day_speaks_only_when_the_roster_has_opined(self):
+        # The predicate is overlap-in-a-window, not a MIN/MAX envelope: an
+        # interior generation gap, a lapsed horizon, a never-scheduled
+        # employee, and a new hire ahead of their roster all answer False
+        # from the same probe, so one boolean carries all four silences.
         first = _punch("P0", "2026-08-17 07:58:00")
-        covered = {"has_shift_assignment": True,
-                   "schedule_min_date": "2026-08-01", "schedule_max_date": "2026-08-31"}
-        with self._env(punches=[first], assignments={}, bounds=covered):
-            self.assertEqual(notify._receipt_for("E1", first)[1], notify.receipt.NO_ROSTER_LINES)
-        # Horizon lapsed: the generator stopped in July. "No shift" would be
-        # a statement about generation lag dressed as one about the roster.
-        lapsed = {"has_shift_assignment": True,
-                  "schedule_min_date": "2026-06-01", "schedule_max_date": "2026-07-31"}
-        with self._env(punches=[first], assignments={}, bounds=lapsed):
+        with self._env(punches=[first], assignments={}, roster_active=True):
+            self.assertEqual(
+                notify._receipt_for("E1", first)[1], notify.receipt.NO_ROSTER_LINES
+            )
+        with self._env(punches=[first], assignments={}, roster_active=False):
             self.assertIsNone(notify._receipt_for("E1", first)[1])
-        # Never scheduled at all: silence, not accusation.
-        with self._env(punches=[first], assignments={}, bounds=None):
-            self.assertIsNone(notify._receipt_for("E1", first)[1])
-        # Open-ended assignments elsewhere: the horizon is infinite.
-        open_ended = {"has_shift_assignment": True,
-                      "schedule_min_date": "2026-08-01", "schedule_max_date": None}
-        with self._env(punches=[first], assignments={}, bounds=open_ended):
-            self.assertEqual(notify._receipt_for("E1", first)[1], notify.receipt.NO_ROSTER_LINES)
+
+    def test_the_opinion_window_brackets_the_day(self):
+        # ±ROSTER_OPINION_WINDOW_DAYS around the punch's own day -- wide
+        # enough to span a roster's cadence, narrow enough that a missed
+        # month of generation cannot pass as a month of days off.
+        with patch.object(notify, "has_assignment_overlapping",
+                          return_value=True) as overlap:
+            self.assertTrue(notify._roster_opined_around("E1", "2026-08-17"))
+        kwargs = overlap.call_args.kwargs
+        self.assertEqual(kwargs["employee"], "E1")
+        self.assertEqual(kwargs["start"], "2026-08-10")
+        self.assertEqual(kwargs["end"], "2026-08-24")
+
+    def test_no_roster_line_stays_off_the_ineligible_even_when_the_roster_opined(self):
+        # The one path that emits NO_ROSTER_LINES, exercised with the one
+        # population that must never receive it. Before this test, moving
+        # the eligible check inside the shift-window branch shipped green.
+        first = _punch("P0", "2026-08-17 07:58:00")
+        for employment_type in ("Casual", ""):
+            with self._env(punches=[first], assignments={},
+                           roster_active=True, employment_type=employment_type):
+                self.assertIsNone(notify._receipt_for("E1", first)[1])
 
     def test_a_broken_shift_type_says_nothing_rather_than_unscheduled(self):
         first = _punch("P0", "2026-08-17 07:58:00")
@@ -533,10 +567,42 @@ class TestMeaningLine(unittest.TestCase):
 
     def test_an_overnight_shift_suppresses_everything(self):
         # Today's roster says 21:00-06:00: the calendar-day replay cannot
-        # see across midnight, so neither line may be computed from it.
+        # see across midnight, so neither line may be computed from it --
+        # the arrival's window line AND the paired departure's hours line.
+        # The OUT leg is what makes _day_context's is_overnight flag
+        # load-bearing: on the IN leg the assignment's presence already
+        # blocks every line, so a deleted overnight branch shipped green
+        # until this test drove the departure.
         first = _punch("P0", "2026-08-17 21:02:00")
         with self._env(punches=[first], shift_types={"DAY": self.NIGHT_SHIFT}):
             self.assertIsNone(notify._receipt_for("E1", first)[1])
+        evening_pair = [
+            _punch("P0", "2026-08-17 21:02:00"),
+            _punch("P1", "2026-08-17 23:50:00"),
+        ]
+        with self._env(punches=evening_pair, shift_types={"DAY": self.NIGHT_SHIFT}):
+            direction, meaning = notify._receipt_for("E1", evening_pair[1])
+        self.assertEqual(direction, "OUT")
+        self.assertIsNone(meaning)
+
+    def test_yesterdays_overnight_shift_silences_the_hours_figure_too(self):
+        # The night worker's 01:00-out / 01:30-in meal break lands on a
+        # fresh calendar date and pairs cleanly there. A "so far today"
+        # computed from it measures the break -- or, for the 06:02 exit and
+        # a 14:00 errand return, the gap spent at home. The IN branch
+        # refused this frame from day one; the OUT branch used to print it.
+        break_pair = [
+            _punch("P0", "2026-08-17 01:00:00"),
+            _punch("P1", "2026-08-17 01:30:00"),
+        ]
+        with self._env(
+            punches=break_pair,
+            assignments={"2026-08-16": {"shift_type": "NIGHT"}},
+            shift_types={"NIGHT": self.NIGHT_SHIFT},
+        ):
+            direction, meaning = notify._receipt_for("E1", break_pair[1])
+        self.assertEqual(direction, "OUT")
+        self.assertIsNone(meaning)
 
     def test_yesterdays_overnight_shift_silences_the_morning(self):
         # 06:02 on the 17th is punch #1 of a fresh date to the replay, but it
@@ -563,6 +629,34 @@ class TestMeaningLine(unittest.TestCase):
             direction, meaning = notify._receipt_for("E1", day[2])
         self.assertEqual(direction, "")
         self.assertIsNone(meaning)
+
+    def test_a_labelled_first_punch_still_gets_its_shift_window(self):
+        # _receipt_for's documented departure from direction_of: a label
+        # settles the VERB with no replay, but the meaning line still needs
+        # the day's aggregates -- restoring direction_of's short-circuit
+        # here would silently kill every meaning line the day a device
+        # firmware update starts writing log_type.
+        first = _punch("P0", "2026-08-17 07:58:00", log_type="IN")
+        with self._env(punches=[first]):
+            direction, meaning = notify._receipt_for("E1", first)
+        self.assertEqual(direction, "IN")
+        self.assertEqual(
+            meaning, ("វេន 7:00 AM – 5:00 PM", "Shift 7:00 AM – 5:00 PM")
+        )
+
+    def test_the_window_reads_identically_early_or_late(self):
+        # THE constraint. The 6:40 arrival and the 8:34 arrival get the
+        # same sentence, byte for byte -- any "early"/"late" annotation
+        # sneaking into one of them is a verdict, and this comparison is
+        # what makes that unshippable rather than unnoticed.
+        early = _punch("P0", "2026-08-17 06:40:00")
+        late = _punch("P0", "2026-08-17 08:34:00")
+        with self._env(punches=[early]):
+            early_meaning = notify._receipt_for("E1", early)[1]
+        with self._env(punches=[late]):
+            late_meaning = notify._receipt_for("E1", late)[1]
+        self.assertEqual(early_meaning, late_meaning)
+        self.assertIsNotNone(early_meaning)
 
     def test_a_meaning_fault_costs_the_line_never_the_receipt(self):
         # The verb IS the service. A bug anywhere in the gates -- here, a
