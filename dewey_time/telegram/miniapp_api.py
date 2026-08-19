@@ -28,6 +28,7 @@ employee's to see.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import frappe
@@ -98,6 +99,24 @@ EMPLOYEE_FLAG_CODES = frozenset({
     "MISSING_LUNCH",
     "ATTENDANCE_ISSUE",
 })
+
+#: Reasons an ATTENDANCE_ISSUE is OUR infrastructure failing, not the
+#: employee's day.
+#:
+#: The allowlist above says UNKNOWN_DEVICE_BRANCH and DELIVERY_FAILED are
+#: excluded, and that exclusion never happened: the engine does not emit either
+#: as a flag CODE. It folds both into ATTENDANCE_ISSUE and records which one in
+#: `evidence.reason` (record_issue_flags.py:58 and :77). ATTENDANCE_ISSUE is on
+#: the allowlist, so an unmapped device serial and a punch the Bridge failed to
+#: deliver both reached the phone -- worded, like every other ATTENDANCE_ISSUE,
+#: as a fault in the employee's own punches: "Your check-ins for this day
+#: couldn't be paired into complete sessions." It also counted toward the amber
+#: "to check" number, asking them to answer for a machine they do not own.
+#:
+#: The reason has to be read HERE, on the server: `evidence` is deliberately
+#: absent from FLAG_KEYS because it carries grace minutes and rule internals,
+#: so the client has nothing to filter on.
+INFRASTRUCTURE_FLAG_REASONS = frozenset({"unknown_device_branch", "delivery_failed"})
 
 #: `evidence` is NOT here, and that is the load-bearing omission -- it carries
 #: grace minutes, thresholds and rule internals. `severity` is not here either:
@@ -217,11 +236,32 @@ def _certain(flag: dict, checkins: list[dict]) -> bool:
     return True
 
 
+def _is_infrastructure_failure(flag: dict) -> bool:
+    """Is this flag about our equipment rather than the employee's day?
+
+    Defensive about the shape: `hr_calendar` parses `evidence` from JSON into a
+    dict before this runs, but a filter whose failure mode is SILENT -- the flag
+    simply reaches the phone -- must not depend on that having happened
+    upstream. An unparsed string is parsed here rather than skipped.
+    """
+    evidence = flag.get("evidence")
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(evidence, dict):
+        return False
+    return evidence.get("reason") in INFRASTRUCTURE_FLAG_REASONS
+
+
 def _pick_flags(day: dict) -> list[dict]:
     checkins = day.get("checkins") or []
     picked = []
     for flag in day.get("flags") or []:
         if flag.get("flag_code") not in EMPLOYEE_FLAG_CODES:
+            continue
+        if _is_infrastructure_failure(flag):
             continue
         if not _certain(flag, checkins):
             continue

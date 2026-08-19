@@ -161,3 +161,73 @@ jobs:
           name: adms-playwright-report
           path: dewey_time/frontend/adms/playwright-report/
           retention-days: 7
+
+  # THE #1 RECURRING FAILURE IN THIS REPO, given a gate.
+  #
+  # Frappe Cloud never builds these SPAs — it cannot, because they depend on the
+  # private @lolbikb/dewey-ui package and a fresh `npm install` returns 401
+  # without a token. Whatever bundle is committed IS what users get, so a merged
+  # PR that changes frontend source without committing the rebuilt bundle ships
+  # nothing at all. It has happened: assets went un-rebuilt from #58 through #74,
+  # four PRs of frontend work, none of it live.
+  #
+  # This compares the PR's own diff rather than rebuilding and diffing the
+  # output. Rebuilding cannot work as a gate here: `build-id.txt` is stamped
+  # from the clock and several dependencies are pinned to "latest", so CI's
+  # bundle legitimately differs from the committed one whenever any transitive
+  # package publishes — a gate that cries wolf gets switched off. Asking "was
+  # the source touched without the bundle" has no such failure mode.
+  #
+  # It cannot catch a bundle rebuilt from stale source; nothing cheap can. It
+  # catches the one that actually keeps happening.
+  bundle-freshness:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: .
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: A frontend change must ship its rebuilt bundle
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE" "$HEAD")
+
+          # Source that ends up inside a bundle. Tests and e2e specs are
+          # excluded: they never reach the shipped artifact.
+          source_touched=$(printf '%s\n' "$changed" \
+            | grep -E '^dewey_time/frontend/hr_attendance/(src/|index\.html|index\.miniapp\.html|vite\.config\.ts|vite\.miniapp\.config\.ts|tailwind\.config\.js|scripts/)' \
+            | grep -vE '\.test\.tsx?$' || true)
+
+          if [ -z "$source_touched" ]; then
+            echo "No shipped frontend source changed — nothing to rebuild."
+            exit 0
+          fi
+
+          echo "Frontend source changed:"
+          printf '  %s\n' $source_touched
+
+          # `npm run build` rebuilds BOTH bundles, so a genuine rebuild always
+          # shows up in both. Requiring both is what stops "I rebuilt the HR app
+          # and forgot the Mini App".
+          missing=""
+          for bundle in dewey_time/public/hr_attendance dewey_time/public/miniapp; do
+            if ! printf '%s\n' "$changed" | grep -q "^$bundle/"; then
+              missing="$missing $bundle"
+            fi
+          done
+
+          if [ -n "$missing" ]; then
+            echo "::error title=Bundle not rebuilt::Frontend source changed but these committed bundles did not:$missing — run 'npm run build' in dewey_time/frontend/hr_attendance and commit the result. Frappe Cloud will not build it for you, so merging this ships nothing."
+            exit 1
+          fi
+
+          echo "Both bundles were rebuilt and committed."

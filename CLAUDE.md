@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **Frappe custom app** (`dewey_time`) that auto-generates `Attendance Flag` records from ZKTeco device punch data (`Employee Checkin`). It serves two React SPAs: the HR attendance app (a single bundle with two routes, `/hr-attendance` and `/hr-schedule`) and a separate ADMS device-admin dashboard at `/adms`.
+This is a **Frappe custom app** (`dewey_time`) that auto-generates `Attendance Flag` records from ZKTeco device punch data (`Employee Checkin`). It serves three React front ends: the HR attendance app (a single bundle with two routes, `/hr-attendance` and `/hr-schedule`), the employee-facing **Telegram Mini App** at `/hr-me`, and a separate ADMS device-admin dashboard at `/adms`.
 
 The app is a standard Frappe layout: the Python package `dewey_time/` sits directly at the repo root, and the per-module code lives under `dewey_time/dewey_time/`.
 
@@ -47,8 +47,11 @@ bench --site <site> migrate
 
 ```bash
 # From dewey_time/ (where the package.json with these scripts lives — there is no repo-root package.json)
-# Builds the SPA into public/hr_attendance/
+# Builds BOTH bundles: public/hr_attendance/ and public/miniapp/ (the Mini App)
 npm run build
+
+# The Mini App bundle alone (also run as the last step of `npm run build`)
+npm run build:miniapp
 
 # Dev server with HMR (proxies API calls to local Frappe)
 npm run dev:hr
@@ -82,6 +85,13 @@ React SPA (frontend/hr_attendance/src/)
   ├─ /hr-attendance  → WeekView grid + DayTimeline + FlagDetailPanel (HR review)
   └─ /hr-schedule    → WeeklySchedulePage (wizard for bulk shift assignment)
 
+Telegram Mini App (frontend/hr_attendance/src/miniapp/ — its own bundle)
+  └─ /hr-me          → the employee's own record on their phone, inside Telegram.
+                       Auth is Telegram initData (telegram/miniapp_auth.py), NOT a
+                       Frappe session; the payload is an allowlist (telegram/miniapp_api.py).
+                       Shares src/lib and src/ui with the HR app — a change there
+                       rebuilds BOTH bundles.
+
 ADMS dashboard (source in frontend/adms/ — built into public/adms/)
   └─ /adms           → device-admin SPA, gated by dashboard_auth token exchange
 ```
@@ -111,6 +121,18 @@ ADMS dashboard (source in frontend/adms/ — built into public/adms/)
 | `schedule_import.py` | Spreadsheet/CSV bulk schedule import (canonical column format) |
 | `dashboard_auth.py` | ADMS token exchange (`get_dashboard_token`) + `ensure_adms_roles` |
 
+### Telegram / Mini App modules (`dewey_time/telegram/`)
+
+| Module | Role |
+|---|---|
+| `miniapp_auth.py` | **The security boundary.** Validates Telegram `initData` (HMAC) and resolves it to an Employee, or raises. There is no Frappe permission backstop beneath it |
+| `miniapp_api.py` | The whitelisted read APIs the Mini App calls. The payload is an **allowlist** (`DAY_KEYS`, `FLAG_KEYS`, `PAYLOAD_KEYS`, …) — a field added upstream stays hidden until someone edits those sets on purpose |
+| `binding.py` | Telegram Link lifecycle: single-use 256-bit tokens (stored hashed), redemption, revocation, and `employee_for_telegram_user` — the resolver every request funnels through |
+| `transport.py` | The only module that talks to `api.telegram.org`. All outbound error strings pass through `scrub_token` |
+| `notify.py` | Outbound check-in notifications and their delivery gates |
+| `webhook.py` | The inbound `allow_guest` webhook. Validates Telegram's secret header before doing anything |
+
+
 ### Custom DocTypes (`dewey_time/dewey_time/doctype/`)
 
 - `Attendance Flag` — the generated flags (`flag_code`, `day_closed`, `source`, `attendance_date`, …)
@@ -118,13 +140,16 @@ ADMS dashboard (source in frontend/adms/ — built into public/adms/)
 - `Device Closeout Alert` — per-device closeout status / alert records
 - `Dewey Time Settings` — single doctype holding app settings (e.g. VAPID keys for web push)
 - `Dewey Time Push Subscription` — one row per browser push endpoint (PWA notifications)
+- `Telegram Link` — one row per bound Telegram account (`telegram_user_id` is the docname); `enabled = 0` is the revocation, never a delete
+- `Telegram Link Token` — single-use invite tokens, stored as SHA-256 hashes with a 24h expiry
+- `Dewey Time Branch Rollout` — per-branch rollout phase (PRELAUNCH / LIVE)
 
 ### Frappe hooks (`hooks.py`)
 
 - **Scheduler**: `daily` → `closeout.run_company_fallback_closeout`; `*/30 * * * *` → `intraday.run_intraday_scheduler`
 - **Doc events**: `Employee Checkin.after_insert` **and** `.on_update` → `intraday.on_employee_checkin_after_insert` / `on_employee_checkin_on_update` (both fire the intraday engine)
-- **After migrate** (five handlers): `setup.custom_fields.make_custom_fields` (ensures custom fields), `utils.sync_hr_attendance_assets.sync_hr_attendance_assets` (HR SPA → `sites/assets/`), `utils.sync_adms_assets.sync_adms_assets` (ADMS bundle), `attendance_engine.dashboard_auth.ensure_adms_roles` (creates the `ADMS Admin` / `ADMS Super Admin` roles), and `webpush.ensure_vapid_keys` (web-push VAPID keypair)
-- **Website routes**: `/hr-attendance/<path>` and `/hr-schedule/<path>` both rewrite to their HTML entry points for client-side routing (`/adms` is served by the `www/adms.py` page, not a route rule)
+- **After migrate**: `setup.custom_fields.make_custom_fields` (ensures custom fields), `utils.sync_hr_attendance_assets.sync_hr_attendance_assets` (HR SPA → `sites/assets/`), `utils.sync_miniapp_assets.sync_miniapp_assets` (Mini App bundle), `utils.sync_adms_assets.sync_adms_assets` (ADMS bundle), `attendance_engine.dashboard_auth.ensure_adms_roles` (creates the `ADMS Admin` / `ADMS Super Admin` roles), and `webpush.ensure_vapid_keys` (web-push VAPID keypair)
+- **Website routes**: `/hr-attendance/<path>` and `/hr-schedule/<path>` both rewrite to their HTML entry points for client-side routing. `/hr-me` (Mini App) and `/adms` are served by the `www/` page convention (`www/hr-me.py`, `www/adms.py`), not route rules
 
 ### Frontend structure (`frontend/hr_attendance/src/`)
 
@@ -183,9 +208,17 @@ Employee Checkin punches arrive via the standard Frappe Resource API with `custo
 
 ## Deployment Notes
 
-- **The built assets are the deployed artifact and MUST be committed.** After any frontend change, run `npm run build` and **commit the resulting `dewey_time/public/hr_attendance/**` and `dewey_time/www/hr-{attendance,schedule}.html`** in the same PR, then `bench migrate` locally to push them to `sites/assets/`.
+- **The built assets are the deployed artifact and MUST be committed.** After any frontend change, run `npm run build` and **commit every rebuilt bundle** in the same PR, then `bench migrate` locally to push them to `sites/assets/`. `npm run build` emits **two** bundles, not one:
 
-  Frappe Cloud **never builds this SPA** — it cannot: the app depends on the private `@lolbikb/dewey-ui` package and a fresh `npm install` returns 401 without a `NODE_AUTH_TOKEN`. Whatever bundle is committed is what users get. A merged PR that changes `frontend/` but not `public/hr_attendance/` ships *nothing*.
+  | Commit this | Built from | Served at |
+  |---|---|---|
+  | `dewey_time/public/hr_attendance/**` + `dewey_time/www/hr-{attendance,schedule,flags,personal}.html` | `frontend/hr_attendance/src/` (minus `src/miniapp/`) | `/hr-attendance`, `/hr-schedule` |
+  | `dewey_time/public/miniapp/**` + `dewey_time/www/hr-me.html` | `frontend/hr_attendance/src/miniapp/` **plus every shared module it imports** (`src/lib/`, `src/ui/`, `src/components/`) | `/hr-me` (Telegram Mini App) |
+  | `dewey_time/public/adms/**` | `frontend/adms/` (its own `npm run build:frappe`) | `/adms` |
+
+  The second row is the one that gets missed: a change to a shared module like `src/ui/DayTimeline.tsx` or `src/lib/shiftTimeline.ts` reaches the Mini App too, so **both** bundles must be rebuilt and committed. CI enforces this in the `bundle-freshness` job.
+
+  Frappe Cloud **never builds these SPAs** — it cannot: they depend on the private `@lolbikb/dewey-ui` package and a fresh `npm install` returns 401 without a `NODE_AUTH_TOKEN`. Whatever bundle is committed is what users get. A merged PR that changes `frontend/` but not the corresponding `public/` bundle ships *nothing*.
 
   This is easy to get wrong, because the rebuilt files are noisy and look like generated clutter you should discard. They have been missed before: assets went un-rebuilt from #58 through #74 (four PRs of frontend work, none of it live) until a35c950e. If a task instruction ever tells you build output is "a verification artifact, not a deliverable", it is wrong — that exact wording caused this.
 - On Frappe Cloud, asset MIME/404 issues are documented in `dewey_time/docs/HR_ATTENDANCE_DEPLOY.md`.

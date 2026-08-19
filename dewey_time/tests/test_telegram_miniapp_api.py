@@ -732,3 +732,52 @@ class TestProfileAuth(unittest.TestCase):
             with self.assertRaises(Exception):
                 miniapp_api.get_my_profile("forged")
         get_value.assert_not_called()
+
+
+class TestInfrastructureFailuresDoNotReachTheEmployee(unittest.TestCase):
+    """The allowlist's comment claimed these were excluded. They were not.
+
+    The engine never emits UNKNOWN_DEVICE_BRANCH or DELIVERY_FAILED as codes --
+    it folds both into ATTENDANCE_ISSUE and records which in `evidence.reason`.
+    ATTENDANCE_ISSUE is on the allowlist, so an unmapped device and a failed
+    delivery both arrived on the phone worded as a fault in the employee's own
+    punches, and counted toward the amber "to check" number.
+    """
+
+    def _day(self, reason, code="ATTENDANCE_ISSUE"):
+        flag = {"flag_code": code, "is_provisional": 0, "decision": None,
+                "decision_state": None}
+        if reason is not None:
+            flag["evidence"] = {"reason": reason}
+        return {"date": "2026-08-14", "checkins": [], "flags": [flag]}
+
+    def _codes(self, day):
+        return [f["flag_code"] for f in miniapp_api._pick_flags(day)]
+
+    def test_an_unmapped_device_is_not_the_employees_problem(self):
+        self.assertEqual(self._codes(self._day("unknown_device_branch")), [])
+
+    def test_a_failed_delivery_is_not_the_employees_problem(self):
+        self.assertEqual(self._codes(self._day("delivery_failed")), [])
+
+    def test_a_reason_the_employee_can_act_on_still_reaches_them(self):
+        # The filter must not swallow the whole code: a single checkin is a
+        # genuine gap in their own record and they can tell HR about it.
+        self.assertEqual(self._codes(self._day("single_checkin")), ["ATTENDANCE_ISSUE"])
+        self.assertEqual(self._codes(self._day("unpaired_punch")), ["ATTENDANCE_ISSUE"])
+
+    def test_a_flag_with_no_evidence_at_all_still_reaches_them(self):
+        self.assertEqual(self._codes(self._day(None)), ["ATTENDANCE_ISSUE"])
+
+    def test_unparsed_evidence_is_parsed_rather_than_waved_through(self):
+        # The failure mode is silent -- the flag simply arrives -- so this must
+        # not depend on hr_calendar having done the json.loads upstream.
+        day = self._day(None)
+        day["flags"][0]["evidence"] = '{"reason": "unknown_device_branch"}'
+        self.assertEqual(self._codes(day), [])
+
+    def test_evidence_itself_never_reaches_the_payload(self):
+        # The reason is read server-side precisely because evidence must not be
+        # sent; this pins that reading it did not start shipping it.
+        picked = miniapp_api._pick_flags(self._day("single_checkin"))
+        self.assertNotIn("evidence", picked[0])
