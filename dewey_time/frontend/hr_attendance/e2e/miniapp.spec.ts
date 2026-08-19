@@ -789,3 +789,61 @@ test("the timeline draws no lateness verdict on the employee's own punch", async
   const text = await canvas.innerText();
   expect(text, "no lateness verdict on the phone").not.toMatch(/Late|\+\d+m/);
 });
+
+
+test("a revoked link is asked once, and says who can fix it", async ({ page }) => {
+  // THE DEFECT: the Mini App's fetchers threw a plain Error, so the shared
+  // query client's "never retry 4xx" rule — which discriminates on
+  // `FrappeCallError` — silently did not apply here. A revoked link, an account
+  // that was never linked and a launch older than the 24-hour window were each
+  // requested three times and then re-polled every sixty seconds for as long as
+  // the app stayed open, on the employee's own mobile data, behind a message
+  // promising it would work in a moment.
+  //
+  // The COUNT is the assertion. A retry that has been switched off looks
+  // identical on screen to one that never fired.
+  let calendarRequests = 0;
+  await page.route("https://telegram.org/**", (route) => route.abort());
+  await page.route(
+    "**/api/method/dewey_time.telegram.miniapp_api.get_my_calendar",
+    async (route) => {
+      calendarRequests += 1;
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({ exc_type: "PermissionError" }),
+      });
+    },
+  );
+  await page.addInitScript(() => {
+    (window as unknown as { Telegram: unknown }).Telegram = {
+      WebApp: {
+        initData: "user=%7B%22id%22%3A55501%7D&auth_date=1&hash=deadbeef",
+        initDataUnsafe: { user: { id: 55501 } },
+        colorScheme: "light",
+        themeParams: {},
+        safeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        contentSafeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        BackButton: { isVisible: false, show() {}, hide() {}, onClick() {}, offClick() {} },
+        HapticFeedback: { selectionChanged() {}, impactOccurred() {}, notificationOccurred() {} },
+        CloudStorage: { getItem(_k: string, cb: (e: unknown, v: unknown) => void) { cb(null, null); } },
+        onEvent() {},
+        offEvent() {},
+        ready() {},
+        expand() {},
+        isVersionAtLeast: () => true,
+      },
+    };
+  });
+
+  await page.goto(MINIAPP);
+
+  // Names the action, and names who can take it — the app cannot.
+  await expect(page.getByText("This link is no longer active")).toBeVisible();
+  await expect(page.getByText(/Dewey Time chat/)).toBeVisible();
+
+  // >1 means the 4xx rule stopped applying again. Sampled after the poll
+  // interval would have fired at least once had it not been stopped.
+  await page.waitForTimeout(1500);
+  expect(calendarRequests).toBe(1);
+});
