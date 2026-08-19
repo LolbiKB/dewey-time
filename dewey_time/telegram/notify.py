@@ -30,7 +30,7 @@ import frappe
 from frappe.utils import get_datetime, nowdate
 
 from dewey_time.attendance_engine import rollout
-from dewey_time.telegram import transport
+from dewey_time.telegram import receipt, transport
 
 LINK_DT = "Telegram Link"
 
@@ -46,24 +46,68 @@ LINK_DT = "Telegram Link"
 #:
 #: Khmer leads because the English is the line that can be inferred from the
 #: numbers beside it, not the other way round.
+#:
+#: The third entry is the NEUTRAL receipt: the punch was recorded, and which
+#: way it went is not claimable (see receipt.py for when that happens). It
+#: deliberately shares no word with the other two -- "Recorded" mistaken for
+#: "Checked in" is the failure the neutral verb exists to end.
 _VERBS = {
-    "IN": ("បានចូល", "Checked in"),
-    "OUT": ("បានចេញ", "Checked out"),
+    receipt.IN: ("បានចូល", "Checked in"),
+    receipt.OUT: ("បានចេញ", "Checked out"),
+    receipt.NO_VERB: ("បានកត់ត្រា", "Recorded"),
 }
 
 
 def compose(direction: str, punch_time, branch) -> str:
-    """The message body. `direction` is already resolved to IN or OUT."""
+    """The message body. `direction` is IN, OUT, or "" for the neutral receipt."""
     # Twelve hour, matching the Mini App. "17:06" here and "5:06 PM" one tap
     # later is one event described two ways.
     stamp = get_datetime(punch_time).strftime("%-I:%M %p")
-    khmer, english = _VERBS["OUT" if str(direction or "").upper() == "OUT" else "IN"]
+    key = str(direction or "").upper()
+    khmer, english = _VERBS[key if key in (receipt.IN, receipt.OUT) else receipt.NO_VERB]
     tail = f" · {branch}" if branch else ""
     return f"{khmer} {stamp}{tail}\n{english} {stamp}{tail}"
 
 
+def _day_punches_up_to(employee: str, row) -> list[dict]:
+    """The day's punch rows, in order, ending at the punch being announced.
+
+    Bounded at `row["time"]` rather than "now", because the job runs
+    asynchronously and a later punch must not change what this message says.
+    Rows tied on time sort by insertion (`creation`), and anything that sorted
+    AFTER the announced punch inside the same second is dropped -- the replay
+    must end at the punch it is describing.
+
+    The date is sliced off the timestamp rather than parsed out of it.
+    `row["time"]` is a datetime from the database or a string from a fixture,
+    and str() renders both as "YYYY-MM-DD HH:MM:SS" -- so the first ten
+    characters are the day, with no parser to disagree about a space versus
+    a T. (getdate() handles both on a real bench; the CI harness's stub does
+    not, and this needed no parse to begin with.)
+    """
+    day = str(row["time"])[:10]
+    rows = (
+        frappe.get_all(
+            "Employee Checkin",
+            filters={
+                "employee": employee,
+                "time": ["between", [f"{day} 00:00:00", row["time"]]],
+            },
+            fields=["name", "time", "log_type", "custom_device_branch"],
+            order_by="time asc, creation asc",
+        )
+        or []
+    )
+    name = (row or {}).get("name")
+    if name:
+        for i, fetched in enumerate(rows):
+            if fetched.get("name") == name:
+                return rows[: i + 1]
+    return rows
+
+
 def direction_of(employee: str, row) -> str:
-    """IN or OUT for this punch -- resolved, not assumed.
+    """IN, OUT, or "" (no claim) for this punch -- resolved, not assumed.
 
     `log_type` on Employee Checkin is an OPTIONAL Select and nothing in this
     app writes it; a device that reports only a timestamp leaves it empty on
@@ -72,33 +116,23 @@ def direction_of(employee: str, row) -> str:
     "Checked in / បានចូល" -- telling someone they had arrived as they walked
     out of the building.
 
-    The Mini App's status chip had the identical bug and is fixed the same
-    way, which matters: the message and the app must not describe one punch
-    two different ways.
+    The first rewrite paired the punch against a whole-day COUNT, which was
+    still wrong two ways, both live: the count was blind to campus (three
+    punches across two sites made the 5pm departure "odd", an arrival) and
+    blind to double taps (a second tap seconds after the first inverted every
+    later verb that day).
 
-    An explicit label is believed. Without one the punch is PAIRED against
-    the day's earlier ones -- the same rule `deriveSegments` uses to draw the
-    timeline -- so an odd count is an arrival and an even one a departure.
-    Bounded at this punch's own timestamp rather than "today so far", because
-    the job runs asynchronously and a later punch must not change what this
-    message says.
+    An explicit label is believed. Without one, the day's punches up to this
+    one are replayed under the SAME branch-run pairing the timeline draws
+    with -- see receipt.py, which is fixture-locked against the TypeScript
+    implementation -- and where that replay cannot honestly call a direction,
+    the answer is "" and compose() sends a neutral receipt instead of a
+    confident wrong verb.
     """
     explicit = str((row or {}).get("log_type") or "").upper()
-    if explicit in ("IN", "OUT"):
+    if explicit in (receipt.IN, receipt.OUT):
         return explicit
-
-    # The date is sliced off the timestamp rather than parsed out of it.
-    # `row["time"]` is a datetime from the database or a string from a
-    # fixture, and str() renders both as "YYYY-MM-DD HH:MM:SS" -- so the first
-    # ten characters are the day, with no parser to disagree about a space
-    # versus a T. (getdate() handles both on a real bench; the CI harness's
-    # stub does not, and this needed no parse to begin with.)
-    day = str(row["time"])[:10]
-    so_far = frappe.db.count(
-        "Employee Checkin",
-        {"employee": employee, "time": ["between", [f"{day} 00:00:00", row["time"]]]},
-    )
-    return "IN" if int(so_far or 0) % 2 == 1 else "OUT"
+    return receipt.announce(_day_punches_up_to(employee, row))["verb"]
 
 
 def _link_for(employee: str):
@@ -111,10 +145,12 @@ def _link_for(employee: str):
 
 
 def _checkin(checkin_name: str):
+    # `name` rides along so _day_punches_up_to can find this punch among
+    # same-second siblings and cut the replay off exactly there.
     return frappe.db.get_value(
         "Employee Checkin",
         checkin_name,
-        ["log_type", "time", "custom_device_branch"],
+        ["name", "log_type", "time", "custom_device_branch"],
         as_dict=True,
     )
 

@@ -214,50 +214,143 @@ class TestBilingualNotification(unittest.TestCase):
             self.assertIn("DIS Iconic", line)
 
 
+def _punch(name, time, branch="DIS Iconic", log_type=""):
+    return {"name": name, "time": time, "log_type": log_type,
+            "custom_device_branch": branch}
+
+
 class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
     """`log_type` is an OPTIONAL Select and nothing in this app writes it.
 
-    The rule was "anything that is not OUT is an arrival", so on a device that
-    reports only timestamps every departure announced itself as "Checked in /
-    បានចូល" -- telling someone they had arrived as they walked out of the
-    building. The Mini App's status chip had the identical bug and is fixed
-    the same way: the message and the app must not describe one punch two
-    different ways.
+    The rule was "anything that is not OUT is an arrival", so every departure
+    on an unlabelled stream announced an arrival. The first rewrite paired the
+    punch against a whole-day COUNT -- still wrong two ways, both live: blind
+    to campus (three punches across two sites made a 5pm departure "odd", an
+    arrival) and blind to double taps (a second tap seconds after the first
+    inverted every later verb that day).
+
+    Now the day is REPLAYED under the timeline's own branch-run pairing
+    (receipt.py, fixture-locked against attendancePunches.ts), and where the
+    replay cannot honestly call a direction the message degrades to a neutral
+    receipt instead of a confident wrong verb. The replay semantics themselves
+    are covered in test_telegram_receipt.py; what this class pins is the
+    WIRING -- what direction_of fetches, how it bounds the day, and the words
+    that reach a phone.
     """
 
-    def test_an_explicit_label_is_believed(self):
-        self.assertEqual(notify.direction_of("E1", {"log_type": "OUT", "time": "2026-08-17 17:06:00"}), "OUT")
-        self.assertEqual(notify.direction_of("E1", {"log_type": "in", "time": "2026-08-17 07:58:00"}), "IN")
-
-    def test_an_unlabelled_punch_is_paired_against_the_day(self):
-        # Fourth punch of the day is a departure; third is a return.
-        with patch.object(notify.frappe.db, "count", return_value=4):
+    def test_an_explicit_label_is_believed_without_any_query(self):
+        with patch.object(notify.frappe, "get_all",
+                          side_effect=AssertionError("a labelled punch needs no replay")):
             self.assertEqual(
-                notify.direction_of("E1", {"log_type": "", "time": "2026-08-17 17:06:00"}), "OUT"
+                notify.direction_of("E1", {"log_type": "OUT", "time": "2026-08-17 17:06:00"}),
+                "OUT",
             )
-        with patch.object(notify.frappe.db, "count", return_value=3):
             self.assertEqual(
-                notify.direction_of("E1", {"log_type": None, "time": "2026-08-17 12:58:00"}), "IN"
+                notify.direction_of("E1", {"log_type": "in", "time": "2026-08-17 07:58:00"}),
+                "IN",
             )
 
-    def test_the_count_is_bounded_at_this_punch_not_at_now(self):
+    def test_an_unlabelled_punch_is_replayed_against_the_day(self):
+        # Fourth punch of the day at one campus is a departure; a third is a
+        # lunch return.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00"),
+            _punch("P1", "2026-08-17 12:01:00"),
+            _punch("P2", "2026-08-17 12:58:00"),
+            _punch("P3", "2026-08-17 17:06:00"),
+        ]
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            self.assertEqual(
+                notify.direction_of("E1", _punch("P3", "2026-08-17 17:06:00")), "OUT"
+            )
+        with patch.object(notify.frappe, "get_all", return_value=day[:3]):
+            self.assertEqual(
+                notify.direction_of("E1", _punch("P2", "2026-08-17 12:58:00")), "IN"
+            )
+
+    def test_the_query_is_bounded_at_this_punch_not_at_now(self):
         # The job is queued, so by the time it runs the employee may have
-        # punched again. Counting "today so far" would let a later punch flip
+        # punched again. Fetching "today so far" would let a later punch flip
         # what THIS message says.
-        with patch.object(notify.frappe.db, "count", return_value=1) as count:
-            notify.direction_of("E1", {"log_type": "", "time": "2026-08-17 07:58:00"})
-        window = count.call_args[0][1]["time"]
+        with patch.object(notify.frappe, "get_all",
+                          return_value=[_punch("P0", "2026-08-17 07:58:00")]) as get_all:
+            notify.direction_of("E1", _punch("P0", "2026-08-17 07:58:00"))
+        window = get_all.call_args.kwargs["filters"]["time"]
         self.assertEqual(window[0], "between")
         self.assertEqual(window[1][1], "2026-08-17 07:58:00")
 
-    def test_a_checkout_on_an_unlabelled_stream_says_checked_out(self):
-        # The whole point, end to end: the words an employee actually reads.
-        with patch.object(notify.frappe.db, "count", return_value=4):
-            direction = notify.direction_of("E1", {"log_type": "", "time": "2026-08-17 17:06:00"})
-        message = notify.compose(direction, datetime(2026, 8, 17, 17, 6), "DIS Iconic")
+    def test_a_same_second_sibling_delivered_later_is_not_replayed(self):
+        # Two rows in one second: the `between` bound cannot separate them,
+        # so the replay is cut at the announced punch's own row. Without the
+        # cut, announcing P0 would replay P1 as the last punch and hand back
+        # P1's verb.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00"),
+            _punch("P1", "2026-08-17 07:58:00"),
+        ]
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            self.assertEqual(
+                notify.direction_of("E1", _punch("P0", "2026-08-17 07:58:00")), "IN"
+            )
+
+    def test_a_cross_campus_departure_says_checked_out(self):
+        # The scenario the whole-day count got backwards: morning at one
+        # campus cleanly paired, afternoon at another. The 5:06 punch closes
+        # the afternoon arrival, whatever campus the morning happened at.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00", branch="DIS Iconic"),
+            _punch("P1", "2026-08-17 12:01:00", branch="DIS Iconic"),
+            _punch("P2", "2026-08-17 13:02:00", branch="DIU"),
+            _punch("P3", "2026-08-17 17:06:00", branch="DIU"),
+        ]
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            direction = notify.direction_of("E1", _punch("P3", "2026-08-17 17:06:00"))
+        message = notify.compose(direction, datetime(2026, 8, 17, 17, 6), "DIU")
         self.assertIn("Checked out", message)
         self.assertIn("បានចេញ", message)
         self.assertNotIn("Checked in", message)
+
+    def test_an_unknowable_punch_is_recorded_not_guessed(self):
+        # A full day at one campus, then a single punch at another on the way
+        # out -- indistinguishable at compose time from arriving there. The
+        # old count announced an arrival to someone leaving the building; now
+        # the receipt is neutral in both languages and claims no direction.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00", branch="DIS Iconic"),
+            _punch("P1", "2026-08-17 17:00:00", branch="DIS Iconic"),
+            _punch("P2", "2026-08-17 17:04:00", branch="DIU"),
+        ]
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            direction = notify.direction_of("E1", _punch("P2", "2026-08-17 17:04:00"))
+        self.assertEqual(direction, "")
+        message = notify.compose(direction, datetime(2026, 8, 17, 17, 4), "DIU")
+        self.assertIn("Recorded", message)
+        self.assertIn("បានកត់ត្រា", message)
+        self.assertNotIn("Checked in", message)
+        self.assertNotIn("Checked out", message)
+        self.assertNotIn("បានចូល", message)
+        self.assertNotIn("បានចេញ", message)
+        # Still a receipt: the time and the place survive.
+        self.assertIn("5:04 PM", message)
+        self.assertIn("DIU", message)
+
+    def test_a_double_tap_no_longer_inverts_the_rest_of_the_day(self):
+        # Tap, tap again three seconds later. The second tap is announced
+        # neutrally, and -- the part the count got wrong -- the REAL lunch
+        # departure an hour later still reads as a departure.
+        day = [
+            _punch("P0", "2026-08-17 07:58:00"),
+            _punch("P1", "2026-08-17 07:58:03"),
+            _punch("P2", "2026-08-17 12:01:00"),
+        ]
+        with patch.object(notify.frappe, "get_all", return_value=day[:2]):
+            self.assertEqual(
+                notify.direction_of("E1", _punch("P1", "2026-08-17 07:58:03")), ""
+            )
+        with patch.object(notify.frappe, "get_all", return_value=day):
+            self.assertEqual(
+                notify.direction_of("E1", _punch("P2", "2026-08-17 12:01:00")), "OUT"
+            )
 
 
 class TestSendTestNotification(unittest.TestCase):
