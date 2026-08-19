@@ -4,7 +4,8 @@ import test from "node:test";
 import {
   accountedFingers, applyFilterChange, columnIdForSort, composeRegister, describeRegisterFilters,
   feedHealth, filterRegisterRows, isFragileEnrollment, isNotReady, joinRegisterRows,
-  paginateRegisterRows, registerAlert, registerCsvColumns, registerFacets, registerFeedState,
+  needsScheduleAndHasNone, paginateRegisterRows, registerAlert, registerCsvColumns,
+  registerFacets, registerFeedState, scheduleFinding,
   REGISTER_PAGE_SIZE, sortFromColumnId, SORT_COLUMN_IDS, sortRegisterRows, suppressUnusableFacts,
   visibleColumnIds, type RegisterFilters, type RegisterRow,
 } from "@/lib/coverageRegister";
@@ -345,6 +346,9 @@ const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   // override it.
   telegram: "none",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
+  // The ordinary row expects a schedule and has one; the clock-based and
+  // unclassified tests override it.
+  schedule_expectation: "scheduled",
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // No names and no face is the ordinary row wherever the bridge sends counts
   // without ids — the finger tests override these.
@@ -1674,4 +1678,125 @@ test("the CSV writes the same words the badge does", () => {
   const csv = toRegisterCsv([row({ telegram: "id_on_file" })], { schedule: true, biometric: true });
   assert.match(csv, /ID on file/);
   assert.doesNotMatch(csv, /id_on_file/);
+});
+
+test("a clock-based employee with no schedule is not a finding", () => {
+  // THE FALSE FINDING: the register bucketed on "does a Shift Assignment
+  // exist", so everyone who clocks in and out was reported as missing a
+  // schedule. closeout.py applies only punch-integrity and location flags on
+  // their days — they are tracked exactly as intended, and the count grew with
+  // every rotating teacher added.
+  const clock = row({ schedule: "missing", schedule_expectation: "clock" });
+  assert.equal(isNotReady(clock), false);
+  assert.equal(scheduleFinding(clock), "clock");
+  assert.equal(needsScheduleAndHasNone(clock), false);
+});
+
+test("a Full-time employee with no schedule is still a finding", () => {
+  // The counterweight: the fix must not stop reporting the people it was
+  // reporting correctly.
+  const scheduled = row({ schedule: "missing", schedule_expectation: "scheduled" });
+  assert.equal(isNotReady(scheduled), true);
+  assert.equal(scheduleFinding(scheduled), "missing");
+  assert.equal(needsScheduleAndHasNone(scheduled), true);
+});
+
+test("an unclassified employment type is a finding in its own right", () => {
+  // `is_clock_based` deliberately refuses to read a blank type as clock-based,
+  // so until somebody fills it in the engine judges them against a shift they
+  // do not have and flags every scan they make. The remedy is to classify
+  // them, not to give them a shift.
+  const blank = row({ schedule: "missing", schedule_expectation: "unclassified" });
+  assert.equal(isNotReady(blank), true);
+  assert.equal(scheduleFinding(blank), "unclassified");
+  assert.equal(needsScheduleAndHasNone(blank), false, "the remedy is not a shift");
+});
+
+test("an unclassified employee is a finding even with a schedule assigned", () => {
+  // Having been rostered does not answer the question. The blank field is what
+  // decides how the engine treats every one of their punches.
+  const blank = row({ schedule: "assigned", schedule_expectation: "unclassified" });
+  assert.equal(isNotReady(blank), true);
+  assert.equal(scheduleFinding(blank), "unclassified");
+});
+
+test("a row no schedule feed vouched for says nothing about its schedule", () => {
+  // Feed silence is never a finding — the rule the whole file turns on.
+  const orphan = row({ schedule: null, schedule_expectation: null });
+  assert.equal(scheduleFinding(orphan), null);
+  assert.equal(needsScheduleAndHasNone(orphan), false);
+});
+
+test("an older cached payload does not get read as 'scheduled'", () => {
+  // The field is new, and a body cached before it existed arrives without one.
+  // Defaulting to "scheduled" would resurrect exactly the false findings this
+  // change removes.
+  const rows = joinRegisterRows(
+    {
+      unassigned: [{ id: "E1", employee_name: "Prof. Chan" }],
+      assigned: [],
+      counts: { active: 1, unassigned: 1, assigned: 0, truncated: false },
+    } as never,
+    undefined,
+  );
+  assert.equal(rows[0]!.schedule_expectation, null);
+  assert.equal(needsScheduleAndHasNone(rows[0]!), false);
+});
+
+test("the expectation survives the join for both halves of the roster", () => {
+  // Assigned and unassigned are built on separate code paths server-side; a
+  // field that reached only one renders as a blank column for the other half.
+  const rows = joinRegisterRows(
+    {
+      unassigned: [{ id: "E1", employee_name: "Prof. Chan", schedule_expectation: "clock" }],
+      assigned: [
+        {
+          id: "E2",
+          employee_name: "Sok Dara",
+          schedule_expectation: "scheduled",
+          weekly_minutes: 2400,
+        },
+      ],
+      counts: { active: 2, unassigned: 1, assigned: 1, truncated: false },
+    } as never,
+    undefined,
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  assert.equal(byId.get("E1")!.schedule_expectation, "clock");
+  assert.equal(byId.get("E2")!.schedule_expectation, "scheduled");
+});
+
+test("filtering to Missing asks who needs a shift, not who lacks one", () => {
+  const rows = [
+    row({ id: "A", schedule: "missing", schedule_expectation: "scheduled" }),
+    row({ id: "B", schedule: "missing", schedule_expectation: "clock" }),
+    row({ id: "C", schedule: "missing", schedule_expectation: "unclassified" }),
+  ];
+  assert.deepEqual(
+    filterRegisterRows(rows, { schedule: "missing" }).map((r) => r.id),
+    ["A"],
+  );
+  assert.deepEqual(
+    filterRegisterRows(rows, { schedule: "clock" }).map((r) => r.id),
+    ["B"],
+  );
+  // The working list for chasing campuses.
+  assert.deepEqual(
+    filterRegisterRows(rows, { schedule: "unclassified" }).map((r) => r.id),
+    ["C"],
+  );
+});
+
+test("worst-first puts the unclassified row above a merely un-rostered one", () => {
+  // Through `sortRegisterRows`, which is where severity is actually observable:
+  // an unclassified employee is not just un-rostered, they are generating a
+  // flag on every scan until somebody fills the field in.
+  const rows = [
+    row({ id: "B", employee_name: "Bopha", schedule: "missing", schedule_expectation: "scheduled" }),
+    row({ id: "A", employee_name: "Arun", schedule: "assigned", schedule_expectation: "unclassified" }),
+  ];
+  assert.deepEqual(
+    sortRegisterRows(rows, { readiness: "not-ready" }).map((r) => r.id),
+    ["A", "B"],
+  );
 });

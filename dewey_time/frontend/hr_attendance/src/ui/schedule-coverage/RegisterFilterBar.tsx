@@ -47,6 +47,11 @@ const STATUS_OPTIONS: { value: NonNullable<RegisterFilters["status"]>; label: st
 const SCHEDULE_OPTIONS: { value: NonNullable<RegisterFilters["schedule"]>; label: string }[] = [
   { value: "assigned", label: SCHEDULE_LABELS.assigned },
   { value: "missing", label: SCHEDULE_LABELS.missing },
+  // The two states the register could not previously name. "Type not set" is
+  // the working list for chasing campuses; "Clock-based" is how you check that
+  // the rotating teachers were classified rather than merely added.
+  { value: "unclassified", label: SCHEDULE_LABELS.unclassified },
+  { value: "clock", label: SCHEDULE_LABELS.clock },
 ];
 
 /**

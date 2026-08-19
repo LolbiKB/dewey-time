@@ -59,6 +59,7 @@ const BASE_ROW: RegisterRow = {
   department: "Ops",
   status: "Active",
   schedule: "assigned",
+  schedule_expectation: "scheduled",
   weekly_minutes: 2400,
   biometric: "enrolled",
   fingerprint_count: 2,

@@ -17,7 +17,9 @@ import {
   accountedFingers,
   BIOMETRIC_LABELS,
   isFragileEnrollment,
+  needsScheduleAndHasNone,
   SCHEDULE_LABELS,
+  scheduleFinding,
   TELEGRAM_LABELS,
   type RegisterRow,
 } from "@/lib/coverageRegister";
@@ -281,11 +283,34 @@ export function registerColumns(
     {
       id: "schedule",
       header: "Schedule",
+      // FOUR STATES, not two. Bucketing on "does a Shift Assignment exist"
+      // reported a clock-based employee and an unclassified one identically to
+      // a Full-time employee nobody has rostered — one is working exactly as
+      // intended, one needs a person, and only the third needs a shift.
       cell: ({ row }) => {
-        if (row.original.schedule === null) return "—";
+        const finding = scheduleFinding(row.original);
+        if (finding === null) return "—";
         return (
-          <Badge variant={row.original.schedule === "missing" ? "outline" : "secondary"}>
-            {SCHEDULE_LABELS[row.original.schedule]}
+          <Badge
+            variant={
+              finding === "unclassified"
+                ? "destructive"
+                : finding === "missing"
+                  ? "outline"
+                  : "secondary"
+            }
+            // The consequence, where there is room for it. "Type not set" says
+            // what is absent; it does not say that every scan this person makes
+            // will be flagged until somebody fills it in.
+            title={
+              finding === "unclassified"
+                ? "Employment type is blank, so the engine treats them as scheduled and flags every scan"
+                : finding === "clock"
+                  ? "Clocks in and out — no schedule needed"
+                  : undefined
+            }
+          >
+            {SCHEDULE_LABELS[finding]}
           </Badge>
         );
       },
@@ -488,7 +513,11 @@ export function registerColumns(
             </Button>
           );
         }
-        if (row.original.schedule === "missing") {
+        // `needsScheduleAndHasNone`, not `schedule === "missing"`: offering
+        // "Add schedule" to a clock-based employee proposes the one thing that
+        // would be wrong for them, and to an unclassified one it fixes the
+        // symptom while leaving the blank field that caused it.
+        if (needsScheduleAndHasNone(row.original)) {
           return (
             <Button size="sm" variant="outline" onClick={() => onAddSchedule(row.original)}>
               Add schedule

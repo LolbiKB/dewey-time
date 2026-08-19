@@ -247,7 +247,7 @@ class TestInvalidateCoverageCache(unittest.TestCase):
 
         frappe.cache.return_value.delete_value.reset_mock()
         coverage_api.invalidate_coverage_cache()
-        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v3")
+        frappe.cache.return_value.delete_value.assert_called_once_with("schedule_coverage:v4")
 
     def test_invalidate_accepts_doc_event_args(self):
         from dewey_time.attendance_engine import coverage_api
@@ -406,3 +406,58 @@ class TestEmployeeKhmerNameFields(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScheduleExpectation(unittest.TestCase):
+    """Three situations the register used to report as one.
+
+    Bucketing on `has_shift_assignment` alone called every clock-based employee
+    "schedule missing" -- a false finding that scales with every rotating
+    teacher added -- while a blank employment type, the one case that genuinely
+    needs a human, looked exactly the same.
+    """
+
+    @property
+    def coverage_api(self):
+        from dewey_time.attendance_engine import coverage_api
+
+        return coverage_api
+
+    def test_a_scheduled_type_expects_a_schedule(self):
+        for employment_type in ("Full-time", "Part-time Fixed", "Intern"):
+            with self.subTest(employment_type=employment_type):
+                self.assertEqual(
+                    self.coverage_api._schedule_expectation(employment_type), "scheduled"
+                )
+
+    def test_a_clock_type_expects_none(self):
+        # closeout.py:624 applies only punch-integrity and location flags on
+        # their days, so there is no schedule for them to be missing.
+        for employment_type in ("Contract", "Casual", "Hourly Teacher"):
+            with self.subTest(employment_type=employment_type):
+                self.assertEqual(self.coverage_api._schedule_expectation(employment_type), "clock")
+
+    def test_a_blank_type_is_unclassified_rather_than_clock(self):
+        # THE CASE THAT MATTERS. `is_clock_based` deliberately refuses to read
+        # blank as clock-based, so until somebody classifies these people the
+        # engine judges them against a shift they do not have and flags every
+        # scan. Calling them "clock" here would hide exactly that.
+        for employment_type in ("", "   ", None):
+            with self.subTest(employment_type=employment_type):
+                self.assertEqual(
+                    self.coverage_api._schedule_expectation(employment_type), "unclassified"
+                )
+
+    def test_the_allowlist_is_matched_case_insensitively(self):
+        self.assertEqual(self.coverage_api._schedule_expectation("full-time"), "scheduled")
+        self.assertEqual(self.coverage_api._schedule_expectation("  Full-time  "), "scheduled")
+
+    def test_every_row_carries_the_expectation(self):
+        base = self.coverage_api._employee_base({"id": "HR-EMP-1", "employment_type": "Contract"})
+        self.assertEqual(base["schedule_expectation"], "clock")
+        # And a row whose employment type never arrived still states one, rather
+        # than leaving the client to guess from an absent key.
+        self.assertEqual(
+            self.coverage_api._employee_base({"id": "HR-EMP-2"})["schedule_expectation"],
+            "unclassified",
+        )

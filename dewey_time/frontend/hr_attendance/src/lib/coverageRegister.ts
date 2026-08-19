@@ -47,6 +47,26 @@ export type RegisterRow = {
   /** Biometric-feed fact. Coverage filters status:Active, so it cannot supply this. */
   status: string | null;
   schedule: "assigned" | "missing" | null;
+  /**
+   * Schedule-feed fact — is this person SUPPOSED to have a weekly schedule?
+   *
+   * Resolved server-side from the employment-type allowlist
+   * (`coverage_api._schedule_expectation`), never re-derived here: a second
+   * copy of that list in TypeScript is a second thing to keep in step.
+   *
+   *   "scheduled"     Full-time and friends. No assignment is a real failure.
+   *   "clock"         They clock in and out; closeout applies only
+   *                   punch-integrity and location flags on their days, so
+   *                   there is no schedule for them to be missing.
+   *   "unclassified"  Employment type is blank. The engine refuses to read
+   *                   blank as clock-based, so until somebody classifies them
+   *                   it judges them against a shift they do not have and
+   *                   flags every scan they make.
+   *
+   * Null when coverage never returned this person at all — feed silence, and
+   * never a finding, like `schedule` beside it.
+   */
+  schedule_expectation: "scheduled" | "clock" | "unclassified" | null;
   weekly_minutes: number | null;
   biometric: "enrolled" | "enrolled_not_punching" | "none" | "still_enrolled" | null;
   fingerprint_count: number | null;
@@ -131,9 +151,16 @@ export const BIOMETRIC_FILTER_LABELS: Record<NonNullable<RegisterFilters["biomet
 };
 
 /** Same rule as BIOMETRIC_LABELS, for the schedule fact. */
-export const SCHEDULE_LABELS: Record<NonNullable<RegisterRow["schedule"]>, string> = {
+export const SCHEDULE_LABELS: Record<NonNullable<ScheduleFinding>, string> = {
   assigned: "Assigned",
   missing: "Missing",
+  // Not "Missing". They clock in and out, and no schedule exists to judge them
+  // against — saying "missing" invites HR to assign a shift to somebody whose
+  // contract is the reason they have none.
+  clock: "Clock-based",
+  // The one that needs a person. Until the employment type is filled in, the
+  // engine judges them against a shift they do not have and flags every scan.
+  unclassified: "Type not set",
 };
 
 /**
@@ -201,6 +228,10 @@ export function joinRegisterRows(
       department: emp.department ?? null,
       status: null,
       schedule,
+      // `?? null`, not a default: an older cached coverage body predates this
+      // field, and guessing "scheduled" for it would resurrect the false
+      // findings this exists to remove.
+      schedule_expectation: emp.schedule_expectation ?? null,
       weekly_minutes: minutes,
       biometric: null,
       fingerprint_count: null,
@@ -235,6 +266,7 @@ export function joinRegisterRows(
         status: null,
         // Coverage never returned this person, so no schedule fact is known.
         schedule: null,
+        schedule_expectation: null,
         weekly_minutes: null,
         biometric: null,
         fingerprint_count: null,
@@ -284,7 +316,7 @@ export type RegisterFilters = {
   branch?: string[];
   department?: string[];
   status?: "Active" | "Left";
-  schedule?: "assigned" | "missing";
+  schedule?: "assigned" | "missing" | "clock" | "unclassified";
   /**
    * The four buckets, plus `single_finger` — a PREDICATE option, not a
    * bucket: it narrows to fragile enrollments across the two enrolled
@@ -373,7 +405,45 @@ export function applyFilterChange(
  * gets found; the alert stays for people who cannot be tracked at all.
  */
 export function isNotReady(row: RegisterRow): boolean {
-  return row.schedule === "missing" || row.biometric === "none" || row.biometric === "still_enrolled";
+  return (
+    needsScheduleAndHasNone(row) ||
+    row.schedule_expectation === "unclassified" ||
+    row.biometric === "none" ||
+    row.biometric === "still_enrolled"
+  );
+}
+
+/**
+ * A missing schedule that is actually missing.
+ *
+ * The register used to count EVERY employee without a Shift Assignment, which
+ * is right for Full-time staff and wrong for everyone who clocks in and out:
+ * closeout applies only punch-integrity and location flags on their days, so
+ * they are tracked exactly as intended and have no schedule to lack. Counting
+ * them was a false finding that grew with every rotating teacher added — the
+ * same drowning-the-count failure this file guards against for Telegram and
+ * for single-finger enrolments.
+ *
+ * An UNCLASSIFIED row is deliberately not counted here. It is a finding, but a
+ * different one: the answer is to classify the person, not to give them a
+ * shift, and `scheduleFinding` keeps the two apart so the row can say which.
+ */
+export function needsScheduleAndHasNone(row: RegisterRow): boolean {
+  return row.schedule === "missing" && row.schedule_expectation === "scheduled";
+}
+
+/**
+ * What this row's schedule column should actually say.
+ *
+ * One derivation, so the cell, the filter and the CSV cannot disagree about a
+ * person the way three separate reads of `schedule` once did.
+ */
+export type ScheduleFinding = "assigned" | "missing" | "clock" | "unclassified" | null;
+
+export function scheduleFinding(row: RegisterRow): ScheduleFinding {
+  if (row.schedule_expectation === "unclassified") return "unclassified";
+  if (row.schedule_expectation === "clock") return "clock";
+  return row.schedule;
 }
 
 /**
@@ -417,7 +487,11 @@ export function isFragileEnrollment(row: RegisterRow): boolean {
 function severity(row: RegisterRow): number {
   if (row.biometric === "still_enrolled") return 0;
   if (row.biometric === "none") return 1;
-  if (row.schedule === "missing") return 2;
+  // Above a missing schedule: an unclassified employee is not merely
+  // un-rostered, they are actively generating a flag on every scan until
+  // somebody fills the field in.
+  if (row.schedule_expectation === "unclassified") return 2;
+  if (needsScheduleAndHasNone(row)) return 2;
   return 3;
 }
 
@@ -461,7 +535,9 @@ export function filterRegisterRows(rows: RegisterRow[], filters: RegisterFilters
     if (filters.branch?.length && !filters.branch.includes(row.branch ?? "")) return false;
     if (filters.department?.length && !filters.department.includes(row.department ?? "")) return false;
     if (filters.status && row.status !== filters.status) return false;
-    if (filters.schedule && row.schedule !== filters.schedule) return false;
+    // The FINDING, not the raw fact: a reader who filters to "Missing" is
+    // asking who needs a shift, and clock-based rows are not that.
+    if (filters.schedule && scheduleFinding(row) !== filters.schedule) return false;
     // `single_finger` is a predicate over the enrolled buckets, not a bucket
     // of its own — see BIOMETRIC_FILTER_LABELS.
     if (filters.biometric === "single_finger") {
@@ -816,7 +892,10 @@ const CSV_FIELDS: CsvField[] = [
   {
     feed: "schedule",
     header: "Schedule",
-    value: (row) => (row.schedule === null ? null : SCHEDULE_LABELS[row.schedule]),
+    value: (row) => {
+      const finding = scheduleFinding(row);
+      return finding === null ? null : SCHEDULE_LABELS[finding];
+    },
   },
   { feed: "schedule", header: "Weekly minutes", value: (row) => row.weekly_minutes },
   {
