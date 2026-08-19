@@ -437,15 +437,19 @@ class TestMeaningLine(unittest.TestCase):
         case = self
 
         def db_get_value(doctype, name, fields=None, as_dict=False, **kwargs):
-            if doctype in ("Employee", "Shift Type"):
-                case.assertTrue(
-                    as_dict, f"{doctype} lookup must pass as_dict=True"
-                )
-            if doctype == "Employee":
-                return dict(employee_row)
-            if doctype == "Shift Type":
-                return dict(shift_types.get(name) or {})
-            return None
+            if doctype not in ("Employee", "Shift Type"):
+                return None
+            case.assertTrue(as_dict, f"{doctype} lookup must pass as_dict=True")
+            # Honor the fields list rather than answering everything: a
+            # field dropped from the production call (employment_type,
+            # end_time) must come back missing here too, or the mutation
+            # ships green and the try/except converts it to permanent
+            # silence in production.
+            source = (
+                employee_row if doctype == "Employee"
+                else (shift_types.get(name) or {})
+            )
+            return {field: source.get(field) for field in (fields or [])}
 
         def fake_holiday(*, company, start, end):
             case.assertEqual(company, "Dewey", "the punching employee's company")
@@ -538,17 +542,43 @@ class TestMeaningLine(unittest.TestCase):
         with self._env(punches=[first], assignments={}, roster_active=False):
             self.assertIsNone(notify._receipt_for("E1", first)[1])
 
-    def test_the_opinion_window_brackets_the_day(self):
-        # ±ROSTER_OPINION_WINDOW_DAYS around the punch's own day -- wide
-        # enough to span a roster's cadence, narrow enough that a missed
-        # month of generation cannot pass as a month of days off.
+    def test_the_opinion_window_brackets_the_day_on_both_sides(self):
+        # Two probes, one per side, each a week deep. A single centred
+        # window was tried first and spoke at exactly the wrong moments:
+        # for a week past a lapsed block's end, and for the week before a
+        # new hire's roster begins.
         with patch.object(notify, "has_assignment_overlapping",
                           return_value=True) as overlap:
             self.assertTrue(notify._roster_opined_around("E1", "2026-08-17"))
-        kwargs = overlap.call_args.kwargs
-        self.assertEqual(kwargs["employee"], "E1")
-        self.assertEqual(kwargs["start"], "2026-08-10")
-        self.assertEqual(kwargs["end"], "2026-08-24")
+        windows = [
+            (call.kwargs["employee"], call.kwargs["start"], call.kwargs["end"])
+            for call in overlap.call_args_list
+        ]
+        self.assertEqual(
+            windows,
+            [
+                ("E1", "2026-08-10", "2026-08-17"),
+                ("E1", "2026-08-17", "2026-08-24"),
+            ],
+        )
+
+    def test_one_sided_roster_activity_stays_silent(self):
+        # The two regressions the centred window shipped, pinned shut. A
+        # block that lapsed keeps assignments BEHIND the day only; a roster
+        # that has not started yet has them AHEAD only. Both must answer
+        # "the roster has not opined", so the no-roster line stays unsent.
+        first = _punch("P0", "2026-08-17 07:58:00")
+
+        def only_behind(*, employee, start, end):
+            return str(end) == "2026-08-17"
+
+        def only_ahead(*, employee, start, end):
+            return str(start) == "2026-08-17"
+
+        for side in (only_behind, only_ahead):
+            with self._env(punches=[first], assignments={}), \
+                 patch.object(notify, "has_assignment_overlapping", side_effect=side):
+                self.assertIsNone(notify._receipt_for("E1", first)[1])
 
     def test_no_roster_line_stays_off_the_ineligible_even_when_the_roster_opined(self):
         # The one path that emits NO_ROSTER_LINES, exercised with the one
