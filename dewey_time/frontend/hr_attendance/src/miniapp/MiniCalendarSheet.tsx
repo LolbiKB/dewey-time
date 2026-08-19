@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
+import { useDismissibleLayer } from "@/miniapp/miniBackStack";
+import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import { dayFacts, totalWorkedMinutes } from "@/miniapp/miniDay";
 import { dayMark, MARK_LABEL, type DayMark } from "@/miniapp/miniDayMark";
 import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
@@ -86,6 +88,12 @@ function Mark(props: { mark: DayMark }) {
           // made. Filled reads as heavier than outlined at any size.
           incomplete: "border-amber-500",
           missing: "border-amber-500 bg-amber-500",
+          // GREY, NOT AMBER, and that is the whole point of the state. Amber
+          // says "there is something about your day to look at"; this day's
+          // gap is our device's, not theirs, and colouring it the same as a
+          // no-show is the accusation this mark exists to stop. Filled rather
+          // than hollow so it is not mistaken for `off` at arm's length.
+          uncertain: "border-muted-foreground/55 bg-muted-foreground/25",
           off: "border-muted-foreground/35",
         }[props.mark],
       )}
@@ -114,10 +122,20 @@ export function MiniCalendarSheet(props: {
   // tabs use — so a month already fetched costs nothing to revisit.
   const from = startOfMonth(month);
   const to = endOfMonth(month);
+  // `enabled`, not empty date strings. The sheet is MOUNTED whether or not it
+  // is open, and the empty range was still a live request — which the server
+  // resolves to today — so a closed sheet fired a calendar build on launch and
+  // again every sixty seconds, doubling every session's traffic for a surface
+  // nobody had tapped.
   const query = useMiniAppCalendar(
-    props.open ? format(from, "yyyy-MM-dd") : "",
-    props.open ? format(to, "yyyy-MM-dd") : "",
+    format(from, "yyyy-MM-dd"),
+    format(to, "yyyy-MM-dd"),
+    { enabled: props.open },
   );
+
+  // Telegram's back button closes this before it touches the day underneath.
+  useDismissibleLayer(props.open, () => props.onOpenChange(false));
+  const insets = useSafeAreaInsets();
 
   const byDate = useMemo(() => daysByDate(query.data), [query.data]);
   const marks = useMemo(() => {
@@ -129,16 +147,28 @@ export function MiniCalendarSheet(props: {
     return map;
   }, [byDate, today, now]);
 
-  const monthTotal = useMemo(() => {
-    const facts = [...byDate].map(([key, day]) =>
-      dayFacts(day, new Date(`${key}T00:00:00`), today),
-    );
-    return fmt.worked(totalWorkedMinutes(facts));
-  }, [byDate, today, fmt]);
+  // From the DAYS, not their facts: dayFacts reports null worked minutes on a
+  // leave or holiday day, so totalling its output dropped exactly the hours a
+  // worker came in for on a day they were paid a premium for.
+  const monthTotal = useMemo(
+    () => fmt.worked(totalWorkedMinutes([...byDate.values()])),
+    [byDate, fmt],
+  );
 
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-      <SheetContent side="bottom" className="gap-0 rounded-t-xl px-2 pb-6">
+      <SheetContent
+        side="bottom"
+        className="gap-0 rounded-t-xl px-2 pb-6"
+        // ADDED to the floor, never chosen between: the sheet renders through a
+        // portal outside the shell's padded container, so without this the
+        // month total sits in the home-indicator swipe zone.
+        style={{
+          paddingBottom: `calc(1.5rem + ${insets.bottom}px)`,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        }}
+      >
         <SheetHeader className="pb-0">
           <SheetTitle className="text-base">{t("chooseDate")}</SheetTitle>
         </SheetHeader>
@@ -218,12 +248,24 @@ export function MiniCalendarSheet(props: {
         {/* Net of lunch, and said so — the same wording the roster total uses,
             because "142h" against a rostered month invites exactly one
             question and the answer is the word "net". */}
-        <div className="flex items-baseline justify-between px-3 pt-2">
-          <span className="text-xs text-muted-foreground">{t("workedInMonth")}</span>
-          <span className="text-sm font-semibold tabular-nums text-foreground">
-            {monthTotal ?? "—"}
-          </span>
-        </div>
+        {/* AN UNANSWERED MONTH IS NOT A CLEAN ONE. While the fetch was pending
+            or failed, `byDate` was empty and this grid drew forty unmarked days
+            under a dash — indistinguishable from a month with a perfect record,
+            on the surface an employee opens to check exactly that. The grid
+            above still renders (its numbers are real dates), but the claim
+            underneath has to say which of the three it is. */}
+        {query.isPending || query.isError ? (
+          <div className="px-3 pt-2 text-xs text-muted-foreground" role="status">
+            {query.isError ? t("errorMonth") : t("loadingMonth")}
+          </div>
+        ) : (
+          <div className="flex items-baseline justify-between px-3 pt-2">
+            <span className="text-xs text-muted-foreground">{t("workedInMonth")}</span>
+            <span className="text-sm font-semibold tabular-nums text-foreground">
+              {monthTotal ?? "—"}
+            </span>
+          </div>
+        )}
       </SheetContent>
     </Sheet>
   );

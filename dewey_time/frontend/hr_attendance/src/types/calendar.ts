@@ -106,6 +106,15 @@ export type Day = {
    * without it. Absent reads as "no opinion", not as PRELAUNCH.
    */
   rollout_phase?: RolloutPhase;
+  /**
+   * The device feed never confirmed delivery for this day, so an empty record
+   * is OURS rather than the employee's. Derived server-side in
+   * telegram/miniapp_api.py from an unresolved Device Closeout Alert and
+   * reduced to a boolean — the alert itself carries a device serial and raw
+   * error text and never leaves the server. Absent on HR's own payload, which
+   * is shown the alerts directly.
+   */
+  feed_uncertain?: boolean;
 };
 
 export type CalendarPayload = {

@@ -111,7 +111,10 @@ export function MiniIdentity(props: MiniIdentityProps) {
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium leading-tight text-foreground">
+        {/* leading-normal: Khmer below-base marks clip at leading-tight, and
+            this is the employee's own name — the one value they would use to
+            catch a mis-binding. */}
+        <p className="truncate text-sm font-medium leading-normal text-foreground">
           {name}
           {/* The Khmer name inline, because for many of these employees it is
               the name they would actually recognise as their own — and an
@@ -121,7 +124,7 @@ export function MiniIdentity(props: MiniIdentityProps) {
             <span className="ml-1.5 font-normal text-muted-foreground">{props.khmerName}</span>
           ) : null}
         </p>
-        <p className={cn("truncate text-[11px] leading-tight text-muted-foreground")}>
+        <p className={cn("truncate text-[11px] leading-normal text-muted-foreground")}>
           {subtitle ? `${subtitle} · ${props.employee ?? ""}` : (props.employee ?? "")}
         </p>
       </div>

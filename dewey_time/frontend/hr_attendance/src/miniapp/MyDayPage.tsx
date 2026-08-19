@@ -32,11 +32,14 @@ import { HourGutter } from "@/ui/TimelineAxis";
 import { resolveWeekTimelineWindow } from "@/lib/weekTimelineWindow";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { isLive, miniStatus, statusKey, type MiniStatus } from "@/miniapp/miniStatus";
-import { MiniState } from "@/miniapp/MiniState";
+import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import { MiniDayNumbers } from "@/miniapp/MiniDayNumbers";
 import { MiniFlagsSheet } from "@/miniapp/MiniFlagsSheet";
 import { flagCount } from "@/miniapp/miniFlags";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
+import { useTimelineIntl } from "@/miniapp/miniTimelineIntl";
+import { useMinuteTick } from "@/miniapp/useMinuteTick";
+import { miniDayAccessibleName } from "@/miniapp/miniDayLabel";
 
 /**
  * Where you are in the day, opposite the date.
@@ -71,7 +74,13 @@ function StatusChip(props: { status: MiniStatus }) {
         // shrink-0 against a truncating heading: the date is the shorter of the
         // two and gives way first. max-w keeps a long branch name from taking
         // the row — measured in Khmer at 320px, where both fit.
-        "flex max-w-[58%] shrink-0 items-center gap-1.5 text-[11px] leading-tight",
+        //
+        // leading-normal, not leading-tight. Khmer stacks marks BELOW the
+        // baseline (្ក, ុ, ូ), and a line box tightened for Latin clips them —
+        // so "កំពុងធ្វើការ" lost the foot of its consonants. The row is a
+        // single line and already shrink-0, so the extra leading costs nothing
+        // horizontally.
+        "flex max-w-[58%] shrink-0 items-center gap-1.5 text-[11px] leading-normal",
         live ? "font-medium text-primary" : "text-muted-foreground",
       )}
     >
@@ -101,18 +110,25 @@ export function MyDayPage(props: {
   const fmt = useFormat();
   // Above the loading/error early returns, where every hook in this file has to
   // sit — React counts them per render and those returns come before `info`.
+  const timelineIntl = useTimelineIntl();
   const [flagsOpen, setFlagsOpen] = useState(false);
-  const today = props.today ?? new Date();
+  // A TICKING CLOCK, not the render's. "So far" is derived from `now`, and a
+  // poll that returns unchanged data does not re-render — so the live figure
+  // froze at whatever it was when the page first drew and stayed there for
+  // hours beside a pulsing dot claiming it was current. On a client too old for
+  // the resume event, the DATE never rolled past midnight either.
+  const tick = useMinuteTick();
+  const today = props.today ?? tick;
   // Separate from `today` because they answer different questions: `today` is
   // which date counts as the current one, `now` is the time of day the status
   // is read against. A test needs to pin the second without moving the first.
-  const now = props.now ?? today;
+  const now = props.now ?? tick;
   const date = props.date ?? today;
   const key = format(date, "yyyy-MM-dd");
   const query = useMiniAppCalendar(key, key);
 
   if (query.isLoading) return <MiniState>{t("loadingDay")}</MiniState>;
-  if (query.isError) return <MiniState>{t("errorDay")}</MiniState>;
+  if (query.isError) return <MiniErrorState error={query.error} fallback="errorDay" />;
 
   const byDate = daysByDate(query.data);
   const info = byDate.get(key);
@@ -176,7 +192,7 @@ export function MyDayPage(props: {
           flex share alone would squeeze the axis to a few unreadable hours,
           and the page scrolls rather than the timeline collapsing. */}
       <div className="grid min-h-[16rem] flex-1 grid-cols-[3.5rem_1fr] [&>button]:border-0">
-        <HourGutter window={timelineWindow} />
+        <HourGutter window={timelineWindow} formatHour={fmt.hour} />
         <DayCell
           date={date}
           outside={false}
@@ -184,9 +200,23 @@ export function MyDayPage(props: {
           info={info}
           timelineStartMin={timelineWindow.startMin}
           timelineEndMin={timelineWindow.endMin}
-          // No inspector in the Mini App: the day sheet is HR's review
-          // surface and carries flag evidence an employee must not see.
-          onInspectDay={() => {}}
+          intl={timelineIntl}
+          // Their own employment type. Without it a Contract or Casual worker's
+          // ordinary day drew in the dashed-salmon off-shift style with lunch in
+          // destructive red, every day, for doing exactly what their contract
+          // requires — while HR's screen showed the same day as solid work.
+          isClockDay={query.data?.is_clock_based === true && !info?.shift?.shift_assigned}
+          // The Mini App is not a verdict surface, and its payload carries no
+          // grace minutes — so a lateness figure here would be computed against
+          // the shift start with zero grace and stamp "+7m" on a morning the
+          // engine forgave.
+          showLateness={false}
+          // A tooltip is the one affordance a phone does not have.
+          labelBands
+          accessibleName={miniDayAccessibleName(info, date, today, { t, fmt }, flagCount(info))}
+          // No `onInspectDay`: the day sheet is HR's review surface and carries
+          // flag evidence an employee must not see, so there is nothing to open.
+          // Omitting it renders a section rather than a button that does nothing.
         />
       </div>
 
@@ -198,6 +228,15 @@ export function MyDayPage(props: {
         flagCount={flagCount(info)}
         onOpenFlags={() => setFlagsOpen(true)}
       />
+      {/* Whose gap it is. Without this a day our own device never delivered was
+          pixel-identical to a no-show: the same amber mark, the same "— / 8h",
+          on the phone of somebody who punched in and out perfectly well. */}
+      {info?.feed_uncertain ? (
+        <p role="status" className="shrink-0 px-1 text-xs leading-normal text-muted-foreground">
+          {t("feedUncertain")}
+        </p>
+      ) : null}
+
       <MiniFlagsSheet open={flagsOpen} onOpenChange={setFlagsOpen} day={info} />
     </div>
   );

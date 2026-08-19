@@ -24,16 +24,21 @@ const MINIAPP = "/index.miniapp.html";
  * finished day reads "Out during shift" before 5pm and "Checked out" after,
  * so asserting on it would pass in the morning and fail in the evening.
  */
-type Punches = "none" | "open" | "partial" | "full";
+type Punches = "none" | "open" | "partial" | "full" | "late";
 
 function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] = []) {
+  // EVERY OTHER VARIANT PUNCHES EARLY, at 07:58 against an 08:00 start, which
+  // is why nothing caught the phone stamping a lateness verdict: there was no
+  // fixture that could produce one. `late` arrives at 08:07 — inside a
+  // 15-minute grace window the engine forgives and the payload never mentions.
+  const firstIn = punches === "late" ? `${date} 08:07:00` : `${date} 07:58:00`;
   const all = [
-    { time: `${date} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    { time: firstIn, log_type: "IN", custom_device_branch: "DIS Iconic" },
     { time: `${date} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
     { time: `${date} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
     { time: `${date} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
   ];
-  const checkins = all.slice(0, { none: 0, open: 1, partial: 3, full: 4 }[punches]);
+  const checkins = all.slice(0, { none: 0, open: 1, partial: 3, full: 4, late: 4 }[punches]);
   const outs = checkins.filter((c) => c.log_type === "OUT");
   return {
     date,
@@ -526,8 +531,8 @@ test("a Khmer interface has no Latin digits left anywhere in it", async ({ page 
   // on the ABSENCE of [0-9] catches any surface someone adds later without a
   // formatter, which naming individual strings would not.
   //
-  // Scoped to the app's own regions. The hour gutter down the timeline is the
-  // shared HR `DayCell` axis and is still Latin — see the note in MyDayPage.
+  // Scoped to the app's own regions. The timeline itself is swept by its own
+  // test below, now that it is no longer English under a Khmer heading.
   await openMiniApp(page, { languageCode: "km", punched: "full" });
 
   const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
@@ -750,4 +755,95 @@ test("the flags pill never overlaps the tab bar on a notched phone", async ({ pa
   if (!pillBox || !navBox) throw new Error("pill or tab bar has no box");
 
   expect(pillBox.y + pillBox.height).toBeLessThanOrEqual(navBox.y);
+});
+
+
+test("the timeline itself speaks Khmer, digits and all", async ({ page }) => {
+  // THE DEFECT THIS PINS: the Day tab's canvas is HR's shared `DayCell`, and it
+  // printed "7:58AM", "4h 3m" and "Day off" in Latin digits under a fully
+  // translated heading — the only numbers on the screen that say when this
+  // person arrived and left. A Khmer reader opened the app every morning to a
+  // picture in a script they may not read.
+  await openMiniApp(page, { languageCode: "km", punched: "full" });
+
+  // The canvas is a <section> now rather than a button — it has no inspector to
+  // open — so it announces as a region carrying the day's accessible name.
+  const canvas = page.getByRole("region").first();
+  await expect(canvas).toBeVisible();
+
+  const text = await canvas.innerText();
+  expect(text, "the timeline kept Latin numerals").not.toMatch(/[0-9]/);
+  // And positively: a Khmer day period, which is the token date-fns gets wrong
+  // and miniIntl replaces.
+  expect(text).toMatch(/ព្រឹក|រសៀល|ល្ងាច/);
+});
+
+test("the timeline draws no lateness verdict on the employee's own punch", async ({ page }) => {
+  // The Mini App's payload carries no grace minutes, so any figure here is
+  // computed against a threshold the engine never used. HR owns verdicts; a
+  // real LATE_START still reaches the employee through the flags sheet.
+  await openMiniApp(page, { languageCode: "en", punched: "late" });
+
+  const canvas = page.getByRole("region").first();
+  await expect(canvas).toBeVisible();
+  const text = await canvas.innerText();
+  expect(text, "no lateness verdict on the phone").not.toMatch(/Late|\+\d+m/);
+});
+
+
+test("a revoked link is asked once, and says who can fix it", async ({ page }) => {
+  // THE DEFECT: the Mini App's fetchers threw a plain Error, so the shared
+  // query client's "never retry 4xx" rule — which discriminates on
+  // `FrappeCallError` — silently did not apply here. A revoked link, an account
+  // that was never linked and a launch older than the 24-hour window were each
+  // requested three times and then re-polled every sixty seconds for as long as
+  // the app stayed open, on the employee's own mobile data, behind a message
+  // promising it would work in a moment.
+  //
+  // The COUNT is the assertion. A retry that has been switched off looks
+  // identical on screen to one that never fired.
+  let calendarRequests = 0;
+  await page.route("https://telegram.org/**", (route) => route.abort());
+  await page.route(
+    "**/api/method/dewey_time.telegram.miniapp_api.get_my_calendar",
+    async (route) => {
+      calendarRequests += 1;
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({ exc_type: "PermissionError" }),
+      });
+    },
+  );
+  await page.addInitScript(() => {
+    (window as unknown as { Telegram: unknown }).Telegram = {
+      WebApp: {
+        initData: "user=%7B%22id%22%3A55501%7D&auth_date=1&hash=deadbeef",
+        initDataUnsafe: { user: { id: 55501 } },
+        colorScheme: "light",
+        themeParams: {},
+        safeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        contentSafeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        BackButton: { isVisible: false, show() {}, hide() {}, onClick() {}, offClick() {} },
+        HapticFeedback: { selectionChanged() {}, impactOccurred() {}, notificationOccurred() {} },
+        CloudStorage: { getItem(_k: string, cb: (e: unknown, v: unknown) => void) { cb(null, null); } },
+        onEvent() {},
+        offEvent() {},
+        ready() {},
+        expand() {},
+        isVersionAtLeast: () => true,
+      },
+    };
+  });
+
+  await page.goto(MINIAPP);
+
+  // Names the action, and names who can take it — the app cannot.
+  await expect(page.getByText("This link is no longer active")).toBeVisible();
+  await expect(page.getByText(/Dewey Time chat/)).toBeVisible();
+
+  // >1 means the 4xx rule stopped applying again. Sampled after the poll
+  // interval would have fired at least once had it not been stopped.
+  await page.waitForTimeout(1500);
+  expect(calendarRequests).toBe(1);
 });

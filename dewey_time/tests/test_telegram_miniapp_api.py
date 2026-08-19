@@ -1,4 +1,5 @@
 import inspect
+import json
 import pathlib
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,10 @@ HR_PAYLOAD = {
     "employee": "HR-EMP-00001",
     "employee_branch": "DIS Iconic",
     "is_clock_based": False,
+    # How far the roster has actually been published. Without it on the phone,
+    # paging forward said "No shifts are assigned to you this week" for weeks
+    # the wizard had simply not run for yet.
+    "schedule_max_date": "2026-08-31",
     "device_sync": [
         {"device_sn": "CK92218010001", "last_error": "timeout", "pending_count": 3}
     ],
@@ -142,7 +147,12 @@ class TestProjection(unittest.TestCase):
         self.assertEqual(
             set(day),
             {"date", "shift", "checkins", "holiday", "leave", "observed_lunch",
-             "first_in", "last_out", "flags"},
+             "first_in", "last_out", "flags",
+             # DERIVED, not copied: a boolean standing in for an unresolved
+             # Device Closeout Alert, so a day the feed never delivered stops
+             # being pixel-identical to a no-show. The alerts themselves carry
+             # serials and error text and still never leave the server.
+             "feed_uncertain"},
         )
 
     def test_the_top_level_key_set_is_exactly_the_allowlist(self):
@@ -158,7 +168,11 @@ class TestProjection(unittest.TestCase):
         self.assertEqual(
             set(self._narrowed()),
             {"employee", "employee_name", "khmer_name", "designation",
-             "image", "employee_branch", "days"},
+             "image", "employee_branch", "days",
+             # Facts about the reader's own employment, not HR internals:
+             # `is_clock_based` is already on their Profile tab, and
+             # `schedule_max_date` is how far the roster has been published.
+             "is_clock_based", "schedule_max_date"},
         )
 
     def test_the_projection_itself_exposes_no_identity(self):
@@ -166,7 +180,10 @@ class TestProjection(unittest.TestCase):
         # is a separate lookup merged after it. Pinned because a future edit
         # that moved the lookup inside narrow() would make every allowlist test
         # in this class depend on a database call.
-        self.assertEqual(set(miniapp_api.narrow(HR_PAYLOAD)), {"employee", "employee_branch", "days"})
+        self.assertEqual(
+            set(miniapp_api.narrow(HR_PAYLOAD)),
+            {"employee", "employee_branch", "is_clock_based", "schedule_max_date", "days"},
+        )
 
     def test_the_shift_block_drops_grace_minutes(self):
         # grace_minutes tells an employee exactly how late they can be before
@@ -732,3 +749,123 @@ class TestProfileAuth(unittest.TestCase):
             with self.assertRaises(Exception):
                 miniapp_api.get_my_profile("forged")
         get_value.assert_not_called()
+
+
+class TestInfrastructureFailuresDoNotReachTheEmployee(unittest.TestCase):
+    """The allowlist's comment claimed these were excluded. They were not.
+
+    The engine never emits UNKNOWN_DEVICE_BRANCH or DELIVERY_FAILED as codes --
+    it folds both into ATTENDANCE_ISSUE and records which in `evidence.reason`.
+    ATTENDANCE_ISSUE is on the allowlist, so an unmapped device and a failed
+    delivery both arrived on the phone worded as a fault in the employee's own
+    punches, and counted toward the amber "to check" number.
+    """
+
+    def _day(self, reason, code="ATTENDANCE_ISSUE"):
+        flag = {"flag_code": code, "is_provisional": 0, "decision": None,
+                "decision_state": None}
+        if reason is not None:
+            flag["evidence"] = {"reason": reason}
+        return {"date": "2026-08-14", "checkins": [], "flags": [flag]}
+
+    def _codes(self, day):
+        return [f["flag_code"] for f in miniapp_api._pick_flags(day)]
+
+    def test_an_unmapped_device_is_not_the_employees_problem(self):
+        self.assertEqual(self._codes(self._day("unknown_device_branch")), [])
+
+    def test_a_failed_delivery_is_not_the_employees_problem(self):
+        self.assertEqual(self._codes(self._day("delivery_failed")), [])
+
+    def test_a_reason_the_employee_can_act_on_still_reaches_them(self):
+        # The filter must not swallow the whole code: a single checkin is a
+        # genuine gap in their own record and they can tell HR about it.
+        self.assertEqual(self._codes(self._day("single_checkin")), ["ATTENDANCE_ISSUE"])
+        self.assertEqual(self._codes(self._day("unpaired_punch")), ["ATTENDANCE_ISSUE"])
+
+    def test_a_flag_with_no_evidence_at_all_still_reaches_them(self):
+        self.assertEqual(self._codes(self._day(None)), ["ATTENDANCE_ISSUE"])
+
+    def test_unparsed_evidence_is_parsed_rather_than_waved_through(self):
+        # The failure mode is silent -- the flag simply arrives -- so this must
+        # not depend on hr_calendar having done the json.loads upstream.
+        day = self._day(None)
+        day["flags"][0]["evidence"] = '{"reason": "unknown_device_branch"}'
+        self.assertEqual(self._codes(day), [])
+
+    def test_evidence_itself_never_reaches_the_payload(self):
+        # The reason is read server-side precisely because evidence must not be
+        # sent; this pins that reading it did not start shipping it.
+        picked = miniapp_api._pick_flags(self._day("single_checkin"))
+        self.assertNotIn("evidence", picked[0])
+
+
+class TestTheThreeFactsTheDayWasMissing(unittest.TestCase):
+    """Three states the phone had no way to tell apart from something worse."""
+
+    def _payload(self, *, alerts=None, days=None):
+        return {
+            "employee": "HR-EMP-00001",
+            "employee_branch": "DIS Iconic",
+            "is_clock_based": True,
+            "schedule_max_date": "2026-08-31",
+            "device_alerts": alerts if alerts is not None else [],
+            "device_sync": [{"device_sn": "CK9", "last_error": "timeout"}],
+            "days": days
+            or [
+                {"date": "2026-08-19", "checkins": [], "flags": []},
+                {"date": "2026-08-20", "checkins": [], "flags": []},
+            ],
+        }
+
+    def test_a_day_the_feed_never_delivered_is_marked_uncertain(self):
+        narrowed = miniapp_api.narrow(
+            self._payload(
+                alerts=[
+                    {
+                        "device_sn": "CK92218010001",
+                        "branch": "DIS Iconic",
+                        "local_date": "2026-08-19",
+                        "status": "missing",
+                        "last_error": "no closeout received",
+                    }
+                ]
+            )
+        )
+        days = {d["date"]: d for d in narrowed["days"]}
+        self.assertTrue(days["2026-08-19"]["feed_uncertain"])
+        # And only that day: a blanket flag would excuse every real no-show.
+        self.assertFalse(days["2026-08-20"]["feed_uncertain"])
+
+    def test_the_alert_itself_never_leaves_the_server(self):
+        # The whole reason this is derived rather than forwarded: the alert
+        # carries a device serial and raw error text.
+        narrowed = miniapp_api.narrow(
+            self._payload(
+                alerts=[{"device_sn": "CK92218010001", "local_date": "2026-08-19",
+                         "last_error": "no closeout received"}]
+            )
+        )
+        blob = json.dumps(narrowed)
+        self.assertNotIn("CK92218010001", blob)
+        self.assertNotIn("no closeout received", blob)
+        self.assertNotIn("device_alerts", narrowed)
+        self.assertNotIn("device_sync", narrowed)
+
+    def test_a_clean_feed_marks_every_day_certain(self):
+        narrowed = miniapp_api.narrow(self._payload())
+        self.assertTrue(all(d["feed_uncertain"] is False for d in narrowed["days"]))
+
+    def test_feed_uncertain_is_always_present_never_missing(self):
+        # The client branches on it; an absent key and a False one must not be
+        # the same question asked twice.
+        for day in miniapp_api.narrow(self._payload())["days"]:
+            self.assertIn("feed_uncertain", day)
+
+    def test_the_employees_own_employment_type_reaches_them(self):
+        # Their ordinary working day was drawn in the off-shift exception style
+        # every day without this.
+        self.assertTrue(miniapp_api.narrow(self._payload())["is_clock_based"])
+
+    def test_the_roster_horizon_reaches_them(self):
+        self.assertEqual(miniapp_api.narrow(self._payload())["schedule_max_date"], "2026-08-31")

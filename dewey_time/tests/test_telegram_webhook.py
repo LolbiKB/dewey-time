@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -185,3 +186,62 @@ class TestLinkConfirmation(unittest.TestCase):
              patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
         self.assertNotIn("linked", send.call_args[0][1].lower())
+
+
+class TestThePublicEntrypointRefusesBeforeItActs(unittest.TestCase):
+    """`telegram_webhook` itself, not `_secret_ok`.
+
+    Every existing test exercised the helper or `_handle`. Nothing called the
+    allow_guest endpoint that Telegram -- and anyone else who knows the URL --
+    actually reaches, so deleting the secret check from it left the whole suite
+    green.
+    """
+
+    def test_a_wrong_secret_raises_and_the_update_is_never_handled(self):
+        with patch.object(webhook.frappe, "get_request_header", return_value="wrong"), \
+             patch.object(webhook.transport, "webhook_secret", return_value="right"), \
+             patch.object(webhook, "_handle") as handle:
+            with self.assertRaises(webhook.frappe.PermissionError):
+                webhook.telegram_webhook()
+        # The refusal must come BEFORE any work: a 403 that still processed the
+        # update would be no protection at all.
+        handle.assert_not_called()
+
+    def test_a_missing_header_raises_rather_than_skipping_the_check(self):
+        # The bypass shape: absent must reject, not wave through.
+        with patch.object(webhook.frappe, "get_request_header", return_value=None), \
+             patch.object(webhook.transport, "webhook_secret", return_value="right"), \
+             patch.object(webhook, "_handle") as handle:
+            with self.assertRaises(webhook.frappe.PermissionError):
+                webhook.telegram_webhook()
+        handle.assert_not_called()
+
+    def test_the_right_secret_lets_the_update_through(self):
+        # Without this the two tests above would also pass on an endpoint that
+        # rejected everything.
+        update = {"message": {"chat": {"id": 55501, "type": "private"}, "text": "/start"}}
+
+        class _Req:
+            @staticmethod
+            def get_data(as_text=False):
+                return json.dumps(update)
+
+        with patch.object(webhook.frappe, "get_request_header", return_value="right"), \
+             patch.object(webhook.transport, "webhook_secret", return_value="right"), \
+             patch.object(webhook.frappe, "request", _Req), \
+             patch.object(webhook, "_handle") as handle:
+            self.assertEqual(webhook.telegram_webhook(), {})
+        handle.assert_called_once_with(update)
+
+    def test_a_handler_failure_is_swallowed_so_telegram_does_not_retry(self):
+        class _Req:
+            @staticmethod
+            def get_data(as_text=False):
+                return "{}"
+
+        with patch.object(webhook.frappe, "get_request_header", return_value="right"), \
+             patch.object(webhook.transport, "webhook_secret", return_value="right"), \
+             patch.object(webhook.frappe, "request", _Req), \
+             patch.object(webhook.frappe, "log_error"), \
+             patch.object(webhook, "_handle", side_effect=RuntimeError("boom")):
+            self.assertEqual(webhook.telegram_webhook(), {})

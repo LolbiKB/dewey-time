@@ -14,10 +14,12 @@ const WORKED_SEGMENT =
   'class="absolute inset-x-2 rounded-sm bg-primary shadow-sm ring-1 ring-foreground/10"';
 const OFF_SHIFT_SEGMENT =
   'class="absolute inset-x-2 rounded-sm border border-dashed border-brand-accent/50 bg-brand-accent/25 shadow-sm ring-1 ring-brand-accent/20"';
+// The gap bands gained a flex box so they can carry their own label: their
+// meaning used to live only in a hover tooltip, which a phone cannot open.
 const NEUTRAL_GAP =
-  'class="absolute inset-x-2 rounded-sm border border-muted-foreground/40 bg-muted/40"';
+  'class="absolute inset-x-2 flex items-center justify-center overflow-hidden rounded-sm border border-muted-foreground/40 bg-muted/40"';
 const EXCEPTION_GAP =
-  'class="absolute inset-x-2 rounded-sm border border-destructive/40 bg-destructive/15"';
+  'class="absolute inset-x-2 flex items-center justify-center overflow-hidden rounded-sm border border-destructive/40 bg-destructive/15"';
 const MISSING_EXPECTED_BAND =
   'class="absolute inset-x-2 rounded-sm border border-dashed border-destructive/75 bg-destructive/5"';
 const OPEN_SESSION_TICK =

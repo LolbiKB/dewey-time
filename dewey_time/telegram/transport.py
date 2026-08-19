@@ -45,6 +45,31 @@ def bot_token() -> str:
     return token
 
 
+#: The bot token sits in the PATH of every Bot API URL, and `requests` reports
+#: the URL it failed against inside the exception it raises. So an unreachable
+#: api.telegram.org turns the token into an ordinary-looking error string --
+#: and that string then travels to the two places chosen for wide readability:
+#: the `diagnostics()` response body, which any HR user can read, and the Error
+#: Log, which persists into every backup. A DNS blip is enough; no attacker is
+#: required, and the outage is precisely when someone runs diagnostics.
+#:
+#: Matches the token's own shape (`<digits>:<base64url>`) inside a /bot path,
+#: which is the only form it takes on the wire.
+_TOKEN_IN_URL = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
+
+
+def scrub_token(text: object) -> str:
+    """Any string leaving this module, with the bot token removed.
+
+    Applied at the EXIT -- every `return` and every `log_error` -- rather than
+    at the point each message is built, so a future error path cannot forget
+    it. The scrub is deliberately narrow: it removes the credential and leaves
+    the rest of the message intact, because an error with the cause stripped
+    out is the reason nobody would notice this was here.
+    """
+    return _TOKEN_IN_URL.sub("/bot<redacted>", str(text))
+
+
 #: Telegram's own constraint on secret_token: 1-256 chars of A-Z, a-z, 0-9,
 #: underscore and hyphen. Anything else makes setWebhook fail with "secret
 #: token contains unallowed characters" -- notably a trailing newline picked
@@ -91,7 +116,9 @@ def send_message(chat_id: str, text: str) -> str:
             timeout=TIMEOUT_SECONDS,
         )
     except Exception:
-        frappe.log_error(title="Telegram send failed", message=frappe.get_traceback())
+        frappe.log_error(
+            title="Telegram send failed", message=scrub_token(frappe.get_traceback())
+        )
         return FAILED
 
     if response.status_code == 403:
@@ -99,7 +126,7 @@ def send_message(chat_id: str, text: str) -> str:
     if response.status_code != 200:
         frappe.log_error(
             title="Telegram send rejected",
-            message=f"status={response.status_code} body={response.text[:500]}",
+            message=scrub_token(f"status={response.status_code} body={response.text[:500]}"),
         )
         return FAILED
     return SENT
@@ -166,13 +193,15 @@ def set_default_menu_button(url: str) -> str:
             timeout=TIMEOUT_SECONDS,
         )
     except Exception:
-        frappe.log_error(title="Telegram menu button failed", message=frappe.get_traceback())
+        frappe.log_error(
+            title="Telegram menu button failed", message=scrub_token(frappe.get_traceback())
+        )
         return FAILED
 
     if response.status_code != 200:
         frappe.log_error(
             title="Telegram menu button rejected",
-            message=f"status={response.status_code} body={response.text[:500]}",
+            message=scrub_token(f"status={response.status_code} body={response.text[:500]}"),
         )
         return FAILED
     return SENT
@@ -228,13 +257,15 @@ def set_webhook(url: str, secret: str) -> str:
             timeout=TIMEOUT_SECONDS,
         )
     except Exception:
-        frappe.log_error(title="Telegram setWebhook failed", message=frappe.get_traceback())
+        frappe.log_error(
+            title="Telegram setWebhook failed", message=scrub_token(frappe.get_traceback())
+        )
         return FAILED
 
     if response.status_code != 200:
         frappe.log_error(
             title="Telegram setWebhook rejected",
-            message=f"status={response.status_code} body={response.text[:500]}",
+            message=scrub_token(f"status={response.status_code} body={response.text[:500]}"),
         )
         return FAILED
     return SENT
@@ -270,11 +301,14 @@ def _get(method: str) -> dict:
     try:
         response = requests.get(f"{API_BASE}/bot{bot_token()}/{method}", timeout=TIMEOUT_SECONDS)
     except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": scrub_token(f"{type(exc).__name__}: {exc}")}
     try:
         return response.json()
     except ValueError:
-        return {"ok": False, "error": f"status={response.status_code} body={response.text[:200]}"}
+        return {
+            "ok": False,
+            "error": scrub_token(f"status={response.status_code} body={response.text[:200]}"),
+        }
 
 
 @frappe.whitelist()
@@ -324,14 +358,14 @@ def diagnostics(employee: str | None = None) -> dict:
         report["miniapp_url"] = miniapp_url()
     except Exception as exc:
         report["miniapp_url"] = None
-        report["miniapp_url_error"] = str(exc)
+        report["miniapp_url_error"] = scrub_token(exc)
 
     # Why no check-in notification, which is a different question from why no
     # button and has its own four silent gates. See notify.delivery_gates.
     try:
         report["notifications"] = notify.delivery_gates(employee)
     except Exception as exc:
-        report["notifications"] = {"error": str(exc)}
+        report["notifications"] = {"error": scrub_token(exc)}
 
     if not report["bot_token_set"]:
         # Everything below needs the token. Saying so beats three identical

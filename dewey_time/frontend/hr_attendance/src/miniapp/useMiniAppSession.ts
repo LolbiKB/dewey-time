@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { FrappeCallError } from "@/lib/frappe";
 import type { Day } from "@/types/calendar";
 import type { Biometric } from "@/miniapp/miniProfile";
 import { isAppActive, onActiveChange } from "@/miniapp/telegramChrome";
@@ -23,8 +24,27 @@ export type MiniCalendar = {
    *  can load. Never the Telegram avatar. */
   image?: string | null;
   employee_branch?: string | null;
+  /** Their own employment type, so a clock-based day stops rendering as an
+   *  exception. See PAYLOAD_KEYS in telegram/miniapp_api.py. */
+  is_clock_based?: boolean;
+  /** How far the roster has actually been published — the bound on forward
+   *  paging, and the difference between "no shifts" and "not built yet". */
+  schedule_max_date?: string | null;
   days: Day[];
 };
+
+const CALENDAR_METHOD = "dewey_time.telegram.miniapp_api.get_my_calendar";
+const PROFILE_METHOD = "dewey_time.telegram.miniapp_api.get_my_profile";
+
+/**
+ * A verdict the server will simply repeat.
+ *
+ * A revoked link, an account that was never linked, and a launch older than the
+ * 24-hour window all arrive as 403. None of them can improve by asking again.
+ */
+export function isPermanentRejection(error: unknown): boolean {
+  return error instanceof FrappeCallError && error.status >= 400 && error.status < 500;
+}
 
 /**
  * The viewer's Telegram avatar, if the client offered one.
@@ -86,7 +106,18 @@ async function fetchCalendar(
     },
   );
   if (!response.ok) {
-    throw new Error(`calendar request failed: ${response.status}`);
+    // FrappeCallError, NOT a plain Error, and that is the whole fix. The shared
+    // query client already refuses to retry 4xx (lib/queryClient.ts) — but it
+    // discriminates on `err instanceof FrappeCallError`, so throwing a plain
+    // Error meant the rule silently did not apply to this app at all. A revoked
+    // link, a never-linked account and an expired launch were each requested
+    // three times and then re-polled every 60 seconds forever, on the
+    // employee's own mobile data, behind a message promising it would work in
+    // a moment.
+    throw new FrappeCallError(`calendar request failed: ${response.status}`, {
+      status: response.status,
+      method: CALENDAR_METHOD,
+    });
   }
   return (await response.json()).message as MiniCalendar;
 }
@@ -97,7 +128,7 @@ export function useMiniAppCalendar(
   /** `poll: false` for a caller that makes no claim about the present. Not part
    *  of the query key — the cache stays shared with every other caller of the
    *  same range, and only this observer's interval changes. */
-  opts?: { poll?: boolean },
+  opts?: { poll?: boolean; enabled?: boolean },
 ) {
   const initData = initDataFromTelegram(window);
   const active = useIsAppActive();
@@ -105,7 +136,12 @@ export function useMiniAppCalendar(
     queryKey: ["mini-calendar", startDate, endDate],
     // Outside Telegram there is nothing to authenticate with, so the request
     // is never fired -- the shell shows an explanation instead of a 403.
-    enabled: initData !== MISSING_INIT_DATA,
+    //
+    // `enabled` also lets a caller that is MOUNTED BUT CLOSED opt out: the
+    // calendar sheet lives in the shell whether or not it is open, and without
+    // this it fired a full month build on launch and every 60 seconds after,
+    // for a sheet nobody had tapped.
+    enabled: initData !== MISSING_INIT_DATA && (opts?.enabled ?? true),
     queryFn: () => fetchCalendar(initData, startDate, endDate),
     // WHILE ON SCREEN ONLY. Refetching on resume covers a minimised app coming
     // back, and misses the case this exists for: the app open on screen while
@@ -128,7 +164,14 @@ export function useMiniAppCalendar(
     // on an employee's mobile data, to keep a count of days worked that changes
     // twice a day. Resuming the app already invalidates this key, which is the
     // moment the figure can actually be stale.
-    refetchInterval: active && (opts?.poll ?? true) ? 60_000 : false,
+    //
+    // And never against a verdict. A 403 re-polled every minute is the shape
+    // this app shipped: the message said "try again in a moment", and it did,
+    // for as long as the app was open.
+    refetchInterval: (query) =>
+      active && (opts?.poll ?? true) && !isPermanentRejection(query.state.error)
+        ? 60_000
+        : false,
   });
 }
 
@@ -181,7 +224,10 @@ async function fetchProfile(initData: string): Promise<MiniProfile> {
     },
   );
   if (!response.ok) {
-    throw new Error(`profile request failed: ${response.status}`);
+    throw new FrappeCallError(`profile request failed: ${response.status}`, {
+      status: response.status,
+      method: PROFILE_METHOD,
+    });
   }
   return (await response.json()).message as MiniProfile;
 }

@@ -28,6 +28,7 @@ employee's to see.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import frappe
@@ -98,6 +99,24 @@ EMPLOYEE_FLAG_CODES = frozenset({
     "MISSING_LUNCH",
     "ATTENDANCE_ISSUE",
 })
+
+#: Reasons an ATTENDANCE_ISSUE is OUR infrastructure failing, not the
+#: employee's day.
+#:
+#: The allowlist above says UNKNOWN_DEVICE_BRANCH and DELIVERY_FAILED are
+#: excluded, and that exclusion never happened: the engine does not emit either
+#: as a flag CODE. It folds both into ATTENDANCE_ISSUE and records which one in
+#: `evidence.reason` (record_issue_flags.py:58 and :77). ATTENDANCE_ISSUE is on
+#: the allowlist, so an unmapped device serial and a punch the Bridge failed to
+#: deliver both reached the phone -- worded, like every other ATTENDANCE_ISSUE,
+#: as a fault in the employee's own punches: "Your check-ins for this day
+#: couldn't be paired into complete sessions." It also counted toward the amber
+#: "to check" number, asking them to answer for a machine they do not own.
+#:
+#: The reason has to be read HERE, on the server: `evidence` is deliberately
+#: absent from FLAG_KEYS because it carries grace minutes and rule internals,
+#: so the client has nothing to filter on.
+INFRASTRUCTURE_FLAG_REASONS = frozenset({"unknown_device_branch", "delivery_failed"})
 
 #: `evidence` is NOT here, and that is the load-bearing omission -- it carries
 #: grace minutes, thresholds and rule internals. `severity` is not here either:
@@ -217,11 +236,32 @@ def _certain(flag: dict, checkins: list[dict]) -> bool:
     return True
 
 
+def _is_infrastructure_failure(flag: dict) -> bool:
+    """Is this flag about our equipment rather than the employee's day?
+
+    Defensive about the shape: `hr_calendar` parses `evidence` from JSON into a
+    dict before this runs, but a filter whose failure mode is SILENT -- the flag
+    simply reaches the phone -- must not depend on that having happened
+    upstream. An unparsed string is parsed here rather than skipped.
+    """
+    evidence = flag.get("evidence")
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(evidence, dict):
+        return False
+    return evidence.get("reason") in INFRASTRUCTURE_FLAG_REASONS
+
+
 def _pick_flags(day: dict) -> list[dict]:
     checkins = day.get("checkins") or []
     picked = []
     for flag in day.get("flags") or []:
         if flag.get("flag_code") not in EMPLOYEE_FLAG_CODES:
+            continue
+        if _is_infrastructure_failure(flag):
             continue
         if not _certain(flag, checkins):
             continue
@@ -240,18 +280,56 @@ def _pick_flags(day: dict) -> list[dict]:
 #: Top-level keys an employee may see about themselves.
 #:
 #: `employee_branch` is their own primary site -- the same fact the check-in
-#: notification already states ("Checked in 07:58 · DIS Iconic"). Everything
-#: else the payload carries at this level stays out: `device_alerts` and
-#: `device_sync` are infrastructure health, and `_employee_nav_meta` is the
-#: SPA's picker plumbing.
-PAYLOAD_KEYS = ("employee", "employee_branch")
+#: notification already states ("Checked in 07:58 · DIS Iconic").
+#:
+#: `is_clock_based` is a fact about the reader's OWN employment type, already
+#: shown to them on the Profile tab. Without it the Mini App drew a clock-based
+#: employee's ordinary working day in the dashed-salmon "off-shift" exception
+#: style and their lunch hour in destructive red -- every day, for doing exactly
+#: what their contract requires. HR's screen shows the same day as solid work.
+#:
+#: `schedule_max_date` is the roster's own horizon, not an HR internal: it is
+#: how far the schedule has been published. Without it the roster paged forward
+#: forever and told people "No shifts are assigned to you this week" for weeks
+#: nobody had built yet -- a statement about the roster that reads as a
+#: statement about them, and workers plan around not working.
+#:
+#: Everything else at this level stays out: `device_alerts` and `device_sync`
+#: are infrastructure health carrying device serials and error text, and
+#: `_employee_nav_meta` is the SPA's picker plumbing.
+PAYLOAD_KEYS = ("employee", "employee_branch", "is_clock_based", "schedule_max_date")
+
+
+def _uncertain_dates(payload: dict) -> set:
+    """Dates whose device feed we cannot vouch for.
+
+    An unresolved `Device Closeout Alert` at this employee's branch means the
+    device never confirmed it had delivered that day. Without this, such a day
+    was PIXEL-IDENTICAL to a no-show on the employee's phone: an amber "no
+    record" mark, "— / 8h", and a screen-reader line reading "Rostered 8h,
+    nothing worked yet" -- for somebody who punched in and out normally while
+    the Bridge was down. HR sees a device alert; the worker saw an accusation.
+
+    Derived here and reduced to a per-day BOOLEAN. The alerts themselves stay
+    out of the payload -- they carry device serials and raw error text, which
+    are infrastructure, not the employee's attendance.
+    """
+    return {
+        str(alert.get("local_date"))
+        for alert in (payload.get("device_alerts") or [])
+        if alert.get("local_date")
+    }
 
 
 def narrow(payload: dict) -> dict:
     """Project the HR calendar payload down to what an employee may see."""
+    uncertain = _uncertain_dates(payload)
     days = []
     for day in payload.get("days") or []:
         narrowed = _pick(day, DAY_KEYS)
+        # Not in DAY_KEYS: it is derived here rather than copied, because the
+        # source it comes from must not travel.
+        narrowed["feed_uncertain"] = str(day.get("date")) in uncertain
         # Only if the source had one. Fabricating an empty shift would make an
         # off day render as a scheduled one.
         if "shift" in narrowed:

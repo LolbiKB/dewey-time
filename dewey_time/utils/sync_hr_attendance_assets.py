@@ -150,6 +150,11 @@ def force_sync_app_branding_assets():
         )
         return
 
+    if _dest_is_the_source(src_dir, dest_dir):
+        # The destination resolves back to the source; removing it would delete
+        # the bundle. Already live — nothing to publish.
+        return
+
     if os.path.lexists(dest_dir):
         _remove_dest(dest_dir)
 
@@ -174,6 +179,11 @@ def force_sync_hr_attendance_assets():
         )
         return
 
+    if _dest_is_the_source(src_dir, dest_dir):
+        # The destination resolves back to the source; removing it would delete
+        # the bundle. Already live — nothing to publish.
+        return
+
     if os.path.lexists(dest_dir):
         _remove_dest(dest_dir)
 
@@ -187,6 +197,21 @@ def force_sync_hr_attendance_assets():
     )
 
     sync_app_branding_assets()
+
+
+def _dest_is_the_source(src_dir: str, dest_dir: str) -> bool:
+    """True when "publishing" here would delete the thing being published.
+
+    On a bench, `sites/assets/<app>` is itself a symlink into the app's own
+    `public/`, so `sites/assets/<app>/<bundle>` is not a symlink — it is an
+    ordinary directory resolving straight back to `src_dir`. `_remove_dest`
+    checks the LEAF for a symlink, sees a plain directory, and `shutil.rmtree`
+    then deletes the source. See docs/HR_ATTENDANCE_DEPLOY.md.
+    """
+    try:
+        return os.path.realpath(src_dir) == os.path.realpath(dest_dir)
+    except OSError:
+        return False
 
 
 def sync_hr_attendance_assets():

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from dewey_time.tests.test_closeout import _install_frappe_mock
@@ -157,8 +158,38 @@ class TestResolverFailsClosed(unittest.TestCase):
         self.assertEqual(gv.call_args[0][1]["enabled"], 1)
 
     def test_resolver_returns_the_employee_id_not_a_boolean(self):
-        with patch.object(binding.frappe.db, "get_value", return_value="HR-EMP-00001"):
+        # Two reads now: the link, then the employee's status.
+        with patch.object(binding.frappe.db, "get_value",
+                          side_effect=["HR-EMP-00001", "Active"]):
             self.assertEqual(binding.employee_for_telegram_user("55501"), "HR-EMP-00001")
+
+    def test_a_leaver_is_refused_even_though_the_link_is_still_enabled(self):
+        # Offboarding sets Employee.status and never touches the link row, so
+        # without this the credential outlives employment -- and the register
+        # that owns Unlink lists only Active employees, so HR cannot even see
+        # the person to revoke them.
+        with patch.object(binding.frappe.db, "get_value",
+                          side_effect=["HR-EMP-00001", "Left"]):
+            with self.assertRaises(Exception):
+                binding.employee_for_telegram_user("55501")
+
+    def test_the_status_is_read_for_the_employee_the_link_named(self):
+        with patch.object(binding.frappe.db, "get_value",
+                          side_effect=["HR-EMP-00042", "Active"]) as gv:
+            binding.employee_for_telegram_user("55501")
+        doctype, name, field = gv.call_args[0]
+        self.assertEqual(doctype, "Employee")
+        self.assertEqual(name, "HR-EMP-00042")
+        self.assertEqual(field, "status")
+
+    def test_any_status_that_is_not_active_is_refused(self):
+        # Fails closed on values this app has never heard of, not just "Left".
+        for status in ("Inactive", "Suspended", "", None, "active"):
+            with self.subTest(status=status):
+                with patch.object(binding.frappe.db, "get_value",
+                                  side_effect=["HR-EMP-00001", status]):
+                    with self.assertRaises(Exception):
+                        binding.employee_for_telegram_user("55501")
 
     def test_blank_telegram_user_id_raises(self):
         with self.assertRaises(Exception):
@@ -639,3 +670,54 @@ class TestRevokeLink(unittest.TestCase):
                 binding.revoke_link("  ")
         names.assert_not_called()
 
+
+
+class TestTheTokenWindowIsActuallyEnforced(unittest.TestCase):
+    """`_is_expired`, executed rather than patched over.
+
+    Every test that mentioned expiry replaced this function with a stub, so the
+    comparison inside it had never run once. The module's own docstring explains
+    why that is dangerous here: under the shared frappe mock `get_datetime` is
+    the identity function, so a comparison built on it is a STRING comparison
+    that looks like a datetime one -- which is also why these tests supply real
+    datetimes instead of relying on the mock.
+    """
+
+    NOW = datetime(2026, 8, 19, 12, 0, 0)
+
+    def _is_expired(self, expires_at):
+        real = lambda v: v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
+        with patch.object(binding, "get_datetime", side_effect=real), \
+             patch.object(binding, "now_datetime", return_value=self.NOW):
+            return binding._is_expired(expires_at)
+
+    def test_a_token_that_expired_an_hour_ago_is_expired(self):
+        self.assertTrue(self._is_expired(datetime(2026, 8, 19, 11, 0, 0)))
+
+    def test_a_token_with_an_hour_left_is_not(self):
+        self.assertFalse(self._is_expired(datetime(2026, 8, 19, 13, 0, 0)))
+
+    def test_the_boundary_instant_is_not_yet_expired(self):
+        self.assertFalse(self._is_expired(self.NOW))
+
+    def test_a_string_timestamp_is_compared_as_a_datetime_not_as_text(self):
+        # "2026-08-19 11:00:00" > "2026-08-19 12:00:00" is False as text too,
+        # so the discriminating case is one where string and datetime ordering
+        # disagree: a single-digit hour sorts after a double-digit one.
+        self.assertTrue(self._is_expired("2026-08-19 09:00:00"))
+        self.assertFalse(self._is_expired("2026-08-19 13:00:00"))
+
+    def test_the_ttl_the_window_is_built_from_is_twenty_four_hours(self):
+        # The mock's add_to_date cannot be trusted to compute a real offset, so
+        # this asserts the ARGUMENT rather than the result -- the runbook's
+        # printed-invite workflow depends on this number.
+        self.assertEqual(binding.DEFAULT_TTL_HOURS, 24)
+        with patch.object(binding, "add_to_date", return_value="2026-08-20 12:00:00") as add, \
+             patch.object(binding, "now_datetime", return_value=self.NOW), \
+             patch.object(binding, "_store_token"), \
+             patch.object(binding, "revoke_outstanding_tokens"):
+            issued = binding.issue_link_token("HR-EMP-00001")
+
+        self.assertEqual(add.call_args[0][0], self.NOW)
+        self.assertEqual(add.call_args[1]["hours"], 24)
+        self.assertEqual(issued.expires_at, "2026-08-20 12:00:00")

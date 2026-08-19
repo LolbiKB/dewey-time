@@ -221,11 +221,37 @@ export function dayFacts(day: Day | undefined, date: Date, today: Date): DayFact
   return note({ ...base, tone: "nothing" }, null, "stateNoPunches");
 }
 
-/** Net worked across a set of days, in minutes. Null when nothing is known. */
-export function totalWorkedMinutes(facts: DayFacts[]): number | null {
-  const known = facts.filter((f) => f.workedMinutes !== null);
+/**
+ * Did this day have punches of its own, whatever else the day was?
+ *
+ * The same question `dayFacts` asks on its way to tone "worked" -- asked
+ * without the leave/holiday early return in front of it, because a public
+ * holiday somebody came in and worked is still a day they worked.
+ */
+export function wasWorked(day: Day | undefined): boolean {
+  return formatDayCheckinTimeRange(day) !== null;
+}
+
+/**
+ * Net worked across a set of days, in minutes. Null when nothing is known.
+ *
+ * Reads the DAYS, not their facts, and that is the whole point. `dayFacts`
+ * answers leave and holiday before it ever looks at a punch and returns
+ * `workedMinutes: null` for both -- right for the day's tone, and the reason
+ * this total used to silently drop the hours a worker most wants to check.
+ * They saw "8h 12m" on the Day tab for a public holiday they worked, and then
+ * "Worked this month" and "days worked" reporting that it never happened. On
+ * the surface built so they can check their pay, that reads as the company
+ * quietly not recording their premium day.
+ *
+ * Tone still governs colour and wording. It does not govern arithmetic.
+ */
+export function totalWorkedMinutes(days: (Day | undefined)[]): number | null {
+  const known = days
+    .map((day) => netWorkedFor(day))
+    .filter((minutes): minutes is number => minutes !== null);
   if (!known.length) return null;
-  return known.reduce((sum, f) => sum + (f.workedMinutes ?? 0), 0);
+  return known.reduce((sum, minutes) => sum + minutes, 0);
 }
 
 /**

@@ -38,13 +38,22 @@ export function MiniDayNumbers(props: {
 
   // A spoken sentence, because "8h 11m / 8h" read aloud is two durations and a
   // slash. The visible row stays compact; this is what is announced.
-  const spoken = worked && rostered
-    ? t("dayAriaWorkedOfRostered").replace("{worked}", worked).replace("{rostered}", rostered)
-    : worked
-      ? t("dayAriaWorkedOnly").replace("{worked}", worked)
-      : rostered
-        ? t("dayAriaRosteredOnly").replace("{rostered}", rostered)
-        : null;
+  //
+  // Except when nothing was worked AND our own feed never delivered. The
+  // rostered-only sentence is "Rostered 8h, nothing worked yet", which on a day
+  // the Bridge went down is an accusation dressed as a reading — the employee
+  // punched in and out normally and the machine never told us. Say whose
+  // problem it actually is.
+  const uncertain = props.day?.feed_uncertain === true && !worked;
+  const spoken = uncertain
+    ? t("feedUncertain")
+    : worked && rostered
+      ? t("dayAriaWorkedOfRostered").replace("{worked}", worked).replace("{rostered}", rostered)
+      : worked
+        ? t("dayAriaWorkedOnly").replace("{worked}", worked)
+        : rostered
+          ? t("dayAriaRosteredOnly").replace("{rostered}", rostered)
+          : null;
 
   return (
     // justify-between with an empty span as the left item when there are no

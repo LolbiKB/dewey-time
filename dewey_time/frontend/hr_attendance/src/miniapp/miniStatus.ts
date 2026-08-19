@@ -98,10 +98,35 @@ function stillInside(punches: { log_type?: string | null }[]): boolean {
  * date itself.
  */
 export function openRunStartedAt(day: Day | undefined): string | null {
-  const runs = groupCheckinsByBranchRuns(inOrder(day));
+  const punches = inOrder(day);
+  const runs = groupCheckinsByBranchRuns(punches);
   const last = runs[runs.length - 1];
   if (!last?.length) return null;
-  return pairRun(last).openAt?.time ?? null;
+
+  const openAt = pairRun(last).openAt;
+  if (!openAt) return null;
+
+  // POSITIVE EVIDENCE, not position.
+  //
+  // `pairRun` falls back to inferring direction from position when a punch
+  // carries no `log_type`, and the first punch of a run is inferred to be an
+  // arrival -- `inferCheckinDirection(0, 1)` returns "IN". A run of exactly one
+  // punch therefore always looked like somebody arriving and never leaving.
+  //
+  // That is not a rare shape. A cover shift ends with a departure recorded at a
+  // SECOND branch, which puts that punch alone in its own branch run: at 19:00
+  // the app read "2h so far" with a live marker, counting from the moment the
+  // person went home, while the status chip beside it said "Checked out" and
+  // the nine hours they actually worked appeared nowhere. Every punch from an
+  // unmapped device is its own run too, so the same thing happens there.
+  //
+  // So an open run has to be evidenced: either the punch says IN itself, or the
+  // day has an odd number of punches, which is what "one of them is unmatched"
+  // actually means. Anything less is claiming someone is at work on the absence
+  // of evidence -- the one thing this surface must never do.
+  const label = String(openAt.log_type || "").trim().toUpperCase();
+  if (label === "IN") return openAt.time ?? null;
+  return punches.length % 2 === 1 ? (openAt.time ?? null) : null;
 }
 
 export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniStatus {

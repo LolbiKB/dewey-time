@@ -74,13 +74,27 @@ export function buildWeekSchedule(
     const lunchLabel =
       lunchStartLabel && lunchEndLabel ? `${lunchStartLabel} – ${lunchEndLabel}` : undefined;
 
+    // AN OVERNIGHT SHIFT WRAPS PAST MIDNIGHT. `endMin > startMin` was the
+    // guard, so a 22:00–06:00 roster (1320 → 360) computed no duration at all:
+    // the row printed "10:00 PM – 6:00 AM" correctly with a blank hours column,
+    // and the week total read "—" because every night was dropped from the sum.
+    // A night worker could see their shifts and not what they were worth.
+    //
+    // Equal start and end is still undefined rather than a full 24 hours: that
+    // is a roster with two identical times, which is a data fault, not a
+    // day-long shift.
+    const spanMin =
+      startMin != null && endMin != null && endMin !== startMin
+        ? (endMin - startMin + 1440) % 1440
+        : null;
+    // The lunch wraps with it — a 02:00–03:00 break on a night shift is an
+    // ordinary interval, but one recorded as 23:30–00:30 crosses midnight too.
+    const lunchMin =
+      lunchStartMin != null && lunchEndMin != null && lunchEndMin !== lunchStartMin
+        ? (lunchEndMin - lunchStartMin + 1440) % 1440
+        : 0;
     const durationMin =
-      assigned && startMin != null && endMin != null && endMin > startMin
-        ? endMin - startMin -
-          (lunchStartMin != null && lunchEndMin != null && lunchEndMin > lunchStartMin
-            ? lunchEndMin - lunchStartMin
-            : 0)
-        : undefined;
+      assigned && spanMin != null ? spanMin - (lunchMin < spanMin ? lunchMin : 0) : undefined;
 
     return {
       date: key,

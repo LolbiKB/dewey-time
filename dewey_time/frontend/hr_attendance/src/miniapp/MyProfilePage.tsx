@@ -13,7 +13,7 @@ import { endOfMonth, format, startOfMonth } from "date-fns";
 
 import { parseDateTimeLocal } from "@/lib/attendanceTime";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
-import { MiniState } from "@/miniapp/MiniState";
+import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import {
   biometricBodyKey, biometricStateKey, fingerKeys, monthStats, parseDateOnly,
   serviceLength,
@@ -64,7 +64,8 @@ export function MyProfilePage(props: {
   );
 
   if (profile.isLoading) return <MiniState>{t("loadingProfile")}</MiniState>;
-  if (profile.isError || !profile.data) return <MiniState>{t("errorProfile")}</MiniState>;
+  if (profile.isError || !profile.data)
+    return <MiniErrorState error={profile.error} fallback="errorProfile" />;
 
   const me = profile.data;
   const bio = me.biometric;
@@ -76,6 +77,12 @@ export function MyProfilePage(props: {
   const span = serviceLength(me.date_of_joining, today);
   const service = span && (span.years || span.months) ? fmt.service(span) : null;
   const bodyKey = biometricBodyKey(bio.state);
+  // `?? []` turned "the source has not spoken" into "the source said zero":
+  // while the month request was in flight or after it failed, this section read
+  // "0 days worked · — · 0 to check" — a confident, wrong claim about somebody's
+  // month, on the tab they open to check it. `answered` is what decides whether
+  // there is a number to show at all.
+  const answered = !month.isPending && !month.isError;
   const stats = monthStats(month.data?.days ?? [], today);
   const joined = parseDateOnly(me.date_of_joining);
   const checked = bio.checked_at ? parseDateTimeLocal(bio.checked_at) : null;
@@ -170,16 +177,26 @@ export function MyProfilePage(props: {
       <ProfileSection title={t("sectionMonth").replace("{month}", fmt.date(today, "LLLL"))}>
         <div className="flex">
           <Stat
-            value={fmt.digits(String(stats.daysWorked))}
+            value={answered ? fmt.digits(String(stats.daysWorked)) : "—"}
             label={t("statDaysWorked")}
           />
-          <Stat value={fmt.worked(stats.minutes) ?? "—"} label={t("statHours")} />
           <Stat
-            value={fmt.digits(String(stats.flags))}
+            value={(answered ? fmt.worked(stats.minutes) : null) ?? "—"}
+            label={t("statHours")}
+          />
+          <Stat
+            value={answered ? fmt.digits(String(stats.flags)) : "—"}
             label={t("statToCheck")}
-            amber={stats.flags > 0}
+            // Never amber on an unanswered month: an alarm colour is a claim
+            // too, and this one would be raised by a dropped request.
+            amber={answered && stats.flags > 0}
           />
         </div>
+        {month.isError ? (
+          <p role="status" className="px-1 pt-1 text-xs text-muted-foreground">
+            {t("errorMonth")}
+          </p>
+        ) : null}
       </ProfileSection>
 
       <section>

@@ -37,14 +37,19 @@ test("the poll is gated on Telegram's activity, not on document visibility", () 
   // harness, so the option object is only inspectable here.
   //
   // `active` must be a CONJUNCT of the interval, not merely mentioned nearby.
-  // A caller opt-out was added for the Profile tab's month range, so the
-  // expression is no longer the bare ternary this once pinned — but a caller
-  // must not be able to opt back IN while minimised, and `false` must remain
-  // the else branch rather than some smaller interval.
+  // A caller opt-out was added for the Profile tab's month range, and the
+  // interval later became a function so it could also see the query's own
+  // error — so this is no longer the bare ternary it once pinned. What must
+  // survive: a caller cannot opt back IN while minimised, and `false` stays the
+  // else branch rather than some smaller interval.
   const src = readFileSync(new URL("./useMiniAppSession.ts", import.meta.url), "utf8");
-  const interval = /refetchInterval:\s*active\b([^;]*?)\?\s*60_000\s*:\s*false/.exec(src);
+  const interval = /refetchInterval:[^;]*?\bactive\s*&&[^;]*?\?\s*60_000\s*:\s*false/.exec(src);
   assert.ok(interval, "the 60s poll must still be gated on `active` and fall back to false");
   assert.match(src, /isAppActive|onActiveChange/);
+
+  // And never against a verdict. A 403 is not a blip: re-polling it every
+  // minute is what this app did to a revoked link for as long as it was open.
+  assert.match(src, /isPermanentRejection\(query\.state\.error\)/);
 });
 
 test("the Mini App HTML pins the SDK's version, and loads it before the bundle", () => {
