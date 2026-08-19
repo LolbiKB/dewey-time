@@ -35,8 +35,12 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 const FLAG_SUMMARIES: Record<string, string> = {
+  // "first check-in", not "first paired check-in": since the feed-attested
+  // single-punch rule, a LATE_START can rest on a lone punch whose device
+  // countersigned the day complete — "paired" would describe evidence that
+  // does not exist for exactly those rows.
   LATE_START:
-    "This employee's first paired check-in was after shift start, including the effective grace period.",
+    "This employee's first check-in was after shift start, including the effective grace period.",
   LATE_FROM_LUNCH:
     "This employee returned from lunch later than the scheduled lunch end plus grace.",
   LEFT_EARLY:
@@ -75,6 +79,7 @@ const TIME_EVIDENCE_KEYS: Record<string, string> = {
   lunch_in: "Lunch return",
   return_threshold: "Return threshold",
   punch_time: "Punch time",
+  arrival_window_end: "Arrival window until",
 };
 
 const GRACE_EVIDENCE_KEYS: Record<string, string> = {
@@ -91,6 +96,7 @@ const EXTRA_EVIDENCE_KEYS: Record<string, string> = {
   non_primary_checkins: "Off-site punches",
   employee_branch: "Employee branch",
   threshold_minutes: "Gap threshold",
+  attesting_device: "Verified by device",
 };
 
 const SKIP_EVIDENCE_KEYS = new Set([
@@ -101,6 +107,12 @@ const SKIP_EVIDENCE_KEYS = new Set([
   "shift_type",
   "employee",
   "attendance_date",
+  // Machine booleans behind the single-punch LATE_START. Their meaning is
+  // carried as a sentence by the narrative subline; a raw "true" row here
+  // would label nothing. The two human-readable companions
+  // (arrival_window_end, attesting_device) ARE shown, above.
+  "feed_attested",
+  "single_punch",
 ]);
 
 export function formatFlagStatusLabel(status: FlagStatus | string | undefined | null): string {

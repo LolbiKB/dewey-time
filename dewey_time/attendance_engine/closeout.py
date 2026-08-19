@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import frappe
-from frappe.utils import add_days, get_datetime, getdate, now_datetime, nowdate
+from frappe.utils import add_days, cint, get_datetime, getdate, now_datetime, nowdate
 
 from dewey_time.attendance_engine.absence_flags import (
     evaluate_missing_time_flags,
@@ -170,6 +170,23 @@ def notify_device_closeout_status(
         status=status,
         device_branch=device_branch,
         last_error=last_error,
+        # The FULL device-level count, before any per-employee narrowing. A row
+        # the bridge could not attribute to an Employee (pin only) vanishes from
+        # every per-employee slice and from the delivery markers -- this stored
+        # count is the one place "closed, but with residue" survives, and
+        # feed_attested_complete refuses on it.
+        #
+        # None when the field was not supplied on a closed post: an ABSENT list
+        # makes no claim and must not touch a stored residue, where an explicit
+        # [] is the bridge positively stating "everything is delivered now"
+        # (its re-close after a backfill) and may reset it. Without this line a
+        # sloppy re-post of {status: closed} would zero a recorded residue and
+        # the next rebuild would attest a day that lost punches.
+        undelivered_count=(
+            len(undelivered_items)
+            if status == "closed" and undelivered not in (None, "")
+            else None
+        ),
     )
 
     if status == "closed":
@@ -198,6 +215,7 @@ def upsert_device_closeout_alert(
     status: str,
     device_branch=None,
     last_error=None,
+    undelivered_count: int | None = None,
 ):
     local_date = getdate(local_date)
     alert_name = f"DCA-{frappe.scrub(device_sn)}-{local_date}"[:140]
@@ -211,6 +229,23 @@ def upsert_device_closeout_alert(
         "last_error": last_error,
         "resolved_at": resolved_at,
     }
+    # None = no claim about residue was made; an existing row keeps whatever it
+    # recorded, and a new row falls to the columns' defaults -- 0/0, which the
+    # predicate reads as "nothing recorded" and refuses. A number, zero
+    # included, is a positive claim: it overwrites the count AND sets the
+    # recorded bit. The bit exists because Frappe creates Int columns NOT NULL
+    # DEFAULT 0, so the count alone cannot say whether zero was claimed or
+    # merely never written.
+    if undelivered_count is not None:
+        values["undelivered_count"] = cint(undelivered_count)
+        values["undelivered_recorded"] = 1
+    elif status != "closed":
+        # A day that re-opened (deferred_offline / closure_failed after a
+        # close) is a day whose residue claim no longer describes it. Clear
+        # the bit so a stale clean claim cannot be inherited across the
+        # re-open by a later nonconforming close; a conforming close restates
+        # the list and re-records.
+        values["undelivered_recorded"] = 0
 
     if frappe.db.exists("Device Closeout Alert", alert_name):
         frappe.db.set_value("Device Closeout Alert", alert_name, values, update_modified=True)
@@ -388,6 +423,164 @@ def should_skip_absence_flags(*, employee: str, employee_branch: str | None, att
     if employee_branch and has_open_device_closeout_alert(branch=employee_branch, local_date=attendance_date):
         return True
     return has_delivery_or_record_failure_today(employee, attendance_date)
+
+
+def feed_attested_complete(
+    *,
+    employee_branch: str | None,
+    punch_branch: str | None,
+    punch_device: str | None,
+    attendance_date,
+    skip_absence: bool,
+) -> bool:
+    """Was this day's punch feed positively attested complete for this employee?
+
+    `should_skip_absence_flags` asks "may the engine trust the SILENCE?" -- it
+    looks for reasons to distrust. This is the opposite grip on the same
+    evidence: a POSITIVE attestation that everything the devices recorded has
+    arrived, used to trust a single punch rather than a missing one.
+
+    STORED STATE ONLY, deliberately. The first version keyed on the webhook
+    call's own `device_sn` parameter, and that context dies with the call:
+    LATE_START lives in a delete-and-rebuild cycle, and three callers re-enter
+    `_generate_for_employee_date` without it -- the 03:00 company fallback,
+    the closed-day regeneration a punch edit enqueues, and the dev tools --
+    each of which would wipe the flag and be unable to recreate it. Reading
+    the `Device Closeout Alert` rows instead makes every rebuild re-derive
+    the same answer, and makes a LATER complaint (a sibling device posting
+    deferred_offline after this job ran) retract the flag on the next
+    rebuild rather than never.
+
+    The positive half is the last check: the device that recorded the lone
+    punch must itself hold a CLOSED alert for this date with ZERO undelivered
+    residue. The bridge reports closed only after a VERIFY_SUM count-match
+    against the physical device, so that row is the device countersigning the
+    day. `undelivered_count` is the FULL device-level figure the webhook
+    stored -- a row the bridge could not attribute to an Employee never
+    reaches the per-employee slices or the delivery markers, and this stored
+    count is the one place it survives. None means the row predates the
+    field, and unknown residue is refused the same as known residue.
+
+    The branch set covers the cross-campus hole: the punch that would
+    contradict a lone one is most plausibly held at whichever campus the
+    person actually was, so both the home branch and the lone punch's own
+    branch must be free of open alerts. An open alert whose branch was never
+    recorded matches no branch query, so it is checked for by absence-of-
+    branch explicitly. With NEITHER branch known, or no device on the punch
+    (a Desk-entered row has no attesting device), there is nothing to
+    countersign against and no attestation -- unknowable is not clean.
+
+    ABSENCE OF COMPLAINTS IS NOT EVIDENCE, and the bridge makes that literal:
+    its closure flow runs from a device's own poll or reconnect, and its
+    stuck-closure sweep explicitly skips offline devices -- a device dark at
+    close time posts NOTHING, not even deferred_offline, until it returns.
+    (An earlier draft of this docstring claimed a 02:00 sweep posts
+    deferred_offline for dark devices; the final-review pass read the bridge
+    and found no such sweep exists.) So the open-alert checks above can only
+    refuse on complaints that were actually filed, and the positive half
+    below is a ROSTER, not a single row: Device Sync Status heartbeats one
+    row per (device, branch, date) while a device is alive, so every device
+    that was alive at a relevant branch on this date must itself hold a
+    closed alert with a recorded zero residue. The device holding the missing
+    arrival was alive that morning; its heartbeat row indicts it.
+
+    The residue that genuinely remains -- stated at its true size, because
+    undersizing it is how the first version of this docstring went wrong: the
+    heartbeat is PUNCH-GATED, not liveness-gated (the bridge skips the post
+    when no attendance_logs exist for the date, and the webhook requires
+    last_device_log_at). So the invisible device is any device from which no
+    day-D punch reached the bridge -- including one that polled all morning
+    but went dark before its first delivered badge, which is exactly the
+    badge that would have created the row. Its punches surface when it
+    reconnects, and its own closeout then rebuilds the day and retracts
+    anything they contradict.
+
+    `undelivered_recorded` exists because Frappe creates Int columns NOT NULL
+    DEFAULT 0 (NOT_NULL_TYPES in frappe/database/schema.py) -- a bare count
+    cannot distinguish "zero residue was claimed" from "nothing was ever
+    recorded", and after migrate every pre-existing row reads 0. The Check's
+    own backfilled 0 IS the refusal, so historical rows are conservative by
+    construction and no patch is needed.
+    """
+    if skip_absence:
+        return False
+    # Defensive, not decisive: a punch with no device also finds no closed
+    # alert below (no alert row carries a NULL device_sn), so deleting this
+    # line changes nothing observable. It stays because "a Desk-entered punch
+    # has no attesting device" is a RULE, and rules stated as code survive the
+    # refactor that would quietly change the query's behaviour.
+    if not punch_device:
+        return False
+    # employee_branch is ALSO checked by skip_absence above (when set). Kept in
+    # the set anyway: skip_absence's contract is "may the engine trust the
+    # silence", owned by the absence path, and this predicate must not become
+    # wrong the day that contract narrows.
+    branches = {b for b in (employee_branch, punch_branch) if b}
+    if not branches:
+        return False
+    if any(
+        has_open_device_closeout_alert(branch=branch, local_date=attendance_date)
+        for branch in branches
+    ):
+        return False
+    # A device that reported itself unable to close, with no branch recorded:
+    # it belongs to SOME branch, possibly one of ours, and nothing can say
+    # which. Unknowable is not clean.
+    if frappe.get_all(
+        "Device Closeout Alert",
+        filters={
+            "local_date": getdate(attendance_date),
+            "resolved_at": ["is", "not set"],
+            "branch": ["is", "not set"],
+        },
+        limit=1,
+    ):
+        return False
+    # THE ROSTER. Every device that delivered a day-D punch at a relevant
+    # branch -- evidenced by its Device Sync Status row, which the bridge
+    # posts only once attendance_logs exist for the date -- must have
+    # countersigned the day, or the lone punch's missing sibling could be
+    # sitting in exactly the device that went quiet. The punch's own device
+    # is in the roster whether or not it heartbeated. Without the sync table
+    # there is no roster and no attestation.
+    if not frappe.db.table_exists("Device Sync Status"):
+        return False
+    alive = set()
+    for branch in branches:
+        alive.update(
+            frappe.get_all(
+                "Device Sync Status",
+                filters={"branch": branch, "local_date": getdate(attendance_date)},
+                pluck="device_sn",
+            )
+            or []
+        )
+    # The punch's own device must be IN the roster, not merely alongside it.
+    # A device that delivered a punch and closed its day was certainly alive,
+    # so in a working deployment its heartbeat row exists; its absence means
+    # the sync integration is blind for this device-day, and a blind roster
+    # proves nothing about who else was alive.
+    if punch_device not in alive:
+        return False
+    return all(_device_closed_clean(device_sn, attendance_date) for device_sn in alive)
+
+
+def _device_closed_clean(device_sn: str, attendance_date) -> bool:
+    """One device's countersignature: closed, with a RECORDED zero residue."""
+    closed = frappe.get_all(
+        "Device Closeout Alert",
+        filters={
+            "device_sn": device_sn,
+            "local_date": getdate(attendance_date),
+            "status": "closed",
+        },
+        fields=["undelivered_count", "undelivered_recorded"],
+        limit=1,
+    )
+    if not closed:
+        return False
+    row = closed[0]
+    return bool(cint(row.get("undelivered_recorded"))) and cint(row.get("undelivered_count")) == 0
 
 
 def delivery_failure_marker_names(employee: str, attendance_date) -> list[str]:
@@ -697,18 +890,78 @@ def _generate_for_employee_date(
             shift_meta.get("end_time") is not None
             and shift_meta["end_time"] < shift_meta["start_time"]
         )
-        _min_punches_for_late = 1 if _is_overnight else 2
+        # THE 2-PUNCH RULE IS A PROXY, and on the webhook path the real signal
+        # now exists. The rule guards against one specific false positive: the
+        # lone punch whose earlier sibling -- the actual arrival -- was made
+        # but LOST in transit, so "first punch at 8:34" would accuse someone
+        # whose 7:55 punch is sitting in an offline device. When the bridge
+        # has countersigned the day complete (feed_attested_complete), that
+        # story is excluded and the guard's premise is gone: the lone punch
+        # really was the only punch.
+        #
+        # What no attestation can exclude is the punch NEVER MADE -- a failed
+        # fingerprint read leaves nothing in any pipe. Hence the window: the
+        # lone punch must fall in the FIRST HALF of the shift to be read as an
+        # arrival. Past the midpoint, "departure whose arrival never read" is
+        # the better story and the engine stays silent, exactly as before.
+        # ATTENDANCE_ISSUE(single_checkin) still fires alongside either way:
+        # the day remains incomplete, and that finding stays true.
+        _attested_lone_arrival = False
+        # An explicit label on the punch is believed before any heuristic --
+        # the same label-first rule punchDirection (attendancePunches.ts) and
+        # the Telegram notifier's direction_of settled on, so one punch is
+        # never described two different ways across surfaces. Only blank and
+        # IN read as an arrival: an explicit OUT is a recorded DEPARTURE, and
+        # anything else is a label this rule has no reading for. In production
+        # the bridge writes no log_type at all, so this gate only ever fires
+        # on Desk-entered or Desk-edited rows -- the window below is the
+        # mitigation that carries the device stream.
+        _lone_label = (
+            str(checkins[0].get("log_type") or "").strip().upper() if checkins else ""
+        )
+        # `not _is_overnight` is provably inert -- on an overnight day the
+        # window end lands BEFORE the start, so it can never coincide with
+        # first_in > late_threshold -- but the exclusion is a stated rule
+        # (overnight has its own 1-punch rule and must not also pay for these
+        # queries), not an accident of the arithmetic.
+        if (
+            not _is_overnight
+            and checkins_count == 1
+            and shift_meta.get("end_time") is not None
+            and first_in_dt
+            and _lone_label in ("", "IN")
+        ):
+            _lone_branch = (checkins[0].get("custom_device_branch") or "").strip() or None
+            _lone_device = (checkins[0].get("device_id") or "").strip() or None
+            if feed_attested_complete(
+                employee_branch=employee_branch,
+                punch_branch=_lone_branch,
+                punch_device=_lone_device,
+                attendance_date=attendance_date,
+                skip_absence=skip_absence,
+            ):
+                _end_dt = _combine_date_time(attendance_date, shift_meta["end_time"])
+                # Measured from the shift START, not the late threshold: the
+                # window answers "is a lone punch here credibly an arrival",
+                # which is a fact about the shape of the shift, not about how
+                # much lateness this shift forgives.
+                _arrival_window_end = start_dt + (_end_dt - start_dt) / 2
+                _attested_lone_arrival = first_in_dt <= _arrival_window_end
+        _min_punches_for_late = 1 if (_is_overnight or _attested_lone_arrival) else 2
         if checkins_count >= _min_punches_for_late and first_in_dt and first_in_dt > late_threshold:
-            flags_to_create.append(
-                (
-                    "LATE_START",
-                    {
-                        **grace_evidence(shift_meta),
-                        "first_in": first_in_dt.isoformat(),
-                        "late_threshold": late_threshold.isoformat(),
-                    },
-                )
-            )
+            _late_evidence = {
+                **grace_evidence(shift_meta),
+                "first_in": first_in_dt.isoformat(),
+                "late_threshold": late_threshold.isoformat(),
+            }
+            if _attested_lone_arrival:
+                # HR sees WHY the engine dared on one punch: the feed was
+                # countersigned, and the punch sat inside the arrival window.
+                _late_evidence["feed_attested"] = True
+                _late_evidence["single_punch"] = True
+                _late_evidence["arrival_window_end"] = _arrival_window_end.isoformat()
+                _late_evidence["attesting_device"] = _lone_device
+            flags_to_create.append(("LATE_START", _late_evidence))
 
     non_primary_flag = _non_primary_site_punch_flag(
         checkins=checkins, employee_branch=employee_branch

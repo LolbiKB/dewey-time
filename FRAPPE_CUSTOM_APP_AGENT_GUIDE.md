@@ -137,7 +137,7 @@ Never mutate historical **Employee Checkin** rows.
 **Closeout flags (examples):**
 
 - `UNNOTIFIED_ABSENCE`: on-shift, zero checkins at closeout / fallback
-- `LATE_START`: closeout only; **≥2 checkins**; first in after start + effective start grace
+- `LATE_START`: closeout only; first in after start + effective start grace; needs **≥2 checkins**, except overnight shifts and feed-attested single-punch days (every device alive at the relevant branches that date — per Device Sync Status heartbeats — closed with a recorded zero undelivered residue, clean branches, punch in the first half of the shift — see `feed_attested_complete` in closeout.py)
 - `LEFT_EARLY`, `MISSING_IN_OR_OUT`, `ATTENDANCE_ISSUE`, `DELIVERY_FAILED`, `UNKNOWN_DEVICE_BRANCH`
 - `OFF_SHIFT_PUNCH`: off-shift or holiday with checkins
 - `LATE_FROM_LUNCH`: valid observed lunch return late (full-day shifts)

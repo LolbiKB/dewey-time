@@ -69,3 +69,42 @@ test("flagHrGuidance for a still-provisional flag also avoids Desk", () => {
   );
   assert.doesNotMatch(guidance, /desk/i, `provisional guidance mentions Desk: "${guidance}"`);
 });
+
+// ---------------------------------------------------------------------------
+// The feed-attested single-punch LATE_START's evidence keys. The engine writes
+// four; two are human-readable rows, two are machine booleans whose meaning
+// the narrative subline carries as a sentence. If any of the four fell through
+// to the leftover JSON blob, the basis of the accusation would live two clicks
+// down in a stringified dump — the exact place the bulk-uphold path never looks.
+test("formatFlagEvidenceDetails: single-punch keys — two labeled rows, and none of the four in the leftover blob", async () => {
+  const { formatFlagEvidenceDetails } = await import("@/lib/flagDetails");
+
+  // Production-shaped evidence: closeout merges the shared base into every
+  // flag, and base keys like device_sn/holiday DO fall through to the
+  // leftover blob (pre-existing). The claim under test is narrower and
+  // honest: the four single-punch keys never land there — two render as
+  // labeled rows, two are deliberately skipped.
+  const { rows, fallbackJson } = formatFlagEvidenceDetails(
+    {
+      first_in: "2026-08-03T09:00:00",
+      late_threshold: "2026-08-03T08:00:00",
+      device_sn: "PYA8254100003",
+      holiday: null,
+      feed_attested: true,
+      single_punch: true,
+      arrival_window_end: "2026-08-03T12:30:00",
+      attesting_device: "PYA8254100003",
+    },
+    "2026-08-03"
+  );
+
+  const labels = rows.map((r) => r.label);
+  // The window renders as a TIME ("12:30 PM"), not as a raw ISO string.
+  const windowRow = rows.find((r) => r.label === "Arrival window until");
+  assert.ok(windowRow, "arrival_window_end must render as a labeled row");
+  assert.doesNotMatch(windowRow!.value, /2026-08-03T/);
+  assert.ok(labels.includes("Verified by device"));
+  for (const key of ["feed_attested", "single_punch", "arrival_window_end", "attesting_device"]) {
+    assert.ok(!fallbackJson?.includes(key), `${key} must not fall through to the blob`);
+  }
+});
