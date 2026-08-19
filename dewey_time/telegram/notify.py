@@ -306,9 +306,8 @@ def _overnight_on(employee: str, day: str) -> bool:
     return start is not None and end is not None and end < start
 
 
-#: How far around a day the generator must have been active before a blank
-#: day may be called a day off. A week each way spans any roster's cadence
-#: without reaching across a generation gap.
+#: How far to each side of a day the roster must reach before a blank day
+#: may be called a day off. A week spans any roster's cadence.
 ROSTER_OPINION_WINDOW_DAYS = 7
 
 
@@ -321,18 +320,30 @@ def _roster_opined_around(employee: str, day: str) -> bool:
     honest only in the first shape, and MIN/MAX bounds cannot isolate it:
     they are an envelope, so an interior generation gap (a missed month
     between two generated windows) reads as covered, and one far-future
-    open-ended row reads as an infinite horizon. What CAN be said honestly:
-    if any assignment overlaps the window centred on the day, the generator
-    was active around this date, and a blank day inside that stretch is a
-    statement the roster is actually making. Everything else stays silent
-    -- the same reasoning that put schedule_max_date in the Mini App
-    payload instead of a "not scheduled" label.
+    open-ended row reads as an infinite horizon.
+
+    The honest predicate needs the roster on BOTH sides of the day, within
+    a week each way. One side is not enough, and each side kills a distinct
+    false claim: with only the trailing side, a lapsed block keeps
+    "speaking" for a week past its end; with only the leading side, a new
+    hire hears about their roster a week before it exists. A blank day
+    BETWEEN generated days is the one shape that is a statement the roster
+    actually makes. Everything else stays silent -- the same reasoning
+    that put schedule_max_date in the Mini App payload instead of a "not
+    scheduled" label. (A hole in generation narrower than the window still
+    reads as days off; a hole that small between two active blocks is a
+    roster decision more often than an accident, and silence-on-doubt ends
+    at some width or the line never fires at all.)
     """
     anchor = date.fromisoformat(day)
     window = timedelta(days=ROSTER_OPINION_WINDOW_DAYS)
     return has_assignment_overlapping(
         employee=employee,
         start=(anchor - window).isoformat(),
+        end=day,
+    ) and has_assignment_overlapping(
+        employee=employee,
+        start=day,
         end=(anchor + window).isoformat(),
     )
 
