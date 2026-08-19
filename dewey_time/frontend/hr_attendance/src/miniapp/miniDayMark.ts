@@ -98,8 +98,8 @@ function isFinished(day: Day | undefined, date: Date, now: Date): boolean {
  * receipt where direction is not honestly callable. So the surfaces no
  * longer all agree: on a cross-campus or bounced-tap day the chat may
  * decline the claim this mark and the chip still make. Aligning these two to
- * the same replay is the recorded follow-up; until then, do not add a NEW
- * rule here — reuse pairRun or the replay, nothing else.
+ * the same replay is deliberate follow-up work; until then, do not add a
+ * NEW rule here — reuse pairRun or the replay, nothing else.
  */
 function punchCount(day: Day | undefined): number {
   return day?.checkins?.length ?? 0;

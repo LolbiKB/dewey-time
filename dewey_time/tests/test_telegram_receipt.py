@@ -121,20 +121,23 @@ class TestAnnounce(unittest.TestCase):
         # bounced tap. If it were dropped as a duplicate it would never open
         # its run, and the campus-B departure below would degrade to "" --
         # that is the observable difference this test pins.
+        # 5 seconds -- INSIDE the window, so only the branch conjunct keeps
+        # this punch alive. A wider gap would pass without exercising it.
         result = receipt.announce(
             [
                 _p("2026-08-17 08:00:00", branch="DIS Iconic"),
-                _p("2026-08-17 08:01:00", branch="DIU"),
+                _p("2026-08-17 08:00:05", branch="DIU"),
                 _p("2026-08-17 12:00:00", branch="DIU"),
             ]
         )
         self.assertEqual(result["verb"], receipt.OUT)
 
     def test_a_labelled_punch_is_never_a_duplicate(self):
-        # Labels are Desk edits -- deliberate. A labelled OUT seconds after
-        # an arrival is believed, not dropped.
+        # Labels are Desk edits -- deliberate. A labelled OUT five seconds
+        # after an arrival is believed, not dropped. The gap must sit INSIDE
+        # the window: only then does the label conjunct carry the test.
         result = receipt.announce(
-            [_p("2026-08-17 08:00:00"), _p("2026-08-17 08:00:30", log_type="OUT")]
+            [_p("2026-08-17 08:00:00"), _p("2026-08-17 08:00:05", log_type="OUT")]
         )
         self.assertEqual(result["verb"], receipt.OUT)
 

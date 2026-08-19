@@ -76,7 +76,8 @@ function inOrder(day: Day | undefined) {
  * (dewey_time/telegram/receipt.py) that degrades to a neutral receipt when
  * direction is not honestly callable. On exactly those days this chip can
  * still make the confident claim the chat just declined. Aligning the chip
- * (and miniDayMark) to the same replay is the recorded follow-up.
+ * (and miniDayMark) to the same replay is deliberate follow-up work, left
+ * out of the receipt change on purpose.
  */
 function stillInside(punches: { log_type?: string | null }[]): boolean {
   const last = String(punches[punches.length - 1]?.log_type || "").toUpperCase();

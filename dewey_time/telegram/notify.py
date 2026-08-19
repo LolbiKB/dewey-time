@@ -76,7 +76,11 @@ def _day_punches_up_to(employee: str, row) -> list[dict]:
     asynchronously and a later punch must not change what this message says.
     Rows tied on time sort by insertion (`creation`), and anything that sorted
     AFTER the announced punch inside the same second is dropped -- the replay
-    must end at the punch it is describing.
+    must end at the punch it is describing. If the announced row is not in
+    the fetched window at all (a stub, a deleted row), the whole window is
+    replayed instead: the bound already ends at this punch's time, so a
+    missing name costs at most its same-second siblings, and guessing a cut
+    would cost more.
 
     The date is sliced off the timestamp rather than parsed out of it.
     `row["time"]` is a datetime from the database or a string from a fixture,
