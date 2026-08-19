@@ -13,7 +13,7 @@ import { endOfMonth, format, startOfMonth } from "date-fns";
 
 import { parseDateTimeLocal } from "@/lib/attendanceTime";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
-import { MiniState } from "@/miniapp/MiniState";
+import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import {
   biometricBodyKey, biometricStateKey, fingerKeys, monthStats, parseDateOnly,
   serviceLength,
@@ -64,7 +64,8 @@ export function MyProfilePage(props: {
   );
 
   if (profile.isLoading) return <MiniState>{t("loadingProfile")}</MiniState>;
-  if (profile.isError || !profile.data) return <MiniState>{t("errorProfile")}</MiniState>;
+  if (profile.isError || !profile.data)
+    return <MiniErrorState error={profile.error} fallback="errorProfile" />;
 
   const me = profile.data;
   const bio = me.biometric;

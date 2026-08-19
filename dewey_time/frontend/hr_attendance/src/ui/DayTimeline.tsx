@@ -38,6 +38,7 @@ import {
 import { dayCellAccessibleName } from "@/lib/dayCellLabel";
 import { cn } from "@/lib/utils";
 import type { Day, ObservedLunch, ShiftContext } from "@/types/calendar";
+import { DEFAULT_TIMELINE_INTL, type TimelineIntl } from "@/ui/timelineIntl";
 
 type Checkin = NonNullable<Day["checkins"]>[number];
 
@@ -62,28 +63,62 @@ export function DayCell(props: {
   isClockDay?: boolean;
   employeeBranch?: string | null;
   now?: Date;
-  onInspectDay: () => void;
+  /** Words and number formats. Omitted means English — see timelineIntl.ts. */
+  intl?: TimelineIntl;
+  /**
+   * Draw the lateness verdict on the first segment. HR's surfaces do; the Mini
+   * App does not, because it is not a verdict surface and the payload it
+   * receives deliberately carries no grace minutes — so the threshold it would
+   * compute against is the shift start with zero grace, and a punch the engine
+   * forgave gets a "+7m" stamped on it in the employee's own pocket.
+   */
+  showLateness?: boolean;
+  /**
+   * Name the gap bands on the canvas rather than only in a hover tooltip.
+   * A tooltip is unreachable on a touch device, which is the only device the
+   * Mini App runs on.
+   */
+  labelBands?: boolean;
+  /** Overrides the English accessible name. */
+  accessibleName?: string;
+  /**
+   * Omitted makes the cell NON-INTERACTIVE — a section rather than a button.
+   * The Mini App has no inspector to open (the day sheet is HR's review surface
+   * and carries flag evidence an employee must not see), so it was rendering a
+   * full-height button wired to an empty handler: a surface that presses and
+   * does nothing.
+   */
+  onInspectDay?: () => void;
 }) {
   const checkins = props.info?.checkins ?? [];
   const dateKey = format(props.date, "yyyy-MM-dd");
   const holiday = props.info?.holiday ?? null;
   const shift = holiday ? { shift_assigned: false } : (props.info?.shift ?? { shift_assigned: false });
+  const intl = props.intl ?? DEFAULT_TIMELINE_INTL;
+  const interactive = typeof props.onInspectDay === "function";
+  const Root = interactive ? "button" : "section";
 
   return (
-    <button
-      type="button"
-      onClick={props.onInspectDay}
+    <Root
+      {...(interactive
+        ? {
+            type: "button" as const,
+            onClick: props.onInspectDay,
+            // A whole day column is one button, so the global press-scale (see
+            // brand/base.css) would shrink a ~500px-tall surface on every tap.
+            // Opt out and press with colour, matching the hover/focus tint.
+            "data-press": "none",
+          }
+        : {})}
       // The column's entire contents are aria-hidden (grid lines, now-line) or
       // described only by hover tooltips, so without this every day in the week
       // announces as a bare "button" — including a scheduled day with zero
       // punches, which is the one HR most needs to notice.
-      aria-label={dayCellAccessibleName(props.date, props.info)}
-      // A whole day column is one button, so the global press-scale (see
-      // brand/base.css) would shrink a ~500px-tall surface on every tap. Opt out
-      // and press with colour, matching the hover/focus tint already used here.
-      data-press="none"
+      aria-label={props.accessibleName ?? dayCellAccessibleName(props.date, props.info)}
       className={cn(
-        "group relative min-h-0 border-b border-r border-border/60 p-3 pl-5 text-left outline-hidden transition-colors hover:bg-muted/20 focus:bg-muted/20 active:bg-muted/30 focus:ring-2 focus:ring-ring/40",
+        "group relative min-h-0 border-b border-r border-border/60 p-3 pl-5 text-left outline-hidden transition-colors",
+        interactive &&
+          "hover:bg-muted/20 focus:bg-muted/20 active:bg-muted/30 focus:ring-2 focus:ring-ring/40",
         "h-full",
         props.outside && "bg-muted/10 text-muted-foreground",
         props.today && "bg-primary/3 ring-1 ring-primary/20"
@@ -94,11 +129,18 @@ export function DayCell(props: {
           {holiday ? (
             <div className="relative rounded-xl bg-muted/25 min-h-0 h-full">
               <div className="absolute inset-2">
-                <HolidayBoard description={holiday.description} weeklyOff={holiday.weekly_off} />
+                <HolidayBoard
+                  description={holiday.description}
+                  weeklyOff={holiday.weekly_off}
+                  intl={intl}
+                />
               </div>
             </div>
           ) : (
             <DayDayTrack
+              intl={intl}
+              showLateness={props.showLateness ?? true}
+              labelBands={props.labelBands ?? false}
               firstIn={props.info?.first_in ?? null}
               checkins={checkins}
               shift={shift}
@@ -115,12 +157,13 @@ export function DayCell(props: {
           )}
         </div>
       </div>
-    </button>
+    </Root>
   );
 }
 
-function HolidayBoard(props: { description: string; weeklyOff: boolean }) {
-  const label = props.weeklyOff ? "Weekly off" : "Holiday";
+function HolidayBoard(props: { description: string; weeklyOff: boolean; intl?: TimelineIntl }) {
+  const intl = props.intl ?? DEFAULT_TIMELINE_INTL;
+  const label = intl.label(props.weeklyOff ? "weeklyOff" : "holiday");
   const text = (props.description || "").trim() || label
 
   // Show as multiple vertical “lines” using columns; keep it stable and non-wrapping in height.
@@ -134,6 +177,9 @@ function HolidayBoard(props: { description: string; weeklyOff: boolean }) {
 }
 
 function DayDayTrack(props: {
+  intl?: TimelineIntl;
+  showLateness?: boolean;
+  labelBands?: boolean;
   firstIn: string | null;
   checkins: Checkin[];
   shift: ShiftContext;
@@ -276,7 +322,11 @@ function DayDayTrack(props: {
       excludeIntervals,
     });
   }, [awayIntervals, now, openSessions, props.dateKey, props.shift, scheduledFuture, segments]);
-  const lateness = computeLateness(props.shift, props.firstIn);
+  const intl = props.intl ?? DEFAULT_TIMELINE_INTL;
+  // Suppressed entirely for the Mini App: see the `showLateness` prop.
+  const lateness = props.showLateness === false
+    ? null
+    : computeLateness(props.shift, props.firstIn);
 
   const window = useMemo(() => {
     if (props.windowStartMin != null && props.windowEndMin != null) {
@@ -357,13 +407,13 @@ function DayDayTrack(props: {
           const topPct = pctFromMinute(m);
           const label =
             row.kind === "rogue"
-              ? "Rogue punch"
-              : "Unpaired punch";
+              ? intl.label("roguePunch")
+              : intl.label("unpairedPunch");
           return (
             <AppTooltip
               key={`${row.checkin.time}-${idx}`}
               side="right"
-              content={`${label} · ${format(parseDateTimeLocal(row.checkin.time), "h:mm a")}`}
+              content={`${label} · ${intl.punch(row.checkin.time)}`}
             >
               <div
                 className="absolute inset-x-2 h-1 rounded-full bg-destructive shadow-sm"
@@ -380,7 +430,7 @@ function DayDayTrack(props: {
             <AppTooltip
               key={`off-${row.checkin.time}-${idx}`}
               side="right"
-              content={`Off-shift punch · ${format(parseDateTimeLocal(row.checkin.time), "h:mm a")}`}
+              content={`${intl.label("offShiftPunch")} · ${intl.punch(row.checkin.time)}`}
             >
               <div
                 className="absolute inset-x-2 h-1 rounded-full border border-brand-accent/60 bg-brand-accent/40 shadow-sm"
@@ -429,7 +479,7 @@ function DayDayTrack(props: {
                     minutes: row.uncertainEndMin - row.confirmedEndMin,
                   },
                   openSessionUncertainClass,
-                  "Punches may still be in transit"
+                  intl.label("inTransit")
                 )
               : null;
           return (
@@ -445,7 +495,7 @@ function DayDayTrack(props: {
             `scheduled-${idx}`,
             interval,
             scheduledBandClass,
-            "Scheduled"
+            intl.label("scheduled")
           )
         )}
 
@@ -454,7 +504,7 @@ function DayDayTrack(props: {
             `missing-${idx}`,
             interval,
             "border border-dashed border-destructive/75 bg-destructive/5",
-            "Missing expected"
+            intl.label("missingExpected")
           )
         )}
 
@@ -466,21 +516,23 @@ function DayDayTrack(props: {
           const isLunch = g.kind === "lunch";
           const isObservedLunch = isLunch && g.source === "observed";
           const isScheduledLunch = isLunch && g.source === "scheduled";
+          const gapLabel = `${intl.label(isLunch ? "lunch" : "away")} ${intl.duration(g.minutes)}`;
+          const gapTip = [
+            `${intl.label(isLunch ? "lunch" : "away")} · ${intl.duration(g.minutes)}`,
+            isObservedLunch ? intl.label("observed") : null,
+            isScheduledLunch ? intl.label("scheduled") : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
           return (
             <AppTooltip
               key={idx}
               side="right"
-              content={
-                <>
-                  {isLunch ? "Lunch" : "Away"} · {formatDurationMinutes(g.minutes)}
-                  {isObservedLunch ? " · observed" : null}
-                  {isScheduledLunch ? " · scheduled" : null}
-                </>
-              }
+              content={gapTip}
             >
               <div
                 className={cn(
-                  "absolute inset-x-2 rounded-sm border",
+                  "absolute inset-x-2 flex items-center justify-center overflow-hidden rounded-sm border",
                   isObservedLunch
                     ? "border-muted-foreground/40 bg-muted/40"
                     : isScheduledLunch
@@ -491,7 +543,21 @@ function DayDayTrack(props: {
                   top: `${topPct}%`,
                   height: `${heightPct}%`,
                 }}
-              />
+              >
+                {/* The band's meaning lived only in the tooltip above, which a
+                    touch device can never open. Visible where the band is tall
+                    enough to hold a line without clipping; screen-reader text
+                    always, so a short gap is still announced rather than being
+                    a coloured rectangle with no name. */}
+                <span
+                  className={cn(
+                    "pointer-events-none truncate px-1 text-[10px] font-medium text-muted-foreground",
+                    props.labelBands && heightPct >= 9 ? "" : "sr-only"
+                  )}
+                >
+                  {gapLabel}
+                </span>
+              </div>
             </AppTooltip>
           );
         })}
@@ -508,25 +574,25 @@ function DayDayTrack(props: {
             // salmon with dashed red borders, and stacking a second signal there
             // makes the louder one harder to read.
             const offSite = workedTone && isOffSiteSegment(s.branch, props.employeeBranch);
-            const startLabel = s.start?.time ? format(new Date(s.start.time), "h:mma") : "—";
-            const endLabel = s.end?.time ? format(new Date(s.end.time), "h:mma") : "—";
+            const startLabel = intl.punch(s.start?.time);
+            const endLabel = intl.punch(s.end?.time);
             const compactTip = [
               `${startLabel}–${endLabel}`,
-              s.minutes != null ? formatDurationMinutes(s.minutes) : null,
+              s.minutes != null ? intl.duration(s.minutes) : null,
               branchLabel,
               // Lateness is derived from the day's FIRST punch, so it belongs to
               // the first segment only. Stamped on every segment it read as
               // "late again after lunch", which is not a thing the engine
               // measures.
               idx === 0 && lateness?.isLate && lateness.deltaMinutes != null
-                ? `Late ${formatDurationMinutes(lateness.deltaMinutes, { signed: true })}`
+                ? `${intl.label("late")} ${formatDurationMinutes(lateness.deltaMinutes, { signed: true })}`
                 : null,
             ]
               .filter(Boolean)
               .join(" · ");
 
             return (
-              <AppTooltip key={idx} side="right" content={compactTip || "Segment"}>
+              <AppTooltip key={idx} side="right" content={compactTip || intl.label("segment")}>
                 <div
                   className={cn(
                     "absolute inset-x-2 rounded-sm",
@@ -547,7 +613,7 @@ function DayDayTrack(props: {
                       </div>
                       {heightPct >= 18 ? (
                         <div className="absolute right-2 top-1.5 text-[10px] font-medium text-white/85">
-                          {formatDurationMinutes(s.minutes)}
+                          {intl.duration(s.minutes)}
                         </div>
                       ) : null}
                       {idx === 0 &&

@@ -26,6 +26,7 @@ import { format as formatDate } from "date-fns";
 import { km } from "date-fns/locale";
 
 import { parseDateTimeLocal } from "@/lib/attendanceTime";
+import { hourLabel } from "@/lib/timelineAxis";
 import type { Locale } from "@/miniapp/miniStrings";
 
 /** ០១២៣៤៥៦៧៨៩, indexed by the digit they replace. */
@@ -94,6 +95,21 @@ function formatClock(locale: Locale, at: Date): string {
  * Minute-of-day rather than a datetime, because a roster has no date — the
  * same 08:00 applies to every Monday.
  */
+/**
+ * One hour tick on a timeline axis: "7 AM", or "៧ ព្រឹក".
+ *
+ * Compact on purpose -- the axis is a 3.5rem gutter beside the canvas, and a
+ * full "7:00 ព្រឹក" at every hour wraps. English delegates to `hourLabel` so
+ * HR's axis and this one cannot drift apart.
+ */
+export function formatHourTick(locale: Locale, minuteOfDay: number): string {
+  if (locale !== "km") return hourLabel(minuteOfDay);
+  const h24 = Math.floor(minuteOfDay / 60) % 24;
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${toKhmerDigits(String(h12))} ${khmerDayPeriod(h24)}`;
+}
+
+
 export function formatClockMinute(locale: Locale, minutes: number | null | undefined): string | null {
   if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) return null;
   // Any date will do; only the clock face is read off it.

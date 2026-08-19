@@ -32,11 +32,13 @@ import { HourGutter } from "@/ui/TimelineAxis";
 import { resolveWeekTimelineWindow } from "@/lib/weekTimelineWindow";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { isLive, miniStatus, statusKey, type MiniStatus } from "@/miniapp/miniStatus";
-import { MiniState } from "@/miniapp/MiniState";
+import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import { MiniDayNumbers } from "@/miniapp/MiniDayNumbers";
 import { MiniFlagsSheet } from "@/miniapp/MiniFlagsSheet";
 import { flagCount } from "@/miniapp/miniFlags";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
+import { useTimelineIntl } from "@/miniapp/miniTimelineIntl";
+import { miniDayAccessibleName } from "@/miniapp/miniDayLabel";
 
 /**
  * Where you are in the day, opposite the date.
@@ -101,6 +103,7 @@ export function MyDayPage(props: {
   const fmt = useFormat();
   // Above the loading/error early returns, where every hook in this file has to
   // sit — React counts them per render and those returns come before `info`.
+  const timelineIntl = useTimelineIntl();
   const [flagsOpen, setFlagsOpen] = useState(false);
   const today = props.today ?? new Date();
   // Separate from `today` because they answer different questions: `today` is
@@ -112,7 +115,7 @@ export function MyDayPage(props: {
   const query = useMiniAppCalendar(key, key);
 
   if (query.isLoading) return <MiniState>{t("loadingDay")}</MiniState>;
-  if (query.isError) return <MiniState>{t("errorDay")}</MiniState>;
+  if (query.isError) return <MiniErrorState error={query.error} fallback="errorDay" />;
 
   const byDate = daysByDate(query.data);
   const info = byDate.get(key);
@@ -176,7 +179,7 @@ export function MyDayPage(props: {
           flex share alone would squeeze the axis to a few unreadable hours,
           and the page scrolls rather than the timeline collapsing. */}
       <div className="grid min-h-[16rem] flex-1 grid-cols-[3.5rem_1fr] [&>button]:border-0">
-        <HourGutter window={timelineWindow} />
+        <HourGutter window={timelineWindow} formatHour={fmt.hour} />
         <DayCell
           date={date}
           outside={false}
@@ -184,9 +187,18 @@ export function MyDayPage(props: {
           info={info}
           timelineStartMin={timelineWindow.startMin}
           timelineEndMin={timelineWindow.endMin}
-          // No inspector in the Mini App: the day sheet is HR's review
-          // surface and carries flag evidence an employee must not see.
-          onInspectDay={() => {}}
+          intl={timelineIntl}
+          // The Mini App is not a verdict surface, and its payload carries no
+          // grace minutes — so a lateness figure here would be computed against
+          // the shift start with zero grace and stamp "+7m" on a morning the
+          // engine forgave.
+          showLateness={false}
+          // A tooltip is the one affordance a phone does not have.
+          labelBands
+          accessibleName={miniDayAccessibleName(info, date, today, { t, fmt }, flagCount(info))}
+          // No `onInspectDay`: the day sheet is HR's review surface and carries
+          // flag evidence an employee must not see, so there is nothing to open.
+          // Omitting it renders a section rather than a button that does nothing.
         />
       </div>
 

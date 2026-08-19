@@ -37,7 +37,13 @@ export type DayMark =
   /** A punch that never got its pair. Somebody did not clock out. */
   | "incomplete"
   /** Rostered, the day is over, and nothing was recorded at all. */
-  | "missing";
+  | "missing"
+  /**
+   * The device feed never delivered for this day, so the gap in the record is
+   * OURS. Without this the two were the same mark: a Bridge outage looked
+   * exactly like a no-show, on the phone of somebody who punched in normally.
+   */
+  | "uncertain";
 
 /** The accessible wording for each mark. Colour alone cannot carry a grid. */
 export const MARK_LABEL: Record<Exclude<DayMark, "none">, StringKey> = {
@@ -45,6 +51,7 @@ export const MARK_LABEL: Record<Exclude<DayMark, "none">, StringKey> = {
   complete: "markComplete",
   incomplete: "markIncomplete",
   missing: "markMissing",
+  uncertain: "markUncertain",
 };
 
 /**
@@ -63,6 +70,15 @@ function isFinished(day: Day | undefined, date: Date, now: Date): boolean {
   if (!isSameDay(date, now)) return date < now;
   const end = parseTimeToMinutes(day?.shift?.end_time);
   if (end === null) return false;
+
+  // AN OVERNIGHT SHIFT DOES NOT END TODAY. `end` is a minute-of-day, so a
+  // 22:00–06:00 roster reports an end of 360 and every minute after six in the
+  // morning compared as "the day is over" — marking a night worker's day
+  // `missing` from 06:00 onward, sixteen hours before their shift even starts,
+  // and then `incomplete` all night while they are standing at the machine.
+  const start = parseTimeToMinutes(day?.shift?.start_time);
+  if (start !== null && end <= start) return false;
+
   return now.getHours() * 60 + now.getMinutes() >= end;
 }
 
@@ -120,6 +136,14 @@ export function dayMark(
   // on that called "clocked in and never clocked out" a day nobody came to,
   // which are opposite problems: one is a forgotten tap, the other is an
   // absence. Found by a test, not by reading.
-  if (punches === 0) return "missing";
-  return isPaired(day) ? "complete" : "incomplete";
+  const mark = punches === 0 ? "missing" : isPaired(day) ? "complete" : "incomplete";
+
+  // A deficient record on a day our own feed could not vouch for is not the
+  // employee's to answer for. Only the deficient marks are rewritten: punches
+  // that arrived and paired up are a complete record whatever the device did
+  // afterwards, and calling every day uncertain would excuse real absences.
+  if (day?.feed_uncertain && (mark === "missing" || mark === "incomplete")) {
+    return "uncertain";
+  }
+  return mark;
 }

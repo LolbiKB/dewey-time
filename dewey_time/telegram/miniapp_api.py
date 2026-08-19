@@ -280,18 +280,56 @@ def _pick_flags(day: dict) -> list[dict]:
 #: Top-level keys an employee may see about themselves.
 #:
 #: `employee_branch` is their own primary site -- the same fact the check-in
-#: notification already states ("Checked in 07:58 · DIS Iconic"). Everything
-#: else the payload carries at this level stays out: `device_alerts` and
-#: `device_sync` are infrastructure health, and `_employee_nav_meta` is the
-#: SPA's picker plumbing.
-PAYLOAD_KEYS = ("employee", "employee_branch")
+#: notification already states ("Checked in 07:58 · DIS Iconic").
+#:
+#: `is_clock_based` is a fact about the reader's OWN employment type, already
+#: shown to them on the Profile tab. Without it the Mini App drew a clock-based
+#: employee's ordinary working day in the dashed-salmon "off-shift" exception
+#: style and their lunch hour in destructive red -- every day, for doing exactly
+#: what their contract requires. HR's screen shows the same day as solid work.
+#:
+#: `schedule_max_date` is the roster's own horizon, not an HR internal: it is
+#: how far the schedule has been published. Without it the roster paged forward
+#: forever and told people "No shifts are assigned to you this week" for weeks
+#: nobody had built yet -- a statement about the roster that reads as a
+#: statement about them, and workers plan around not working.
+#:
+#: Everything else at this level stays out: `device_alerts` and `device_sync`
+#: are infrastructure health carrying device serials and error text, and
+#: `_employee_nav_meta` is the SPA's picker plumbing.
+PAYLOAD_KEYS = ("employee", "employee_branch", "is_clock_based", "schedule_max_date")
+
+
+def _uncertain_dates(payload: dict) -> set:
+    """Dates whose device feed we cannot vouch for.
+
+    An unresolved `Device Closeout Alert` at this employee's branch means the
+    device never confirmed it had delivered that day. Without this, such a day
+    was PIXEL-IDENTICAL to a no-show on the employee's phone: an amber "no
+    record" mark, "— / 8h", and a screen-reader line reading "Rostered 8h,
+    nothing worked yet" -- for somebody who punched in and out normally while
+    the Bridge was down. HR sees a device alert; the worker saw an accusation.
+
+    Derived here and reduced to a per-day BOOLEAN. The alerts themselves stay
+    out of the payload -- they carry device serials and raw error text, which
+    are infrastructure, not the employee's attendance.
+    """
+    return {
+        str(alert.get("local_date"))
+        for alert in (payload.get("device_alerts") or [])
+        if alert.get("local_date")
+    }
 
 
 def narrow(payload: dict) -> dict:
     """Project the HR calendar payload down to what an employee may see."""
+    uncertain = _uncertain_dates(payload)
     days = []
     for day in payload.get("days") or []:
         narrowed = _pick(day, DAY_KEYS)
+        # Not in DAY_KEYS: it is derived here rather than copied, because the
+        # source it comes from must not travel.
+        narrowed["feed_uncertain"] = str(day.get("date")) in uncertain
         # Only if the source had one. Fabricating an empty shift would make an
         # off day render as a scheduled one.
         if "shift" in narrowed:

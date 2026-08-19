@@ -6,7 +6,7 @@ import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { formatMinuteOfDay } from "@/miniapp/miniDay";
 import { weekForOffset, weekRangeLabel } from "@/miniapp/miniWeek";
 import { WeekNav } from "@/miniapp/MiniWeekNav";
-import { MiniState } from "@/miniapp/MiniState";
+import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
 
 /** Rostered hours net of the unpaid lunch, which is what a day is actually worth. */
@@ -143,7 +143,7 @@ export function MySchedulePage(props: {
     return (
       <div className="flex flex-col gap-3">
         {nav}
-        <MiniState>{t("errorSchedule")}</MiniState>
+        <MiniErrorState error={query.error} fallback="errorSchedule" />
       </div>
     );
   }

@@ -169,3 +169,75 @@ test("every mark this app can produce is one of the five", () => {
     ["complete", "incomplete", "missing", "none", "off"],
   );
 });
+
+test("a night shift's own day is not judged finished at its end minute", () => {
+  // THE DEFECT: `end_time` is a minute-of-day, so a 22:00–06:00 roster reported
+  // an end of 360 and every minute after six in the morning compared as "over".
+  // The day was marked `missing` from 06:00 — sixteen hours before the shift
+  // starts — and then `incomplete` all night while they stood at the machine.
+  const day = {
+    date: "2026-08-19",
+    shift: { shift_assigned: true, start_time: "22:00:00", end_time: "06:00:00" },
+    checkins: [],
+  } as unknown as Day;
+  const date = new Date(2026, 7, 19);
+
+  const facts = dayFacts(day, date, date);
+  // Midday: the shift has not started, so there is nothing to report yet.
+  assert.equal(dayMark(facts, day, date, new Date(2026, 7, 19, 12, 0)), "none");
+  // And late in the evening, mid-shift, it is still not a verdict.
+  assert.equal(dayMark(facts, day, date, new Date(2026, 7, 19, 23, 30)), "none");
+});
+
+test("an ordinary day still finishes at its end time", () => {
+  // The counterweight: the wrap guard must not stop every day from being judged.
+  const day = {
+    date: "2026-08-19",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    checkins: [],
+  } as unknown as Day;
+  const date = new Date(2026, 7, 19);
+  const facts = dayFacts(day, date, date);
+
+  assert.equal(dayMark(facts, day, date, new Date(2026, 7, 19, 12, 0)), "none");
+  assert.equal(dayMark(facts, day, date, new Date(2026, 7, 19, 18, 0)), "missing");
+});
+
+test("a day our own feed never delivered is not marked like a no-show", () => {
+  const base = {
+    date: "2026-08-19",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    checkins: [],
+  };
+  const date = new Date(2026, 7, 19);
+  const after = new Date(2026, 7, 19, 18, 0);
+
+  const blamed = base as unknown as Day;
+  assert.equal(dayMark(dayFacts(blamed, date, date), blamed, date, after), "missing");
+
+  const ours = { ...base, feed_uncertain: true } as unknown as Day;
+  assert.equal(dayMark(dayFacts(ours, date, date), ours, date, after), "uncertain");
+});
+
+test("an uncertain feed does not rewrite a record that arrived intact", () => {
+  // Punches that came through and paired up are a complete record whatever the
+  // device did afterwards; calling every day uncertain would excuse real
+  // absences, which is the same dishonesty facing the other way.
+  const day = {
+    date: "2026-08-19",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    feed_uncertain: true,
+    first_in: "2026-08-19 08:00:00",
+    last_out: "2026-08-19 17:00:00",
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 17:00:00", log_type: "OUT", custom_device_branch: "DIS Iconic" },
+    ],
+  } as unknown as Day;
+  const date = new Date(2026, 7, 19);
+
+  assert.equal(
+    dayMark(dayFacts(day, date, date), day, date, new Date(2026, 7, 19, 18, 0)),
+    "complete",
+  );
+});

@@ -19,6 +19,7 @@ import {
   formatPunchTime,
   formatServiceLength,
   formatWorkedMinutes,
+  formatHourTick,
 } from "@/miniapp/miniIntl";
 import { translator, type Locale, type Translate } from "@/miniapp/miniStrings";
 
@@ -57,6 +58,8 @@ export type MiniFormat = {
   date: (date: Date, pattern: string) => string;
   /** A minute-of-day as a clock time. */
   clock: (minutes: number | null | undefined) => string | null;
+  /** One hour tick on a timeline axis, compact: "7 AM" / "៧ ព្រឹក". */
+  hour: (minuteOfDay: number) => string;
   /** Two minute-of-day values as "8:00 AM – 5:00 PM". */
   span: (startMin: number | null | undefined, endMin: number | null | undefined) => string | null;
   /** One punch's wall-clock time, from the API's datetime string. */
@@ -75,6 +78,7 @@ export function useFormat(): MiniFormat {
     () => ({
       date: (date, pattern) => formatIn(locale, date, pattern),
       clock: (minutes) => formatClockMinute(locale, minutes),
+      hour: (minuteOfDay) => formatHourTick(locale, minuteOfDay),
       span: (startMin, endMin) => formatClockSpan(locale, startMin, endMin),
       punch: (value) => formatPunchTime(locale, value),
       worked: (minutes) =>

@@ -204,6 +204,44 @@ const EN = {
   fingerRightRing: "Right ring",
   fingerRightLittle: "Right little",
   fingerOther: "Another finger",
+
+  // The day timeline's own words. The canvas is shared with HR's week view,
+  // which keeps its English defaults (ui/timelineIntl.ts); these are the Mini
+  // App's, so the picture speaks the same language as the heading above it.
+  // `labelLunch` and `stateHoliday` already exist and are reused rather than
+  // duplicated.
+  timelineAway: "Away",
+  timelineObserved: "observed",
+  timelineScheduled: "Scheduled",
+  timelineMissingExpected: "Missing expected",
+  timelineWeeklyOff: "Weekly off",
+  timelineInTransit: "Punches may still be in transit",
+  timelineRoguePunch: "Rogue punch",
+  timelineUnpairedPunch: "Unpaired punch",
+  timelineOffShiftPunch: "Off-shift punch",
+  timelineLate: "Late",
+  timelineSegment: "Segment",
+
+  // The three states this app previously had no words for. Each says what the
+  // RECORD is or what WE could not do — never what the employee did.
+  //
+  // sessionEndedTitle/Body: a revoked link, a never-linked account, or a
+  // launch older than the 24h window. All three used to render "Couldn't load
+  // your day. Try again in a moment.", which is false on every count: nothing
+  // is loading, trying again cannot work, and it was retried every 60 seconds
+  // on the employee's own mobile data.
+  sessionEndedTitle: "This link is no longer active",
+  sessionEndedBody: "Open the app again from your Dewey Time chat. If that does not work, ask HR for a new link.",
+
+  // rosterNotPublished: past the roster's own horizon. "No shifts are assigned
+  // to you this week" is a statement about the roster that reads as a
+  // statement about the employee — people plan around not working.
+  rosterNotPublished: "The roster for this week has not been published yet.",
+
+  // feedUncertain: the device feed never delivered for this day. Without this,
+  // a Bridge outage was pixel-identical to a no-show.
+  feedUncertain: "No data came from the device for this day.",
+  markUncertain: "no data from the device",
 } as const;
 
 const KM: Record<StringKey, string> = {
@@ -350,6 +388,30 @@ const KM: Record<StringKey, string> = {
   fingerRightRing: "ម្រាមនាងស្តាំ",
   fingerRightLittle: "កូនដៃស្តាំ",
   fingerOther: "ម្រាមដៃផ្សេងទៀត",
+
+  timelineAway: "ចេញក្រៅ",
+  timelineObserved: "សង្កេតឃើញ",
+  timelineScheduled: "តាមកាលវិភាគ",
+  // "No record during working hours" -- NOT "missing work". The band marks a
+  // gap in the RECORD, and the wording must not drift into an accusation.
+  timelineMissingExpected: "គ្មានកំណត់ត្រាក្នុងម៉ោងធ្វើការ",
+  timelineWeeklyOff: "ថ្ងៃឈប់ប្រចាំសប្តាហ៍",
+  timelineInTransit: "កំណត់ត្រាអាចកំពុងបញ្ជូន",
+  timelineRoguePunch: "ការស្កេនមិនស្គាល់ទីតាំង",
+  timelineUnpairedPunch: "ការស្កេនគ្មានគូ",
+  timelineOffShiftPunch: "ការស្កេនក្រៅម៉ោងធ្វើការ",
+  timelineLate: "យឺត",
+  timelineSegment: "ចន្លោះពេល",
+
+  sessionEndedTitle: "តំណនេះលែងដំណើរការហើយ",
+  sessionEndedBody: "សូមបើកកម្មវិធីម្តងទៀតពីការសន្ទនា Dewey Time របស់អ្នក។ បើនៅតែមិនបាន សូមសុំតំណថ្មីពីផ្នែកធនធានមនុស្ស។",
+
+  rosterNotPublished: "កាលវិភាគសម្រាប់សប្តាហ៍នេះ មិនទាន់ត្រូវបានចេញផ្សាយនៅឡើយទេ។",
+
+  // "No data came from the machine" -- about our equipment, not about them.
+  feedUncertain: "គ្មានទិន្នន័យមកពីម៉ាស៊ីនសម្រាប់ថ្ងៃនេះទេ។",
+  markUncertain: "គ្មានទិន្នន័យពីម៉ាស៊ីន",
+
 };
 
 const TABLES: Record<Locale, Record<StringKey, string>> = { en: EN, km: KM };

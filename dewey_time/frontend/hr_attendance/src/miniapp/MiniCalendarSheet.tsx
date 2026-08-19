@@ -86,6 +86,12 @@ function Mark(props: { mark: DayMark }) {
           // made. Filled reads as heavier than outlined at any size.
           incomplete: "border-amber-500",
           missing: "border-amber-500 bg-amber-500",
+          // GREY, NOT AMBER, and that is the whole point of the state. Amber
+          // says "there is something about your day to look at"; this day's
+          // gap is our device's, not theirs, and colouring it the same as a
+          // no-show is the accusation this mark exists to stop. Filled rather
+          // than hollow so it is not mistaken for `off` at arm's length.
+          uncertain: "border-muted-foreground/55 bg-muted-foreground/25",
           off: "border-muted-foreground/35",
         }[props.mark],
       )}
