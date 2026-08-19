@@ -314,7 +314,18 @@ test("the tooltip stacks its facts — measured, because a class string cannot p
   const tooltip = page.locator('[data-slot="tooltip-content"]');
   await expect(tooltip).toBeVisible();
 
-  const lines = tooltip.locator("span span");
+  // Radix renders the content TWICE: the visible tooltip, and a visually-hidden
+  // copy carrying `role="tooltip"` for assistive tech, clipped to a 1px box.
+  // Both hold the same spans, so an unscoped `span span` counts five and — more
+  // to the point — the hidden copy has no geometry to measure. Scope to the
+  // visible wrapper, which is the flex column this test exists to prove.
+  // The FIRST child, not a class selector: matching on `flex-col` would make
+  // this fail because the class went missing, which is not the same as proving
+  // the lines stack — and a differently-named layout that still stacked would
+  // fail it for nothing. Take the wrapper positionally and let the geometry
+  // below do the proving.
+  const visible = tooltip.locator("> span").first();
+  const lines = visible.locator("> span");
   await expect(lines).toHaveCount(2);
   const first = await lines.nth(0).boundingBox();
   const second = await lines.nth(1).boundingBox();
