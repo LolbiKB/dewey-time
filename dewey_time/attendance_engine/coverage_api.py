@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import frappe
 
-from dewey_time.attendance_engine.employment_type import weekly_scheduled_minutes
+from dewey_time.attendance_engine.employment_type import (
+    is_clock_based,
+    is_weekly_schedule_eligible,
+    weekly_scheduled_minutes,
+)
 from dewey_time.attendance_engine.hr_calendar import (
     _list_calendar_employee_rows,
     _require_hr_role,
@@ -32,7 +36,8 @@ from dewey_time.attendance_engine.schedule_resolver import week_pattern_from_ssa
 # v2: employee rows (both assigned and unassigned) gained
 # custom_khmer_last_name / custom_khmer_first_name.
 # v3: employee rows gained `telegram`.
-_CACHE_KEY = "schedule_coverage:v3"
+#: v4: rows gained `schedule_expectation`.
+_CACHE_KEY = "schedule_coverage:v4"
 _CACHE_TTL_SECONDS = 120
 
 # The Employee column a prior Telegram notifier left behind, holding a numeric
@@ -63,8 +68,39 @@ _EMPLOYEE_FIELDS = (
 )
 
 
+#: Whether this employee is SUPPOSED to have a weekly schedule.
+#:
+#: The register bucketed purely on `has_shift_assignment`, which cannot tell
+#: three different situations apart and reported all of them as "schedule
+#: missing":
+#:
+#:   scheduled     Full-time and friends. No assignment IS a coverage failure.
+#:   clock         Contract, Casual, hourly teachers. They clock in and out and
+#:                 no schedule exists to judge them against -- closeout.py:624
+#:                 applies only punch-integrity and location flags on their
+#:                 days. Reporting them as missing a schedule is a false
+#:                 finding, and it scales with every rotating teacher added.
+#:   unclassified  Employment type is blank. This is the one that needs a human:
+#:                 `is_clock_based` deliberately refuses to treat blank as
+#:                 clock-based, so until somebody classifies them the engine
+#:                 judges them against a shift they do not have and flags every
+#:                 scan they make.
+#:
+#: Resolved HERE rather than shipping the raw type, so the allowlist stays in
+#: employment_type.py. A second copy in TypeScript would be a second thing to
+#: keep in step with the first.
+def _schedule_expectation(employment_type) -> str:
+    if is_weekly_schedule_eligible(employment_type):
+        return "scheduled"
+    if is_clock_based(employment_type):
+        return "clock"
+    return "unclassified"
+
+
 def _employee_base(row: dict) -> dict:
-    return {key: row.get(key) for key in _EMPLOYEE_FIELDS}
+    base = {key: row.get(key) for key in _EMPLOYEE_FIELDS}
+    base["schedule_expectation"] = _schedule_expectation(row.get("employment_type"))
+    return base
 
 
 def _telegram_status_by_employee(employee_ids: list[str]) -> dict[str, str]:

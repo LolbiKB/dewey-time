@@ -1115,3 +1115,67 @@ test("a facet that IS narrowing still says so on its face", async ({ page }) => 
   // And it really filtered — otherwise this is a test about a label.
   await expect(bodyRows(page)).toHaveCount(2);
 });
+
+
+test("the register tells three schedule situations apart", async ({ page }) => {
+  // IT USED TO REPORT ALL THREE AS "Missing", because it bucketed on whether a
+  // Shift Assignment exists. One of them is working exactly as intended, one
+  // needs a person, and only the third needs a shift — and the false one grows
+  // with every rotating teacher added.
+  await page.setViewportSize(LAPTOP);
+  await stubFrappe(page, {
+    coverage: {
+      unassigned: [
+        { id: "EMP-901", employee_name: "Sok Dara", department: "Retail",
+          employment_type: "Full-time", title: "Cashier", image: null,
+          telegram: "none", schedule_expectation: "scheduled" },
+        { id: "EMP-902", employee_name: "Sovanna Ly", department: "Teaching",
+          employment_type: "Contract", title: "Lecturer", image: null,
+          telegram: "none", schedule_expectation: "clock" },
+        { id: "EMP-903", employee_name: "Chan Sophea", department: "Teaching",
+          employment_type: "", title: "Lecturer", image: null,
+          telegram: "none", schedule_expectation: "unclassified" },
+      ],
+      assigned: [],
+      counts: { active: 3, unassigned: 3, assigned: 0, truncated: false },
+    },
+    // The biometric feed too, matching these three: left to the default it
+    // joins in its own roster and the attention count stops meaning what this
+    // test is about. All three are enrolled, so the schedule column is the only
+    // thing raising a finding here.
+    enrollment: {
+      ...readyEnrollmentPayload(),
+      rows: ["EMP-901", "EMP-902", "EMP-903"].map((id, i) => ({
+        ...readyEnrollmentPayload().rows[0]!,
+        id,
+        employee_name: ["Sok Dara", "Sovanna Ly", "Chan Sophea"][i]!,
+      })),
+    },
+  });
+  await openRegister(page);
+
+  const rowFor = (name: string) => page.getByRole("row").filter({ hasText: name });
+
+  await expect(rowFor("Sok Dara")).toContainText("Missing");
+  await expect(rowFor("Sovanna Ly")).toContainText("Clock-based");
+  await expect(rowFor("Chan Sophea")).toContainText("Type not set");
+
+  // Only the Full-time row is offered a shift. Offering one to the lecturer
+  // would propose the single thing that is wrong for her contract.
+  await expect(rowFor("Sok Dara").getByRole("button", { name: "Add schedule" })).toBeVisible();
+  await expect(rowFor("Sovanna Ly").getByRole("button", { name: "Add schedule" })).toHaveCount(0);
+  await expect(rowFor("Chan Sophea").getByRole("button", { name: "Add schedule" })).toHaveCount(0);
+
+  // And the count: two findings out of three, not three. The clock-based row
+  // is tracked exactly as intended.
+  // TWO findings out of three, not three. The clock-based lecturer is tracked
+  // exactly as intended and used to be counted here — the inflation that grows
+  // with every rotating teacher added.
+  await expect(alertDot(page)).toHaveAttribute("aria-label", "2 need attention — show them");
+
+  // And worst-first inside the filter: the blank employment type outranks the
+  // merely un-rostered row, because it is actively flagging every scan.
+  await alertDot(page).click();
+  await expect(bodyRows(page)).toHaveCount(2);
+  expect(await employeeNames(page)).toEqual(["Chan Sophea", "Sok Dara"]);
+});

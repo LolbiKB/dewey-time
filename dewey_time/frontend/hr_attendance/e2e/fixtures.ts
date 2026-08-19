@@ -133,9 +133,29 @@ const EMPLOYEE = {
   first_checkin_date: "2026-01-01",
 } satisfies CalendarEmployee;
 
+/**
+ * The server's own classification, mirrored.
+ *
+ * `coverage_api._schedule_expectation` resolves this from the employment-type
+ * allowlist and ships it on every row; the stub has to send it too or the
+ * register reads every fixture row as feed silence. Kept as a function rather
+ * than hand-written per row so a fixture cannot claim an expectation its
+ * employment type would not produce.
+ */
+function expectationFor(employmentType: string | undefined) {
+  if (!employmentType?.trim()) return "unclassified" as const;
+  return ["full-time", "part-time fixed", "intern"].includes(employmentType.trim().toLowerCase())
+    ? ("scheduled" as const)
+    : ("clock" as const);
+}
+
 // Schedule-coverage payload: a few employees with no shift assignment, plus assigned
 // employees spread across weekly-hours buckets (incl. one unresolvable 0-minute row).
-const COVERAGE = {
+//
+// EMP-131 carries a blank employment type, so the "Type not set" finding is
+// reachable end to end. The clock-based case gets its own stub override rather
+// than a row here: this payload's counts are pinned by ~30 tests.
+const COVERAGE_RAW = {
   unassigned: [
     { id: "EMP-104", employee_name: "Marco Diaz", ...KHMER["EMP-104"], department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, telegram: "none" },
     { id: "EMP-118", employee_name: "Priya Nair", department: "Retail", employment_type: "Part-time Fixed", title: "Cashier", image: null, telegram: "id_on_file" },
@@ -156,6 +176,20 @@ const COVERAGE = {
     { id: "EMP-017", employee_name: "Jonas Berg", department: "Warehouse", employment_type: "Full-time", title: "Picker", image: null, weekly_minutes: 0 },
   ],
   counts: { active: 13, unassigned: 3, assigned: 10, truncated: false },
+  // `satisfies` on the RAW object too: without it the literal types widen to
+  // `string` through the spread below, and `telegram` stops matching its union.
+} satisfies ScheduleCoveragePayload;
+
+const COVERAGE = {
+  ...COVERAGE_RAW,
+  unassigned: COVERAGE_RAW.unassigned.map((row) => ({
+    ...row,
+    schedule_expectation: expectationFor(row.employment_type),
+  })),
+  assigned: COVERAGE_RAW.assigned.map((row) => ({
+    ...row,
+    schedule_expectation: expectationFor(row.employment_type),
+  })),
 } satisfies ScheduleCoveragePayload;
 
 /**

@@ -13,6 +13,14 @@ export type CoverageEmployee = {
   department?: string | null;
   branch?: string | null;
   employment_type?: string | null;
+  /**
+   * Whether this person is SUPPOSED to have a weekly schedule, resolved
+   * server-side from the employment-type allowlist
+   * (`coverage_api._schedule_expectation`). Optional because a cached payload
+   * written before the field existed genuinely arrives without it — the
+   * register reads that absence as silence, not as "scheduled".
+   */
+  schedule_expectation?: "scheduled" | "clock" | "unclassified" | null;
   title?: string | null;
   image?: string | null;
   /**

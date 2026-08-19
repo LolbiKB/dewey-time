@@ -15,6 +15,9 @@ const row = (over: Partial<RegisterRow> = {}): RegisterRow => ({
   image: null,
   telegram: "none",
   status: "Active", schedule: "assigned", weekly_minutes: 2400,
+  // The ordinary row expects a schedule and has one; the clock-based and
+  // unclassified tests override it.
+  schedule_expectation: "scheduled",
   biometric: "enrolled", fingerprint_count: 2, days_since_relieving: null,
   // Named fingers and a face by default, so the pinned header/data-row tests
   // below exercise the new fields with real values rather than blanks.
