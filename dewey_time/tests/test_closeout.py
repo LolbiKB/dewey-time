@@ -243,6 +243,73 @@ class TestDeviceCloseoutWebhook(unittest.TestCase):
         self.assertEqual(upsert.call_args_list[-1].kwargs["status"], "closed")
         enqueue.assert_called_once()
 
+    @patch("dewey_time.attendance_engine.closeout.frappe.enqueue")
+    @patch("dewey_time.attendance_engine.closeout.upsert_device_closeout_alert")
+    @patch("dewey_time.attendance_engine.closeout.validate_bridge_request")
+    def test_undelivered_count_none_when_field_absent_number_when_supplied(
+        self, _auth, upsert, enqueue
+    ):
+        # The residue ratchet. An ABSENT undelivered field makes no claim and
+        # must reach the upsert as None (leave any stored residue alone); an
+        # explicit list -- empty included -- is a positive claim and reaches it
+        # as its length. Without the distinction, a sloppy re-post of
+        # {status: closed} zeroes a recorded residue and the next rebuild
+        # attests a day that lost punches.
+        from dewey_time.attendance_engine.closeout import notify_device_closeout_status
+
+        upsert.return_value = "DCA-dev1-2026-05-27"
+
+        notify_device_closeout_status(
+            device_sn="dev1", local_date="2026-05-27", status="closed",
+            device_branch="BRANCH-A",
+            undelivered=json.dumps([{"pin": "42"}, {"pin": "43"}]),
+        )
+        self.assertEqual(upsert.call_args.kwargs["undelivered_count"], 2)
+
+        notify_device_closeout_status(
+            device_sn="dev1", local_date="2026-05-27", status="closed",
+            device_branch="BRANCH-A",
+        )
+        self.assertIsNone(upsert.call_args.kwargs["undelivered_count"])
+
+        notify_device_closeout_status(
+            device_sn="dev1", local_date="2026-05-27", status="closed",
+            device_branch="BRANCH-A", undelivered="[]",
+        )
+        self.assertEqual(upsert.call_args.kwargs["undelivered_count"], 0)
+
+    def test_upsert_leaves_stored_residue_alone_when_no_claim_is_made(self):
+        # The upsert half of the ratchet: undelivered_count=None must not put
+        # the key into the update payload at all, where 0 must.
+        from dewey_time.attendance_engine.closeout import upsert_device_closeout_alert
+
+        with patch(
+            "dewey_time.attendance_engine.closeout.frappe.db.exists", return_value=True
+        ), patch(
+            "dewey_time.attendance_engine.closeout.frappe.db.set_value"
+        ) as set_value:
+            upsert_device_closeout_alert(
+                device_sn="dev1", local_date=date(2026, 5, 27), status="closed",
+            )
+            self.assertNotIn("undelivered_count", set_value.call_args.args[2])
+
+            upsert_device_closeout_alert(
+                device_sn="dev1", local_date=date(2026, 5, 27), status="closed",
+                undelivered_count=0,
+            )
+            self.assertEqual(set_value.call_args.args[2]["undelivered_count"], 0)
+            self.assertEqual(set_value.call_args.args[2]["undelivered_recorded"], 1)
+
+            # A re-opened day drops its stale clean claim: deferred_offline
+            # after a close clears the recorded bit, so a later nonconforming
+            # close cannot inherit it.
+            upsert_device_closeout_alert(
+                device_sn="dev1", local_date=date(2026, 5, 27),
+                status="deferred_offline",
+            )
+            self.assertEqual(set_value.call_args.args[2]["undelivered_recorded"], 0)
+            self.assertNotIn("undelivered_count", set_value.call_args.args[2])
+
 
 class TestLateAndEarlyFlags(unittest.TestCase):
     def _shift_meta_with_grace(self, **grace_fields):
@@ -550,6 +617,468 @@ class TestLateAndEarlyFlags(unittest.TestCase):
             include_unnotified_absence=True,
         )
         insert_flag.assert_not_called()
+
+
+class TestAttestedSinglePunchLateStart(unittest.TestCase):
+    """The 2-punch rule is a proxy for feed completeness. When the stored
+    Device Closeout Alert state positively attests the feed -- the lone
+    punch's own device closed with zero undelivered residue, no open alert at
+    either relevant branch, no branchless open alert, no delivery markers --
+    a lone unlabelled punch in the first half of the shift may carry
+    LATE_START. Every other situation must keep today's silence.
+
+    The attestation is STORED-STATE ONLY (no call-time device_sn), so the
+    positive test here runs through the fallback signature too: the same
+    delete-and-rebuild that used to destroy the flag must now recreate it.
+
+    Each breaker test corresponds to one clause of the predicate. The first
+    review of this feature proved by mutation that several clauses had no
+    covering test; every clause now has a test that fails when it alone is
+    deleted.
+    """
+
+    DATE = date(2026, 5, 27)
+
+    def setUp(self):
+        # Patcher-based rather than decorator stacks: ten collaborators per
+        # test. evaluate_record_issue_flags is deliberately NOT patched -- the
+        # lone punch must produce a real ATTENDANCE_ISSUE(single_checkin)
+        # NEXT TO the new LATE_START, and a stubbed [] would stage that
+        # coexistence instead of proving it. frappe.get_all and
+        # rollout.phase_for are pinned because the frappe mock is shared
+        # module state under `unittest discover` and this class must not
+        # inherit another module's leavings.
+        specs = {
+            "get_cached_doc": patch("dewey_time.attendance_engine.closeout.frappe.get_cached_doc"),
+            "get_all": patch("dewey_time.attendance_engine.closeout.frappe.get_all"),
+            "get_shift": patch("dewey_time.attendance_engine.closeout._get_shift_assignment"),
+            "get_checkins": patch("dewey_time.attendance_engine.closeout._get_checkins_for_day"),
+            "get_shift_meta": patch("dewey_time.attendance_engine.closeout._get_shift_meta"),
+            "delete_flags": patch(
+                "dewey_time.attendance_engine.closeout._delete_auto_flags_for_employee_date"
+            ),
+            "insert_flag": patch("dewey_time.attendance_engine.closeout._insert_flag"),
+            "lunch": patch(
+                "dewey_time.attendance_engine.closeout.evaluate_lunch_flags", return_value=[]
+            ),
+            "missing": patch(
+                "dewey_time.attendance_engine.closeout.evaluate_missing_time_flags",
+                return_value=[],
+            ),
+            "open_alert": patch(
+                "dewey_time.attendance_engine.closeout.has_open_device_closeout_alert",
+                return_value=False,
+            ),
+            "phase_for": patch(
+                "dewey_time.attendance_engine.closeout.rollout.phase_for", return_value="LIVE"
+            ),
+        }
+        self.mocks = {}
+        for key, patcher in specs.items():
+            self.mocks[key] = patcher.start()
+            self.addCleanup(patcher.stop)
+
+        # One discriminating side_effect instead of a flat []: the predicate's
+        # frappe.get_all consumers (delivery markers, the branchless
+        # open-alert probe, the device-sync roster, each device's closed
+        # alert) must each be steerable independently, or their clauses are
+        # untestable -- the first review deleted `or skip_absence` and the
+        # whole suite stayed green precisely because a flat [] neutered the
+        # marker query. FULL filter fidelity on the date/resolved_at keys,
+        # because the final review proved a mutation dropping `local_date`
+        # from the closed-alert query survived a looser mock: one closed day
+        # EVER would have attested every later date for that device.
+        self.marker_rows = []  # DELIVERY_FAILED pluck rows
+        self.issue_rows = []  # ATTENDANCE_ISSUE marker rows (name+evidence)
+        self.branchless_open_alerts = []  # open alerts with no branch recorded
+        self.closed_alerts = {}  # (device_sn, date) -> alert row
+        self.sync_rows = {}  # branch -> [device_sn] heartbeats for DATE
+
+        def _get_all(doctype, **kwargs):
+            filters = kwargs.get("filters") or {}
+            if doctype == "Attendance Flag":
+                if filters.get("flag_code") == "DELIVERY_FAILED":
+                    return list(self.marker_rows)
+                if filters.get("flag_code") == "ATTENDANCE_ISSUE":
+                    return list(self.issue_rows)
+                return []
+            if doctype == "Device Sync Status":
+                if filters.get("local_date") != self.DATE:
+                    return []
+                return list(self.sync_rows.get(filters.get("branch"), []))
+            if doctype == "Device Closeout Alert":
+                if filters.get("local_date") != self.DATE:
+                    return []
+                if filters.get("branch") == ["is", "not set"]:
+                    if filters.get("resolved_at") != ["is", "not set"]:
+                        return []
+                    return list(self.branchless_open_alerts)
+                if filters.get("status") == "closed":
+                    row = self.closed_alerts.get(filters.get("device_sn"))
+                    return [row] if row else []
+                return []
+            return []
+
+        self.mocks["get_all"].side_effect = _get_all
+
+        employee = MagicMock()
+        employee.branch = "BRANCH-A"
+        employee.company = "Test Co"
+        self.mocks["get_cached_doc"].return_value = employee
+        self.employee_doc = employee
+        self.mocks["get_shift"].return_value = {"shift_type": "FT_0800_1700"}
+        self._set_shift_meta()
+
+        # The attesting device: alive on the roster, closed, RECORDED zero
+        # residue -- the positive baseline every breaker test then subtracts
+        # one condition from.
+        self.closed_alerts["DEV-1"] = {"undelivered_count": 0, "undelivered_recorded": 1}
+        self.sync_rows["BRANCH-A"] = ["DEV-1"]
+
+    def _set_shift_meta(self, **grace):
+        from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
+
+        # 8:00-17:00 default: late_threshold 8:00 + grace, arrival window ends
+        # 12:30 (midpoint of the shift, grace-independent).
+        meta = {
+            "start_time": dt_time(8, 0),
+            "end_time": dt_time(17, 0),
+            "custom_lunch_start": None,
+            "custom_lunch_end": None,
+            "custom_grace_minutes": 0,
+            "late_entry_grace_period": 0,
+            "early_exit_grace_period": 0,
+        }
+        meta.update(grace)
+        self.mocks["get_shift_meta"].return_value = enrich_shift_meta(meta)
+
+    def _lone_punch(self, hour, minute=0, branch="BRANCH-A", device="DEV-1", log_type=None):
+        self.mocks["get_checkins"].return_value = [
+            {
+                "name": "IN-1",
+                "time": datetime(2026, 5, 27, hour, minute),
+                "log_type": log_type,
+                "device_id": device,
+                "custom_device_branch": branch,
+            }
+        ]
+
+    def _generate(self, **overrides):
+        from dewey_time.attendance_engine.closeout import _generate_for_employee_date
+
+        kwargs = {
+            "employee": "EMP-1",
+            "attendance_date": self.DATE,
+            "include_unnotified_absence": False,
+            "device_sn": "DEV-1",
+            "undelivered_items": [],
+        }
+        kwargs.update(overrides)
+        _generate_for_employee_date(**kwargs)
+
+    def _flag_codes(self):
+        return [call.kwargs["flag_code"] for call in self.mocks["insert_flag"].call_args_list]
+
+    def _late_call(self):
+        return next(
+            c
+            for c in self.mocks["insert_flag"].call_args_list
+            if c.kwargs["flag_code"] == "LATE_START"
+        )
+
+    def test_attested_lone_morning_punch_now_carries_late_start(self):
+        self._lone_punch(9)
+        self._generate()
+
+        codes = self._flag_codes()
+        self.assertIn("LATE_START", codes)
+        # The day is still incomplete, and that finding survives alongside.
+        self.assertIn("ATTENDANCE_ISSUE", codes)
+
+        evidence = self._late_call().kwargs["evidence"]
+        self.assertIs(evidence["feed_attested"], True)
+        self.assertIs(evidence["single_punch"], True)
+        self.assertEqual(evidence["arrival_window_end"], "2026-05-27T12:30:00")
+        self.assertEqual(evidence["attesting_device"], "DEV-1")
+
+    def test_the_rebuild_recreates_what_it_deleted(self):
+        # THE BLOCKER FROM THE FIRST REVIEW. The 03:00 fallback and the
+        # punch-edit regeneration re-enter without device_sn, wipe every AUTO
+        # flag, and rebuild. The attestation now lives in stored alert state,
+        # so the rebuild must re-derive it and recreate the LATE_START it
+        # just deleted -- not silently drop it.
+        self._lone_punch(9)
+        self._generate(device_sn=None, undelivered_items=None)
+
+        self.assertIn("LATE_START", self._flag_codes())
+        self.assertIs(self._late_call().kwargs["evidence"]["feed_attested"], True)
+
+    def test_no_closed_alert_for_the_punch_device_means_no_attestation(self):
+        # The positive half: without the device's own countersigned close,
+        # "nobody complained" is not an attestation.
+        self.closed_alerts.clear()
+        self._lone_punch(9)
+        self._generate()
+
+        codes = self._flag_codes()
+        self.assertNotIn("LATE_START", codes)
+        self.assertIn("ATTENDANCE_ISSUE", codes)
+
+    def test_closed_with_undelivered_residue_is_not_attestation_grade(self):
+        # A closed report that named ANY undelivered rows -- including rows
+        # the bridge could not attribute to an employee, which vanish from
+        # every per-employee slice -- breaks the attestation via the stored
+        # device-level count.
+        self.closed_alerts["DEV-1"] = {"undelivered_count": 3, "undelivered_recorded": 1}
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_the_migrate_backfill_shape_is_not_attestation_grade(self):
+        # Frappe creates Int columns NOT NULL DEFAULT 0 (NOT_NULL_TYPES in
+        # frappe/database/schema.py, verified on a real bench), so after
+        # migrate EVERY pre-existing closed row reads count=0 -- including
+        # days that closed WITH residue. The recorded bit's own backfilled 0
+        # is what keeps those rows refused; count alone cannot.
+        self.closed_alerts["DEV-1"] = {"undelivered_count": 0, "undelivered_recorded": 0}
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_every_device_alive_at_the_branch_must_have_countersigned(self):
+        # THE ROSTER, from the final review: a device dark at close time
+        # posts NOTHING -- not even deferred_offline -- until it reconnects,
+        # so absence of complaints proves nothing. DEV-2 heartbeated at the
+        # home branch this date (it was alive that morning, exactly when the
+        # missing arrival would have been badged) and never closed: refuse.
+        self.sync_rows["BRANCH-A"] = ["DEV-1", "DEV-2"]
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_a_fully_countersigned_roster_attests(self):
+        self.sync_rows["BRANCH-A"] = ["DEV-1", "DEV-2"]
+        self.closed_alerts["DEV-2"] = {"undelivered_count": 0, "undelivered_recorded": 1}
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertIn("LATE_START", self._flag_codes())
+
+    def test_a_punch_device_with_no_heartbeat_row_cannot_attest(self):
+        # The device closed its day but never heartbeated a Device Sync
+        # Status row for the date: the sync integration is blind for this
+        # device-day, and a blind roster proves nothing about who else was
+        # alive. Closed alert alone is not enough.
+        self.sync_rows["BRANCH-A"] = []
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_a_label_that_is_neither_blank_nor_in_is_not_an_arrival(self):
+        # Only blank and IN read as an arrival. A junk label is a label this
+        # rule has no reading for -- refuse, same as OUT.
+        self._lone_punch(9, log_type="AUTO")
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_delivery_failure_marker_breaks_the_attestation(self):
+        # skip_absence's marker half, un-neutered: a DELIVERY_FAILED row for
+        # this employee-date must refuse the attestation even with the
+        # device's alert closed and every branch clean.
+        self.marker_rows = ["FLAG-DF-1"]
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_open_alert_at_home_branch_breaks_it_even_for_a_foreign_punch(self):
+        # employee_branch's own limb, ISOLATED: the punch is at clean BRANCH-B
+        # and only the HOME branch has the open alert. skip_absence would also
+        # catch this (it checks the home branch first), so it is pinned False
+        # here -- otherwise this test passes through skip_absence and the
+        # branch-set limb has zero coverage, which is exactly what the first
+        # review proved by deleting the limb with the suite green.
+        skip_patch = patch(
+            "dewey_time.attendance_engine.closeout.should_skip_absence_flags",
+            return_value=False,
+        )
+        skip_patch.start()
+        self.addCleanup(skip_patch.stop)
+        self.mocks["open_alert"].side_effect = (
+            lambda *, branch, local_date: branch == "BRANCH-A"
+        )
+        self.closed_alerts["DEV-B"] = {"undelivered_count": 0, "undelivered_recorded": 1}
+        self.sync_rows["BRANCH-B"] = ["DEV-B"]
+        self._lone_punch(9, branch="BRANCH-B", device="DEV-B")
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_open_alert_at_the_punch_campus_breaks_it(self):
+        # punch_branch's limb, isolated: home branch clean, the lone punch
+        # came from BRANCH-B and a device THERE has not closed.
+        self.mocks["open_alert"].side_effect = (
+            lambda *, branch, local_date: branch == "BRANCH-B"
+        )
+        self.closed_alerts["DEV-B"] = {"undelivered_count": 0, "undelivered_recorded": 1}
+        self.sync_rows["BRANCH-B"] = ["DEV-B"]
+        self._lone_punch(9, branch="BRANCH-B", device="DEV-B")
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_branchless_open_alert_breaks_it(self):
+        # A deferred_offline posted without device_branch matches no branch
+        # query. It belongs to SOME branch -- possibly ours -- so its mere
+        # existence on this date refuses the attestation.
+        self.branchless_open_alerts = [{"name": "DCA-mystery-2026-05-27"}]
+        self._lone_punch(9)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_neither_branch_known_is_not_clean(self):
+        # "Unknowable is not clean": no home branch, no branch on the punch,
+        # nowhere to check -- even though the device's alert is closed.
+        self.employee_doc.branch = None
+        self._lone_punch(9, branch="")
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_a_punch_with_no_device_cannot_be_attested(self):
+        # A Desk-entered punch has no device_id: nothing countersigned it.
+        self._lone_punch(9, device="")
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_an_explicit_out_label_is_believed_over_the_window(self):
+        # Label-first, the rule punchDirection and notify.direction_of both
+        # follow: an explicit OUT at 11:30 is a recorded DEPARTURE, and
+        # reading it as a late arrival is the exact accusation the guard
+        # exists to prevent -- whatever the clock says.
+        self._lone_punch(11, 30, log_type="OUT")
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_afternoon_lone_punch_stays_silent(self):
+        # 14:00 is past the 12:30 midpoint: "departure whose arrival never
+        # read" is the better story, and no attestation can exclude it.
+        self._lone_punch(14)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_a_punch_exactly_at_the_midpoint_is_still_an_arrival(self):
+        # The boundary itself: <= midpoint, not < midpoint.
+        self._lone_punch(12, 30)
+        self._generate()
+
+        self.assertIn("LATE_START", self._flag_codes())
+
+    def test_the_window_is_measured_from_shift_start_not_the_threshold(self):
+        # With 60 minutes of grace the midpoint must stay 12:30 -- the window
+        # answers "is a lone punch here credibly an arrival", a fact about
+        # the shift's shape, not about how much lateness it forgives. A
+        # threshold-based formula would print 13:00 here.
+        self._set_shift_meta(custom_grace_minutes=60)
+        self._lone_punch(9, 30)
+        self._generate()
+
+        evidence = self._late_call().kwargs["evidence"]
+        self.assertEqual(evidence["arrival_window_end"], "2026-05-27T12:30:00")
+
+    def test_lone_punch_inside_grace_is_not_late(self):
+        self._set_shift_meta(custom_grace_minutes=10)
+        self._lone_punch(8, 5)
+        self._generate()
+
+        self.assertNotIn("LATE_START", self._flag_codes())
+
+    def test_overnight_shift_keeps_its_own_rule_untouched(self):
+        # Overnight already allows 1 punch; the attestation block must not
+        # touch it -- its window arithmetic would be NEGATIVE here (end 06:00
+        # combines onto the same day, so midpoint lands before the start).
+        # LATE_START fires by the overnight rule with NONE of the new keys.
+        self._set_shift_meta()
+        from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
+
+        self.mocks["get_shift_meta"].return_value = enrich_shift_meta(
+            {
+                "start_time": dt_time(22, 0),
+                "end_time": dt_time(6, 0),
+                "custom_lunch_start": None,
+                "custom_lunch_end": None,
+                "custom_grace_minutes": 0,
+                "late_entry_grace_period": 0,
+                "early_exit_grace_period": 0,
+            }
+        )
+        self._lone_punch(23)
+        self._generate()
+
+        evidence = self._late_call().kwargs["evidence"]
+        self.assertNotIn("feed_attested", evidence)
+        self.assertNotIn("single_punch", evidence)
+        self.assertNotIn("arrival_window_end", evidence)
+
+    def test_a_shift_without_an_end_time_cannot_attest_and_cannot_crash(self):
+        # No end_time -> no window to compute. The guard must decline BEFORE
+        # _combine_date_time(date, None) raises -- an exception here is
+        # swallowed by the isolation wrapper and costs the employee every
+        # flag for the day, which is worse than a wrong one.
+        from dewey_time.attendance_engine.shift_grace import enrich_shift_meta
+
+        self.mocks["get_shift_meta"].return_value = enrich_shift_meta(
+            {
+                "start_time": dt_time(8, 0),
+                "end_time": None,
+                "custom_lunch_start": None,
+                "custom_lunch_end": None,
+                "custom_grace_minutes": 0,
+                "late_entry_grace_period": 0,
+                "early_exit_grace_period": 0,
+            }
+        )
+        self._lone_punch(9)
+        self._generate()
+
+        codes = self._flag_codes()
+        self.assertNotIn("LATE_START", codes)
+        self.assertIn("ATTENDANCE_ISSUE", codes)
+
+    def test_two_punch_day_gains_no_attestation_evidence(self):
+        # The ordinary path must be byte-identical to before: LATE_START by
+        # the normal rule, with none of the single-punch evidence keys.
+        self.mocks["get_checkins"].return_value = [
+            {
+                "name": "IN-1",
+                "time": datetime(2026, 5, 27, 9, 0),
+                "log_type": None,
+                "device_id": "DEV-1",
+                "custom_device_branch": "BRANCH-A",
+            },
+            {
+                "name": "OUT-1",
+                "time": datetime(2026, 5, 27, 17, 0),
+                "log_type": None,
+                "device_id": "DEV-1",
+                "custom_device_branch": "BRANCH-A",
+            },
+        ]
+        self._generate()
+
+        evidence = self._late_call().kwargs["evidence"]
+        self.assertNotIn("feed_attested", evidence)
+        self.assertNotIn("single_punch", evidence)
+        self.assertNotIn("arrival_window_end", evidence)
 
 
 class TestDeviceCloseoutFlags(unittest.TestCase):

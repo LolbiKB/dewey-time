@@ -68,7 +68,7 @@ Callers: `hr_calendar.py`, `intraday.py`, `closeout.py`.
 
 | Flag | When | `day_closed` | Requires / notes |
 |------|------|----------------|------------------|
-| `LATE_START` | **Closeout only** | 1 | On-shift; **≥2 checkins**; `first_in` > start + effective start grace |
+| `LATE_START` | **Closeout only** | 1 | On-shift; `first_in` > start + effective start grace. Needs **≥2 checkins** — except overnight shifts (1 suffices), and a **feed-attested single punch**: every device alive at either relevant branch that date (per its Device Sync Status heartbeat, the punch's own device included) holds a `closed` Device Closeout Alert with a *recorded* zero undelivered residue, no open alert at either branch (or branchless), no delivery markers, punch unlabelled-or-IN and within the first half of the shift window (`feed_attested`/`single_punch`/`arrival_window_end`/`attesting_device` in evidence) |
 | `LEFT_EARLY` | Closeout | 1 | On-shift; ≥2 checkins; last punch before end − effective end grace |
 | `MISSING_TIME` | Intraday + closeout | 0 / 1 | On-shift gap **≥30 min** |
 | `ATTENDANCE_ISSUE` | Closeout | 1 | Incomplete punch data — **CRITICAL** |

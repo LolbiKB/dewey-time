@@ -449,6 +449,46 @@ test("flagNarrative: LATE_START timeline covers only the start boundary and firs
   assert.ok(timeline.window.endMin < timeline.band!.endMin);
 });
 
+test("flagNarrative: a feed-attested single-punch LATE_START says so in the subline — HR must see the no-clock-out basis without opening the raw blob", () => {
+  const late = boundaryFlag("LATE_START", {
+    first_in: "2026-08-03T09:00:00",
+    shift_start: "2026-08-03T08:00:00",
+    late_threshold: "2026-08-03T08:00:00",
+    effective_start_grace_minutes: 0,
+    grace_minutes: 0,
+    // The three keys closeout writes when it dared on one punch.
+    feed_attested: true,
+    single_punch: true,
+    arrival_window_end: "2026-08-03T12:30:00",
+    attesting_device: "PYA8254100003",
+  });
+  const d = day({ checkins: [checkin("2026-08-03T09:00:00")] });
+
+  const narrative = flagNarrative(late, d, DATE_KEY);
+
+  // Headline unchanged — the claim is the same claim.
+  assert.equal(
+    narrative.headline,
+    "Clocked in at 9:00 AM — 60 minutes after the 8:00 AM shift start."
+  );
+  // The subline is the load-bearing part: single check-in, no clock-out, and
+  // why the engine dared anyway.
+  assert.ok(narrative.subline, "single-punch LATE_START must carry a subline");
+  assert.match(narrative.subline!, /single check-in/);
+  assert.match(narrative.subline!, /no matching clock-out/);
+
+  // A paired day must NOT inherit the subline: single_punch is the trigger,
+  // not the flag code.
+  const paired = boundaryFlag("LATE_START", {
+    first_in: "2026-08-03T09:00:00",
+    shift_start: "2026-08-03T08:00:00",
+    late_threshold: "2026-08-03T08:00:00",
+    effective_start_grace_minutes: 0,
+    grace_minutes: 0,
+  });
+  assert.equal(flagNarrative(paired, d, DATE_KEY).subline, null);
+});
+
 test("flagNarrative: LEFT_EARLY with grace states the cutoff, not the raw shift end, and measures against early_threshold in both the headline and the facts", () => {
   const leftEarly = boundaryFlag("LEFT_EARLY", {
     last_out: "2026-08-03T16:37:00",

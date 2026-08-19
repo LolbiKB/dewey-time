@@ -535,9 +535,17 @@ function buildLateStartNarrative(flag: Flag, day: NarrativeDay, dateKey: string)
           fact("Late by", formatDurationMinutes(lateMinutes)),
         ]);
 
+  // The feed-attested single-punch basis is a different evidentiary footing
+  // than a paired day, and HR must see that without opening the raw blob:
+  // there is no clock-out behind this headline, and the reason the engine
+  // dared anyway is that the device countersigned its day complete.
+  const singlePunch = (genericEvidence as Record<string, unknown>).single_punch === true;
+
   return {
     headline,
-    subline: null,
+    subline: singlePunch
+      ? "This rests on a single check-in — there is no matching clock-out. The device closed its day with nothing left to deliver, so that punch is read as the arrival."
+      : null,
     facts,
     timeline: buildLateStartTimeline(day, evidence, grace),
   };

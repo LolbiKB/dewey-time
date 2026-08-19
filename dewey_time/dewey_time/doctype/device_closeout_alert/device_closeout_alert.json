@@ -16,6 +16,8 @@
     "local_date",
     "column_break_1",
     "status",
+    "undelivered_count",
+    "undelivered_recorded",
     "resolved_at",
     "last_error"
   ],
@@ -54,6 +56,20 @@
       "reqd": 1
     },
     {
+      "default": "0",
+      "description": "Rows the bridge reported as undelivered when this day closed. Non-zero means closed-with-residue: not attestation grade.",
+      "fieldname": "undelivered_count",
+      "fieldtype": "Int",
+      "label": "Undelivered Count"
+    },
+    {
+      "default": "0",
+      "description": "Set when the bridge actually supplied an undelivered list on close. Frappe Int columns are NOT NULL DEFAULT 0, so the count alone cannot distinguish a claimed zero from nothing recorded; only rows with this bit set are attestation grade.",
+      "fieldname": "undelivered_recorded",
+      "fieldtype": "Check",
+      "label": "Undelivered Recorded"
+    },
+    {
       "fieldname": "resolved_at",
       "fieldtype": "Datetime",
       "label": "Resolved At"
@@ -66,7 +82,7 @@
   ],
   "index_web_pages_for_search": 0,
   "links": [],
-  "modified": "2026-08-16 00:00:00.000000",
+  "modified": "2026-08-19 18:00:00.000000",
   "modified_by": "Administrator",
   "module": "Dewey Time",
   "name": "Device Closeout Alert",
