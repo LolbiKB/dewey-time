@@ -564,6 +564,20 @@ class TestMeaningLine(unittest.TestCase):
         self.assertEqual(direction, "")
         self.assertIsNone(meaning)
 
+    def test_a_meaning_fault_costs_the_line_never_the_receipt(self):
+        # The verb IS the service. A bug anywhere in the gates -- here, a
+        # roster lookup that raises -- must degrade to a plain receipt and
+        # an Error Log entry, not a dead notification queue.
+        first = _punch("P0", "2026-08-17 07:58:00")
+        with self._env(punches=[first]), \
+             patch.object(notify, "get_shift_assignment",
+                          side_effect=RuntimeError("half-migrated column")), \
+             patch.object(notify.frappe, "log_error") as log_error:
+            direction, meaning = notify._receipt_for("E1", first)
+        self.assertEqual(direction, "IN")
+        self.assertIsNone(meaning)
+        log_error.assert_called_once()
+
     def test_a_lunch_return_gets_no_line(self):
         # Not the first punch, not a departure: nothing to say, on purpose.
         day = [

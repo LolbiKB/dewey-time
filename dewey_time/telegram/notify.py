@@ -171,7 +171,19 @@ def _receipt_for(employee: str, row) -> tuple[str, tuple[str, str] | None]:
     explicit = str((row or {}).get("log_type") or "").upper()
     announced = receipt.announce(_day_punches_up_to(employee, row))
     direction = explicit if explicit in (receipt.IN, receipt.OUT) else announced["verb"]
-    return direction, _meaning_for(employee, row, direction, announced)
+    try:
+        meaning = _meaning_for(employee, row, direction, announced)
+    except Exception:
+        # The verb IS the service; the meaning line is garnish. A broken
+        # Shift Type row, a half-migrated column, or a bug in a gate must
+        # cost the line, never the receipt -- without this, a garnish fault
+        # silences every check-in message in the queue.
+        frappe.log_error(
+            title="Telegram meaning line failed",
+            message=f"employee={employee}\n{frappe.get_traceback()}",
+        )
+        meaning = None
+    return direction, meaning
 
 
 def _meaning_for(employee: str, row, direction: str, announced: dict) -> tuple[str, str] | None:
