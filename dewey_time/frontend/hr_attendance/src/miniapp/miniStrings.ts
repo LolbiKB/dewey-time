@@ -242,6 +242,8 @@ const EN = {
   // a Bridge outage was pixel-identical to a no-show.
   feedUncertain: "No data came from the device for this day.",
   markUncertain: "no data from the device",
+  loadingMonth: "Loading this month\u2026",
+  errorMonth: "This month could not be loaded.",
 } as const;
 
 const KM: Record<StringKey, string> = {
@@ -411,6 +413,8 @@ const KM: Record<StringKey, string> = {
   // "No data came from the machine" -- about our equipment, not about them.
   feedUncertain: "គ្មានទិន្នន័យមកពីម៉ាស៊ីនសម្រាប់ថ្ងៃនេះទេ។",
   markUncertain: "គ្មានទិន្នន័យពីម៉ាស៊ីន",
+  loadingMonth: "កំពុងផ្ទុកខែនេះ…",
+  errorMonth: "មិនអាចផ្ទុកខែនេះបានទេ។",
 
 };
 

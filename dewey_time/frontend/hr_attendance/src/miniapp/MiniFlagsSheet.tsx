@@ -14,6 +14,8 @@
 import { TriangleAlertIcon } from "lucide-react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useDismissibleLayer } from "@/miniapp/miniBackStack";
+import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import { flagStatusKey, flagText, visibleFlags } from "@/miniapp/miniFlags";
 import { useT } from "@/miniapp/MiniLocale";
 import type { Day } from "@/types/calendar";
@@ -25,10 +27,21 @@ export function MiniFlagsSheet(props: {
 }) {
   const t = useT();
   const flags = visibleFlags(props.day);
+  // Closed by Telegram's back button before the day underneath it moves.
+  useDismissibleLayer(props.open, () => props.onOpenChange(false));
+  const insets = useSafeAreaInsets();
 
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-      <SheetContent side="bottom" className="gap-0 rounded-t-xl px-4 pb-8">
+      <SheetContent
+        side="bottom"
+        className="gap-0 rounded-t-xl px-4 pb-8"
+        style={{
+          paddingBottom: `calc(2rem + ${insets.bottom}px)`,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        }}
+      >
         <SheetHeader className="px-0 pb-2">
           <SheetTitle className="text-base">{t("flagsSheetTitle")}</SheetTitle>
         </SheetHeader>

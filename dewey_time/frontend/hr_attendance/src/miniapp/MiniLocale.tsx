@@ -20,6 +20,7 @@ import {
   formatServiceLength,
   formatWorkedMinutes,
   formatHourTick,
+  formatPunchCompact,
 } from "@/miniapp/miniIntl";
 import { translator, type Locale, type Translate } from "@/miniapp/miniStrings";
 
@@ -64,6 +65,8 @@ export type MiniFormat = {
   span: (startMin: number | null | undefined, endMin: number | null | undefined) => string | null;
   /** One punch's wall-clock time, from the API's datetime string. */
   punch: (value: string | null | undefined) => string | null;
+  /** The same, tightened for the timeline canvas. See formatPunchCompact. */
+  punchCompact: (value: string | null | undefined) => string | null;
   /** A duration in hours and minutes, with the units in the reader's language. */
   worked: (minutes: number | null | undefined) => string | null;
   /** Latin digits to the reader's script, for a string formatted elsewhere. */
@@ -81,6 +84,7 @@ export function useFormat(): MiniFormat {
       hour: (minuteOfDay) => formatHourTick(locale, minuteOfDay),
       span: (startMin, endMin) => formatClockSpan(locale, startMin, endMin),
       punch: (value) => formatPunchTime(locale, value),
+      punchCompact: (value) => formatPunchCompact(locale, value),
       worked: (minutes) =>
         formatWorkedMinutes(locale, minutes, { hour: t("unitHour"), minute: t("unitMinute") }),
       digits: digitsFor(locale),

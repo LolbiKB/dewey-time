@@ -151,12 +151,20 @@ export function MySchedulePage(props: {
   const planned = plannedDaysFromSchedule(week, daysByDate(query.data));
   const total = fmt.worked(weekRosteredMinutes(planned));
 
+  // PAST THE HORIZON IS NOT THE SAME AS NOTHING ROSTERED. `schedule_max_date`
+  // is how far the wizard has actually published; beyond it there is no roster
+  // to have, and "No shifts are assigned to you this week" is a statement about
+  // the schedule that reads as a statement about the person. Workers plan
+  // around not working, and the roster lands two days later.
+  const horizon = query.data?.schedule_max_date;
+  const beyondHorizon = Boolean(horizon) && week.every((day) => format(day, "yyyy-MM-dd") > horizon!);
+
   return (
     <div className="flex flex-col gap-3">
       {nav}
 
       {planned.every((d) => !d.works) ? (
-        <MiniState>{t("noShiftsThisWeek")}</MiniState>
+        <MiniState>{t(beyondHorizon ? "rosterNotPublished" : "noShiftsThisWeek")}</MiniState>
       ) : (
         <>
           <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">

@@ -137,6 +137,24 @@ export function formatPunchTime(locale: Locale, value: string | null | undefined
 }
 
 /**
+ * The same punch time, tightened for the timeline canvas.
+ *
+ * The canvas prints a start and an end INSIDE a punch block, which on a 320px
+ * phone is a few dozen pixels wide, so the shared timeline has always drawn
+ * "7:58AM" without the space. Khmer keeps its space: "៧:៥៨ ព្រឹក" is a numeral
+ * followed by a separate word, and closing that gap sets two scripts against
+ * each other rather than saving room.
+ */
+export function formatPunchCompact(locale: Locale, value: string | null | undefined): string | null {
+  if (locale === "km") return formatPunchTime(locale, value);
+  if (!value) return null;
+  const at = parseDateTimeLocal(value);
+  if (!Number.isFinite(at.getTime())) return null;
+  return formatDate(at, "h:mma");
+}
+
+
+/**
  * A duration in hours and minutes — NEVER days.
  *
  * `formatDurationMinutes` in the shared lib rolls anything past 24h into

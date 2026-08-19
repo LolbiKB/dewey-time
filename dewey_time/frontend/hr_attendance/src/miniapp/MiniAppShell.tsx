@@ -18,6 +18,8 @@ import {
   telegramPhotoUrl,
   useMiniAppCalendar,
 } from "@/miniapp/useMiniAppSession";
+import { dismissTopLayer, useLayerDepth } from "@/miniapp/miniBackStack";
+import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import {
   bindBackButton,
   loadLastTab,
@@ -132,11 +134,7 @@ export function MiniAppShell() {
   // at mount they are whatever they were before the sheet was dragged or the
   // device rotated, which is how a tab bar ends up back under the home
   // indicator halfway through a session.
-  const [insets, setInsets] = useState(() => safeAreaInsets(window));
-  useEffect(
-    () => onViewportChange(window, () => setInsets(safeAreaInsets(window))),
-    [],
-  );
+  const insets = useSafeAreaInsets();
 
   // Reopen on the tab they left. Applied ONLY while nothing has been touched:
   // the read resolves asynchronously, so a slow CloudStorage round trip would
@@ -185,10 +183,32 @@ export function MiniAppShell() {
   }, []);
 
   const closeDay = useCallback(() => setOpenDay(null), []);
-  // Telegram's own back button, shown only while a specific day is open. The
-  // teardown hides it, so switching tabs while drilled in cannot strand a
-  // visible arrow that no longer does anything.
-  useEffect(() => bindBackButton(window, openDay !== null, closeDay), [openDay, closeDay]);
+
+  // Telegram's own back button, over a STACK rather than over one state.
+  //
+  // It used to be bound to the drill-in alone, so with a sheet open back left
+  // the sheet exactly where it was and silently reset the date underneath it --
+  // the one layer the reader could not see was the one that moved. Now the
+  // topmost open layer goes first (flags sheet, then the date picker), and the
+  // drill-in only when nothing is covering it.
+  const layerDepth = useLayerDepth();
+  const goBack = useCallback(() => {
+    if (dismissTopLayer()) return;
+    closeDay();
+  }, [closeDay]);
+  useEffect(
+    () => bindBackButton(window, layerDepth > 0 || openDay !== null, goBack),
+    [layerDepth, openDay, goBack],
+  );
+
+  // The DOCUMENT's language, not just the words. Without this the page stayed
+  // `lang="en"` while every string on it turned Khmer, so a screen reader kept
+  // reading Khmer text with an English voice -- which is unintelligible rather
+  // than merely wrong. `hr-me.html` can only ship one value; this is the only
+  // place that knows which language is actually on screen.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const selectTab = useCallback((next: MiniTab) => {
     touched.current = true;

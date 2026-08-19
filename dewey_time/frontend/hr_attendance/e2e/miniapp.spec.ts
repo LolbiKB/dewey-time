@@ -24,16 +24,21 @@ const MINIAPP = "/index.miniapp.html";
  * finished day reads "Out during shift" before 5pm and "Checked out" after,
  * so asserting on it would pass in the morning and fail in the evening.
  */
-type Punches = "none" | "open" | "partial" | "full";
+type Punches = "none" | "open" | "partial" | "full" | "late";
 
 function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] = []) {
+  // EVERY OTHER VARIANT PUNCHES EARLY, at 07:58 against an 08:00 start, which
+  // is why nothing caught the phone stamping a lateness verdict: there was no
+  // fixture that could produce one. `late` arrives at 08:07 — inside a
+  // 15-minute grace window the engine forgives and the payload never mentions.
+  const firstIn = punches === "late" ? `${date} 08:07:00` : `${date} 07:58:00`;
   const all = [
-    { time: `${date} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    { time: firstIn, log_type: "IN", custom_device_branch: "DIS Iconic" },
     { time: `${date} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
     { time: `${date} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
     { time: `${date} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
   ];
-  const checkins = all.slice(0, { none: 0, open: 1, partial: 3, full: 4 }[punches]);
+  const checkins = all.slice(0, { none: 0, open: 1, partial: 3, full: 4, late: 4 }[punches]);
   const outs = checkins.filter((c) => c.log_type === "OUT");
   return {
     date,
@@ -526,8 +531,8 @@ test("a Khmer interface has no Latin digits left anywhere in it", async ({ page 
   // on the ABSENCE of [0-9] catches any surface someone adds later without a
   // formatter, which naming individual strings would not.
   //
-  // Scoped to the app's own regions. The hour gutter down the timeline is the
-  // shared HR `DayCell` axis and is still Latin — see the note in MyDayPage.
+  // Scoped to the app's own regions. The timeline itself is swept by its own
+  // test below, now that it is no longer English under a Khmer heading.
   await openMiniApp(page, { languageCode: "km", punched: "full" });
 
   const header = page.getByRole("heading", { level: 1 }).locator("xpath=..");
@@ -750,4 +755,37 @@ test("the flags pill never overlaps the tab bar on a notched phone", async ({ pa
   if (!pillBox || !navBox) throw new Error("pill or tab bar has no box");
 
   expect(pillBox.y + pillBox.height).toBeLessThanOrEqual(navBox.y);
+});
+
+
+test("the timeline itself speaks Khmer, digits and all", async ({ page }) => {
+  // THE DEFECT THIS PINS: the Day tab's canvas is HR's shared `DayCell`, and it
+  // printed "7:58AM", "4h 3m" and "Day off" in Latin digits under a fully
+  // translated heading — the only numbers on the screen that say when this
+  // person arrived and left. A Khmer reader opened the app every morning to a
+  // picture in a script they may not read.
+  await openMiniApp(page, { languageCode: "km", punched: "full" });
+
+  // The canvas is a <section> now rather than a button — it has no inspector to
+  // open — so it announces as a region carrying the day's accessible name.
+  const canvas = page.getByRole("region").first();
+  await expect(canvas).toBeVisible();
+
+  const text = await canvas.innerText();
+  expect(text, "the timeline kept Latin numerals").not.toMatch(/[0-9]/);
+  // And positively: a Khmer day period, which is the token date-fns gets wrong
+  // and miniIntl replaces.
+  expect(text).toMatch(/ព្រឹក|រសៀល|ល្ងាច/);
+});
+
+test("the timeline draws no lateness verdict on the employee's own punch", async ({ page }) => {
+  // The Mini App's payload carries no grace minutes, so any figure here is
+  // computed against a threshold the engine never used. HR owns verdicts; a
+  // real LATE_START still reaches the employee through the flags sheet.
+  await openMiniApp(page, { languageCode: "en", punched: "late" });
+
+  const canvas = page.getByRole("region").first();
+  await expect(canvas).toBeVisible();
+  const text = await canvas.innerText();
+  expect(text, "no lateness verdict on the phone").not.toMatch(/Late|\+\d+m/);
 });

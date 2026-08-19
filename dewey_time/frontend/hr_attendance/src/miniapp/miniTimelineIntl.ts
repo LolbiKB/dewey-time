@@ -46,7 +46,9 @@ export function useTimelineIntl(): TimelineIntl {
       // An em dash for a punch that has no time, matching the English default:
       // a missing value must not render as the word "null" or as a blank the
       // reader cannot distinguish from a layout bug.
-      punch: (value) => fmt.punch(value) ?? "—",
+      // `punchCompact`: the canvas prints these inside a punch block a few
+      // dozen pixels wide, so English drops the space the rest of the app uses.
+      punch: (value) => fmt.punchCompact(value) ?? "—",
       duration: (minutes) => fmt.worked(minutes) ?? "—",
       hour: (minuteOfDay) => fmt.hour(minuteOfDay),
       label: (key) => t(LABEL_KEYS[key]),
