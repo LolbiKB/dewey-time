@@ -132,7 +132,7 @@ test("a cover shift's lone closing punch is not one undifferentiated oddness", (
   assert.equal(dayMarkLabel("incomplete", cover), "markIncompleteNoIn");
 });
 
-test("a lone OUT names the clock-in as missing, never the clock-out", () => {
+test("a lone OUT is an unpaired clock-out, never a missing one", () => {
   // THE AUDIT'S EXACT CASE: a day whose only punch is an explicit OUT was
   // announced as "no clock-out recorded" -- the opposite of what happened --
   // and sent the worker to argue about the wrong end of their day.
@@ -188,6 +188,37 @@ test("an unmapped device's day cannot masquerade as a complete record", () => {
   } as Partial<Day>);
   assert.equal(mark(unmapped, AUG(10), AUG(17, 12, 0)), "incomplete");
   assert.equal(dayMarkLabel("incomplete", unmapped), "markUnpaired");
+});
+
+test("two arrivals in one run are an unmatched punch, whatever the count", () => {
+  // The discriminator between pairRun and any parity rule, per-run included:
+  // an even-count run of two INs has a duplicate arrival in it, which parity
+  // of every flavour calls a complete record. pairRun keeps the first arrival
+  // open and files the repeat as unmatched.
+  const k = KEY(10);
+  const doubled = day(10, 0, {
+    checkins: [
+      { time: `${k} 08:00:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 09:00:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    ],
+  } as Partial<Day>);
+  assert.equal(mark(doubled, AUG(10), AUG(17, 12, 0)), "incomplete");
+});
+
+test("the payload's order cannot change the mark", () => {
+  // The runs are grouped by walking CONSECUTIVE punches, so an out-of-order
+  // row would split one run into three and flip complete to incomplete. The
+  // payload's order is the query's order, not a guarantee -- sorted first.
+  const k = KEY(10);
+  const scrambled = day(10, 0, {
+    checkins: [
+      { time: `${k} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    ],
+  } as Partial<Day>);
+  assert.equal(mark(scrambled, AUG(10), AUG(17, 12, 0)), "complete");
 });
 
 test("the label passthrough for the other marks is the static table", () => {

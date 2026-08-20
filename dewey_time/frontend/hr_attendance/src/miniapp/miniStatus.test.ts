@@ -79,15 +79,12 @@ test("out before the shift opens is not 'during' it", () => {
   assert.equal(miniStatus(day(punches), DAY, at(7)).kind, "out");
 });
 
-test("an unlabelled punch stream is paired, not assumed to be an arrival", () => {
-  // Employee Checkin's `log_type` is an OPTIONAL Select, and a device that
-  // reports only a timestamp leaves it empty on every row. The rule here used
-  // to be "the last punch is not an OUT", which claims someone is at work on
-  // any evidence short of an explicit departure -- so an unlabelled stream
-  // read "In" forever, including after they had gone home.
-  //
-  // Paired instead, the way deriveSegments pairs them to draw the timeline
-  // directly below this chip, so the two surfaces cannot disagree.
+test("an unlabelled punch stream follows the receipt's walk, not an assumption", () => {
+  // Employee Checkin's `log_type` is an OPTIONAL Select, and in production
+  // the bridge writes none at all -- a device that reports only a timestamp
+  // leaves it empty on every row. The chip reads the same causal walk as the
+  // Telegram receipt (`liveWalk`): first punch is an arrival, a blank punch
+  // closes the open arrival, a same-branch return is the lunch-comeback.
   const blank = (time: string): Punch => [time, "" as never];
   const home = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00"), blank("17:06:00")]);
   assert.notEqual(miniStatus(home, DAY, at(17, 30)).kind, "in", "four punches is two closed pairs");
@@ -95,34 +92,52 @@ test("an unlabelled punch stream is paired, not assumed to be an arrival", () =>
   assert.equal(miniStatus(day([blank("07:58:00")]), DAY, at(9)).kind, "in");
 });
 
-test("the chip never out-claims the canvas on an unlabelled odd day", () => {
-  // 07:58 / 12:01 / 12:58, no labels. Whole-day parity read this as "still
-  // inside" -- the old rule here -- while `pairRun` directly below drew a
-  // closed pair and a stray, no live marker, "so far" frozen. Two answers to
-  // one question, stacked on one screen. The chip now follows the same
-  // evidenced open run as the canvas: no run is open, so it reports the
-  // clock's observation instead of a claim the timeline just declined.
+test("back from lunch on a blank feed reads In, like the message that just said so", () => {
+  // 07:58 / 12:01 / 12:58, no labels, 14:00. The person is at their desk.
+  // The receipt called the 12:58 punch "Checked in" (the lunch-comeback rule)
+  // and the canvas below the chip draws a growing on-site band from 12:58 --
+  // so a chip reading anything else contradicts both. Retrospective pairRun
+  // would close this day at 12:01 (it calls the last punch of a run a
+  // departure, which mid-afternoon is a guess about punches that have not
+  // happened yet); the chip must read the LIVE walk instead.
   const blank = (time: string): Punch => [time, "" as never];
   const working = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00")]);
-  assert.equal(miniStatus(working, DAY, at(14)).kind, "outDuringShift");
+  const status = miniStatus(working, DAY, at(14));
+  assert.equal(status.kind, "in");
+  assert.equal(isLive(status), true);
 });
 
-test("a cover shift's closing punch at a second branch reads checked out", () => {
-  // THE AUDIT'S BLOCKER 3, at chip level. The departure is alone in its own
-  // branch run; inferred by position it was an arrival, and the chip said
-  // "In" at 19:00 while `openRunStartedAt` beside it said nothing was open.
-  const punches: Punch[] = [
-    ["08:00:00", "" as never, "DIS Iconic"],
-    ["17:00:00", "" as never, "DIS Toul Kork"],
-  ];
-  assert.equal(miniStatus(day(punches), DAY, at(19)).kind, "out");
+test("a lone unlabelled punch at a second branch is not a claim either way", () => {
+  // THE AUDIT'S COVER-SHIFT SHAPE, as the shared fixture carries it
+  // (departure_through_another_campus): a punch alone in a fresh branch run
+  // is indistinguishable from a departure through that campus's exit device.
+  // The receipt sent a NEUTRAL message for it -- no verb -- so the chip says
+  // nothing rather than "In" (the old whole-day-parity answer on any odd
+  // count) or "Checked out" (a guess in the other direction).
+  const blank = (time: string, branch: string): Punch => [time, "" as never, branch];
+  const threePunch = day([
+    blank("08:00:00", "DIS Iconic"),
+    blank("17:00:00", "DIS Iconic"),
+    blank("17:04:00", "DIU"),
+  ]);
+  assert.equal(miniStatus(threePunch, DAY, at(19)).kind, "none");
+
+  const twoPunch = day([blank("08:00:00", "DIS Iconic"), blank("17:00:00", "DIS Toul Kork")]);
+  assert.equal(miniStatus(twoPunch, DAY, at(19)).kind, "none");
+});
+
+test("a bounced tap is a non-event, not a departure", () => {
+  // Two blank punches five seconds apart at one device: one physical visit,
+  // read twice. The receipt drops the bounce; the state stays the 08:00
+  // arrival. Whole-day parity saw "two punches, even" and said checked out.
+  const punches: Punch[] = [["08:00:00", "" as never], ["08:00:05", "" as never]];
+  assert.equal(miniStatus(day(punches), DAY, at(10)).kind, "in");
 });
 
 test("a duplicated arrival does not read as having left", () => {
-  // Two INs, no OUT: the second is a bounced tap, not a departure. The open
-  // run is evidenced by the punch's own label, so the chip stays "in" even
-  // though the count is even.
-  const punches: Punch[] = [["08:00:00", "IN"], ["08:00:30", "IN"]];
+  // Two labelled INs, no OUT: the second is noise, not a departure. The
+  // walk keeps the first arrival open and the verb stays IN.
+  const punches: Punch[] = [["08:00:00", "IN"], ["09:00:00", "IN"]];
   const status = miniStatus(day(punches), DAY, at(10));
   assert.equal(status.kind, "in");
 });
@@ -196,7 +211,8 @@ test("a cover shift's closing punch at a second branch is not an arrival", () =>
   // THE DEFECT: the departure is alone in its own branch run, and a one-punch
   // run was inferred to be an arrival by position. At 19:00 the app read
   // "2h so far", live, counting from the moment the person went home -- beside
-  // a chip that said "Checked out".
+  // a chip that said "Checked out". The walk refuses that punch a verb, so
+  // nothing live rides on it.
   const day = {
     date: "2026-08-19",
     shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
@@ -235,14 +251,64 @@ test("a punch that says IN is still an open run", () => {
 });
 
 test("a lone unlabelled arrival is still an open run", () => {
-  // The case that must keep working, and the reason parity is the fallback
-  // rather than a flat refusal: a device that labels nothing, one punch this
-  // morning, nobody home yet. Odd parity is what "one of them is unmatched"
-  // means, and here it is the arrival.
+  // The case that must keep working: a device that labels nothing, one punch
+  // this morning, nobody home yet. The day's FIRST punch is an arrival in the
+  // walk's book -- the one blank punch whose direction is honestly callable.
   const day = {
     date: "2026-08-19",
     checkins: [
       { time: "2026-08-19 08:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), "2026-08-19 08:00:00");
+});
+
+test("the lunch comeback re-opens the run, so the afternoon counts", () => {
+  // 07:58 / 12:01 / 12:58 blank. Retrospective pairRun closes this day at
+  // 12:01 and calls 12:58 a stray -- which froze the "so far" figure at four
+  // hours for the whole afternoon. The walk's lunch-comeback rule re-opens at
+  // 12:58, the same moment the canvas starts its on-site band.
+  const day = {
+    date: "2026-08-19",
+    checkins: [
+      { time: "2026-08-19 07:58:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 12:01:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 12:58:00", log_type: "", custom_device_branch: "DIS Iconic" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), "2026-08-19 12:58:00");
+});
+
+test("an odd day count cannot re-open a fresh-run departure", () => {
+  // Four paired punches at the home branch, then one blank punch at a second
+  // campus on the way out: FIVE punches. The old gate fell back to WHOLE-DAY
+  // parity for the unlabelled opener, so odd meant "open" and the so-far
+  // figure climbed all night from the moment the person went home. The walk
+  // refuses that punch a verb, so nothing live may ride on it.
+  const day = {
+    date: "2026-08-19",
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 12:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 13:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 17:00:00", log_type: "", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 17:04:00", log_type: "", custom_device_branch: "DIU" },
+    ],
+  } as unknown as Day;
+
+  assert.equal(openRunStartedAt(day), null);
+});
+
+test("a repeated labelled arrival does not move the open moment", () => {
+  // Issue #191: the person got there at 08:00; the 09:00 IN is a duplicate.
+  // Counting from the later punch would quietly dock them an hour.
+  const day = {
+    date: "2026-08-19",
+    checkins: [
+      { time: "2026-08-19 08:00:00", log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: "2026-08-19 09:00:00", log_type: "IN", custom_device_branch: "DIS Iconic" },
     ],
   } as unknown as Day;
 

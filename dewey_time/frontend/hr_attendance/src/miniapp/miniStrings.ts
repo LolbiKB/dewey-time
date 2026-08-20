@@ -73,15 +73,18 @@ const EN = {
   chooseDate: "Choose a date",
   workedInMonth: "Worked this month, net of lunch",
   markComplete: "complete record",
-  markIncomplete: "no clock-out recorded",
-  // The twin of markIncomplete for a day whose unmatched punches all say OUT:
-  // the clock-out is the punch that EXISTS, and naming the wrong end sends the
-  // worker to argue about the wrong thing.
-  markIncompleteNoIn: "no clock-in recorded",
-  // When the unmatched punches carry no labels (or disagree), direction is not
-  // honestly callable and the mark refuses to name an end — the same refusal
-  // the Telegram receipt makes.
-  markUnpaired: "a check-in without its pair",
+  // CLAIMS ABOUT A PUNCH, NEVER ABOUT THE DAY. "No clock-out recorded" was
+  // the old wording and it was false on the commonest deficient day — IN,
+  // OUT, IN has a recorded clock-out at midday; only the SECOND clock-in
+  // lacks one. A stray punch can even be a duplicate of an end that exists.
+  // So each label states what is true of the unmatched punch itself, and the
+  // direction comes from that punch's own label alone.
+  markIncomplete: "a clock-in without its pair",
+  markIncompleteNoIn: "a clock-out without its pair",
+  // Unlabelled or mixed strays: direction is not honestly callable, so the
+  // mark refuses to name an end — the same refusal the Telegram receipt
+  // makes.
+  markUnpaired: "a punch without its pair",
   markMissing: "no record",
   markOff: "not a working day",
 
@@ -289,9 +292,9 @@ const KM: Record<StringKey, string> = {
   chooseDate: "ជ្រើសរើសថ្ងៃ",
   workedInMonth: "ម៉ោងធ្វើការខែនេះ (ដកម៉ោងសម្រាក)",
   markComplete: "កំណត់ត្រាពេញលេញ",
-  markIncomplete: "មិនមានកំណត់ត្រាចេញ",
-  markIncompleteNoIn: "មិនមានកំណត់ត្រាចូល",
-  markUnpaired: "កំណត់ត្រាមួយមិនមានគូ",
+  markIncomplete: "កំណត់ត្រាចូលមិនមានគូ",
+  markIncompleteNoIn: "កំណត់ត្រាចេញមិនមានគូ",
+  markUnpaired: "កំណត់ត្រាមិនមានគូ",
   markMissing: "មិនមានកំណត់ត្រា",
   markOff: "មិនមែនថ្ងៃធ្វើការ",
 

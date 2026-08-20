@@ -124,17 +124,16 @@ function isPaired(day: Day | undefined): boolean {
  * The words for a mark.
  *
  * Static for every mark but `incomplete`, whose one string — "no clock-out
- * recorded" — used to be the wording of EVERY deficient day. A day whose
- * only punch is an explicit OUT has the opposite problem: the clock-out is
- * the punch that exists, and naming the wrong end sends the worker to argue
- * about the wrong thing.
- *
- * Direction is claimed from a punch's OWN label and nothing else — position
- * pairs, it never names (the #192 rule). All unmatched punches explicitly IN
- * means an arrival never closed; all explicitly OUT means a departure with
- * no recorded arrival; anything unlabelled or mixed gets the neutral
- * wording, the same refusal the receipt makes when direction is not
- * honestly callable.
+ * recorded" — used to be the wording of EVERY deficient day, and was a claim
+ * about the DAY that the day often refuted: IN, OUT, IN has a recorded
+ * clock-out at midday, a lone explicit OUT has the opposite end missing, and
+ * a stray can be a duplicate of an end that exists and paired. So the label
+ * now claims only what is true of the unmatched punch ITSELF — "a clock-in
+ * without its pair" — and the direction in that claim comes from the punch's
+ * OWN label and nothing else (the #192 rule: labels decide direction,
+ * position only pairs). Unlabelled or mixed strays get the direction-free
+ * wording, the same refusal the receipt makes when it cannot honestly call
+ * a punch.
  */
 export function dayMarkLabel(mark: Exclude<DayMark, "none">, day: Day | undefined): StringKey {
   if (mark !== "incomplete") return MARK_LABEL[mark];
