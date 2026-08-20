@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --base=/assets/dewey_time/hr_attendance/ && node scripts/copy-html-entry.mjs && node scripts/check-fonts.mjs && npm run build:miniapp",
+    "build": "vite build --base=/assets/dewey_time/hr_attendance/ && node scripts/copy-html-entry.mjs && node scripts/check-fonts.mjs hr_attendance && npm run build:miniapp",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:web": "tsx --test src/lib/*.test.ts src/brand/*.test.ts src/brand/*.test.tsx src/pwa/*.test.ts src/pwa/*.test.tsx src/components/*.test.tsx src/components/ui/*.test.tsx src/services/*.test.ts src/ui/*.test.tsx src/miniapp/*.test.ts src/miniapp/*.test.tsx src/ui/telegram/*.test.ts src/ui/telegram/*.test.tsx",
     "test:e2e": "playwright test",
-    "build:miniapp": "vite build --config vite.miniapp.config.ts && node scripts/copy-miniapp-html.mjs"
+    "build:miniapp": "vite build --config vite.miniapp.config.ts && node scripts/copy-miniapp-html.mjs && node scripts/check-fonts.mjs miniapp"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",

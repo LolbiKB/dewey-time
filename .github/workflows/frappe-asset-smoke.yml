@@ -34,9 +34,16 @@ jobs:
           # Generalize to ALL Frappe custom apps by adding lines here (or other sites
           # via another job/matrix). The check fails if the asset is missing (non-200)
           # or is served as the HTML 404 fallback instead of its real type.
+          # All three SPAs, not just ADMS: the Mini App (/hr-me) and the HR
+          # console load from these exact stable paths, and a 404/MIME failure
+          # there is a white screen on every phone with nothing in any log.
           ASSETS=(
             "/assets/dewey_time/adms/assets/index.css|text/css"
             "/assets/dewey_time/adms/assets/index.js|javascript"
+            "/assets/dewey_time/miniapp/assets/index.css|text/css"
+            "/assets/dewey_time/miniapp/assets/index.js|javascript"
+            "/assets/dewey_time/hr_attendance/assets/index.css|text/css"
+            "/assets/dewey_time/hr_attendance/assets/index.js|javascript"
           )
 
           fail=0

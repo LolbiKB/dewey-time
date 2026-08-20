@@ -1,7 +1,14 @@
+# PEP 604 `str | None` below needs this on Python 3.9, where a bare def-time
+# annotation is a TypeError that takes the whole module import down — it took
+# three unrelated test modules out of every local 3.9 run via hooks.py.
+from __future__ import annotations
+
 import os
 import shutil
 
 import frappe
+
+from dewey_time.utils.asset_publish import publish_tree
 
 # Same deploy rules as sync_hr_attendance_assets.py — read
 # docs/HR_ATTENDANCE_DEPLOY.md before changing this module or asset URLs
@@ -107,7 +114,7 @@ def sync_adms_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(src_dir, dest_dir)
+    publish_tree(src_dir, dest_dir)
 
 
 def force_sync_adms_assets():
@@ -134,4 +141,4 @@ def force_sync_adms_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(src_dir, dest_dir)
+    publish_tree(src_dir, dest_dir)

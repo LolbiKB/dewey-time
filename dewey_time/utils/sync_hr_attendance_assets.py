@@ -9,6 +9,8 @@ import shutil
 
 import frappe
 
+from dewey_time.utils.asset_publish import publish_tree
+
 # Before changing this module or asset URLs, read docs/HR_ATTENDANCE_DEPLOY.md
 # (sync onto a symlink deletes the bundle → 404 / text/html MIME on CSS).
 
@@ -113,7 +115,7 @@ def sync_app_branding_assets():
         return
 
     if not os.path.lexists(dest_dir):
-        shutil.copytree(src_dir, dest_dir)
+        publish_tree(src_dir, dest_dir)
         return
 
     try:
@@ -133,7 +135,7 @@ def sync_app_branding_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(src_dir, dest_dir)
+    publish_tree(src_dir, dest_dir)
 
 
 def force_sync_app_branding_assets():
@@ -161,7 +163,7 @@ def force_sync_app_branding_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(src_dir, dest_dir)
+    publish_tree(src_dir, dest_dir)
 
 
 def force_sync_hr_attendance_assets():
@@ -190,11 +192,7 @@ def force_sync_hr_attendance_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(
-        src_dir,
-        dest_dir,
-        ignore=shutil.ignore_patterns("index.html"),
-    )
+    publish_tree(src_dir, dest_dir, ignore=shutil.ignore_patterns("index.html"))
 
     sync_app_branding_assets()
 
@@ -247,10 +245,6 @@ def sync_hr_attendance_assets():
         return
 
     # index.html contains Jinja; served only via www/hr-attendance.
-    shutil.copytree(
-        src_dir,
-        dest_dir,
-        ignore=shutil.ignore_patterns("index.html"),
-    )
+    publish_tree(src_dir, dest_dir, ignore=shutil.ignore_patterns("index.html"))
 
     sync_app_branding_assets()

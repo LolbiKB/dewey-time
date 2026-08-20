@@ -11,8 +11,13 @@
 from ZKTeco device punch data. It consists of:
 
 - A Python business-logic backend (20+ modules in `attendance_engine/`)
-- Three custom DocTypes (MariaDB tables)
-- A React 18 SPA served at `/hr-attendance` and `/hr-schedule`
+- A Telegram employee layer (`telegram/`): check-in notifications from a bot, and
+  the **Mini App** at `/hr-me` — the employee's own record on their phone, inside
+  Telegram. Its auth is Telegram `initData` HMAC, **not** a Frappe session (§8)
+- Eight custom DocTypes (MariaDB tables)
+- Three committed React SPAs: the HR console at `/hr-attendance` + `/hr-schedule`,
+  the Telegram Mini App bundle at `/hr-me`, and the ADMS device-admin dashboard
+  at `/adms`
 - An external Bridge service integration with its own webhook auth
 - Scheduled attendance-flag generation (30-min intraday + daily EOD closeout)
 
@@ -30,7 +35,12 @@ dewey_time/                          ← git repo root
     │   └── doctype/
     │       ├── attendance_flag/
     │       ├── device_closeout_alert/
-    │       └── device_sync_status/
+    │       ├── device_sync_status/
+    │       ├── dewey_time_settings/          ← single doctype (bot token, VAPID keys, …)
+    │       ├── dewey_time_push_subscription/
+    │       ├── dewey_time_branch_rollout/
+    │       ├── telegram_link/               ← one row per bound Telegram account
+    │       └── telegram_link_token/         ← single-use invite tokens (SHA-256, 24h)
     ├── attendance_engine/          ← core Python business logic
     │   ├── api.py                  ← general whitelisted APIs (get_my_week, run_engine)
     │   ├── hr_calendar.py          ← read API: employee list + calendar data
@@ -45,28 +55,43 @@ dewey_time/                          ← git repo root
     │   ├── lunch_flags.py          ← LATE_FROM_LUNCH flag generation
     │   ├── bridge_auth.py          ← API key + X-Bridge-Secret webhook auth
     │   └── dev_tools.py            ← backfill + clear-schedule dev APIs
+    ├── telegram/                   ← the Telegram employee layer
+    │   ├── miniapp_auth.py         ← THE security boundary: initData HMAC → Employee
+    │   ├── miniapp_api.py          ← Mini App read APIs; payload is an ALLOWLIST
+    │   ├── binding.py              ← link lifecycle: invite tokens, redemption, revocation
+    │   ├── transport.py            ← the only module that talks to api.telegram.org
+    │   ├── receipt.py              ← causal punch-verb walk wording the notifications
+    │   ├── notify.py               ← outbound check-in messages + delivery gates
+    │   └── webhook.py              ← inbound allow_guest webhook (secret-header gated)
     ├── utils/
-    │   └── sync_hr_attendance_assets.py  ← copies Vite build to sites/assets/
-    ├── public/
-    │   └── hr_attendance/          ← Vite build output (committed to git)
-    │       └── assets/index.js, index.css
+    │   ├── asset_publish.py                ← atomic copy-into-sites (temp + rename)
+    │   ├── sync_hr_attendance_assets.py    ← publishes the HR bundle + branding
+    │   ├── sync_miniapp_assets.py          ← publishes the Mini App bundle
+    │   └── sync_adms_assets.py             ← publishes the ADMS bundle
+    ├── public/                     ← Vite build output, ALL committed to git
+    │   ├── hr_attendance/          ← assets/index.js, index.css (+ hashed fonts)
+    │   ├── miniapp/                ← the Telegram Mini App bundle
+    │   └── adms/                   ← the ADMS dashboard bundle
     ├── www/
     │   ├── hr-attendance.html      ← Jinja entry page (injects CSRF token)
     │   ├── hr-attendance.py        ← Python context provider for above
-    │   ├── hr-schedule.html
-    │   └── hr-schedule.py
+    │   ├── hr-schedule.html / .py
+    │   ├── hr-me.html / hr-me.py   ← Mini App shell (guest-served; auth is initData)
+    │   └── adms.html / adms.py     ← ADMS shell (redirects Guests to /login)
     ├── docs/                       ← you are here
     └── frontend/
+        ├── adms/                   ← ADMS dashboard source (own build:frappe script)
         └── hr_attendance/          ← React source (not served directly)
             ├── src/
             │   ├── main.tsx                  ← FrappeProvider + BrowserRouter + routes
             │   ├── ui/App.tsx                ← attendance week view (main calendar)
             │   ├── ui/WeeklySchedulePage.tsx ← schedule wizard
-            │   ├── ui/SpreadsheetImportDialog.tsx ← bulk import UI
+            │   ├── miniapp/                  ← Mini App source (own bundle; shares src/lib + src/ui)
             │   ├── hooks/useHrAttendanceData.ts   ← calendar data fetching
-            │   └── hooks/useCalendarSession.ts    ← client-side filter state
+            │   └── hooks/useCalendarSession.ts    ← HR session state
             ├── package.json
-            └── vite.config.ts
+            ├── vite.config.ts               ← HR bundle
+            └── vite.miniapp.config.ts       ← Mini App bundle
 ```
 
 ---
@@ -151,6 +176,11 @@ Bridge webhooks use API key auth (`bridge_auth.py`), not session cookies.
 | `Attendance Flag` | Core record — one flag per employee × issue × day. Stores `flag_type`, `severity`, `status`, evidence JSON, HR decision fields, audit trail. |
 | `Device Closeout Alert` | EOD closeout triggers from the Bridge service per device/date. |
 | `Device Sync Status` | Last-successful-sync watermark per ZKTeco device — drives the data-freshness banner in the SPA. |
+| `Dewey Time Settings` | Single doctype: Telegram bot token/secret, VAPID keys, feature switches. |
+| `Dewey Time Push Subscription` | One row per browser push endpoint (PWA notifications). |
+| `Dewey Time Branch Rollout` | Per-branch rollout phase (PRELAUNCH / LIVE) — gates what the engine concludes. |
+| `Telegram Link` | One row per bound Telegram account (`telegram_user_id` is the docname); `enabled=0` is the revocation, never a delete. |
+| `Telegram Link Token` | Single-use invite tokens, stored as SHA-256 hashes, 24h expiry. |
 
 DocTypes are defined as JSON files in `dewey_time/doctype/`. `bench migrate`
 syncs them to the database. The controller class lives at
@@ -163,18 +193,33 @@ syncs them to the database. The controller class lives at
 ### Build → deploy flow
 
 ```
-npm run build
-    → public/hr_attendance/assets/index.js   (stable filename, no hash)
-    → public/hr_attendance/assets/index.css
-    → www/hr-attendance.html                  (cache-busted: ?v=<timestamp>)
-    → www/hr-schedule.html
+npm run build                      # builds BOTH hr_attendance and miniapp
+    → public/hr_attendance/assets/index.js    (stable name; page adds ?v=)
+    → public/hr_attendance/assets/index.css   (stable name; page adds ?v=)
+    → public/hr_attendance/assets/*-<hash>.woff2   (content-hashed fonts)
+    → public/miniapp/…                        (same shape, second bundle)
+    → www/hr-attendance.html, www/hr-schedule.html, www/hr-me.html
+      (each cache-busted: ?v=<timestamp>)
 git commit public/ www/*.html
 git push → Frappe Cloud deploy → bench migrate
-    → sync_hr_attendance_assets copies to sites/assets/dewey_time/hr_attendance/
+    → sync_*_assets publish each bundle to sites/assets/dewey_time/<bundle>/
+      (atomically: copied to a temp sibling, renamed into place — a killed
+      migrate can never leave a half-copied bundle the freshness sentinel
+      certifies; see utils/asset_publish.py)
 ```
 
+Only `index.js` and `index.css` keep stable names — the www pages reference
+those two directly with a `?v=` buster. Fonts are content-hashed because their
+URLs live *inside* `index.css`, where no `?v=` can reach. Sourcemaps are OFF:
+the bundles are committed and `/assets/` serves to guests, so a `.map` would
+publish the full annotated source. `scripts/check-fonts.mjs` guards both
+bundles' fonts after each build; a 6-hourly smoke workflow
+(`frappe-asset-smoke.yml`) checks all three SPAs' live asset URLs and MIME.
+
 Built assets are **committed to git** because Frappe Cloud does not run `npm build`
-on deploy.
+on deploy. A change to a shared module (`src/lib/`, `src/ui/`) reaches the Mini
+App too — both bundles must be rebuilt and committed (CI's `bundle-freshness`
+job enforces this).
 
 ### CSRF token injection
 
@@ -264,14 +309,33 @@ Status: OPEN → EXPLAINED → APPROVED | REJECTED → CLOSED
 
 ## 8. Authentication
 
-### Browser (SPA)
-Session cookie + CSRF token. All `@frappe.whitelist()` endpoints validate both.
+Four models coexist. **"All endpoints validate session + CSRF" is NOT true of
+this app** — the Mini App endpoints are `allow_guest` by design, and their
+security rests entirely on the HMAC boundary below.
+
+### HR console (`/hr-attendance`, `/hr-schedule`)
+Session cookie + CSRF token, the standard Frappe model.
 Role guard pattern:
 ```python
 def _require_hr_role():
     if not frappe.has_permission("Attendance Flag", "read"):
         frappe.throw("HR role required", frappe.PermissionError)
 ```
+
+### Telegram Mini App (`/hr-me`)
+`@frappe.whitelist(allow_guest=True)` + Telegram `initData` validation —
+**no Frappe session, no CSRF, and no Frappe permission backstop beneath it.**
+`telegram/miniapp_auth.py` is the whole boundary: it verifies Telegram's HMAC
+over the launch payload, checks staleness, and resolves the authenticated
+Telegram user id to an Employee through the `Telegram Link` binding — or
+raises. The endpoints take no employee-selecting parameter (the binding IS the
+selection), and the response is narrowed through an explicit allowlist in
+`miniapp_api.py`. Anything touching these two files is security-boundary work.
+
+### Telegram webhook (inbound bot updates)
+`allow_guest`, gated by the `X-Telegram-Bot-Api-Secret-Token` header matching
+the secret registered with `setWebhook` (`telegram/webhook.py`). Validated
+before the update is read.
 
 ### Bridge service (webhooks)
 ```
@@ -280,6 +344,11 @@ X-Bridge-Secret: <shared_secret>   # optional, from site_config.json
 ```
 Validated in `bridge_auth.py`. Uses Frappe's built-in User + API key system —
 no separate auth database needed.
+
+### ADMS dashboard (`/adms`)
+Session login required by the shell (`www/adms.py` redirects Guests), then a
+token exchange via `attendance_engine/dashboard_auth.py`, scoped by the
+`ADMS Admin` / `ADMS Super Admin` roles.
 
 ---
 
@@ -349,14 +418,16 @@ Raw spreadsheets should be normalised with Claude Haiku first — see
 
 ```bash
 # After any frontend change:
-npm run build                       # from frontend/hr_attendance/
-git add dewey_time/public/hr_attendance/ dewey_time/www/*.html
+npm run build                       # from frontend/hr_attendance/ — BOTH bundles
+git add dewey_time/public/ dewey_time/www/*.html
 git push origin main
 # Then on Frappe Cloud: deploy → bench migrate
+# (the ADMS bundle builds separately: frontend/adms → npm run build:frappe)
 
 # Force asset resync (if 404 after deploy):
-# Add a new patch file + entry in patches.txt that calls
-# force_sync_hr_attendance_assets() — runs on next migrate
+# Add a new patch file + entry in patches.txt that calls the bundle's
+# force_sync_*_assets() — runs on next migrate. Safe against the bench-symlink
+# self-delete and against interruption (utils/asset_publish.py).
 ```
 
 After any backend change:
@@ -373,7 +444,7 @@ bench --site <site> migrate         # syncs DocTypes, runs patches
 | Framework | Frappe 15/16, Python 3.11+ |
 | Database | MariaDB (via Frappe ORM) |
 | Job queue | Redis + RQ (Frappe-managed) |
-| Frontend | React 18, TypeScript, Vite 8 |
+| Frontend | React 19 (pinned `latest`), TypeScript, Vite 8 |
 | Styling | TailwindCSS 4, shadcn/ui (Radix UI) |
 | Data fetching | frappe-react-sdk (SWR-based) |
 | Routing | React Router v7 |

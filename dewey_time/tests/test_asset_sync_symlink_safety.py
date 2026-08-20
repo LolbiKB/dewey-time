@@ -19,6 +19,7 @@ from dewey_time.tests.test_closeout import _install_frappe_mock
 _install_frappe_mock()
 
 from dewey_time.utils import (  # noqa: E402
+    asset_publish,
     sync_adms_assets as adms,
     sync_hr_attendance_assets as hr,
     sync_miniapp_assets as miniapp,
@@ -120,3 +121,87 @@ class TestForceSyncCannotDeleteTheBundle(unittest.TestCase):
         self.assertEqual(
             self._bundle_files("miniapp"), ["build-id.txt", "index.css", "index.js"]
         )
+
+
+def _certifiable_partial_copy(src_dir, tmp_dir, ignore=None):
+    """A copytree that dies AFTER writing everything the freshness checks read.
+
+    This is the worst-case interruption: the sentinel (build-id.txt) and both
+    index files land, the fonts never do. Under the old in-place copy this
+    exact tree passed `_bundle_ok` AND matched the source build id, so no
+    migrate would ever repair it.
+    """
+    assets = os.path.join(tmp_dir, "assets")
+    os.makedirs(assets)
+    for name in ("index.js", "index.css"):
+        with open(os.path.join(assets, name), "w") as handle:
+            handle.write("/* partial */")
+    src_build = os.path.join(src_dir, "assets", "build-id.txt")
+    shutil.copy2(src_build, os.path.join(assets, "build-id.txt"))
+    raise OSError("disk full / killed migrate")
+
+
+class TestPublishIsAllOrNothing(unittest.TestCase):
+    """An interrupted copy must never leave a destination the sentinel certifies.
+
+    Same policy as above: a real bench layout, a real interruption. The bench
+    here has a REAL directory at sites/assets/dewey_time (no symlink), because
+    the atomicity question only exists when publishing actually copies.
+    """
+
+    def setUp(self):
+        self.bench = _Bench(["miniapp"])
+        self.addCleanup(self.bench.close)
+        link = os.path.join(self.bench.sites_path, "assets", "dewey_time")
+        os.unlink(link)
+        os.makedirs(link)
+        for module in (miniapp,):
+            p1 = patch.object(module.frappe, "get_app_path", return_value=self.bench.app_path)
+            p1.start()
+            self.addCleanup(p1.stop)
+            p2 = patch.object(module.frappe.local, "sites_path", self.bench.sites_path)
+            p2.start()
+            self.addCleanup(p2.stop)
+        self.dest = os.path.join(self.bench.sites_path, "assets", "dewey_time", "miniapp")
+
+    def test_an_interrupted_copy_certifies_nothing(self):
+        # THE DEFECT: copytree walked straight into the destination, so a copy
+        # killed after the sentinel landed left a tree the next migrate read
+        # as fresh — permanently, because the build ids matched.
+        with patch.object(asset_publish.shutil, "copytree", _certifiable_partial_copy):
+            with self.assertRaises(OSError):
+                miniapp.sync_miniapp_assets()
+
+        # Nothing at the destination name, so the next sync MUST retry.
+        self.assertFalse(os.path.lexists(self.dest))
+        self.assertTrue(miniapp._needs_resync(os.path.join(self.bench.public, "miniapp"), self.dest))
+
+        # And the retry succeeds once the copy can complete.
+        miniapp.sync_miniapp_assets()
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, "assets", "index.js")))
+
+    def test_the_interruption_leaves_no_temp_litter(self):
+        with patch.object(asset_publish.shutil, "copytree", _certifiable_partial_copy):
+            with self.assertRaises(OSError):
+                miniapp.sync_miniapp_assets()
+        parent = os.path.dirname(self.dest)
+        leftovers = [n for n in os.listdir(parent) if asset_publish.TMP_SUFFIX in n]
+        self.assertEqual(leftovers, [])
+
+    def test_a_stale_temp_from_a_crashed_run_is_swept(self):
+        # A hard kill (SIGKILL, power loss) skips the except-branch cleanup;
+        # the NEXT publish must sweep what it finds rather than accumulate.
+        stale = f"{self.dest}{asset_publish.TMP_SUFFIX}-99999"
+        os.makedirs(os.path.join(stale, "assets"))
+        miniapp.sync_miniapp_assets()
+        self.assertFalse(os.path.lexists(stale))
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, "assets", "index.js")))
+
+    def test_a_successful_publish_is_complete_and_clean(self):
+        miniapp.sync_miniapp_assets()
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.dest, "assets"))),
+            ["build-id.txt", "index.css", "index.js"],
+        )
+        parent = os.path.dirname(self.dest)
+        self.assertEqual([n for n in os.listdir(parent) if asset_publish.TMP_SUFFIX in n], [])

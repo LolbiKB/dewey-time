@@ -47,17 +47,24 @@ export default defineConfig(({ command, mode }) => {
     build: {
       outDir: path.resolve(__dirname, "../../public/hr_attendance"),
       emptyOutDir: true,
-      sourcemap: true,
+      // No sourcemap: the 4.6MB map embedded the full annotated source, was
+      // committed with the bundle, and /assets/ serves statically to anyone —
+      // the login gate on the page does not extend to its assets.
+      sourcemap: false,
       target: "es2015",
       rollupOptions: {
         output: {
-          // Stable names so Desk page can load the same bundle without parsing index.html.
+          // Stable names for index.js/index.css only — the www pages and Desk
+          // reference those two directly, with their own ?v= cache-buster.
+          // Fonts and images are content-hashed: their URLs live inside
+          // index.css where no ?v= reaches, so a stable-named font fix could
+          // never replace a cached copy.
           entryFileNames: "assets/index.js",
           chunkFileNames: "assets/[name].js",
           assetFileNames: (assetInfo) => {
             const name = assetInfo.name ?? "";
             if (name.endsWith(".css")) return "assets/index.css";
-            return "assets/[name][extname]";
+            return "assets/[name]-[hash][extname]";
           },
         },
       },
