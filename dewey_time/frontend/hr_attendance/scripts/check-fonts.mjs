@@ -27,8 +27,8 @@ import { fileURLToPath } from "node:url";
 // the Mini App bundle — the one whose users' names are ALL in Khmer —
 // unguarded against the exact failure this file exists to catch.
 // adms builds from frontend/adms with its own scripts, but its bundle lands in
-// the same public/ layout and its Khmer face matters just as much — the no-arg
-// standalone run covers it, and its build can invoke this with "adms".
+// the same public/ layout and its Khmer face matters just as much — its
+// build:frappe invokes this with "adms" after publishing.
 const KNOWN = ["hr_attendance", "miniapp", "adms"];
 const requested = process.argv.slice(2);
 const bad = requested.filter((b) => !KNOWN.includes(b));

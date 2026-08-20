@@ -19,7 +19,8 @@ from ZKTeco device punch data. It consists of:
   the Telegram Mini App bundle at `/hr-me`, and the ADMS device-admin dashboard
   at `/adms`
 - An external Bridge service integration with its own webhook auth
-- Scheduled attendance-flag generation (30-min intraday + daily EOD closeout)
+- Scheduled attendance-flag generation (30-min intraday + an EOD closeout
+  gated to ~03:00 in each company's timezone)
 
 ---
 
@@ -41,11 +42,11 @@ dewey_time/                          ← git repo root
     │       ├── dewey_time_branch_rollout/
     │       ├── telegram_link/               ← one row per bound Telegram account
     │       ├── telegram_link_token/         ← single-use invite tokens (SHA-256, 24h)
-    │       ├── attendance_flag_decision/    ← child table of Attendance Flag
+    │       ├── attendance_flag_decision/    ← HR decisions (flag_decision_api)
     │       ├── employee_biometric_enrollment/
     │       └── schedule_change_log/
     ├── attendance_engine/          ← core Python business logic
-    │   ├── api.py                  ← general whitelisted APIs (get_my_week, run_engine)
+    │   ├── api.py                  ← general whitelisted APIs (get_my_week, get_engine_health)
     │   ├── hr_calendar.py          ← read API: employee list + calendar data
     │   ├── closeout.py             ← EOD final flag generation + Bridge closeout webhook
     │   ├── intraday.py             ← provisional flags; triggered every 30 min + on checkin
@@ -111,7 +112,8 @@ point. All registrations go here — nothing else is auto-discovered.
 
 ```python
 # SPA routing — rewrites sub-paths to Jinja entry page for React Router
-# (hr-me and adms are ALSO routed; see hooks.py for the full list)
+# (hr-me is ALSO routed this way; adms and hr-personal serve purely via the
+# www/ page convention — see hooks.py for the authoritative list)
 website_route_rules = [
     {"from_route": "/hr-attendance/<path:app_path>", "to_route": "hr-attendance"},
     {"from_route": "/hr-attendance",                 "to_route": "hr-attendance"},
@@ -133,13 +135,16 @@ scheduler_events = {
     },
 }
 
-# Doc event hooks — LISTS, because the flag engine and the Telegram notifier
-# both care about a new punch and neither should be nested inside the other
+# Doc event hooks. after_insert is a LIST, because the flag engine and the
+# Telegram notifier both care about a new punch and neither should be nested
+# inside the other; on_update stays a plain string. Shift Schedule Assignment
+# and Telegram Link carry doc_events too — hooks.py is the authoritative map.
 doc_events = {
     "Employee Checkin": {
         "after_insert": ["…intraday.on_employee_checkin_after_insert", "…telegram notifier"],
-        "on_update":    ["…intraday.on_employee_checkin_on_update"],
+        "on_update":    "…intraday.on_employee_checkin_on_update",
     },
+    ...
 }
 
 # after_migrate is a LIST of eight: custom fields, schedule naming, the three
@@ -176,11 +181,11 @@ coverage register all expose more):
 
 | Module | Methods |
 |---|---|
-| `hr_calendar.py` | `list_calendar_employees`, `get_employee_calendar` |
+| `hr_calendar.py` | `list_calendar_employees`, `get_employee_calendar`, `get_calendar_session` |
 | `schedule_api.py` | `get_employee_schedule_context`, `resolve_weekly_schedule_plan`, `apply_weekly_schedule`, `list_weekly_schedule_templates`, `get_holiday_preview` |
 | `schedule_import.py` | `parse_schedule_upload` |
 | `api.py` | `get_my_week`, `get_engine_health` |
-| `dev_tools.py` | `run_engine_for_employee`, `clear_employee_schedule` *(backfill lives here, not in api.py)* |
+| `dev_tools.py` | `run_engine_for_employee`, `clear_employee_schedule_api` *(backfill lives here, not in api.py)* |
 | `closeout.py` | `notify_device_closeout_status` *(Bridge webhook)* |
 | `device_sync.py` | `notify_device_sync_status` *(Bridge webhook)* |
 | `telegram/miniapp_api.py` | Mini App reads *(allow_guest + initData — see §8)* |
@@ -200,9 +205,12 @@ Bridge webhooks use API key auth (`bridge_auth.py`), not session cookies.
 | `Device Sync Status` | Last-successful-sync watermark per ZKTeco device — drives the data-freshness banner in the SPA. |
 | `Dewey Time Settings` | Single doctype: Telegram bot token/secret, VAPID keys, feature switches. |
 | `Dewey Time Push Subscription` | One row per browser push endpoint (PWA notifications). |
-| `Dewey Time Branch Rollout` | Per-branch rollout phase (PRELAUNCH / LIVE) — gates what the engine concludes. |
+| `Dewey Time Branch Rollout` | Per-branch rollout phase (PRELAUNCH / LIVE) — gates what the engine concludes. **The one child table** (`istable=1`, rows live inside Dewey Time Settings). |
 | `Telegram Link` | One row per bound Telegram account (`telegram_user_id` is the docname); `enabled=0` is the revocation, never a delete. |
 | `Telegram Link Token` | Single-use invite tokens, stored as SHA-256 hashes, 24h expiry. |
+| `Attendance Flag Decision` | HR's recorded decision per flag (behind `flag_decision_api.decide_flags`). |
+| `Employee Biometric Enrollment` | Per-employee ZKTeco enrollment snapshot (drives the register's Biometric column). |
+| `Schedule Change Log` | Audit rows for schedule edits. |
 
 DocTypes are defined as JSON files in `dewey_time/doctype/`. `bench migrate`
 syncs them to the database. The controller class lives at
@@ -227,18 +235,24 @@ npm run build                      # builds BOTH hr_attendance and miniapp
 git commit public/ www/*.html
 git push → Frappe Cloud deploy → bench migrate
     → sync_*_assets publish each bundle to sites/assets/dewey_time/<bundle>/
-      (atomically: copied to a temp sibling, renamed into place — a killed
-      migrate can never leave a half-copied bundle the freshness sentinel
-      certifies; see utils/asset_publish.py)
+      (all-or-nothing: copied to a temp sibling, renamed into place — a
+      killed migrate can never leave a half-copied bundle the freshness
+      sentinel certifies. A stale destination is REMOVED before the new one
+      is renamed in, so an interruption can leave the bundle briefly absent;
+      the next migrate repairs that. See utils/asset_publish.py)
 ```
 
-Only `index.js` and `index.css` keep stable names — the www pages reference
-those two directly with a `?v=` buster. Fonts are content-hashed because their
-URLs live *inside* `index.css`, where no `?v=` can reach. Sourcemaps are OFF:
-the bundles are committed and `/assets/` serves to guests, so a `.map` would
-publish the full annotated source. `scripts/check-fonts.mjs` guards both
-bundles' fonts after each build; a 6-hourly smoke workflow
-(`frappe-asset-smoke.yml`) checks all three SPAs' live asset URLs and MIME.
+For the two bundles built here, only `index.js` and `index.css` keep stable
+names — the www pages reference those two directly with a `?v=` buster.
+Fonts (and any chunks) are content-hashed because their URLs live *inside*
+`index.css`, where no `?v=` can reach. Sourcemaps are OFF: the bundles are
+committed and `/assets/` serves to guests, so a `.map` would publish the full
+annotated source. **The ADMS bundle does not yet follow the font-hashing
+rule** — its fonts are still stable-named (known follow-up in its own build).
+`scripts/check-fonts.mjs` guards each bundle's fonts as it builds (adms
+included); a 6-hourly smoke workflow (`frappe-asset-smoke.yml`) checks all
+three SPAs' live asset URLs and MIME, and asserts the removed sourcemaps do
+NOT serve.
 
 Built assets are **committed to git** because Frappe Cloud does not run `npm build`
 on deploy. A change to a shared module (`src/lib/`, `src/ui/`) reaches the Mini
@@ -302,7 +316,8 @@ Bridge Service ──► Frappe Resource API ──► Employee Checkin (DocType
     └──► notify_device_sync_status ──► Device Sync Status (DocType)
 
 Scheduler every 30 min → intraday.run_intraday_scheduler
-Scheduler daily        → closeout.run_company_fallback_closeout
+Scheduler hourly       → closeout.run_company_fallback_closeout
+                         (self-gated to fire at 03:00 in each company's timezone)
 ```
 
 ### Attendance Flag types
@@ -452,7 +467,9 @@ git push origin main
 # Force asset resync (if 404 after deploy):
 # Add a new patch file + entry in patches.txt that calls the bundle's
 # force_sync_*_assets() — runs on next migrate. Safe against the bench-symlink
-# self-delete and against interruption (utils/asset_publish.py).
+# self-delete; an interruption can never leave a half-copied bundle, though
+# it can leave the bundle briefly absent until the next migrate repairs it
+# (utils/asset_publish.py).
 ```
 
 After any backend change:

@@ -62,15 +62,11 @@ function injectAssetVersion(html) {
     );
 }
 
+// VALIDATE EVERYTHING, THEN WRITE EVERYTHING. An exit between writes would
+// leave the www pages stamped with a build id that build-id.txt — the
+// sentinel every sync helper reads — does not carry.
 const html = injectAssetVersion(fs.readFileSync(builtHtmlPath, "utf8"));
-fs.writeFileSync(builtHtmlPath, html);
-for (const targetHtmlPath of targetHtmlPaths) {
-  const scheduleHtml =
-    targetHtmlPath.endsWith("hr-schedule.html")
-      ? html.replace("<title>HR Attendance</title>", "<title>Weekly Schedule</title>")
-      : html;
-  fs.writeFileSync(targetHtmlPath, scheduleHtml);
-}
+const restamps = [];
 for (const restampPath of restampHtmlPaths) {
   if (!fs.existsSync(restampPath)) continue;
   const own = fs.readFileSync(restampPath, "utf8");
@@ -82,6 +78,18 @@ for (const restampPath of restampHtmlPaths) {
     console.error(`Could not restamp asset versions in ${restampPath}`);
     process.exit(1);
   }
+  restamps.push([restampPath, restamped]);
+}
+
+fs.writeFileSync(builtHtmlPath, html);
+for (const targetHtmlPath of targetHtmlPaths) {
+  const scheduleHtml =
+    targetHtmlPath.endsWith("hr-schedule.html")
+      ? html.replace("<title>HR Attendance</title>", "<title>Weekly Schedule</title>")
+      : html;
+  fs.writeFileSync(targetHtmlPath, scheduleHtml);
+}
+for (const [restampPath, restamped] of restamps) {
   fs.writeFileSync(restampPath, restamped);
 }
 fs.writeFileSync(buildIdPath, `${buildId}\n`);

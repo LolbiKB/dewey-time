@@ -184,13 +184,15 @@ def force_sync_hr_attendance_assets():
     app = "dewey_time"
     app_path = frappe.get_app_path(app)
     src_dir = os.path.join(app_path, "public", "hr_attendance")
-    src_assets = os.path.join(src_dir, "assets")
     dest_dir = os.path.join(frappe.local.sites_path, "assets", app, "hr_attendance")
 
-    if not os.path.isdir(src_assets):
+    # The SAME completeness bar as the migrate path: force-publishing a
+    # degraded source (an aborted vite build) replaces a working deployment
+    # with a broken one on any layout where the copy actually happens.
+    if not _hr_attendance_bundle_ok(src_dir):
         frappe.log_error(
             title="force_sync_hr_attendance_assets missing source",
-            message=f"Expected bundle at {src_assets}",
+            message=f"Expected a complete bundle at {src_dir}",
         )
         return
 

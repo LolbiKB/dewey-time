@@ -64,8 +64,8 @@ Runs on every `bench migrate` (`hooks.py` → `after_migrate`).
 
    When you ship a new frontend build, `build-id.txt` changes — migrate republishes the bundle automatically.
 
-2. **If the bundle is missing** (empty dir, broken symlink, or wiped symlink target) → remove `dest` and **full `copytree`** of `public/hr_attendance/`, excluding `index.html`.  
-   A dangling symlink is unlinked first; the copy is never written through a symlink.
+2. **If the bundle is missing** (empty dir, broken symlink, or wiped symlink target) → remove `dest` and republish the whole of `public/hr_attendance/` (excluding `index.html`) via `utils/asset_publish.publish_tree` — copied to a temp sibling and renamed into place, so an interrupted copy can never be certified by the sentinel.  
+   A dangling symlink is unlinked first; the copy is never written through a symlink, and a destination that resolves back to the source is refused rather than removed.
 
 3. **Do not use Jinja in asset URLs** (`?v={{ asset_version }}`).  
    Static asset paths are not rendered by Jinja. The browser requests the literal string `{{%20asset_version%20}}` and gets HTML → MIME type error.
@@ -81,7 +81,7 @@ Implementation: `dewey_time/utils/sync_hr_attendance_assets.py`
 | Asset | URL | Used for |
 | --- | --- | --- |
 | `DI-logo.svg` | `/assets/dewey_time/images/DI-logo.svg` | Site favicon / Desk login (`app_logo_url`, `website_context`, SPA `<link rel="icon">`) |
-| `attendance-svgrepo-com.svg` | `/assets/dewey_time/images/attendance-svgrepo-com.svg` | App switcher logo (`add_to_apps_screen`) and SPA header |
+| `dewey-time.svg` | `/assets/dewey_time/images/dewey-time.svg` | App switcher logo (`add_to_apps_screen`) and SPA header |
 
 Every migrate runs `sync_app_branding_assets()` (copies all of `public/images/`). Desk **Workspace / Desktop Icon** for Dewey Time are not created — patch `remove_dewey_time_desk_workspace` deletes them if present.
 
@@ -117,7 +117,7 @@ git, reverting the code restores the previous bundle:
 
 The file is missing under `sites/assets/dewey_time/hr_attendance/assets/`.
 
-- Confirm built files are in git and deployed (`public/hr_attendance/assets/index.css` ~120 KB).
+- Confirm built files are in git and deployed (`public/hr_attendance/assets/index.css` ~180 KB; the build fails under its 150 KB floor).
 - Run **Migrate** on Frappe Cloud (runs `sync_hr_attendance_assets` + any one-time repair patches).
 - On bench SSH (if available):  
   `ls sites/assets/dewey_time/hr_attendance/assets/index.css`
