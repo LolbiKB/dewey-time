@@ -20,19 +20,26 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../../public/miniapp"),
     emptyOutDir: true,
-    sourcemap: true,
+    // No sourcemap: the map embeds the app's complete annotated TypeScript
+    // source, the bundle is committed, and /hr-me serves to guests — so a
+    // `sourcemap: true` here published 2.5MB of source from a public URL.
+    sourcemap: false,
     target: "es2015",
     rollupOptions: {
       input: path.resolve(__dirname, "index.miniapp.html"),
       output: {
-        // Stable names, matching the other two bundles in this repo, so the
-        // www page can reference the asset without parsing index.html.
+        // Stable names for the TWO files the www page references, so it never
+        // parses index.html: the page carries its own ?v= cache-buster for
+        // them. Everything else — the fonts above all — is content-hashed,
+        // because those URLs live inside index.css where no ?v= can reach:
+        // with stable names a font fix could never arrive on a phone that had
+        // loaded the app once.
         entryFileNames: "assets/index.js",
-        chunkFileNames: "assets/[name].js",
+        chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: (assetInfo) => {
           const name = assetInfo.name ?? "";
           if (name.endsWith(".css")) return "assets/index.css";
-          return "assets/[name][extname]";
+          return "assets/[name]-[hash][extname]";
         },
       },
     },

@@ -10,6 +10,11 @@ const targetHtmlPaths = [
   path.join(appRoot, "www/hr-schedule.html"),
   path.join(appRoot, "www/hr-flags.html"),
 ];
+// hr-personal serves via the www convention like the others but keeps its own
+// head (no PWA block), so it is re-STAMPED in place rather than overwritten.
+// Leaving it out entirely froze its ?v= at a June build: warm caches kept
+// serving a stylesheet whose font URLs no longer exist.
+const restampHtmlPaths = [path.join(appRoot, "www/hr-personal.html")];
 const buildIdPath = path.join(appRoot, "public/hr_attendance/assets/build-id.txt");
 const builtCssPath = path.join(appRoot, "public/hr_attendance/assets/index.css");
 
@@ -57,7 +62,25 @@ function injectAssetVersion(html) {
     );
 }
 
+// VALIDATE EVERYTHING, THEN WRITE EVERYTHING. An exit between writes would
+// leave the www pages stamped with a build id that build-id.txt — the
+// sentinel every sync helper reads — does not carry.
 const html = injectAssetVersion(fs.readFileSync(builtHtmlPath, "utf8"));
+const restamps = [];
+for (const restampPath of restampHtmlPaths) {
+  if (!fs.existsSync(restampPath)) continue;
+  const own = fs.readFileSync(restampPath, "utf8");
+  const restamped = own.replace(
+    /(\/assets\/dewey_time\/hr_attendance\/assets\/index\.(?:js|css))(\?v=\d+)?/g,
+    `$1?v=${buildId}`
+  );
+  if (!restamped.includes(`?v=${buildId}`)) {
+    console.error(`Could not restamp asset versions in ${restampPath}`);
+    process.exit(1);
+  }
+  restamps.push([restampPath, restamped]);
+}
+
 fs.writeFileSync(builtHtmlPath, html);
 for (const targetHtmlPath of targetHtmlPaths) {
   const scheduleHtml =
@@ -65,6 +88,9 @@ for (const targetHtmlPath of targetHtmlPaths) {
       ? html.replace("<title>HR Attendance</title>", "<title>Weekly Schedule</title>")
       : html;
   fs.writeFileSync(targetHtmlPath, scheduleHtml);
+}
+for (const [restampPath, restamped] of restamps) {
+  fs.writeFileSync(restampPath, restamped);
 }
 fs.writeFileSync(buildIdPath, `${buildId}\n`);
 console.log(

@@ -15,18 +15,27 @@ npm run build
 
 This writes:
 
-- `public/hr_attendance/assets/index.js` / `index.css` (stable filenames)
-- `public/hr_attendance/assets/build-id.txt` (timestamp for debugging)
-- `www/hr-attendance.html` and `www/hr-schedule.html` with literal `?v=<timestamp>` on asset URLs (cache bust)
+- `public/hr_attendance/assets/index.js` / `index.css` (stable filenames — the
+  ONLY two; fonts and any chunks are content-hashed, because their URLs live
+  inside `index.css` where the `?v=` buster cannot reach them)
+- `public/hr_attendance/assets/build-id.txt` (freshness sentinel read by the sync helpers)
+- `www/hr-attendance.html`, `www/hr-schedule.html`, `www/hr-flags.html` with
+  literal `?v=<timestamp>` on asset URLs (cache bust); `www/hr-personal.html`
+  is re-stamped in place (it keeps its own head)
 - copies the same HTML to `public/hr_attendance/index.html` (do **not** serve this as the app entry)
+- **no sourcemaps**: the bundles are committed and `/assets/` serves to anyone,
+  so a `.map` would publish the full annotated source
 
-Commit `public/hr_attendance/assets/*`, `www/hr-attendance.html`, and `www/hr-schedule.html` with your code changes.
+Commit everything the build changed under `public/` and `www/*.html` in the
+**same PR** as the source change.
 
-> **⚠ CI does not rebuild the bundle.** `.github/workflows/frontend.yml` runs the
-> tests only (`test:web`, `e2e`) — it never runs `npm run build`. If you change
-> frontend source but forget to rebuild and commit `public/hr_attendance/assets/*`,
-> the merge ships **stale assets** and nothing catches it. Always `npm run build`
-> and commit the output in the **same PR** as the source change.
+> **CI guards this two ways** (`.github/workflows/frontend.yml`): the
+> `typecheck` job runs a full `npm run build` (which is what makes
+> `check-fonts` a gate), and the `bundle-freshness` job fails any PR that
+> changes shipped frontend source — dependency files included — without both
+> committed bundles changing with it. Neither ships the CI-built output:
+> whatever bundle is **committed** is what deploys, so a green build with an
+> un-rebuilt commit still ships stale assets. Rebuild and commit together.
 
 ## How Frappe serves the bundle
 
@@ -55,8 +64,8 @@ Runs on every `bench migrate` (`hooks.py` → `after_migrate`).
 
    When you ship a new frontend build, `build-id.txt` changes — migrate republishes the bundle automatically.
 
-2. **If the bundle is missing** (empty dir, broken symlink, or wiped symlink target) → remove `dest` and **full `copytree`** of `public/hr_attendance/`, excluding `index.html`.  
-   A dangling symlink is unlinked first; the copy is never written through a symlink.
+2. **If the bundle is missing** (empty dir, broken symlink, or wiped symlink target) → remove `dest` and republish the whole of `public/hr_attendance/` (excluding `index.html`) via `utils/asset_publish.publish_tree` — copied to a temp sibling and renamed into place, so an interrupted copy can never be certified by the sentinel.  
+   A dangling symlink is unlinked first; the copy is never written through a symlink, and a destination that resolves back to the source is refused rather than removed.
 
 3. **Do not use Jinja in asset URLs** (`?v={{ asset_version }}`).  
    Static asset paths are not rendered by Jinja. The browser requests the literal string `{{%20asset_version%20}}` and gets HTML → MIME type error.
@@ -72,7 +81,7 @@ Implementation: `dewey_time/utils/sync_hr_attendance_assets.py`
 | Asset | URL | Used for |
 | --- | --- | --- |
 | `DI-logo.svg` | `/assets/dewey_time/images/DI-logo.svg` | Site favicon / Desk login (`app_logo_url`, `website_context`, SPA `<link rel="icon">`) |
-| `attendance-svgrepo-com.svg` | `/assets/dewey_time/images/attendance-svgrepo-com.svg` | App switcher logo (`add_to_apps_screen`) and SPA header |
+| `dewey-time.svg` | `/assets/dewey_time/images/dewey-time.svg` | App switcher logo (`add_to_apps_screen`) and SPA header |
 
 Every migrate runs `sync_app_branding_assets()` (copies all of `public/images/`). Desk **Workspace / Desktop Icon** for Dewey Time are not created — patch `remove_dewey_time_desk_workspace` deletes them if present.
 
@@ -108,7 +117,7 @@ git, reverting the code restores the previous bundle:
 
 The file is missing under `sites/assets/dewey_time/hr_attendance/assets/`.
 
-- Confirm built files are in git and deployed (`public/hr_attendance/assets/index.css` ~120 KB).
+- Confirm built files are in git and deployed (`public/hr_attendance/assets/index.css` ~180 KB; the build fails under its 150 KB floor).
 - Run **Migrate** on Frappe Cloud (runs `sync_hr_attendance_assets` + any one-time repair patches).
 - On bench SSH (if available):  
   `ls sites/assets/dewey_time/hr_attendance/assets/index.css`

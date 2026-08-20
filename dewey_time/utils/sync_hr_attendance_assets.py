@@ -9,6 +9,8 @@ import shutil
 
 import frappe
 
+from dewey_time.utils.asset_publish import publish_tree, referenced_fonts_present
+
 # Before changing this module or asset URLs, read docs/HR_ATTENDANCE_DEPLOY.md
 # (sync onto a symlink deletes the bundle → 404 / text/html MIME on CSS).
 
@@ -17,9 +19,13 @@ def _hr_attendance_bundle_ok(base_dir: str) -> bool:
     if not base_dir or not os.path.isdir(base_dir):
         return False
     assets_dir = os.path.join(base_dir, "assets")
-    return os.path.isfile(os.path.join(assets_dir, "index.css")) and os.path.isfile(
-        os.path.join(assets_dir, "index.js")
-    )
+    if not (
+        os.path.isfile(os.path.join(assets_dir, "index.css"))
+        and os.path.isfile(os.path.join(assets_dir, "index.js"))
+    ):
+        return False
+    # Fonts too -- see sync_miniapp_assets._bundle_ok.
+    return referenced_fonts_present(base_dir)
 
 
 def _read_build_id(base_dir: str) -> str | None:
@@ -113,7 +119,7 @@ def sync_app_branding_assets():
         return
 
     if not os.path.lexists(dest_dir):
-        shutil.copytree(src_dir, dest_dir)
+        publish_tree(src_dir, dest_dir)
         return
 
     try:
@@ -129,11 +135,20 @@ def sync_app_branding_assets():
         _copy_branding_files(src_dir, dest_dir)
         return
 
+    if _dest_is_the_source(src_dir, dest_dir):
+        # On the bench-symlink layout an incomplete-LOOKING destination IS the
+        # source (e.g. a file was renamed out of _BRANDING_FILES): removing it
+        # here would delete public/images itself, and this function runs on
+        # EVERY migrate via sync_hr_attendance_assets. Already live — the file
+        # copy above is the only publishing that makes sense, and it ran or
+        # was refused above.
+        return
+
     _remove_dest(dest_dir)
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(src_dir, dest_dir)
+    publish_tree(src_dir, dest_dir)
 
 
 def force_sync_app_branding_assets():
@@ -161,7 +176,7 @@ def force_sync_app_branding_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(src_dir, dest_dir)
+    publish_tree(src_dir, dest_dir)
 
 
 def force_sync_hr_attendance_assets():
@@ -169,13 +184,15 @@ def force_sync_hr_attendance_assets():
     app = "dewey_time"
     app_path = frappe.get_app_path(app)
     src_dir = os.path.join(app_path, "public", "hr_attendance")
-    src_assets = os.path.join(src_dir, "assets")
     dest_dir = os.path.join(frappe.local.sites_path, "assets", app, "hr_attendance")
 
-    if not os.path.isdir(src_assets):
+    # The SAME completeness bar as the migrate path: force-publishing a
+    # degraded source (an aborted vite build) replaces a working deployment
+    # with a broken one on any layout where the copy actually happens.
+    if not _hr_attendance_bundle_ok(src_dir):
         frappe.log_error(
             title="force_sync_hr_attendance_assets missing source",
-            message=f"Expected bundle at {src_assets}",
+            message=f"Expected a complete bundle at {src_dir}",
         )
         return
 
@@ -190,11 +207,7 @@ def force_sync_hr_attendance_assets():
     if os.path.lexists(dest_dir):
         return
 
-    shutil.copytree(
-        src_dir,
-        dest_dir,
-        ignore=shutil.ignore_patterns("index.html"),
-    )
+    publish_tree(src_dir, dest_dir, ignore=shutil.ignore_patterns("index.html"))
 
     sync_app_branding_assets()
 
@@ -228,14 +241,27 @@ def sync_hr_attendance_assets():
     app = "dewey_time"
     app_path = frappe.get_app_path(app)
     src_dir = os.path.join(app_path, "public", "hr_attendance")
-    src_assets = os.path.join(src_dir, "assets")
     dest_dir = os.path.join(frappe.local.sites_path, "assets", app, "hr_attendance")
 
-    if not os.path.isdir(src_assets):
+    # A COMPLETE source, not merely an assets/ directory. An aborted vite
+    # build (emptyOutDir wipes first) leaves assets/ present with index.*
+    # missing; publishing that would replace a working deployment with a
+    # broken one — and on the bench-symlink layout, without the guard below,
+    # the old isdir check let _remove_dest delete the app's own bundle.
+    # The miniapp and adms syncs have always checked their source this way.
+    if not _hr_attendance_bundle_ok(src_dir):
         sync_app_branding_assets()
         return
 
     if os.path.lexists(dest_dir) and not _needs_hr_attendance_resync(src_dir, dest_dir):
+        sync_app_branding_assets()
+        return
+
+    if _dest_is_the_source(src_dir, dest_dir):
+        # THE after_migrate PATH of the guard the force helper already has: on
+        # a bench, sites/assets/dewey_time is a symlink into the app's own
+        # public/, so a "stale-looking" destination here IS the source and
+        # removing it deletes the committed bundle from the app tree.
         sync_app_branding_assets()
         return
 
@@ -247,10 +273,6 @@ def sync_hr_attendance_assets():
         return
 
     # index.html contains Jinja; served only via www/hr-attendance.
-    shutil.copytree(
-        src_dir,
-        dest_dir,
-        ignore=shutil.ignore_patterns("index.html"),
-    )
+    publish_tree(src_dir, dest_dir, ignore=shutil.ignore_patterns("index.html"))
 
     sync_app_branding_assets()
