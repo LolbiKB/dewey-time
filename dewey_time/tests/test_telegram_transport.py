@@ -380,6 +380,24 @@ class TestDiagnostics(unittest.TestCase):
         self.assertIsNone(report["webhook"]["allowed_updates"])
         self.assertTrue(report["webhook"]["delivers_button_presses"])
 
+    def test_an_unreachable_api_reads_as_unknown_not_healthy(self):
+        # _get reports a failed call as {"ok": False}, which leaves the
+        # result empty -- indistinguishable, naively, from Telegram's
+        # default-allowed-updates answer. The one field the runbook tells
+        # operators to trust must say "unknown" (None) there, and a failed
+        # getMyCommands must not read as "set_bot_commands never ran".
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get",
+                          return_value={"ok": False, "error": "NameResolutionError"}):
+            report = transport.diagnostics()
+
+        self.assertIsNone(report["webhook"]["delivers_button_presses"])
+        self.assertIsNone(report["commands"]["listed"])
+
     def test_the_registered_command_menu_is_surfaced(self):
         # "language" missing from this list means set_bot_commands never ran
         # against this bot: /language is then undiscoverable for everyone

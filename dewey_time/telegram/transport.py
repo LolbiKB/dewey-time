@@ -473,7 +473,8 @@ def diagnostics(employee: str | None = None) -> dict:
     if configured and actual and configured.lower() != actual.lower():
         report["invite_username_mismatch"] = actual
 
-    hook = _get("getWebhookInfo").get("result") or {}
+    hook_answer = _get("getWebhookInfo")
+    hook = hook_answer.get("result") or {}
     allowed = hook.get("allowed_updates")
     report["webhook"] = {
         "url": hook.get("url") or None,
@@ -490,7 +491,14 @@ def diagnostics(employee: str | None = None) -> dict:
         # every other line of this report reads healthy. Absent means
         # Telegram's default (everything but chat_member), so presses arrive.
         "allowed_updates": allowed,
-        "delivers_button_presses": allowed is None or "callback_query" in allowed,
+        # True/False only when Telegram actually answered; None when the call
+        # itself failed. An unreachable API must read as UNKNOWN on the one
+        # field the runbook tells operators to trust, never as healthy.
+        "delivers_button_presses": (
+            (allowed is None or "callback_query" in allowed)
+            if hook_answer.get("ok")
+            else None
+        ),
     }
 
     menu = _get("getChatMenuButton").get("result") or {}
@@ -507,9 +515,20 @@ def diagnostics(employee: str | None = None) -> dict:
     # The registered command menu -- Telegram-side state again, so it is
     # ASKED rather than assumed. "language" missing here means
     # set_bot_commands has never run against this bot and /language is
-    # undiscoverable for everyone already linked.
-    listed = _get("getMyCommands").get("result") or []
+    # undiscoverable for everyone already linked. `listed: None` means the
+    # call failed, which must stay distinguishable from an empty menu -- the
+    # runbook maps [] to "set_bot_commands never ran", and a transport blip
+    # must not read as that diagnosis.
+    commands_answer = _get("getMyCommands")
     report["commands"] = {
-        "listed": [c.get("command") for c in listed if isinstance(c, dict)],
+        "listed": (
+            [
+                c.get("command")
+                for c in (commands_answer.get("result") or [])
+                if isinstance(c, dict)
+            ]
+            if commands_answer.get("ok")
+            else None
+        ),
     }
     return report
