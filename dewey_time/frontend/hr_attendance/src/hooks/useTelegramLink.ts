@@ -5,20 +5,24 @@
  * the same credential. Only the coverage register does now, so this is not a
  * shared hook -- it is that page's dialog state, and it covers the whole
  * lifecycle rather than just the issuing half.
+ *
+ * The state itself lives in `telegramLinkState.ts` as a pure reducer, and the
+ * reason is the defect that reducer's docstring records: a settlement from a
+ * previous target must change nothing, and "nothing" has to cover invite,
+ * error AND busy at once. This file only starts the network calls and hands
+ * their results back with the generation they started under.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useReducer, useRef } from "react";
 
 import { createLinkInvite, revokeLink, type LinkInvite } from "@/services/telegram";
+import {
+  INITIAL_LINK_STATE,
+  linkReducer,
+  type TelegramLinkStatus,
+  type TelegramTarget,
+} from "@/hooks/telegramLinkState";
 
-export type { LinkInvite };
-
-export type TelegramLinkStatus = "linked" | "id_on_file" | "none";
-
-export type TelegramTarget = {
-  employee: string;
-  employeeName: string;
-  status: TelegramLinkStatus;
-};
+export type { LinkInvite, TelegramLinkStatus, TelegramTarget };
 
 export type TelegramLink = {
   target: TelegramTarget | null;
@@ -29,76 +33,86 @@ export type TelegramLink = {
   close: () => void;
   issue: () => void;
   revoke: () => void;
+  dismissError: () => void;
 };
 
 export function useTelegramLink(opts?: { onUnlinked?: () => void }): TelegramLink {
-  const [target, setTarget] = useState<TelegramTarget | null>(null);
-  const [invite, setInvite] = useState<LinkInvite | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"issuing" | "revoking" | null>(null);
+  const [state, dispatch] = useReducer(linkReducer, INITIAL_LINK_STATE);
 
-  // Reset FIRST, before anything awaits. Leaving the previous employee's link
-  // on screen while the next one loads is how someone sends the wrong person a
-  // credential that binds their Telegram account to the wrong record.
+  // The gen and target an operation captures must be the ones on screen when
+  // the button was pressed. A ref rather than a closure over `state`: the
+  // callbacks are stable, and reading a stale render's state would defeat the
+  // guard from the other side.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const openFor = useCallback((next: TelegramTarget) => {
-    setInvite(null);
-    setError(null);
-    setBusy(null);
-    setTarget(next);
+    dispatch({ type: "open", target: next });
   }, []);
 
   const close = useCallback(() => {
-    setTarget(null);
-    setInvite(null);
-    setError(null);
-    setBusy(null);
+    dispatch({ type: "close" });
+  }, []);
+
+  const dismissError = useCallback(() => {
+    dispatch({ type: "dismissError" });
   }, []);
 
   const issue = useCallback(() => {
-    if (!target) return;
-    const employee = target.employee;
-    setInvite(null);
-    setError(null);
-    setBusy("issuing");
+    const current = stateRef.current;
+    if (!current.target) return;
+    const { gen } = current;
+    const employee = current.target.employee;
+    dispatch({ type: "issueStart" });
     void (async () => {
       try {
-        setInvite(await createLinkInvite(employee));
+        // A dropped stale invite is safe server-side: minting revokes every
+        // outstanding token for the employee, so the credential this discards
+        // dies the moment a fresh one is issued.
+        dispatch({ type: "issued", gen, invite: await createLinkInvite(employee) });
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Could not issue a link");
-      } finally {
-        setBusy(null);
+        dispatch({
+          type: "failed",
+          gen,
+          message: caught instanceof Error ? caught.message : "Could not issue a link",
+        });
       }
     })();
-  }, [target]);
+  }, []);
 
   const revoke = useCallback(() => {
-    if (!target) return;
-    const employee = target.employee;
-    setError(null);
-    setBusy("revoking");
+    const current = stateRef.current;
+    if (!current.target) return;
+    const { gen } = current;
+    const employee = current.target.employee;
+    dispatch({ type: "revokeStart" });
     void (async () => {
       try {
         await revokeLink(employee);
-        // Locally, not by refetching: the dialog must show the unlinked state
-        // immediately, and the feed refresh the caller does is a network round
-        // trip the person standing at the screen should not wait through.
-        //
-        // Guarded on the id because the dialog can be reopened for someone
-        // else while this is in flight, and writing "none" onto THEIR row
-        // would offer Issue for an employee who is still linked.
-        setTarget((current) =>
-          current && current.employee === employee
-            ? { ...current, status: "none" }
-            : current,
-        );
+        dispatch({ type: "revoked", gen });
+        // Unconditionally, even if the dialog has moved on: the revoke DID
+        // happen, and the caller's refetch is how the register row it
+        // belonged to stops offering Unlink.
         opts?.onUnlinked?.();
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Could not unlink");
-      } finally {
-        setBusy(null);
+        dispatch({
+          type: "failed",
+          gen,
+          message: caught instanceof Error ? caught.message : "Could not unlink",
+        });
       }
     })();
-  }, [target, opts]);
+  }, [opts]);
 
-  return { target, invite, error, busy, openFor, close, issue, revoke };
+  return {
+    target: state.target,
+    invite: state.invite,
+    error: state.error,
+    busy: state.busy,
+    openFor,
+    close,
+    issue,
+    revoke,
+    dismissError,
+  };
 }
