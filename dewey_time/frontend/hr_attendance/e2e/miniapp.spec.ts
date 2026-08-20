@@ -408,7 +408,7 @@ test("every day announces its mark, not just draws it", async ({ page }) => {
   expect(days.length, "no day buttons found — the locator is wrong").toBeGreaterThan(20);
 
   // Every fixture day is a full 4-punch day, so each past one is complete.
-  const withMark = days.filter((n) => /complete record|no clock-out|no record|not a working day/.test(n));
+  const withMark = days.filter((n) => /complete record|without its pair|no record|not a working day/.test(n));
   expect(withMark.length, `no day named its mark: ${days[0]}`).toBeGreaterThan(0);
 });
 

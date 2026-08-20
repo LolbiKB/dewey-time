@@ -28,7 +28,8 @@ import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { useDismissibleLayer } from "@/miniapp/miniBackStack";
 import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import { dayFacts, totalWorkedMinutes } from "@/miniapp/miniDay";
-import { dayMark, MARK_LABEL, type DayMark } from "@/miniapp/miniDayMark";
+import { dayMark, dayMarkLabel, type DayMark } from "@/miniapp/miniDayMark";
+import type { StringKey } from "@/miniapp/miniStrings";
 import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
 
 /**
@@ -138,11 +139,15 @@ export function MiniCalendarSheet(props: {
   const insets = useSafeAreaInsets();
 
   const byDate = useMemo(() => daysByDate(query.data), [query.data]);
+  // The label rides with the mark because it needs the DAY: an `incomplete`
+  // dot has three possible wordings and only the day's own unmatched punches
+  // say which one is honest (dayMarkLabel).
   const marks = useMemo(() => {
-    const map = new Map<string, DayMark>();
+    const map = new Map<string, { mark: DayMark; label: StringKey | null }>();
     for (const [key, day] of byDate) {
       const date = new Date(`${key}T00:00:00`);
-      map.set(key, dayMark(dayFacts(day, date, today), day, date, now));
+      const mark = dayMark(dayFacts(day, date, today), day, date, now);
+      map.set(key, { mark, label: mark === "none" ? null : dayMarkLabel(mark, day) });
     }
     return map;
   }, [byDate, today, now]);
@@ -210,8 +215,8 @@ export function MiniCalendarSheet(props: {
             labelDayButton: (date, modifiers) => {
               const base = fmt.date(date, "EEEE d MMMM");
               if (modifiers.hidden || modifiers.outside) return base;
-              const mark = marks.get(format(date, "yyyy-MM-dd")) ?? "none";
-              return mark === "none" ? base : `${base}, ${t(MARK_LABEL[mark])}`;
+              const label = marks.get(format(date, "yyyy-MM-dd"))?.label ?? null;
+              return label === null ? base : `${base}, ${t(label)}`;
             },
           }}
           weekStartsOn={1}
@@ -227,7 +232,7 @@ export function MiniCalendarSheet(props: {
           components={{
             DayButton: ({ day, modifiers, ...rest }) => {
               const key = format(day.date, "yyyy-MM-dd");
-              const mark = marks.get(key) ?? "none";
+              const mark = marks.get(key)?.mark ?? "none";
               return (
                 <CalendarDayButton day={day} modifiers={modifiers} {...rest}>
                   {/* The number in the reader's digits. react-day-picker

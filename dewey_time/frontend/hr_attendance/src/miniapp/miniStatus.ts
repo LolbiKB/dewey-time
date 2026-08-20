@@ -24,7 +24,7 @@
 import { isSameDay } from "date-fns";
 
 import { parseTimeToMinutes } from "@/lib/attendanceTime";
-import { groupCheckinsByBranchRuns, pairRun } from "@/lib/attendancePunches";
+import { liveWalk } from "@/lib/punchLiveVerbs";
 import type { Day } from "@/types/calendar";
 import type { StringKey } from "@/miniapp/miniStrings";
 
@@ -57,84 +57,34 @@ function inOrder(day: Day | undefined) {
 }
 
 /**
- * Is the last punch an arrival that has not been closed?
- *
- * NOT "the last punch is not an OUT". That was the rule here, and it claims
- * someone is at work on any evidence short of an explicit departure —
- * including a blank `log_type`, which is a legitimate state: Employee
- * Checkin's `log_type` is an optional Select, and a device that reports only
- * a timestamp leaves it empty on every row. Every punch then reads as an
- * arrival and the chip says "In" for the rest of the person's life.
- *
- * An explicit label is believed. Without one, the punches are PAIRED — the
- * same thing `deriveSegments` does to draw the timeline directly below this
- * chip, so an odd count is an open run in both places and the two surfaces
- * cannot disagree about the same day.
- *
- * KNOWN GAP: whole-day parity is blind to campus and to double taps, which
- * is why the Telegram notifier abandoned it for a branch-run replay
- * (dewey_time/telegram/receipt.py) that degrades to a neutral receipt when
- * direction is not honestly callable. On exactly those days this chip can
- * still make the confident claim the chat just declined. Aligning the chip
- * (and miniDayMark) to the same replay is deliberate follow-up work, left
- * out of the receipt change on purpose.
- */
-function stillInside(punches: { log_type?: string | null }[]): boolean {
-  const last = String(punches[punches.length - 1]?.log_type || "").toUpperCase();
-  if (last === "IN") return true;
-  if (last === "OUT") return false;
-  return punches.length % 2 === 1;
-}
-
-/**
  * The unclosed arrival on this day, as the API's own datetime string.
  *
- * Reads `pairRun` -- the SAME matching `deriveSegments` uses to draw the
- * timeline and to total the day -- so the status chip, the canvas and the
- * worked figure cannot disagree about whether one Tuesday is still running.
+ * Reads the LIVE walk (`liveWalk`, the TypeScript twin of the Telegram
+ * receipt's verb rule), because "is somebody at work right now" is a live
+ * question and the retrospective pairing answers a different one: `pairRun`
+ * sees the whole day and calls the last punch of a run a departure, which
+ * mid-afternoon closes the day on the punch the person just came BACK on.
  *
- * It returns the arrival that is actually still open, which is not always the
- * last punch: a device that repeats an arrival leaves 08:00 open and 09:00 as
- * a duplicate, and the person got there at 08:00. Taking the last punch would
- * quietly dock them an hour (issue #191).
+ * A run is open only when the walk's last verb is IN — a claimable arrival:
+ * an explicit label, the day's first punch, or a same-branch return. A lone
+ * unlabelled punch opening a fresh run is indistinguishable from a departure
+ * through that campus's exit device, so the walk refuses a verb and this
+ * returns null: no live marker, no climbing "so far", for someone who may
+ * have gone home. (The earlier rule here fell back to WHOLE-DAY parity for
+ * that punch, which read "still at work, since 17:04" all evening whenever
+ * the day's total count happened to be odd.)
  *
- * The LAST run only. Earlier runs belong to a branch the person has left; what
- * is open now is where they are now.
+ * The moment returned is the walk's own open arrival — the FIRST arrival of
+ * the open stretch, so a repeated arrival does not move it and nobody is
+ * quietly docked an hour (issue #191).
  *
  * Says nothing about WHICH day. An unclosed punch three weeks ago is a gap in
  * the record, not somebody still at work; a caller that cares must check the
  * date itself.
  */
 export function openRunStartedAt(day: Day | undefined): string | null {
-  const punches = inOrder(day);
-  const runs = groupCheckinsByBranchRuns(punches);
-  const last = runs[runs.length - 1];
-  if (!last?.length) return null;
-
-  const openAt = pairRun(last).openAt;
-  if (!openAt) return null;
-
-  // POSITIVE EVIDENCE, not position.
-  //
-  // `pairRun` falls back to inferring direction from position when a punch
-  // carries no `log_type`, and the first punch of a run is inferred to be an
-  // arrival -- `inferCheckinDirection(0, 1)` returns "IN". A run of exactly one
-  // punch therefore always looked like somebody arriving and never leaving.
-  //
-  // That is not a rare shape. A cover shift ends with a departure recorded at a
-  // SECOND branch, which puts that punch alone in its own branch run: at 19:00
-  // the app read "2h so far" with a live marker, counting from the moment the
-  // person went home, while the status chip beside it said "Checked out" and
-  // the nine hours they actually worked appeared nowhere. Every punch from an
-  // unmapped device is its own run too, so the same thing happens there.
-  //
-  // So an open run has to be evidenced: either the punch says IN itself, or the
-  // day has an odd number of punches, which is what "one of them is unmatched"
-  // actually means. Anything less is claiming someone is at work on the absence
-  // of evidence -- the one thing this surface must never do.
-  const label = String(openAt.log_type || "").trim().toUpperCase();
-  if (label === "IN") return openAt.time ?? null;
-  return punches.length % 2 === 1 ? (openAt.time ?? null) : null;
+  const walk = liveWalk(inOrder(day));
+  return walk.openClaimable ? walk.openTime : null;
 }
 
 export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniStatus {
@@ -160,10 +110,27 @@ export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniSta
 
   if (!punches.length) return { kind: "notIn" };
 
-  const last = punches[punches.length - 1]!;
-  if (stillInside(punches)) {
+  // THE RECEIPT'S RULE, not a third one. "Am I clocked in" is the question
+  // the Telegram receipt just answered about the same punch on the same
+  // phone, so the chip reads the same causal walk (`liveWalk`, the TS twin of
+  // receipt.py) and makes the claims the receipt made — one deliberate step
+  // further: a bounced tap gets a neutral MESSAGE but is a non-event for
+  // STATE, so the chip keeps saying "in" over a bounce. A kept IN is
+  // "in"; a kept OUT — a label, or a blank punch closing the open arrival —
+  // is out; and where the receipt refused a verb (a lone
+  // unlabelled punch opening a fresh run, indistinguishable from a departure
+  // through that campus's exit device), the chip says NOTHING rather than
+  // guessing. The rule that lived here before — last punch's label, else
+  // whole-day parity — said "In" all evening to someone who left through a
+  // second campus, and the first replacement (retrospective `pairRun`) said
+  // "Out during shift" to someone back from lunch. Both were confident
+  // sentences the receipt had declined to say.
+  const walk = liveWalk(punches);
+  if (walk.lastKeptVerb === "IN") {
+    const last = punches[punches.length - 1]!;
     return { kind: "in", branch: (last.custom_device_branch || "").trim() || null };
   }
+  if (walk.lastKeptVerb !== "OUT") return { kind: "none" };
 
   const nowMin = minuteOfDay(now);
   const lunchStart = parseTimeToMinutes(day?.shift?.lunch_start);
