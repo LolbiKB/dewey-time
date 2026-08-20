@@ -94,7 +94,9 @@ export function TelegramInviteBody(props: {
     }
     // Fail loudly, and hand over the fallback in the same gesture: the
     // read-only input exists for exactly this, so select it rather than
-    // describing where it is.
+    // describing where it is. `copied` is cleared too — a success two seconds
+    // ago must not leave "Copied" on a button beside a failure notice.
+    setCopied(false);
     setCopyFailed(true);
     inputRef.current?.focus();
     inputRef.current?.select();

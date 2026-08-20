@@ -146,6 +146,14 @@ def revoke_outstanding_tokens(employee: str) -> int:
                 "revoked_at": ["is", "not set"],
             },
             fields=["name"],
+            # A CURRENT read, not a snapshot read. Under REPEATABLE READ a
+            # plain SELECT here can serve a read view pinned before
+            # _serialize_credential_ops' lock was granted -- if any cache-miss
+            # SQL ran earlier in this request -- and would then miss a token
+            # the lock's winner just committed, leaving two live credentials.
+            # A locking read always sees committed state, so the invariant
+            # stops depending on statement ordering and cache warmth.
+            for_update=True,
         )
         or []
     )
@@ -532,13 +540,20 @@ def _bot_username() -> str:
 
 
 def _live_link_names(employee: str) -> list[str]:
-    """Names of this employee's ENABLED Telegram Link rows."""
+    """Names of this employee's ENABLED Telegram Link rows.
+
+    A locking read, for the same reason revoke_outstanding_tokens' is one:
+    this is the check half of a check-then-act that
+    _serialize_credential_ops serialises, and a snapshot read here could
+    predate the lock (see the comment there).
+    """
     return [
         row["name"]
         for row in frappe.get_all(
             LINK_DT,
             filters={"employee": employee, "enabled": 1},
             fields=["name"],
+            for_update=True,
         )
         or []
     ]

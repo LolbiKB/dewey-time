@@ -878,3 +878,28 @@ class TestCredentialOpsAreSerialised(unittest.TestCase):
             with self.assertRaises(Exception):
                 binding.create_link_invite("  ")
         lock.assert_not_called()
+
+
+class TestTheDecidingReadsAreLockingReads(unittest.TestCase):
+    """The reads the invariant depends on must be CURRENT reads.
+
+    Under REPEATABLE READ a plain SELECT can serve a read view pinned before
+    _serialize_credential_ops' lock was granted (any cache-miss SQL earlier in
+    the request pins it), and would then miss a token the lock's winner just
+    committed. for_update on the reads makes them current regardless of when
+    the snapshot formed -- so its PRESENCE is the guarantee, and these pin it.
+    """
+
+    def test_live_link_names_reads_for_update(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[]) as get_all:
+            binding._live_link_names("HR-EMP-00001")
+        self.assertTrue(get_all.call_args.kwargs.get("for_update"))
+
+    def test_outstanding_token_revocation_reads_for_update(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[]) as get_all:
+            binding.revoke_outstanding_tokens("HR-EMP-00001")
+        self.assertTrue(get_all.call_args.kwargs.get("for_update"))

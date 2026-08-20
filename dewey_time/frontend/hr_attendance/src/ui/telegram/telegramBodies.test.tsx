@@ -134,3 +134,23 @@ test("copy resolves false where the clipboard API does not exist, never throwing
   // unhandled promise rejection and the button silently did nothing.
   assert.equal(await copyToClipboard("https://t.me/x?start=y"), false);
 });
+
+test("copy resolves true and delivers the exact text when the clipboard works", async () => {
+  // The inversion pin: an implementation that always returns false — which
+  // satisfies the no-navigator test above — must fail here. Node ships a
+  // navigator global without clipboard, so it is stubbed property-wise and
+  // restored whatever happens.
+  const written: string[] = [];
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: async (t: string) => { written.push(t); } } },
+  });
+  try {
+    assert.equal(await copyToClipboard("https://t.me/x?start=y"), true);
+    assert.deepEqual(written, ["https://t.me/x?start=y"]);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "navigator", original);
+    else delete (globalThis as { navigator?: unknown }).navigator;
+  }
+});
