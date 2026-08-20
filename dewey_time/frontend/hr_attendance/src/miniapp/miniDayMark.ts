@@ -91,9 +91,15 @@ function isFinished(day: Day | undefined, date: Date, now: Date): boolean {
  * run degraded and could classify a day differently from the same function in
  * the HR console.
  *
- * Parity is the rule `miniStatus.stillInside` and the notifier's
- * `direction_of` already use. Three surfaces agree on it today; a fourth rule
- * is exactly how they would start describing one Tuesday three ways.
+ * Parity is the rule `miniStatus.stillInside` still uses. The notifier's
+ * `direction_of` has LEFT it — it now replays the day under the timeline's
+ * branch-run pairing (dewey_time/telegram/receipt.py) because whole-day
+ * parity is blind to campus and to double taps, and it sends a neutral
+ * receipt where direction is not honestly callable. So the surfaces no
+ * longer all agree: on a cross-campus or bounced-tap day the chat may
+ * decline the claim this mark and the chip still make. Aligning these two to
+ * the same replay is deliberate follow-up work; until then, do not add a
+ * NEW rule here — reuse pairRun or the replay, nothing else.
  */
 function punchCount(day: Day | undefined): number {
   return day?.checkins?.length ?? 0;
