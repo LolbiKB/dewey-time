@@ -23,11 +23,45 @@ failure class lives in the filesystem, and a mock would agree with the bug.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 
 #: Temp directories are `<dest>.publishing-<pid>`. The suffix is swept on the
-#: next publish, so a crashed run's leftovers cannot accumulate.
+#: next publish, so a crashed run's leftovers cannot accumulate. SINGLE
+#: WRITER ASSUMED: the sweep removes every temp for this destination,
+#: including a live one — two concurrent publishes of one bundle (a migrate
+#: overlapping a bench-console force_sync) are not supported, and were not
+#: under the old in-place copy either, which would have interleaved into the
+#: destination itself.
 TMP_SUFFIX = ".publishing"
+
+
+def referenced_fonts_present(base_dir: str) -> bool:
+    """Every woff2 the bundle's stylesheet references exists beside it.
+
+    The freshness checks used to key only on `index.css` + `index.js`
+    existing — the two files whose names never change — so a destination with
+    ZERO fonts was "ok" and, if its build id matched, certified fresh forever.
+    Content-hashed fonts make this sharper: they are now the only filenames
+    that move between deploys, so a hand-repaired or externally-staged tree
+    is exactly the shape that loses them. A stylesheet referencing no fonts
+    at all also fails — that is check-fonts.mjs's dropped-fonts case, seen
+    from the serving side.
+    """
+    css_path = os.path.join(base_dir, "assets", "index.css")
+    try:
+        with open(css_path, encoding="utf-8", errors="replace") as handle:
+            css = handle.read()
+    except OSError:
+        return False
+    referenced = {
+        match.strip("\"'").split("/")[-1]
+        for match in re.findall(r"url\(([^)]*?\.woff2)[^)]*\)", css)
+    }
+    if not referenced:
+        return False
+    assets_dir = os.path.join(base_dir, "assets")
+    return all(os.path.isfile(os.path.join(assets_dir, name)) for name in referenced)
 
 
 def _sweep_stale_tmp(dest_dir: str) -> None:

@@ -33,6 +33,8 @@ class _Bench:
         sites/assets/dewey_time -> apps/dewey_time/dewey_time/public   (symlink)
     """
 
+    FONT = "kantumruy-pro-test-C0FFEE.woff2"
+
     def __init__(self, bundles):
         self.root = tempfile.mkdtemp()
         self.app_path = os.path.join(self.root, "apps", "dewey_time", "dewey_time")
@@ -40,9 +42,17 @@ class _Bench:
         for bundle in bundles:
             assets = os.path.join(self.public, bundle, "assets")
             os.makedirs(assets)
-            for name in ("index.js", "index.css"):
-                with open(os.path.join(assets, name), "w") as handle:
-                    handle.write("/* the deployed artifact */")
+            with open(os.path.join(assets, "index.js"), "w") as handle:
+                handle.write("/* the deployed artifact */")
+            # The stylesheet references a font, and the font exists, because
+            # _bundle_ok now checks exactly that — a css with no @font-face is
+            # the dropped-fonts failure, not a healthy bundle.
+            with open(os.path.join(assets, "index.css"), "w") as handle:
+                handle.write(
+                    "@font-face{src:url(/assets/dewey_time/%s/assets/%s)}" % (bundle, self.FONT)
+                )
+            with open(os.path.join(assets, self.FONT), "wb") as handle:
+                handle.write(b"woff2")
             with open(os.path.join(assets, "build-id.txt"), "w") as handle:
                 handle.write("build-1")
 
@@ -50,6 +60,8 @@ class _Bench:
         os.makedirs(os.path.join(self.sites_path, "assets"))
         # The link that makes the destination resolve back to the source.
         os.symlink(self.public, os.path.join(self.sites_path, "assets", "dewey_time"))
+
+    BUNDLE_FILES = ["build-id.txt", "index.css", "index.js", FONT]
 
     def close(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -78,17 +90,17 @@ class TestForceSyncCannotDeleteTheBundle(unittest.TestCase):
         # The trigger is an operator running the documented repair helper.
         miniapp.force_sync_miniapp_assets()
         self.assertEqual(
-            self._bundle_files("miniapp"), ["build-id.txt", "index.css", "index.js"]
+            self._bundle_files("miniapp"), _Bench.BUNDLE_FILES
         )
 
     def test_force_sync_adms_leaves_the_source_bundle_intact(self):
         adms.force_sync_adms_assets()
-        self.assertEqual(self._bundle_files("adms"), ["build-id.txt", "index.css", "index.js"])
+        self.assertEqual(self._bundle_files("adms"), _Bench.BUNDLE_FILES)
 
     def test_force_sync_hr_attendance_leaves_the_source_bundle_intact(self):
         hr.force_sync_hr_attendance_assets()
         self.assertEqual(
-            self._bundle_files("hr_attendance"), ["build-id.txt", "index.css", "index.js"]
+            self._bundle_files("hr_attendance"), _Bench.BUNDLE_FILES
         )
 
     def test_the_ordinary_sync_also_leaves_it_intact(self):
@@ -96,8 +108,35 @@ class TestForceSyncCannotDeleteTheBundle(unittest.TestCase):
         # is protected only incidentally by a build-id match.
         miniapp.sync_miniapp_assets()
         self.assertEqual(
-            self._bundle_files("miniapp"), ["build-id.txt", "index.css", "index.js"]
+            self._bundle_files("miniapp"), _Bench.BUNDLE_FILES
         )
+
+    def test_a_degraded_hr_source_cannot_delete_itself_on_migrate(self):
+        # An aborted vite build (emptyOutDir wipes first) leaves assets/
+        # present with index.* gone. The ordinary after_migrate sync then read
+        # "needs resync", and with no source guard handed the destination --
+        # which on this bench IS the source -- to rmtree. Reproduced before
+        # the fix: FileNotFoundError, and public/hr_attendance gone.
+        os.remove(os.path.join(self.bench.public, "hr_attendance", "assets", "index.js"))
+        hr.sync_hr_attendance_assets()
+        assets = os.path.join(self.bench.public, "hr_attendance", "assets")
+        self.assertTrue(os.path.isdir(assets))
+        self.assertIn("index.css", sorted(os.listdir(assets)))
+
+    def test_branding_with_a_renamed_file_cannot_delete_public_images(self):
+        # A logo renamed or dropped without editing _BRANDING_FILES is an
+        # ordinary refactor -- and it made _branding_assets_ok False on every
+        # branch, so the next migrate rmtree'd sites/assets/dewey_time/images,
+        # which on this bench IS public/images. Site favicon and both SPA
+        # logos 404'd until a redeploy.
+        images = os.path.join(self.bench.public, "images")
+        os.makedirs(images)
+        for name in ("DI-logo.svg", "dewey-time.svg"):  # adms-bridge.svg missing
+            with open(os.path.join(images, name), "w") as handle:
+                handle.write("<svg/>")
+        hr.sync_app_branding_assets()
+        self.assertTrue(os.path.isdir(images))
+        self.assertIn("DI-logo.svg", sorted(os.listdir(images)))
 
     def test_the_guard_recognises_the_resolved_destination(self):
         src = os.path.join(self.bench.public, "miniapp")
@@ -119,7 +158,7 @@ class TestForceSyncCannotDeleteTheBundle(unittest.TestCase):
         )
         self.assertTrue(os.path.isfile(published))
         self.assertEqual(
-            self._bundle_files("miniapp"), ["build-id.txt", "index.css", "index.js"]
+            self._bundle_files("miniapp"), _Bench.BUNDLE_FILES
         )
 
 
@@ -197,11 +236,23 @@ class TestPublishIsAllOrNothing(unittest.TestCase):
         self.assertFalse(os.path.lexists(stale))
         self.assertTrue(os.path.isfile(os.path.join(self.dest, "assets", "index.js")))
 
+    def test_a_destination_missing_a_referenced_font_is_stale(self):
+        # Content-hashed fonts are the only filenames that move between
+        # deploys, so a hand-repaired or externally-staged tree that lost them
+        # is exactly the shape freshness must catch. The two stable names and
+        # a matching build id used to certify it forever.
+        miniapp.sync_miniapp_assets()
+        os.remove(os.path.join(self.dest, "assets", _Bench.FONT))
+        src = os.path.join(self.bench.public, "miniapp")
+        self.assertTrue(miniapp._needs_resync(src, self.dest))
+        miniapp.sync_miniapp_assets()
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, "assets", _Bench.FONT)))
+
     def test_a_successful_publish_is_complete_and_clean(self):
         miniapp.sync_miniapp_assets()
         self.assertEqual(
             sorted(os.listdir(os.path.join(self.dest, "assets"))),
-            ["build-id.txt", "index.css", "index.js"],
+            _Bench.BUNDLE_FILES,
         )
         parent = os.path.dirname(self.dest)
         self.assertEqual([n for n in os.listdir(parent) if asset_publish.TMP_SUFFIX in n], [])

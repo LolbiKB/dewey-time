@@ -35,7 +35,7 @@ export default defineConfig({
         // with stable names a font fix could never arrive on a phone that had
         // loaded the app once.
         entryFileNames: "assets/index.js",
-        chunkFileNames: "assets/[name].js",
+        chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: (assetInfo) => {
           const name = assetInfo.name ?? "";
           if (name.endsWith(".css")) return "assets/index.css";

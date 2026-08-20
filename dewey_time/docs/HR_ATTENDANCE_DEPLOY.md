@@ -15,18 +15,27 @@ npm run build
 
 This writes:
 
-- `public/hr_attendance/assets/index.js` / `index.css` (stable filenames)
-- `public/hr_attendance/assets/build-id.txt` (timestamp for debugging)
-- `www/hr-attendance.html` and `www/hr-schedule.html` with literal `?v=<timestamp>` on asset URLs (cache bust)
+- `public/hr_attendance/assets/index.js` / `index.css` (stable filenames — the
+  ONLY two; fonts and any chunks are content-hashed, because their URLs live
+  inside `index.css` where the `?v=` buster cannot reach them)
+- `public/hr_attendance/assets/build-id.txt` (freshness sentinel read by the sync helpers)
+- `www/hr-attendance.html`, `www/hr-schedule.html`, `www/hr-flags.html` with
+  literal `?v=<timestamp>` on asset URLs (cache bust); `www/hr-personal.html`
+  is re-stamped in place (it keeps its own head)
 - copies the same HTML to `public/hr_attendance/index.html` (do **not** serve this as the app entry)
+- **no sourcemaps**: the bundles are committed and `/assets/` serves to anyone,
+  so a `.map` would publish the full annotated source
 
-Commit `public/hr_attendance/assets/*`, `www/hr-attendance.html`, and `www/hr-schedule.html` with your code changes.
+Commit everything the build changed under `public/` and `www/*.html` in the
+**same PR** as the source change.
 
-> **⚠ CI does not rebuild the bundle.** `.github/workflows/frontend.yml` runs the
-> tests only (`test:web`, `e2e`) — it never runs `npm run build`. If you change
-> frontend source but forget to rebuild and commit `public/hr_attendance/assets/*`,
-> the merge ships **stale assets** and nothing catches it. Always `npm run build`
-> and commit the output in the **same PR** as the source change.
+> **CI guards this two ways** (`.github/workflows/frontend.yml`): the
+> `typecheck` job runs a full `npm run build` (which is what makes
+> `check-fonts` a gate), and the `bundle-freshness` job fails any PR that
+> changes shipped frontend source — dependency files included — without both
+> committed bundles changing with it. Neither ships the CI-built output:
+> whatever bundle is **committed** is what deploys, so a green build with an
+> un-rebuilt commit still ships stale assets. Rebuild and commit together.
 
 ## How Frappe serves the bundle
 

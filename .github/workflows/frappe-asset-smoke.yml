@@ -66,6 +66,27 @@ jobs:
             fi
           done
 
+          # Assets that must NOT serve. The sourcemaps embedded the apps'
+          # complete annotated source and were world-readable from /assets/;
+          # they were removed from the bundles, and this asserts the live
+          # origin actually stopped serving them — a Deploy-without-Migrate,
+          # or a stale migrate-made copy where the bench symlink is missing,
+          # can keep a deleted file alive long after the repo dropped it.
+          FORBIDDEN=(
+            "/assets/dewey_time/miniapp/assets/index.js.map"
+            "/assets/dewey_time/hr_attendance/assets/index.js.map"
+          )
+          for path in "${FORBIDDEN[@]}"; do
+            url="${SITE}${path}"
+            code=$(curl -sS -L --max-time 20 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "::error title=Leak still live::${url} → HTTP 200 (this file must not be served)"
+              fail=1
+            else
+              echo "OK  ${url} → ${code} (not served)"
+            fi
+          done
+
           if [ "$fail" -ne 0 ]; then
             echo "::error::One or more Frappe custom-app assets are not serving correctly (see above)."
             exit 1

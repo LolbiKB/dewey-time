@@ -8,7 +8,7 @@ import shutil
 
 import frappe
 
-from dewey_time.utils.asset_publish import publish_tree
+from dewey_time.utils.asset_publish import publish_tree, referenced_fonts_present
 
 # Same deploy rules as sync_hr_attendance_assets.py — read
 # docs/HR_ATTENDANCE_DEPLOY.md before changing this module or asset URLs
@@ -22,9 +22,13 @@ def _bundle_ok(base_dir: str) -> bool:
     if not base_dir or not os.path.isdir(base_dir):
         return False
     assets_dir = os.path.join(base_dir, "assets")
-    return os.path.isfile(os.path.join(assets_dir, "index.css")) and os.path.isfile(
-        os.path.join(assets_dir, "index.js")
-    )
+    if not (
+        os.path.isfile(os.path.join(assets_dir, "index.css"))
+        and os.path.isfile(os.path.join(assets_dir, "index.js"))
+    ):
+        return False
+    # Fonts too -- see sync_miniapp_assets._bundle_ok.
+    return referenced_fonts_present(base_dir)
 
 
 def _read_build_id(base_dir: str) -> str | None:

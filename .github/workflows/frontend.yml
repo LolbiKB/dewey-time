@@ -203,8 +203,13 @@ jobs:
 
           # Source that ends up inside a bundle. Tests and e2e specs are
           # excluded: they never reach the shipped artifact.
+          # package.json / package-lock.json are in the list because a
+          # dependency bump is exactly the change that alters font BYTES — and
+          # with content-hashed fonts, therefore font FILENAMES. A dep-only PR
+          # that skips the rebuild ships an index.css pointing at woff2 names
+          # that no longer exist.
           source_touched=$(printf '%s\n' "$changed" \
-            | grep -E '^dewey_time/frontend/hr_attendance/(src/|index\.html|index\.miniapp\.html|vite\.config\.ts|vite\.miniapp\.config\.ts|tailwind\.config\.js|scripts/)' \
+            | grep -E '^dewey_time/frontend/hr_attendance/(src/|index\.html|index\.miniapp\.html|vite\.config\.ts|vite\.miniapp\.config\.ts|tailwind\.config\.js|scripts/|package\.json|package-lock\.json)' \
             | grep -vE '\.test\.tsx?$' || true)
 
           if [ -z "$source_touched" ]; then

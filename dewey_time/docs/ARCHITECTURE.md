@@ -14,7 +14,7 @@ from ZKTeco device punch data. It consists of:
 - A Telegram employee layer (`telegram/`): check-in notifications from a bot, and
   the **Mini App** at `/hr-me` — the employee's own record on their phone, inside
   Telegram. Its auth is Telegram `initData` HMAC, **not** a Frappe session (§8)
-- Eight custom DocTypes (MariaDB tables)
+- Eleven custom DocTypes (MariaDB tables; one is a child table)
 - Three committed React SPAs: the HR console at `/hr-attendance` + `/hr-schedule`,
   the Telegram Mini App bundle at `/hr-me`, and the ADMS device-admin dashboard
   at `/adms`
@@ -40,7 +40,10 @@ dewey_time/                          ← git repo root
     │       ├── dewey_time_push_subscription/
     │       ├── dewey_time_branch_rollout/
     │       ├── telegram_link/               ← one row per bound Telegram account
-    │       └── telegram_link_token/         ← single-use invite tokens (SHA-256, 24h)
+    │       ├── telegram_link_token/         ← single-use invite tokens (SHA-256, 24h)
+    │       ├── attendance_flag_decision/    ← child table of Attendance Flag
+    │       ├── employee_biometric_enrollment/
+    │       └── schedule_change_log/
     ├── attendance_engine/          ← core Python business logic
     │   ├── api.py                  ← general whitelisted APIs (get_my_week, run_engine)
     │   ├── hr_calendar.py          ← read API: employee list + calendar data
@@ -76,6 +79,9 @@ dewey_time/                          ← git repo root
     │   ├── hr-attendance.html      ← Jinja entry page (injects CSRF token)
     │   ├── hr-attendance.py        ← Python context provider for above
     │   ├── hr-schedule.html / .py
+    │   ├── hr-flags.html / .py     ← flag-queue route (same bundle)
+    │   ├── hr-personal.html        ← personal view (same bundle, own head)
+    │   ├── hr-attendance-sw.js     ← PWA service worker
     │   ├── hr-me.html / hr-me.py   ← Mini App shell (guest-served; auth is initData)
     │   └── adms.html / adms.py     ← ADMS shell (redirects Guests to /login)
     ├── docs/                       ← you are here
@@ -105,31 +111,40 @@ point. All registrations go here — nothing else is auto-discovered.
 
 ```python
 # SPA routing — rewrites sub-paths to Jinja entry page for React Router
+# (hr-me and adms are ALSO routed; see hooks.py for the full list)
 website_route_rules = [
     {"from_route": "/hr-attendance/<path:app_path>", "to_route": "hr-attendance"},
     {"from_route": "/hr-attendance",                 "to_route": "hr-attendance"},
     {"from_route": "/hr-schedule/<path:app_path>",   "to_route": "hr-schedule"},
     {"from_route": "/hr-schedule",                   "to_route": "hr-schedule"},
+    {"from_route": "/hr-flags/<path:app_path>",      "to_route": "hr-flags"},
+    {"from_route": "/hr-flags",                      "to_route": "hr-flags"},
+    ...
 ]
 
-# Scheduled jobs (Frappe RQ)
+# Scheduled jobs (Frappe RQ). The fallback closeout is HOURLY on purpose: the
+# job gates itself on each company's local hour being 03:00, and "daily" fires
+# once around site midnight — under "daily" the gate could essentially never
+# match and the fallback never ran.
 scheduler_events = {
-    "daily": ["dewey_time.attendance_engine.closeout.run_company_fallback_closeout"],
+    "hourly": ["dewey_time.attendance_engine.closeout.run_company_fallback_closeout"],
     "cron": {
         "*/30 * * * *": ["dewey_time.attendance_engine.intraday.run_intraday_scheduler"],
     },
 }
 
-# Doc event hooks — fire on any Employee Checkin save
+# Doc event hooks — LISTS, because the flag engine and the Telegram notifier
+# both care about a new punch and neither should be nested inside the other
 doc_events = {
     "Employee Checkin": {
-        "after_insert": "dewey_time.attendance_engine.intraday.on_employee_checkin_after_insert",
-        "on_update":    "dewey_time.attendance_engine.intraday.on_employee_checkin_on_update",
+        "after_insert": ["…intraday.on_employee_checkin_after_insert", "…telegram notifier"],
+        "on_update":    ["…intraday.on_employee_checkin_on_update"],
     },
 }
 
-# Copies Vite build to sites/assets/ after every bench migrate
-after_migrate = ["dewey_time.utils.sync_hr_attendance_assets.sync_hr_attendance_assets"]
+# after_migrate is a LIST of eight: custom fields, schedule naming, the three
+# bundle syncs (hr_attendance, adms, miniapp), ADMS roles, Bridge role, and
+# the web-push VAPID keys — see hooks.py for the authoritative list
 ```
 
 ---
@@ -155,15 +170,22 @@ def list_calendar_employees(include_all: str = "0") -> dict:
 
 ### API modules and their methods
 
+The load-bearing modules (not exhaustive — grep `@frappe.whitelist` for the
+full surface; flag management, notices, biometric enrollment, webpush and the
+coverage register all expose more):
+
 | Module | Methods |
 |---|---|
 | `hr_calendar.py` | `list_calendar_employees`, `get_employee_calendar` |
 | `schedule_api.py` | `get_employee_schedule_context`, `resolve_weekly_schedule_plan`, `apply_weekly_schedule`, `list_weekly_schedule_templates`, `get_holiday_preview` |
 | `schedule_import.py` | `parse_schedule_upload` |
-| `api.py` | `get_my_week`, `run_engine` |
-| `dev_tools.py` | `run_engine_for_employee`, `clear_employee_schedule` |
+| `api.py` | `get_my_week`, `get_engine_health` |
+| `dev_tools.py` | `run_engine_for_employee`, `clear_employee_schedule` *(backfill lives here, not in api.py)* |
 | `closeout.py` | `notify_device_closeout_status` *(Bridge webhook)* |
 | `device_sync.py` | `notify_device_sync_status` *(Bridge webhook)* |
+| `telegram/miniapp_api.py` | Mini App reads *(allow_guest + initData — see §8)* |
+| `telegram/webhook.py` | `telegram_webhook` *(allow_guest + secret header)* |
+| `dashboard_auth.py` | `get_dashboard_token` *(ADMS token exchange)* |
 
 Bridge webhooks use API key auth (`bridge_auth.py`), not session cookies.
 
@@ -173,7 +195,7 @@ Bridge webhooks use API key auth (`bridge_auth.py`), not session cookies.
 
 | DocType | Table / Purpose |
 |---|---|
-| `Attendance Flag` | Core record — one flag per employee × issue × day. Stores `flag_type`, `severity`, `status`, evidence JSON, HR decision fields, audit trail. |
+| `Attendance Flag` | Core record — one flag per employee × issue × day. Stores `flag_code`, `severity`, `status`, evidence JSON, HR decision fields, audit trail. |
 | `Device Closeout Alert` | EOD closeout triggers from the Bridge service per device/date. |
 | `Device Sync Status` | Last-successful-sync watermark per ZKTeco device — drives the data-freshness banner in the SPA. |
 | `Dewey Time Settings` | Single doctype: Telegram bot token/secret, VAPID keys, feature switches. |
@@ -198,8 +220,10 @@ npm run build                      # builds BOTH hr_attendance and miniapp
     → public/hr_attendance/assets/index.css   (stable name; page adds ?v=)
     → public/hr_attendance/assets/*-<hash>.woff2   (content-hashed fonts)
     → public/miniapp/…                        (same shape, second bundle)
-    → www/hr-attendance.html, www/hr-schedule.html, www/hr-me.html
-      (each cache-busted: ?v=<timestamp>)
+    → www/hr-attendance.html, www/hr-schedule.html, www/hr-flags.html,
+      www/hr-me.html (each cache-busted: ?v=<timestamp>);
+      www/hr-personal.html re-stamped in place
+
 git commit public/ www/*.html
 git push → Frappe Cloud deploy → bench migrate
     → sync_*_assets publish each bundle to sites/assets/dewey_time/<bundle>/
@@ -290,7 +314,7 @@ Scheduler daily        → closeout.run_company_fallback_closeout
 | `MISSING_TIME` | Intra-shift gap ≥ 30 min |
 | `ATTENDANCE_ISSUE` | Incomplete / inconsistent punch data |
 | `UNNOTIFIED_ABSENCE` | On shift, zero checkins |
-| `MISSING_IN_OR_OUT` | On shift, exactly one checkin |
+| `MISSING_IN_OR_OUT` | *Declared but not emitted* — a single checkin raises `ATTENDANCE_ISSUE` (reason `single_checkin`) |
 | `OFF_SHIFT_PUNCH` | Checkins present but off-shift or holiday |
 | `NON_PRIMARY_SITE_PUNCH` | Employee branch ≠ device branch |
 | `LATE_FROM_LUNCH` | Returned late from observed lunch |
@@ -369,13 +393,14 @@ Key constraints:
 - An employee can only get a new SSA if they have **no enabled SSAs** (`employee_has_enabled_ssas()`).
 - `apply_weekly_schedule` hard-blocks if an enabled SSA exists — `confirm_create=1` only bypasses the "create new records?" prompt, not this block.
 - Shift generation window: `DEFAULT_SHIFT_GENERATION_DAYS = 90`.
-- Grace minutes are fixed at 10 for all employees (hardcoded in `WeekPattern` builder).
+- Grace minutes come from the schedule profile (`grace_minutes`, default 0) and
+  are resolved per shift at flag time by `shift_grace.py` — not hardcoded.
 
 ---
 
 ## 10. Schedule Import
 
-`schedule_import.py` / `SpreadsheetImportDialog.tsx`
+`schedule_import.py` / `src/ui/schedule-import/` (the import wizard UI)
 
 **Canonical CSV format:**
 ```
@@ -497,9 +522,11 @@ Response:
 ## 15. Common Commands  <!-- was §14 before T3-4 health section was added -->
 
 ```bash
-# Run tests
-bench --site <site> pytest dewey_time
-bench --site <site> pytest dewey_time --path dewey_time/tests/test_closeout.py
+# Run tests (unittest-based; CI uses run-tests — there is no pytest here)
+bench --site <site> run-tests --app dewey_time
+bench --site <site> run-tests --app dewey_time --module dewey_time.tests.test_closeout
+# Locally, without a bench (the tests mock frappe):
+python3 -m unittest discover -s dewey_time/tests -t .
 
 # Python REPL with Frappe context
 bench --site <site> console

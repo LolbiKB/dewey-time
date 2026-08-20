@@ -60,7 +60,7 @@ export default defineConfig(({ command, mode }) => {
           // index.css where no ?v= reaches, so a stable-named font fix could
           // never replace a cached copy.
           entryFileNames: "assets/index.js",
-          chunkFileNames: "assets/[name].js",
+          chunkFileNames: "assets/[name]-[hash].js",
           assetFileNames: (assetInfo) => {
             const name = assetInfo.name ?? "";
             if (name.endsWith(".css")) return "assets/index.css";
