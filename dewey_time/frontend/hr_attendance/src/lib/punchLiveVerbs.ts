@@ -14,7 +14,9 @@
  * PORTED LINE FOR LINE from receipt.announce's verb logic, and pinned against
  * the same fixture file (dewey_time/tests/fixtures/punch_replay_fixtures.json,
  * `py_verbs` column) by punchReplayParity.test.ts, so the two implementations
- * cannot drift silently. If a rule changes here it must change there, and the
+ * cannot drift silently. The fixture pins the VERBS; the walk-state fields a
+ * caller reads (`openTime`, `openClaimable`, `lastKeptVerb`) are pinned by
+ * the chip's own tests. If a rule changes here it must change there, and the
  * fixture is where that argument is had.
  *
  * The walk's decisions, in order (receipt.py documents the reasoning):
@@ -51,7 +53,9 @@ function branchOf(punch: Checkin): string | null {
 
 function timeOf(punch: Checkin): Date | null {
   if (!punch.time) return null;
-  const parsed = new Date(String(punch.time).replace(" ", "T"));
+  // The [:19] truncation is receipt.py's, kept so the twins cannot disagree
+  // about whether a microsecond-stamped punch sits inside the dup window.
+  const parsed = new Date(String(punch.time).replace(" ", "T").slice(0, 19));
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
@@ -146,7 +150,10 @@ export function liveWalk(punches: Checkin[]): LiveWalk {
       // First arrival stays open; a labelled repeat is noise. An explicit IN
       // also CONFIRMS an open stretch whose opener was unclaimable — the
       // receipt says "Checked in" here, so the state is claimable too.
-      if (open === null) open = punch;
+      // (`when !== null` on every open-setting arm mirrors the receipt, whose
+      // open_time IS the parsed time: a punch whose time will not parse can
+      // never open anything, there or here.)
+      if (open === null && when !== null) open = punch;
       openClaimable = true;
       lastKeptVerb = "IN";
     } else if (open !== null) {
@@ -154,17 +161,17 @@ export function liveWalk(punches: Checkin[]): LiveWalk {
       openClaimable = false;
       lastKeptVerb = "OUT";
     } else if (!firstSeen) {
-      open = punch;
+      open = when !== null ? punch : null;
       openClaimable = true;
       lastKeptVerb = "IN";
     } else if (runLen > 1) {
       // Same-branch continuation with nothing open: the lunch-comeback.
-      open = punch;
+      open = when !== null ? punch : null;
       openClaimable = true;
       lastKeptVerb = "IN";
     } else {
       // Fresh run opened mid-day: opens for later pairing, verb unclaimable.
-      open = punch;
+      open = when !== null ? punch : null;
       openClaimable = false;
       lastKeptVerb = NO_VERB;
     }
@@ -183,8 +190,3 @@ export function liveWalk(punches: Checkin[]): LiveWalk {
   };
 }
 
-/** The verb of the last punch — what the receipt said about that very tap. */
-export function liveLastVerb(punches: Checkin[]): LiveVerb {
-  const { verbs } = liveWalk(punches);
-  return verbs.length ? verbs[verbs.length - 1]! : NO_VERB;
-}

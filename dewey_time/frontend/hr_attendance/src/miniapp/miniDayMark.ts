@@ -99,12 +99,14 @@ function inOrder(day: Day | undefined) {
 }
 
 /**
- * Every punch that never found its pair, under THE SAME pairing that draws
- * the timeline, totals the day, and words the Telegram receipt: branch runs,
- * then `pairRun` within each (dewey_time/telegram/receipt.py is the Python
- * twin). Whole-day parity lived here before, and it was blind to campus and
- * to double taps — a cover shift's nine punches read "incomplete" as one
- * undifferentiated oddness, and two bounced taps could cancel into a
+ * Every punch that never found its pair, under THE SAME retrospective
+ * pairing that draws the timeline and totals the day: branch runs, then
+ * `pairRun` within each. (The Telegram receipt and the status chip answer a
+ * different, LIVE question with a different rule — `punchLiveVerbs.ts` —
+ * that drops bounces and refuses verbs; a finished day's record is this
+ * rule's to judge.) Whole-day parity lived here before, and it was blind to
+ * campus and to double taps — a cover shift's nine punches read "incomplete"
+ * as one undifferentiated oddness, and two bounced taps could cancel into a
  * "complete" record the timeline drew as two strays.
  *
  * Still not `classifyUnpairedPresentations`: that draws the finer

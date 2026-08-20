@@ -126,6 +126,23 @@ test("a lone unlabelled punch at a second branch is not a claim either way", () 
   assert.equal(miniStatus(twoPunch, DAY, at(19)).kind, "none");
 });
 
+test("a branchless first punch is a claim without a count", () => {
+  // An unmapped device's lone morning punch: the receipt says "Checked in"
+  // (the day's first punch is an arrival) but opens nothing for pairing --
+  // a branchless punch can never pair. The chip mirrors both halves: it says
+  // "in", and openRunStartedAt refuses, so no live figure rides on a punch
+  // the timeline will draw as a rogue dot. DELIBERATE split, pinned so a
+  // future edit has to face it rather than trip over it.
+  const day = {
+    date: "2026-08-19",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    checkins: [{ time: "2026-08-19 08:00:00", log_type: "" }],
+  } as unknown as Day;
+
+  assert.equal(miniStatus(day, new Date(2026, 7, 19), new Date(2026, 7, 19, 10, 0)).kind, "in");
+  assert.equal(openRunStartedAt(day), null);
+});
+
 test("a bounced tap is a non-event, not a departure", () => {
   // Two blank punches five seconds apart at one device: one physical visit,
   // read twice. The receipt drops the bounce; the state stays the 08:00

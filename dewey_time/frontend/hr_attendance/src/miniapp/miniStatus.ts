@@ -24,7 +24,7 @@
 import { isSameDay } from "date-fns";
 
 import { parseTimeToMinutes } from "@/lib/attendanceTime";
-import { liveLastVerb, liveWalk } from "@/lib/punchLiveVerbs";
+import { liveWalk } from "@/lib/punchLiveVerbs";
 import type { Day } from "@/types/calendar";
 import type { StringKey } from "@/miniapp/miniStrings";
 
@@ -113,7 +113,9 @@ export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniSta
   // THE RECEIPT'S RULE, not a third one. "Am I clocked in" is the question
   // the Telegram receipt just answered about the same punch on the same
   // phone, so the chip reads the same causal walk (`liveWalk`, the TS twin of
-  // receipt.py) and makes exactly the claims the receipt made: a kept IN is
+  // receipt.py) and makes the claims the receipt made — one deliberate step
+  // further: a bounced tap gets a neutral MESSAGE but is a non-event for
+  // STATE, so the chip keeps saying "in" over a bounce. A kept IN is
   // "in"; a kept OUT — a label, or a blank punch closing the open arrival —
   // is out; and where the receipt refused a verb (a lone
   // unlabelled punch opening a fresh run, indistinguishable from a departure

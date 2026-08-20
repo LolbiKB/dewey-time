@@ -104,10 +104,10 @@ test("nothing is marked in the future — not even a day off", () => {
 // Past days
 // ---------------------------------------------------------------------------
 
-test("pairing is the branch-run replay, the same rule the timeline and the bot use", () => {
+test("pairing is the branch-run replay, the same rule the timeline draws by", () => {
   // Not whole-day parity any more: the day is grouped into branch runs and
-  // each run paired by `pairRun`, exactly as `deriveSegments` draws it and
-  // as the Telegram receipt replays it. Complete means NOTHING went unmatched.
+  // each run paired by `pairRun`, exactly as `deriveSegments` draws it.
+  // Complete means NOTHING went unmatched.
   assert.equal(mark(day(10, 4), AUG(10), AUG(17, 12, 0)), "complete");
   assert.equal(mark(day(10, 2), AUG(10), AUG(17, 12, 0)), "complete");
   assert.equal(mark(day(10, 3), AUG(10), AUG(17, 12, 0)), "incomplete");
