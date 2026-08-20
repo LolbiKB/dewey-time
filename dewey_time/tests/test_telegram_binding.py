@@ -721,3 +721,89 @@ class TestTheTokenWindowIsActuallyEnforced(unittest.TestCase):
         self.assertEqual(add.call_args[0][0], self.NOW)
         self.assertEqual(add.call_args[1]["hours"], 24)
         self.assertEqual(issued.expires_at, "2026-08-20 12:00:00")
+
+
+class TestSetLanguage(unittest.TestCase):
+    """The one write a chooser button can cause, and every way it must refuse.
+
+    Refusals assert that `frappe.get_doc` was never reached, not merely that
+    something raised -- the pattern every guard class in this file uses, and
+    for the same reason: a mock that raises before the guard satisfies
+    assertRaises on its own.
+    """
+
+    def _link(self, enabled=1):
+        return {"name": "55501", "employee": "HR-EMP-00001", "enabled": enabled}
+
+    def test_a_valid_choice_is_saved_and_the_chat_id_returned(self):
+        import frappe
+
+        with patch.object(binding, "_existing_link", return_value=self._link()), \
+             patch.object(frappe, "get_doc") as get_doc:
+            doc = get_doc.return_value
+            doc.chat_id = "77702"
+            chat_id = binding.set_language("55501", "en")
+
+        get_doc.assert_called_once_with(binding.LINK_DT, "55501")
+        self.assertEqual(doc.language, "en")
+        # ignore_permissions: the caller is the Guest-context webhook.
+        doc.save.assert_called_once_with(ignore_permissions=True)
+        # The chat id comes back so the confirmation can go to the bound chat.
+        self.assertEqual(chat_id, "77702")
+
+    def test_the_write_goes_through_the_document_api(self):
+        # Same audit rule as revoke_link: the doctype tracks changes, and
+        # Versions are written by Document.save() -- db.set_value records
+        # nothing, so "when did this switch to English" would be unanswerable.
+        import frappe
+
+        with patch.object(binding, "_existing_link", return_value=self._link()), \
+             patch.object(frappe.db, "set_value") as set_value, \
+             patch.object(frappe, "get_doc"):
+            binding.set_language("55501", "km")
+        set_value.assert_not_called()
+
+    def test_a_revoked_link_keeps_its_revocation(self):
+        # A revoked account pressing a button on an old chooser message must
+        # change nothing -- the same rule that stops a bare /start silently
+        # reviving a disabled link.
+        import frappe
+
+        with patch.object(binding, "_existing_link",
+                          return_value=self._link(enabled=0)), \
+             patch.object(frappe, "get_doc") as get_doc:
+            with self.assertRaises(Exception):
+                binding.set_language("55501", "en")
+        get_doc.assert_not_called()
+
+    def test_an_account_that_never_linked_is_refused(self):
+        import frappe
+
+        with patch.object(binding, "_existing_link", return_value=None), \
+             patch.object(frappe, "get_doc") as get_doc:
+            with self.assertRaises(Exception):
+                binding.set_language("99999", "en")
+        get_doc.assert_not_called()
+
+    def test_only_renderable_languages_are_accepted(self):
+        # The value is interpolated into nothing, but a junk write would read
+        # as Khmer forever -- a misconfiguration wearing the default. The
+        # webhook's allowlist should make these unreachable; this guard is for
+        # every OTHER future caller.
+        import frappe
+
+        for bad in ("both", "", None, "fr", "EN", "km "):
+            with patch.object(binding, "_existing_link") as existing, \
+                 patch.object(frappe, "get_doc") as get_doc:
+                with self.assertRaises(Exception, msg=f"{bad!r} should be refused"):
+                    binding.set_language("55501", bad)
+            existing.assert_not_called()
+            get_doc.assert_not_called()
+
+    def test_a_blank_telegram_user_id_is_refused(self):
+        import frappe
+
+        with patch.object(frappe, "get_doc") as get_doc:
+            with self.assertRaises(Exception):
+                binding.set_language("  ", "km")
+        get_doc.assert_not_called()

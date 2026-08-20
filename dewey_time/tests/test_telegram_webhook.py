@@ -65,7 +65,8 @@ class TestStartCommand(unittest.TestCase):
         self.assertEqual(redeem.call_args[0][0], "abc123")
         # The Telegram user id must come off the update, not the message text.
         self.assertEqual(redeem.call_args[0][1], "55501")
-        self.assertIn("linked", send.call_args[0][1].lower())
+        # First message: the confirmation. (The language chooser follows it.)
+        self.assertIn("linked", send.call_args_list[0][0][1].lower())
 
     def test_failed_redemption_replies_without_leaking_why(self):
         with patch.object(webhook.binding, "redeem_link_token",
@@ -99,7 +100,7 @@ class TestStartCommand(unittest.TestCase):
         redeem.assert_not_called(), "a bare /start has no token to redeem"
         self.assertEqual(claim.call_args[0][0], "55501", "the id comes off the update")
         self.assertEqual(claim.call_args[0][1], "77702")
-        self.assertIn("linked", send.call_args[0][1].lower())
+        self.assertIn("linked", send.call_args_list[0][0][1].lower())
 
     def test_a_token_start_never_takes_the_recorded_id_path(self):
         # The two paths must not blur: a token names ONE employee, and falling
@@ -149,12 +150,15 @@ class TestStartCommand(unittest.TestCase):
 
 
 class TestLinkConfirmation(unittest.TestCase):
-    """The reply carries no inline button any more.
+    """The confirmation is plain text; the language chooser follows it.
 
-    It used to offer one, and that button was the app's discoverability at the
-    exact moment it was least able to carry it: the confirmation scrolls out of
-    the chat and never comes back. The bot's Main Mini App button and its chat
-    menu button are permanent, so this message is text again.
+    The confirmation used to carry an inline button into the Mini App, and
+    that button was the app's discoverability at the exact moment it was least
+    able to carry it: the confirmation scrolls out of the chat and never comes
+    back. The bot's Main Mini App button and its chat menu button are
+    permanent, so this message is text again -- and the SECOND message, the
+    language chooser, is allowed its buttons precisely because scrolling away
+    is fine for it: Khmer is the default, and /language reopens it.
     """
 
     def test_a_successful_link_is_confirmed_in_plain_text(self):
@@ -162,7 +166,9 @@ class TestLinkConfirmation(unittest.TestCase):
                           return_value="HR-EMP-00001"), \
              patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
-        self.assertIn("linked", send.call_args[0][1].lower())
+        confirmation = send.call_args_list[0]
+        self.assertIn("linked", confirmation[0][1].lower())
+        self.assertNotIn("reply_markup", confirmation[1])
 
     def test_the_confirmation_does_not_depend_on_the_mini_app_url(self):
         # It used to: an unset URL made the button path throw, and the reply
@@ -175,7 +181,7 @@ class TestLinkConfirmation(unittest.TestCase):
                           side_effect=AssertionError("must not be consulted")), \
              patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
-        self.assertIn("linked", send.call_args[0][1].lower())
+        self.assertIn("linked", send.call_args_list[0][0][1].lower())
 
     def test_a_failed_link_is_not_confirmed(self):
         # Negative control. Without it, moving the confirmation outside the
@@ -186,6 +192,175 @@ class TestLinkConfirmation(unittest.TestCase):
              patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_update(text="/start abc123"))
         self.assertNotIn("linked", send.call_args[0][1].lower())
+
+    def test_a_successful_link_is_followed_by_the_language_chooser(self):
+        with patch.object(webhook.binding, "redeem_link_token",
+                          return_value="HR-EMP-00001"), \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/start abc123"))
+        self.assertEqual(send.call_count, 2)
+        chooser = send.call_args_list[1]
+        self.assertEqual(chooser[0][1], webhook.LANGUAGE_PROMPT)
+        self.assertEqual(chooser[1]["reply_markup"], webhook.LANGUAGE_KEYBOARD)
+
+    def test_a_failed_link_gets_no_chooser(self):
+        # Asking an unlinkable account to pick a language would imply the
+        # link worked.
+        with patch.object(webhook.binding, "redeem_link_token",
+                          side_effect=Exception("bad token")), \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/start abc123"))
+        self.assertEqual(send.call_count, 1)
+        self.assertNotIn("reply_markup", send.call_args[1])
+
+
+class TestLanguageCommand(unittest.TestCase):
+    """/language: the persistent route back to the chooser."""
+
+    def test_it_sends_the_two_button_chooser(self):
+        with patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/language"))
+        args, kwargs = send.call_args
+        self.assertEqual(args[0], 77702)
+        # Bilingual BY NECESSITY: the one message whose whole job is to ask
+        # which language the reader reads cannot assume an answer.
+        self.assertIn("ភាសា", args[1])
+        self.assertIn("language", args[1].lower())
+        buttons = [b for row in kwargs["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertEqual([b["callback_data"] for b in buttons],
+                         ["lang:km", "lang:en"])
+
+    def test_two_buttons_and_no_both(self):
+        # Two by decision: the stacked-bilingual format is retired, and a
+        # "both" button would quietly bring it back.
+        buttons = [b for row in webhook.LANGUAGE_KEYBOARD["inline_keyboard"]
+                   for b in row]
+        self.assertEqual(len(buttons), 2)
+
+    def test_every_button_is_in_the_callback_allowlist(self):
+        # The chooser and the handler are two constants that must agree; a
+        # button whose data the allowlist does not know would render, press,
+        # and silently do nothing.
+        for row in webhook.LANGUAGE_KEYBOARD["inline_keyboard"]:
+            for button in row:
+                self.assertIn(button["callback_data"], webhook.LANGUAGE_CALLBACKS)
+
+    def test_the_command_menu_form_with_the_bot_name_works(self):
+        # Telegram's command menu appends @BotName in some clients; the menu's
+        # own entry for /language must not be a no-op there.
+        with patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/language@dewey_time_bot"))
+        self.assertEqual(send.call_args[1]["reply_markup"], webhook.LANGUAGE_KEYBOARD)
+
+    def test_it_is_ignored_outside_private_chats(self):
+        with patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/language", chat_type="group"))
+        send.assert_not_called()
+
+    def test_language_with_a_payload_is_still_the_chooser_not_a_setter(self):
+        # "/language en" must not become an undocumented text path around the
+        # buttons -- the allowlisted callback is the only setter.
+        with patch.object(webhook.binding, "set_language") as set_language, \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_update(text="/language en"))
+        set_language.assert_not_called()
+        self.assertEqual(send.call_args[1]["reply_markup"], webhook.LANGUAGE_KEYBOARD)
+
+
+def _tap(data="lang:en", user_id=55501, callback_id="cbq-1"):
+    return {
+        "callback_query": {
+            "id": callback_id,
+            "data": data,
+            "from": {"id": user_id},
+            "message": {"chat": {"id": 77702, "type": "private"}},
+        }
+    }
+
+
+class TestLanguageTap(unittest.TestCase):
+    """A press on the chooser's buttons, arriving as callback_query.
+
+    The authorisation model under test: the DATA picks which language, the
+    authenticated identity picks whose link, and nothing in the payload can
+    point the write at anyone else's row.
+    """
+
+    def test_a_valid_press_sets_the_pressers_own_language(self):
+        with patch.object(webhook.binding, "set_language",
+                          return_value="77702") as set_language, \
+             patch.object(webhook.transport, "answer_callback_query") as answer, \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_tap(data="lang:en"))
+        set_language.assert_called_once_with("55501", "en")
+        answer.assert_called_once_with("cbq-1")
+        # Confirmed to the BOUND chat, in the language just chosen -- the
+        # first message that proves the choice took.
+        self.assertEqual(send.call_args[0][0], "77702")
+        self.assertEqual(send.call_args[0][1], webhook.LANGUAGE_SET_REPLIES["en"])
+
+    def test_the_khmer_press_confirms_in_khmer(self):
+        with patch.object(webhook.binding, "set_language", return_value="77702"), \
+             patch.object(webhook.transport, "answer_callback_query"), \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_tap(data="lang:km"))
+        self.assertEqual(send.call_args[0][1], webhook.LANGUAGE_SET_REPLIES["km"])
+        self.assertIn("ខ្មែរ", send.call_args[0][1])
+
+    def test_the_identity_comes_off_the_update_never_the_data(self):
+        with patch.object(webhook.binding, "set_language",
+                          return_value="88801") as set_language, \
+             patch.object(webhook.transport, "answer_callback_query"), \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle(_tap(data="lang:km", user_id=99999))
+        set_language.assert_called_once_with("99999", "km")
+
+    def test_forged_callback_data_selects_nothing(self):
+        # Any Telegram client can send arbitrary bytes as callback_data; the
+        # allowlist is the whole parse. The press is still answered -- a
+        # refusal must look like nothing, not like a hang.
+        for data in ("lang:both", "lang:xx", "", None, "employee=HR-EMP-1",
+                     "LANG:EN", "lang:en junk"):
+            with patch.object(webhook.binding, "set_language") as set_language, \
+                 patch.object(webhook.transport, "answer_callback_query") as answer, \
+                 patch.object(webhook.transport, "send_message") as send:
+                webhook._handle(_tap(data=data))
+            set_language.assert_not_called(), f"data={data!r}"
+            send.assert_not_called()
+            answer.assert_called_once_with("cbq-1")
+
+    def test_lang_en_with_surrounding_whitespace_still_counts(self):
+        # .strip() on the data is a nicety, not a hole: the stripped value
+        # still has to equal an allowlist key exactly.
+        with patch.object(webhook.binding, "set_language",
+                          return_value="77702") as set_language, \
+             patch.object(webhook.transport, "answer_callback_query"), \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle(_tap(data=" lang:en "))
+        set_language.assert_called_once_with("55501", "en")
+
+    def test_an_unlinked_or_revoked_presser_is_answered_but_unconfirmed(self):
+        # binding.set_language refuses without an enabled link; the webhook
+        # stays silent about why, exactly like the bare-/start refusals.
+        with patch.object(webhook.binding, "set_language",
+                          side_effect=Exception("Not permitted")), \
+             patch.object(webhook.transport, "answer_callback_query") as answer, \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(_tap(data="lang:en"))
+        answer.assert_called_once_with("cbq-1")
+        send.assert_not_called()
+
+    def test_a_callback_update_never_reaches_the_binding_paths(self):
+        # callback_query and message are disjoint branches; a press must not
+        # fall through to redemption with its data as a token.
+        with patch.object(webhook.binding, "redeem_link_token") as redeem, \
+             patch.object(webhook.binding, "claim_by_recorded_id") as claim, \
+             patch.object(webhook.binding, "set_language", return_value="77702"), \
+             patch.object(webhook.transport, "answer_callback_query"), \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle(_tap(data="lang:km"))
+        redeem.assert_not_called()
+        claim.assert_not_called()
 
 
 class TestThePublicEntrypointRefusesBeforeItActs(unittest.TestCase):

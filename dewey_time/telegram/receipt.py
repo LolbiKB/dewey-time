@@ -249,11 +249,14 @@ def _pair_minutes(start: datetime, end: datetime) -> int:
 # ---------------------------------------------------------------------------
 # The meaning line. Formatting only -- every gate that decides WHETHER one of
 # these lines may be said lives with the queries in notify.py; what lives
-# here is the guarantee that when a line is said, both languages say it the
-# same way. Khmer first, English second, matching the verb lines above them.
-# ASCII digits and AM/PM in both languages for now, matching the verb line's
-# stamp -- Khmer numerals mean porting the Mini App's formatter and are a
-# recorded open question, not an oversight.
+# here is the guarantee that both languages say the same thing. The
+# formatters stay PAIR-BUILDING (Khmer first, English second) even though
+# each message now carries only the language chosen on the link: building
+# both halves together is what keeps them reviewed together, and
+# notify.compose picks the one to send. ASCII digits and AM/PM in both
+# languages for now, matching the verb line's stamp -- Khmer numerals mean
+# porting the Mini App's formatter and are a recorded open question, not an
+# oversight.
 
 #: The roster holds nothing for this day, said only when the roster has
 #: actually opined about the day (see notify's horizon gate) and only to

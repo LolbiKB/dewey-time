@@ -48,17 +48,16 @@ from dewey_time.telegram import receipt, transport
 LINK_DT = "Telegram Link"
 
 
-#: Khmer first, English under it.
+#: (Khmer, English) pairs; compose() picks ONE line by the link's stored
+#: preference.
 #:
-#: BILINGUAL RATHER THAN CHOSEN, and the reason is that there is nothing here
-#: worth guessing with. Telegram reports a client language, but that is the
-#: language of someone's PHONE, which on this roster is frequently English for
-#: people who read Khmer. Employee carries no language field. Guessing wrong
-#: sends an unreadable message to the person least able to say so, and this
-#: message is two short lines either way.
-#:
-#: Khmer leads because the English is the line that can be inferred from the
-#: numbers beside it, not the other way round.
+#: KHMER BY DEFAULT, ENGLISH BY A TAP. This message used to send both
+#: languages stacked, because the only signal then available -- the phone's
+#: client language -- guesses wrong for exactly the people a wrong guess
+#: hurts: Khmer readers who run their phones in English. The /language
+#: chooser replaced the guess with the person's own answer, which IS worth
+#: believing -- and until they answer, Khmer is the language of this roster.
+#: A blank value (links from before the field existed) reads as Khmer too.
 #:
 #: The third entry is the NEUTRAL receipt: the punch was recorded, and which
 #: way it went is not claimable (see receipt.py for when that happens). It
@@ -71,23 +70,41 @@ _VERBS = {
 }
 
 
-def compose(direction: str, punch_time, branch, meaning: tuple[str, str] | None = None) -> str:
+def _language_index(language) -> int:
+    """0 for Khmer, 1 for English. Anything that is not exactly "en" -- "km",
+    blank, None, a value from before the field existed -- is Khmer: the
+    default must be unlosable, not one bad row away from silence."""
+    return 1 if str(language or "").strip().lower() == "en" else 0
+
+
+def compose(
+    direction: str,
+    punch_time,
+    branch,
+    meaning: tuple[str, str] | None = None,
+    language: str | None = None,
+) -> str:
     """The message body. `direction` is IN, OUT, or "" for the neutral receipt.
 
-    `meaning` is an optional (khmer, english) line pair appended AFTER the two
-    verb lines -- deliberately after: push previews truncate to the leading
-    line, so the meaning line is context for someone who opens the chat,
-    never the claim itself. The verb lines must stand alone.
+    One language throughout, chosen by `language` (the link's stored
+    preference; see `_language_index`). `meaning` is still an optional
+    (khmer, english) pair -- the formatters in receipt.py stay
+    language-blind on purpose, so both halves are always built and reviewed
+    together -- and the line is appended AFTER the verb line: push previews
+    truncate to the leading line, so the meaning line is context for someone
+    who opens the chat, never the claim itself. The verb line must stand
+    alone.
     """
     # Twelve hour, matching the Mini App. "17:06" here and "5:06 PM" one tap
     # later is one event described two ways.
     stamp = get_datetime(punch_time).strftime("%-I:%M %p")
     key = str(direction or "").upper()
-    khmer, english = _VERBS[key if key in (receipt.IN, receipt.OUT) else receipt.NO_VERB]
+    pick = _language_index(language)
+    verb = _VERBS[key if key in (receipt.IN, receipt.OUT) else receipt.NO_VERB][pick]
     tail = f" · {branch}" if branch else ""
-    lines = [f"{khmer} {stamp}{tail}", f"{english} {stamp}{tail}"]
+    lines = [f"{verb} {stamp}{tail}"]
     if meaning:
-        lines.extend(meaning)
+        lines.append(meaning[pick])
     return "\n".join(lines)
 
 
@@ -352,7 +369,7 @@ def _link_for(employee: str):
     return frappe.db.get_value(
         LINK_DT,
         {"employee": employee, "enabled": 1},
-        ["name", "chat_id"],
+        ["name", "chat_id", "language"],
         as_dict=True,
     )
 
@@ -414,7 +431,13 @@ def send_checkin_notification(employee: str, checkin_name: str) -> str:
     direction, meaning = _receipt_for(employee, row)
     result = transport.send_message(
         link["chat_id"],
-        compose(direction, row["time"], row.get("custom_device_branch"), meaning),
+        compose(
+            direction,
+            row["time"],
+            row.get("custom_device_branch"),
+            meaning,
+            link.get("language"),
+        ),
     )
     if result == transport.BLOCKED:
         # The user blocked the bot. That is a decision, not a fault -- stop
@@ -545,7 +568,11 @@ def send_test_notification(employee: str | None = None) -> dict:
     else:
         direction, meaning = direction_of(employee, latest), None
     text = compose(
-        direction, latest["time"], latest.get("custom_device_branch"), meaning
+        direction,
+        latest["time"],
+        latest.get("custom_device_branch"),
+        meaning,
+        link.get("language"),
     )
     return {
         **report,

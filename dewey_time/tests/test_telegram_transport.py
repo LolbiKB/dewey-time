@@ -49,6 +49,50 @@ class TestSendMessage(unittest.TestCase):
             post.return_value.json.return_value = {"ok": False, "description": "bot was blocked"}
             self.assertEqual(transport.send_message("55501", "hi"), transport.BLOCKED)
 
+    def test_a_reply_markup_is_passed_through_verbatim(self):
+        keyboard = {"inline_keyboard": [[{"text": "ខ្មែរ", "callback_data": "lang:km"}]]}
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            transport.send_message("55501", "pick one", reply_markup=keyboard)
+        self.assertEqual(post.call_args[1]["json"]["reply_markup"], keyboard)
+
+    def test_a_plain_message_carries_no_reply_markup_key(self):
+        # The ordinary check-in message must stay the shape it has always
+        # been on the wire -- not grow a null field Telegram then interprets.
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            transport.send_message("55501", "hi")
+        self.assertNotIn("reply_markup", post.call_args[1]["json"])
+
+
+class TestAnswerCallbackQuery(unittest.TestCase):
+    def test_it_acknowledges_the_press_by_id(self):
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            self.assertEqual(transport.answer_callback_query("cbq-1"), transport.SENT)
+        self.assertIn("answerCallbackQuery", post.call_args[0][0])
+        self.assertEqual(post.call_args[1]["json"], {"callback_query_id": "cbq-1"})
+
+    def test_a_stale_press_is_reported_not_raised(self):
+        # Telegram answers 400 for an expired callback id -- redelivered old
+        # updates after webhook downtime produce exactly this, and it must not
+        # take the handler down.
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.frappe, "log_error"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 400
+            post.return_value.text = "Bad Request: query is too old"
+            self.assertEqual(transport.answer_callback_query("cbq-1"), transport.FAILED)
+
+    def test_a_transport_fault_is_reported_not_raised(self):
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.frappe, "log_error"), \
+             patch.object(transport.requests, "post", side_effect=OSError("down")):
+            self.assertEqual(transport.answer_callback_query("cbq-1"), transport.FAILED)
+
 
 class TestMiniAppUrl(unittest.TestCase):
     def test_a_plain_http_url_is_refused(self):
@@ -376,15 +420,20 @@ class TestWebhookRegistration(unittest.TestCase):
         self.assertEqual(body["url"], "https://site/api/method/x")
         self.assertEqual(body["secret_token"], "s3cret")
 
-    def test_only_messages_are_requested(self):
-        # _handle reads update["message"] and deliberately ignores
-        # edited_message and callback_query, so asking for them is asking
-        # Telegram to spend deliveries on updates we drop.
+    def test_only_the_shapes_the_handler_reads_are_requested(self):
+        # Messages, and callback_query for the language chooser's buttons.
+        # edited_message and the rest stay unrequested: asking for them is
+        # asking Telegram to spend deliveries on updates we drop. If a new
+        # shape is added to _handle, it must be added HERE too -- this list
+        # lives on Telegram's servers and gates delivery entirely.
         with patch.object(transport, "bot_token", return_value="123:ABC"), \
              patch.object(transport.requests, "post") as post:
             post.return_value.status_code = 200
             transport.set_webhook("https://site/api/method/x", "s3cret")
-        self.assertEqual(post.call_args[1]["json"]["allowed_updates"], ["message"])
+        self.assertEqual(
+            post.call_args[1]["json"]["allowed_updates"],
+            ["message", "callback_query"],
+        )
 
     def test_a_rejection_is_reported_not_raised(self):
         with patch.object(transport, "bot_token", return_value="123:ABC"), \
@@ -402,22 +451,55 @@ class TestWebhookRegistration(unittest.TestCase):
             with self.assertRaises(Exception):
                 transport.webhook_url()
 
-    def test_setup_does_both_pieces_of_telegram_side_state(self):
-        # Where to deliver updates, and what the menu button opens. Neither
-        # lives in this site and no deploy can touch either.
+    def test_setup_does_all_three_pieces_of_telegram_side_state(self):
+        # Where to deliver updates (and which shapes), what the menu button
+        # opens, and the command menu. None of them lives in this site and no
+        # deploy can touch any of them -- which is why setup must be re-run
+        # after a deploy that changes what the webhook handles.
         with patch("dewey_time.attendance_engine.hr_calendar._require_hr_role"), \
              patch.object(transport, "webhook_url", return_value="https://site/hook"), \
              patch.object(transport, "miniapp_url", return_value="https://site/hr-me"), \
              patch.object(transport, "webhook_secret", return_value="s3cret"), \
              patch.object(transport, "set_webhook", return_value=transport.SENT) as hook, \
              patch.object(transport, "set_default_menu_button",
-                          return_value=transport.SENT) as menu:
+                          return_value=transport.SENT) as menu, \
+             patch.object(transport, "set_bot_commands",
+                          return_value=transport.SENT) as commands:
             result = transport.setup_telegram()
 
         hook.assert_called_once_with("https://site/hook", "s3cret")
         menu.assert_called_once_with("https://site/hr-me")
+        commands.assert_called_once_with()
         self.assertEqual(result["webhook"]["status"], transport.SENT)
         self.assertEqual(result["menu_button"]["status"], transport.SENT)
+        self.assertEqual(result["commands"]["status"], transport.SENT)
+
+    def test_the_command_menu_lists_language_bilingually(self):
+        # /language is the only persistent route back to the chooser once it
+        # scrolls away; its menu entry must be readable before the choice it
+        # exists to change has been made.
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 200
+            self.assertEqual(transport.set_bot_commands(), transport.SENT)
+
+        self.assertIn("setMyCommands", post.call_args[0][0])
+        commands = post.call_args[1]["json"]["commands"]
+        language = [c for c in commands if c["command"] == "language"]
+        self.assertEqual(len(language), 1)
+        self.assertIn("ភាសា", language[0]["description"])
+        self.assertIn("Language", language[0]["description"])
+        # /start stays unlisted: it is the deep-link carrier, and the people
+        # who should send it arrive holding a link that sends it for them.
+        self.assertNotIn("start", [c["command"] for c in commands])
+
+    def test_a_commands_rejection_is_reported_not_raised(self):
+        with patch.object(transport, "bot_token", return_value="123:ABC"), \
+             patch.object(transport.frappe, "log_error"), \
+             patch.object(transport.requests, "post") as post:
+            post.return_value.status_code = 400
+            post.return_value.text = "Bad Request"
+            self.assertEqual(transport.set_bot_commands(), transport.FAILED)
 
 
 class TestGatesRefuseToGuessAboutAnUnknownEmployee(unittest.TestCase):
