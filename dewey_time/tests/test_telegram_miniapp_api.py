@@ -869,3 +869,89 @@ class TestTheThreeFactsTheDayWasMissing(unittest.TestCase):
 
     def test_the_roster_horizon_reaches_them(self):
         self.assertEqual(miniapp_api.narrow(self._payload())["schedule_max_date"], "2026-08-31")
+
+
+class TestClosedWithResidueIsUncertain(unittest.TestCase):
+    """A close carrying undelivered residue must still read as uncertain.
+
+    #199 resolves the Device Closeout Alert on any closed status -- residue
+    included -- so those rows vanish from the unresolved query that feeds
+    feed_uncertain, while the engine's own feed_attested_complete refuses to
+    trust exactly those rows for LATE_START. The phone must refuse them the
+    same way, or a day the bridge itself said it under-delivered reads as a
+    bare no-show.
+    """
+
+    def test_residue_dates_ask_for_recorded_positive_residue(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[
+            {"local_date": "2026-08-19"}
+        ]) as get_all, \
+             patch.object(frappe.db, "table_exists", return_value=True):
+            dates = miniapp_api._residue_dates("DIS Iconic", "2026-08-18", "2026-08-20")
+
+        self.assertEqual(dates, {"2026-08-19"})
+        filters = get_all.call_args.kwargs.get("filters") or get_all.call_args[0][1]
+        # The positive-claim gate, read the way feed_attested_complete reads
+        # it: an unrecorded count is not residue, and a recorded zero is a
+        # clean close.
+        self.assertEqual(filters["undelivered_recorded"], 1)
+        self.assertEqual(filters["undelivered_count"], [">", 0])
+        self.assertEqual(filters["branch"], "DIS Iconic")
+
+    def test_no_branch_means_no_query_and_no_claim(self):
+        import frappe
+
+        with patch.object(frappe, "get_all") as get_all:
+            self.assertEqual(miniapp_api._residue_dates(None, "2026-08-18", "2026-08-20"), set())
+        get_all.assert_not_called()
+
+    def test_a_missing_table_degrades_to_certain_rather_than_raising(self):
+        import frappe
+
+        with patch.object(frappe.db, "table_exists", return_value=False), \
+             patch.object(frappe, "get_all") as get_all:
+            self.assertEqual(miniapp_api._residue_dates("DIS Iconic", "a", "b"), set())
+        get_all.assert_not_called()
+
+    def test_extra_uncertain_dates_mark_their_day(self):
+        # narrow stays a pure projection; the residue set arrives from the
+        # caller. The day named by it reads uncertain with NO alert rows at
+        # all -- the resolved alert is exactly the row the unresolved query
+        # can no longer see.
+        payload = {
+            "employee": "HR-EMP-00001",
+            "employee_branch": "DIS Iconic",
+            "device_alerts": [],
+            "days": [
+                {"date": "2026-08-19", "checkins": [], "flags": []},
+                {"date": "2026-08-20", "checkins": [], "flags": []},
+            ],
+        }
+        narrowed = miniapp_api.narrow(payload, extra_uncertain={"2026-08-19"})
+        days = {d["date"]: d for d in narrowed["days"]}
+        self.assertTrue(days["2026-08-19"]["feed_uncertain"])
+        self.assertFalse(days["2026-08-20"]["feed_uncertain"])
+
+    def test_get_my_calendar_threads_the_residue_lookup_through(self):
+        import frappe
+
+        built = {
+            "employee": "HR-EMP-00001",
+            "employee_branch": "DIS Iconic",
+            "device_alerts": [],
+            "days": [{"date": "2026-08-19", "checkins": [], "flags": []}],
+        }
+        with patch.object(miniapp_api.miniapp_auth, "employee_from_init_data",
+                          return_value="HR-EMP-00001"), \
+             patch.object(miniapp_api.hr_calendar, "build_employee_calendar",
+                          return_value=built), \
+             patch.object(miniapp_api, "_residue_dates",
+                          return_value={"2026-08-19"}) as residue, \
+             patch.object(miniapp_api, "_identity", return_value={}):
+            result = miniapp_api.get_my_calendar("initdata", "2026-08-18", "2026-08-20")
+
+        residue.assert_called_once()
+        self.assertEqual(residue.call_args[0][0], "DIS Iconic")
+        self.assertTrue(result["days"][0]["feed_uncertain"])

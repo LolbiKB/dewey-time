@@ -25,7 +25,7 @@ import { isSameDay } from "date-fns";
 import { groupCheckinsByBranchRuns, pairRun } from "@/lib/attendancePunches";
 import { parseTimeToMinutes } from "@/lib/attendanceTime";
 import type { Day } from "@/types/calendar";
-import type { DayFacts } from "@/miniapp/miniDay";
+import { dayFacts, type DayFacts } from "@/miniapp/miniDay";
 import type { StringKey } from "@/miniapp/miniStrings";
 
 export type DayMark =
@@ -188,4 +188,22 @@ export function dayMark(
     return "uncertain";
   }
   return mark;
+}
+
+/**
+ * Whether the Day tab should show its "no data from the device" notice.
+ *
+ * THE SAME PREDICATE AS THE CALENDAR MARK, on purpose. The notice used to key
+ * on `feed_uncertain` alone, which is a branch-level fact — any unresolved
+ * closeout alert at the employee's branch, from any device — so it appeared
+ * under days whose own record was complete and fully paired, flatly
+ * contradicting the timeline drawn right above it. Routing through `dayMark`
+ * means the banner shows exactly when the calendar shows the uncertain mark:
+ * the day is deficient AND the feed cannot be vouched for. One rule, two
+ * surfaces, no disagreement possible.
+ */
+export function showsFeedNotice(day: Day | undefined, date: Date, now: Date): boolean {
+  // Composed exactly the way the calendar sheet composes its marks, so the
+  // two surfaces cannot read the same day differently.
+  return dayMark(dayFacts(day, date, now), day, date, now) === "uncertain";
 }

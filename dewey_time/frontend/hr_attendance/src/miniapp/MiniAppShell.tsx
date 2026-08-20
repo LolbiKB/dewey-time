@@ -20,6 +20,7 @@ import {
 } from "@/miniapp/useMiniAppSession";
 import { dismissTopLayer, useLayerDepth } from "@/miniapp/miniBackStack";
 import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
+import { useMinuteTick } from "@/miniapp/useMinuteTick";
 import {
   bindBackButton,
   loadLastTab,
@@ -237,7 +238,15 @@ export function MiniAppShell() {
   // that tab this costs nothing and everywhere else it costs one narrow
   // request. The identity has to outlive the tab — a header that appeared and
   // vanished as tabs changed would be the opposite of a stable confirmation.
-  const todayKey = format(new Date(), "yyyy-MM-dd");
+  //
+  // From the TICKING clock, not the render's. `new Date()` here was computed
+  // once per shell render, and the shell re-renders only on its own state —
+  // so after midnight this key kept naming yesterday while the Day tab
+  // (which ticks) had moved on: two different one-day queries polling side
+  // by side until the app was reopened. #200 fixed exactly this inside
+  // MyDayPage; the shell needed the same clock.
+  const tick = useMinuteTick();
+  const todayKey = format(tick, "yyyy-MM-dd");
   const identity = useMiniAppCalendar(todayKey, todayKey);
 
   // Not a security check -- the server re-verifies every request. This is so a

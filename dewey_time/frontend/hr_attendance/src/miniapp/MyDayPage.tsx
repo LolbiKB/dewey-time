@@ -36,6 +36,7 @@ import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import { MiniDayNumbers } from "@/miniapp/MiniDayNumbers";
 import { MiniFlagsSheet } from "@/miniapp/MiniFlagsSheet";
 import { flagCount } from "@/miniapp/miniFlags";
+import { showsFeedNotice } from "@/miniapp/miniDayMark";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
 import { useTimelineIntl } from "@/miniapp/miniTimelineIntl";
 import { useMinuteTick } from "@/miniapp/useMinuteTick";
@@ -191,7 +192,7 @@ export function MyDayPage(props: {
           min-h-[16rem] is a floor, not a height: on a half-height sheet the
           flex share alone would squeeze the axis to a few unreadable hours,
           and the page scrolls rather than the timeline collapsing. */}
-      <div className="grid min-h-[16rem] flex-1 grid-cols-[3.5rem_1fr] [&>button]:border-0">
+      <div className="grid min-h-[16rem] flex-1 grid-cols-[3.5rem_1fr] [&>button]:border-0 [&>section]:border-0">
         <HourGutter window={timelineWindow} formatHour={fmt.hour} />
         <DayCell
           date={date}
@@ -230,8 +231,11 @@ export function MyDayPage(props: {
       />
       {/* Whose gap it is. Without this a day our own device never delivered was
           pixel-identical to a no-show: the same amber mark, the same "— / 8h",
-          on the phone of somebody who punched in and out perfectly well. */}
-      {info?.feed_uncertain ? (
+          on the phone of somebody who punched in and out perfectly well.
+          Gated on the SAME predicate as the calendar's uncertain mark — the
+          bare feed_uncertain boolean is branch-level and also fired under
+          days with a complete record, contradicting the timeline above. */}
+      {showsFeedNotice(info, date, now) ? (
         <p role="status" className="shrink-0 px-1 text-xs leading-normal text-muted-foreground">
           {t("feedUncertain")}
         </p>

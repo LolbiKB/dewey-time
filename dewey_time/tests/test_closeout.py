@@ -103,6 +103,9 @@ def _install_frappe_mock():
     ).days
     utils_mod.nowdate = lambda: str(date.today())
     utils_mod.cint = _mock_cint
+    # Added for the /hr-me page module (www/hr-me.py), whose boot carries the
+    # site timezone for the Mini App's clock arithmetic.
+    utils_mod.get_system_timezone = lambda: "Asia/Phnom_Penh"
     # An https site by default, because that is what production is and what
     # the Telegram Mini App URL fallback needs to produce a usable button.
     # Tests that care about the value patch `transport.get_url` directly.

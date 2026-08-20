@@ -148,7 +148,7 @@ export function WeekDayView(props: WeekDayViewProps) {
             collapsed to a narrow sliver on phones (issue #71). A single-column
             grid stretches it by the same mechanism the week grid uses, so the two
             surfaces cannot drift apart. */}
-        <div className="grid h-full grid-cols-[3.5rem_1fr] [&>button]:border-0">
+        <div className="grid h-full grid-cols-[3.5rem_1fr] [&>button]:border-0 [&>section]:border-0">
           <HourGutter window={weekWindow} />
           <DayCell
             date={selectedDate}
