@@ -58,11 +58,22 @@ class TestHrMeFrameAncestors(unittest.TestCase):
         csp = headers.rows.get("Content-Security-Policy")
         self.assertIsNotNone(csp, "frame-ancestors must be declared")
         self.assertIn("frame-ancestors", csp)
-        # The two ancestors that matter: the site itself, and Telegram's web
-        # clients (web.telegram.org/k and /a are one origin). Mobile apps and
-        # Telegram Desktop use native webviews and never consult this.
+        # The site itself plus ALL FOUR Telegram web-client origins. Web K and
+        # Web A live under web.telegram.org/k and /a, but the same clients are
+        # deployed on the sibling origins too -- webk serves with no redirect
+        # at all, and weba/webz redirect only on a first visit -- so a list
+        # that stops at web.telegram.org blanks established users of the
+        # siblings, which is the exact failure this header exists to fix.
+        # Mobile apps and Telegram Desktop use native webviews and never
+        # consult this.
         self.assertIn("'self'", csp)
-        self.assertIn("https://web.telegram.org", csp)
+        for origin in (
+            "https://web.telegram.org",
+            "https://webk.telegram.org",
+            "https://webz.telegram.org",
+            "https://weba.telegram.org",
+        ):
+            self.assertIn(origin, csp)
 
     def test_no_app_side_x_frame_options_is_ever_emitted(self):
         # nginx already stamps one; a second X-Frame-Options makes browsers

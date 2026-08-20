@@ -16,6 +16,7 @@ import { MiniFlagButton } from "@/miniapp/MiniFlagButton";
 import { useFormat, useT } from "@/miniapp/MiniLocale";
 import { dayNumbers } from "@/miniapp/miniDay";
 import type { Day } from "@/types/calendar";
+import { showsFeedNotice } from "@/miniapp/miniDayMark";
 
 export function MiniDayNumbers(props: {
   day: Day | undefined;
@@ -44,7 +45,11 @@ export function MiniDayNumbers(props: {
   // the Bridge went down is an accusation dressed as a reading — the employee
   // punched in and out normally and the machine never told us. Say whose
   // problem it actually is.
-  const uncertain = props.day?.feed_uncertain === true && !worked;
+  // THE SAME PREDICATE AS THE VISIBLE BANNER below this row (showsFeedNotice)
+  // — keyed on the bare boolean, the spoken sentence and the visible notice
+  // disagreed on one screen: sighted and assistive-tech users got different
+  // accounts of the same day.
+  const uncertain = showsFeedNotice(props.day, props.date, props.now) && !worked;
   const spoken = uncertain
     ? t("feedUncertain")
     : worked && rostered

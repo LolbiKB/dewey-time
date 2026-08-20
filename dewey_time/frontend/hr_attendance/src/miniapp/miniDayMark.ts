@@ -25,7 +25,7 @@ import { isSameDay } from "date-fns";
 import { groupCheckinsByBranchRuns, pairRun } from "@/lib/attendancePunches";
 import { parseTimeToMinutes } from "@/lib/attendanceTime";
 import type { Day } from "@/types/calendar";
-import { dayFacts, type DayFacts } from "@/miniapp/miniDay";
+import type { DayFacts } from "@/miniapp/miniDay";
 import type { StringKey } from "@/miniapp/miniStrings";
 
 export type DayMark =
@@ -193,17 +193,25 @@ export function dayMark(
 /**
  * Whether the Day tab should show its "no data from the device" notice.
  *
- * THE SAME PREDICATE AS THE CALENDAR MARK, on purpose. The notice used to key
- * on `feed_uncertain` alone, which is a branch-level fact — any unresolved
- * closeout alert at the employee's branch, from any device — so it appeared
- * under days whose own record was complete and fully paired, flatly
- * contradicting the timeline drawn right above it. Routing through `dayMark`
- * means the banner shows exactly when the calendar shows the uncertain mark:
- * the day is deficient AND the feed cannot be vouched for. One rule, two
- * surfaces, no disagreement possible.
+ * The notice used to key on `feed_uncertain` alone, which is a branch-level
+ * fact — any troubled closeout at the employee's branch, from any device — so
+ * it appeared under days whose own record was complete and fully paired,
+ * flatly contradicting the timeline drawn right above it. That completeness
+ * check is the ONLY suppression: a record that arrived intact needs no
+ * excuse, and everything less than intact keeps one.
+ *
+ * Deliberately NOT `dayMark(...) === "uncertain"`, though a first version
+ * was. The mark judges a FINISHED, ROSTERED record and refuses judgment
+ * everywhere else — "off" for an unrostered day, "none" mid-shift — and a
+ * notice routed through it went silent for exactly the people least able to
+ * miss it: a clock-based employee has no roster, so their every day is
+ * "off", and a day the device lost their punches read "Day off" with no
+ * explanation at all. The banner is not a judgment; it is an excuse, and an
+ * excuse must reach any day whose record might be missing something.
  */
 export function showsFeedNotice(day: Day | undefined, date: Date, now: Date): boolean {
-  // Composed exactly the way the calendar sheet composes its marks, so the
-  // two surfaces cannot read the same day differently.
-  return dayMark(dayFacts(day, date, now), day, date, now) === "uncertain";
+  if (!day?.feed_uncertain) return false;
+  // Never in the future — same rule as the mark.
+  if (date > now && !isSameDay(date, now)) return false;
+  return !(punchCount(day) > 0 && isPaired(day));
 }

@@ -4,16 +4,30 @@ from frappe.utils import get_system_timezone
 no_cache = 1
 
 
-#: Telegram's browser-based web clients (web.telegram.org/k and /a) embed
-#: Mini Apps in a REAL iframe -- unlike the mobile apps and Telegram Desktop,
-#: which use native webviews. The bench's nginx template stamps
-#: `X-Frame-Options: SAMEORIGIN` onto every response (bench
-#: config/templates/nginx.conf), which blanks this app there; that header
-#: cannot be removed from app code, and emitting a second X-Frame-Options
-#: would make things worse (browsers take the most restrictive). What CAN be
-#: done app-side is this: `frame-ancestors` is the CSP2 successor, and the
-#: spec requires browsers to IGNORE X-Frame-Options when it is present.
-FRAME_ANCESTORS = "frame-ancestors 'self' https://web.telegram.org"
+#: Telegram's browser-based web clients embed Mini Apps in a REAL iframe --
+#: unlike the mobile apps and Telegram Desktop, which use native webviews.
+#: The bench's nginx template stamps `X-Frame-Options: SAMEORIGIN` onto every
+#: response (bench config/templates/nginx.conf), which blanks this app there;
+#: that header cannot be removed from app code, and emitting a second
+#: X-Frame-Options would make things worse (browsers take the most
+#: restrictive). What CAN be done app-side is this: `frame-ancestors` is the
+#: CSP2 successor, and the spec requires browsers to IGNORE X-Frame-Options
+#: when it is present.
+#:
+#: FOUR Telegram origins, not one. Web K and Web A live under
+#: web.telegram.org/k and /a, but the SAME clients are also deployed on the
+#: sibling origins -- probed live 2026-08-20: webk.telegram.org serves Web K
+#: with no redirect at all, and weba.telegram.org / webz.telegram.org
+#: redirect only on a FIRST visit (their redirect.js checks localStorage), so
+#: an established user stays on the sibling origin. CSP taking precedence
+#: over X-Frame-Options makes this list the sole decider there.
+FRAME_ANCESTORS = (
+    "frame-ancestors 'self'"
+    " https://web.telegram.org"
+    " https://webk.telegram.org"
+    " https://webz.telegram.org"
+    " https://weba.telegram.org"
+)
 
 
 def get_context(context):
