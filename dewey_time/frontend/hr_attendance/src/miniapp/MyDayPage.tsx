@@ -232,9 +232,10 @@ export function MyDayPage(props: {
       {/* Whose gap it is. Without this a day our own device never delivered was
           pixel-identical to a no-show: the same amber mark, the same "— / 8h",
           on the phone of somebody who punched in and out perfectly well.
-          Gated on the SAME predicate as the calendar's uncertain mark — the
-          bare feed_uncertain boolean is branch-level and also fired under
-          days with a complete record, contradicting the timeline above. */}
+          Gated on showsFeedNotice — the bare feed_uncertain boolean is
+          branch-level and also fired under days with a complete record,
+          contradicting the timeline above. See its docstring for why it is
+          NOT the calendar mark's predicate: the mark judges, this excuses. */}
       {showsFeedNotice(info, date, now) ? (
         <p role="status" className="shrink-0 px-1 text-xs leading-normal text-muted-foreground">
           {t("feedUncertain")}

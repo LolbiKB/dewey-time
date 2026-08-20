@@ -453,3 +453,26 @@ test("the spoken numbers row keys on the same predicate as the banner", () => {
   assert.match(source, /showsFeedNotice\(props\.day, props\.date, props\.now\)/);
   assert.doesNotMatch(source, /props\.day\?\.feed_uncertain === true/);
 });
+
+test("a zero-punch holiday or leave day gets no excuse it does not owe", () => {
+  // Nothing on a holiday screen accuses anyone, so "no data came from the
+  // device" under it is noise. Punches on the day change that — someone
+  // worked it, and a broken record of premium-paid work keeps the excuse.
+  const holidayOff = day(18, 0, {
+    holiday: { name: "HOL-1" },
+    feed_uncertain: true,
+  } as unknown as Partial<Day>);
+  assert.equal(showsFeedNotice(holidayOff, AUG(18), AUG(19)), false);
+
+  const leaveOff = day(18, 0, {
+    leave: { on_leave: true },
+    feed_uncertain: true,
+  } as unknown as Partial<Day>);
+  assert.equal(showsFeedNotice(leaveOff, AUG(18), AUG(19)), false);
+
+  const workedHolidayBroken = day(18, 1, {
+    holiday: { name: "HOL-1" },
+    feed_uncertain: true,
+  } as unknown as Partial<Day>);
+  assert.equal(showsFeedNotice(workedHolidayBroken, AUG(18), AUG(19)), true);
+});

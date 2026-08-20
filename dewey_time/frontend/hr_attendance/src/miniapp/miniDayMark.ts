@@ -213,5 +213,9 @@ export function showsFeedNotice(day: Day | undefined, date: Date, now: Date): bo
   if (!day?.feed_uncertain) return false;
   // Never in the future — same rule as the mark.
   if (date > now && !isSameDay(date, now)) return false;
+  // A zero-punch holiday or leave day owes no record, so it needs no excuse
+  // — and nothing on its screen accuses anyone. Punches on such a day change
+  // that: someone worked it, and a broken record of it keeps the excuse.
+  if (punchCount(day) === 0 && (day.holiday || day.leave?.on_leave)) return false;
   return !(punchCount(day) > 0 && isPaired(day));
 }
