@@ -24,8 +24,12 @@ class TestCompose(unittest.TestCase):
         self.assertIn("DIS Iconic", text)
 
     def test_out_punch_reads_as_a_checkout(self):
+        # Khmer by default; the English wording is pinned through the "en"
+        # preference, which is the only way it is ever rendered now.
         text = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), "ISBB")
-        self.assertIn("out", text.lower())
+        self.assertIn("បានចេញ", text)
+        english = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), "ISBB", None, "en")
+        self.assertIn("out", english.lower())
 
     def test_missing_branch_still_produces_a_message(self):
         text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
@@ -167,51 +171,68 @@ class TestCheckinIsPlainText(unittest.TestCase):
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
 
         self.assertEqual(send.call_args[0][0], "77702")
-        self.assertIn("Checked in", send.call_args[0][1])
+        self.assertIn("បានចូល", send.call_args[0][1])
 
 
-class TestBilingualNotification(unittest.TestCase):
-    """Khmer and English in one message, rather than a guess between them.
+class TestOneLanguageNotification(unittest.TestCase):
+    """One language per message, chosen on the link -- Khmer until chosen.
 
-    Telegram reports a client language, but that is the language of someone's
-    PHONE — frequently English for people who read Khmer. Employee carries no
-    language field. Guessing wrong sends an unreadable message to the person
-    least able to say so, and this message is two short lines either way.
+    The stacked-bilingual format is retired. It existed because the only
+    signal then available (the phone's client language) guesses wrong for
+    Khmer readers who run their phones in English; the /language chooser
+    replaced the guess with the person's own answer. Khmer is the default
+    because it is the language of this roster, and the default must hold for
+    every link minted before the field existed.
     """
 
-    def test_both_languages_are_present_for_each_direction(self):
+    def test_the_default_is_khmer_with_no_english_line(self):
         arrived = notify.compose("IN", datetime(2026, 8, 14, 7, 58), "DIS Iconic")
         self.assertIn("បានចូល", arrived)
-        self.assertIn("Checked in", arrived)
+        self.assertNotIn("Checked in", arrived)
+        self.assertEqual(len(arrived.split("\n")), 1)
 
         left = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), "DIS Iconic")
         self.assertIn("បានចេញ", left)
-        self.assertIn("Checked out", left)
+        self.assertNotIn("Checked out", left)
 
-    def test_khmer_leads(self):
-        # The English line can be inferred from the numbers beside it; the
-        # Khmer one is the reason this is bilingual at all.
-        text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
-        lines = text.split("\n")
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[0].startswith("បានចូល"))
-        self.assertTrue(lines[1].startswith("Checked in"))
+    def test_the_english_preference_drops_the_khmer_line(self):
+        arrived = notify.compose("IN", datetime(2026, 8, 14, 7, 58), "DIS Iconic",
+                                 None, "en")
+        self.assertIn("Checked in", arrived)
+        self.assertNotIn("បានចូល", arrived)
+        self.assertEqual(len(arrived.split("\n")), 1)
+
+    def test_anything_that_is_not_en_reads_as_khmer(self):
+        # The unlosable default: blank, None, "km", and junk a future bug
+        # might write must all land on Khmer, never on silence or a crash.
+        for value in (None, "", "km", "KM", " en \t junk", "kh"):
+            text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None,
+                                  None, value)
+            self.assertIn("បានចូល", text, f"language={value!r}")
+            self.assertNotIn("Checked in", text, f"language={value!r}")
+        # Case and whitespace on the one real alternative still count.
+        text = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None, None, " EN ")
+        self.assertIn("Checked in", text)
 
     def test_in_and_out_are_never_the_same_words(self):
         # A copy-paste that left both directions saying "arrived" would be
-        # invisible in either language alone.
-        arrived = notify.compose("IN", datetime(2026, 8, 14, 7, 58), None)
-        left = notify.compose("OUT", datetime(2026, 8, 14, 17, 2), None)
-        self.assertNotIn("បានចេញ", arrived)
-        self.assertNotIn("បានចូល", left)
+        # invisible to every reviewer who reads only the other language.
+        self.assertNotIn(
+            "បានចេញ", notify.compose("IN", datetime(2026, 8, 14, 7, 58), None))
+        self.assertNotIn(
+            "បានចូល", notify.compose("OUT", datetime(2026, 8, 14, 17, 2), None))
+        self.assertNotIn(
+            "out", notify.compose("IN", datetime(2026, 8, 14, 7, 58), None,
+                                  None, "en").lower())
 
-    def test_both_lines_carry_the_same_time_and_branch(self):
-        # Two lines describing one punch. A stamp that differed between them
-        # would be a bug nobody reading only their own language could see.
-        text = notify.compose("OUT", datetime(2026, 8, 14, 17, 6), "DIS Iconic")
-        for line in text.split("\n"):
-            self.assertIn("5:06 PM", line)
-            self.assertIn("DIS Iconic", line)
+    def test_both_languages_carry_the_same_time_and_branch(self):
+        # One punch described in either language: a stamp that differed
+        # between them would be a bug nobody reading one language could see.
+        for language in (None, "en"):
+            text = notify.compose("OUT", datetime(2026, 8, 14, 17, 6),
+                                  "DIS Iconic", None, language)
+            self.assertIn("5:06 PM", text)
+            self.assertIn("DIS Iconic", text)
 
 
 def _punch(name, time, branch="DIS Iconic", log_type=""):
@@ -350,9 +371,12 @@ class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
         with patch.object(notify.frappe, "get_all", return_value=day):
             direction = notify.direction_of("E1", _punch("P3", "2026-08-17 17:06:00"))
         message = notify.compose(direction, datetime(2026, 8, 17, 17, 6), "DIU")
-        self.assertIn("Checked out", message)
         self.assertIn("បានចេញ", message)
-        self.assertNotIn("Checked in", message)
+        self.assertNotIn("បានចូល", message)
+        english = notify.compose(direction, datetime(2026, 8, 17, 17, 6), "DIU",
+                                 None, "en")
+        self.assertIn("Checked out", english)
+        self.assertNotIn("Checked in", english)
 
     def test_an_unknowable_punch_is_recorded_not_guessed(self):
         # A full day at one campus, then a single punch at another on the way
@@ -368,15 +392,18 @@ class TestDirectionIsResolvedNotAssumed(unittest.TestCase):
             direction = notify.direction_of("E1", _punch("P2", "2026-08-17 17:04:00"))
         self.assertEqual(direction, "")
         message = notify.compose(direction, datetime(2026, 8, 17, 17, 4), "DIU")
-        self.assertIn("Recorded", message)
         self.assertIn("បានកត់ត្រា", message)
-        self.assertNotIn("Checked in", message)
-        self.assertNotIn("Checked out", message)
         self.assertNotIn("បានចូល", message)
         self.assertNotIn("បានចេញ", message)
-        # Still a receipt: the time and the place survive.
-        self.assertIn("5:04 PM", message)
-        self.assertIn("DIU", message)
+        english = notify.compose(direction, datetime(2026, 8, 17, 17, 4), "DIU",
+                                 None, "en")
+        self.assertIn("Recorded", english)
+        self.assertNotIn("Checked in", english)
+        self.assertNotIn("Checked out", english)
+        # Still a receipt in either language: the time and the place survive.
+        for text in (message, english):
+            self.assertIn("5:04 PM", text)
+            self.assertIn("DIU", text)
 
     def test_a_double_tap_no_longer_inverts_the_rest_of_the_day(self):
         # Tap, tap again three seconds later. The second tap is announced
@@ -715,8 +742,9 @@ class TestMeaningLine(unittest.TestCase):
         self.assertIsNone(meaning)
 
     def test_end_to_end_the_meaning_rides_below_the_verb(self):
-        # Push previews truncate to the leading line: the verb lines must
-        # come first, the meaning after, in the message actually sent.
+        # Push previews truncate to the leading line: the verb line must come
+        # first, the meaning after, in the message actually sent. A link with
+        # no language field (every row from before it existed) reads as Khmer.
         # `_checkin` hands back a DATETIME (Datetime column + passthrough
         # get_datetime in this harness); the replay rows stay strings.
         first = _punch("CKIN-1", "2026-08-17 07:58:00")
@@ -729,11 +757,31 @@ class TestMeaningLine(unittest.TestCase):
                           return_value=notify.transport.SENT) as send:
             notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
         lines = send.call_args[0][1].split("\n")
-        self.assertEqual(len(lines), 4)
+        self.assertEqual(len(lines), 2)
         self.assertTrue(lines[0].startswith("បានចូល"))
-        self.assertTrue(lines[1].startswith("Checked in"))
-        self.assertEqual(lines[2], "វេន 7:00 AM – 5:00 PM")
-        self.assertEqual(lines[3], "Shift 7:00 AM – 5:00 PM")
+        self.assertEqual(lines[1], "វេន 7:00 AM – 5:00 PM")
+
+    def test_end_to_end_the_links_language_travels_to_both_lines(self):
+        # The stored preference must reach the meaning line too, not just the
+        # verb -- a message that switched verbs but kept a Khmer shift line
+        # would be exactly the half-translated shape the chooser exists to end.
+        first = _punch("CKIN-1", "2026-08-17 07:58:00")
+        checkin_row = {**first, "time": datetime(2026, 8, 17, 7, 58)}
+        with self._env(punches=[first]), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for",
+                          return_value={"chat_id": "77702", "name": "L1",
+                                        "language": "en"}), \
+             patch.object(notify, "_checkin", return_value=checkin_row), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT) as send:
+            notify.send_checkin_notification("HR-EMP-00001", "CKIN-1")
+        lines = send.call_args[0][1].split("\n")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("Checked in"))
+        self.assertEqual(lines[1], "Shift 7:00 AM – 5:00 PM")
+        self.assertNotIn("បានចូល", send.call_args[0][1])
+        self.assertNotIn("វេន", send.call_args[0][1])
 
 
 class TestSendTestNotification(unittest.TestCase):
@@ -766,10 +814,29 @@ class TestSendTestNotification(unittest.TestCase):
         self.assertEqual(result["result"], notify.transport.SENT)
         self.assertEqual(send.call_args[0][0], "77702")
         # The text comes back so the wording can be reviewed from the response
-        # rather than from the phone that happens to be linked.
-        self.assertIn("Checked out", result["text"])
+        # rather than from the phone that happens to be linked -- and it is
+        # the link's OWN language, Khmer here, exactly what the phone gets.
         self.assertIn("បានចេញ", result["text"])
+        self.assertNotIn("Checked out", result["text"])
         self.assertIn("DIS Iconic", result["text"])
+
+    def test_it_honours_the_links_language_like_the_real_path(self):
+        # The endpoint exists to prove the real message; a test message that
+        # ignored the preference would review wording nobody will receive.
+        with self._hr(), self._me(), \
+             patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify, "_link_for",
+                          return_value={"chat_id": "77702", "name": "L1",
+                                        "language": "en"}), \
+             patch.object(notify.frappe.db, "get_value", return_value={
+                 "name": "CKIN-9", "log_type": "OUT",
+                 "time": datetime(2026, 8, 17, 17, 6), "custom_device_branch": "DIS Iconic"}), \
+             patch.object(notify.transport, "send_message",
+                          return_value=notify.transport.SENT):
+            result = notify.send_test_notification()
+
+        self.assertIn("Checked out", result["text"])
+        self.assertNotIn("បានចេញ", result["text"])
 
     def test_it_returns_the_text_so_wording_can_be_checked_without_a_phone(self):
         # What this still does that a punch cannot: fire on demand and hand
@@ -785,7 +852,6 @@ class TestSendTestNotification(unittest.TestCase):
             result = notify.send_test_notification()
 
         self.assertIn("បានចូល", result["text"])
-        self.assertIn("Checked in", result["text"])
         self.assertEqual(result["checkin"], "CKIN-9")
 
     def test_every_other_gate_still_reports_honestly(self):
@@ -822,9 +888,11 @@ class TestSendTestNotification(unittest.TestCase):
              patch.object(notify.transport, "send_message", return_value=notify.transport.SENT):
             result = notify.send_test_notification()
 
-        self.assertEqual(len(result["text"].split("\n")), 2)
+        self.assertEqual(len(result["text"].split("\n")), 1)
         self.assertNotIn("So far", result["text"])
         self.assertNotIn("Shift", result["text"])
+        self.assertNotIn("វេន", result["text"])
+        self.assertNotIn("គិតត្រឹមពេលនេះ", result["text"])
 
     def test_a_same_day_punch_test_message_is_the_real_receipt(self):
         # The endpoint's whole reason to exist: the REAL message, meaning
@@ -856,8 +924,8 @@ class TestSendTestNotification(unittest.TestCase):
                           return_value=notify.transport.SENT):
             result = notify.send_test_notification()
 
-        self.assertIn("Shift 7:00 AM – 5:00 PM", result["text"])
         self.assertIn("វេន 7:00 AM – 5:00 PM", result["text"])
+        self.assertNotIn("Shift", result["text"])
 
     def test_a_blocked_link_is_reported_but_not_disabled(self):
         # send_checkin_notification disables a blocked link, correctly. Doing
@@ -883,3 +951,53 @@ class TestSendTestNotification(unittest.TestCase):
                    return_value=None):
             with self.assertRaises(Exception):
                 notify.send_test_notification()
+
+
+class TestLinkQueryShape(unittest.TestCase):
+    """The one query where the stored preference enters the message path.
+
+    Every send-path test patches _link_for with a hand-built dict, so none of
+    them can notice the real select dropping the language column -- that
+    mutant left the whole suite green until this class existed. The feature
+    would be 100% inert in production (everyone Khmer forever) with CI green.
+    """
+
+    def test_the_link_query_asks_for_the_language_column(self):
+        with patch.object(notify.frappe.db, "has_column", return_value=True) as has_column, \
+             patch.object(notify.frappe.db, "get_value", return_value=None) as get_value:
+            notify._link_for("HR-EMP-00042")
+        has_column.assert_called_once_with(notify.LINK_DT, "language")
+        args, kwargs = get_value.call_args
+        self.assertEqual(args[0], notify.LINK_DT)
+        self.assertEqual(args[1], {"employee": "HR-EMP-00042", "enabled": 1})
+        self.assertEqual(args[2], ["name", "chat_id", "language"])
+        self.assertTrue(kwargs["as_dict"])
+
+    def test_a_missing_column_is_left_out_of_the_select_not_crashed_into(self):
+        # Deploy without Migrate. Unguarded, this query dies with "Unknown
+        # column" inside the enqueued job -- one dead job per punch, a total
+        # notification outage from a mistake this site has actually made.
+        # Guarded, the dict simply has no language key and .get() reads None,
+        # which _language_index already folds to Khmer: the documented default.
+        with patch.object(notify.frappe.db, "has_column", return_value=False), \
+             patch.object(notify.frappe.db, "get_value", return_value=None) as get_value:
+            notify._link_for("HR-EMP-00042")
+        self.assertEqual(get_value.call_args[0][2], ["name", "chat_id"])
+
+    def test_delivery_gates_names_the_missing_column(self):
+        # The guard must not HIDE the missed Migrate -- that is the recorded
+        # failure mode of has_column guards on this site. The gates report is
+        # where "everyone gets Khmer and taps refuse" becomes one glance.
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=3), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "has_column", return_value=False):
+            gates = notify.delivery_gates()
+        self.assertFalse(gates["language_column"])
+
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=3), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "has_column", return_value=True):
+            gates = notify.delivery_gates()
+        self.assertTrue(gates["language_column"])

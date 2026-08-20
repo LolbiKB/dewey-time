@@ -8,9 +8,11 @@ but with one important difference: those are server-to-server and can hold an
 API key as well. A webhook can only hold this one secret, so it carries the
 whole load.
 
-The bot's only command is /start. With a token payload it redeems that token;
-bare, it tries the Telegram id already recorded on the Employee record. There
-is deliberately no /today or /week: the Mini App is the read surface.
+The bot answers two commands. /start with a token payload redeems that token;
+bare, it tries the Telegram id already recorded on the Employee record.
+/language opens the message-language chooser (two inline buttons, whose
+presses arrive back here as callback_query updates). There is deliberately no
+/today or /week: the Mini App is the read surface.
 """
 
 import hmac
@@ -22,11 +24,12 @@ from dewey_time.telegram import binding, transport
 
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
-# Khmer first, English under it, for the reason notify.compose gives: the
-# language Telegram reports is the language of someone's PHONE, and guessing
-# wrong sends an unreadable message to the person least able to report it.
-# These three are also the messages most likely to arrive when something has
-# gone wrong, which is the worst moment to be unreadable.
+# Khmer first, English under it. These three are the only messages still sent
+# BILINGUALLY: they can all arrive before any language preference exists (two
+# of them exist precisely because linking failed), and they are the messages
+# most likely to arrive when something has gone wrong -- the worst moment to
+# be unreadable. The check-in messages themselves are single-language, chosen
+# on the link; see notify._VERBS.
 LINKED_REPLY = (
     "អ្នកបានភ្ជាប់គណនីរួចរាល់។ យើងនឹងផ្ញើសារនៅពេលអ្នកចូល ឬចេញ។\n"
     "You're linked. You'll get a message here when you check in or out."
@@ -40,6 +43,34 @@ NEEDS_TOKEN_REPLY = (
     "To connect your account, use the link or QR code HR gave you."
 )
 
+# The language chooser. Bilingual BY NECESSITY, unlike everything else the bot
+# now sends: this is the one message whose whole job is to ask which language
+# the reader reads, so it cannot assume an answer. Two buttons, no "both" --
+# the stacked-bilingual format is retired, and Khmer is the default nobody has
+# to press anything to get.
+LANGUAGE_PROMPT = (
+    "តើអ្នកចង់ទទួលសារជាភាសាអ្វី?\n"
+    "Which language should your messages arrive in?"
+)
+LANGUAGE_KEYBOARD = {
+    "inline_keyboard": [
+        [
+            {"text": "ខ្មែរ", "callback_data": "lang:km"},
+            {"text": "English", "callback_data": "lang:en"},
+        ]
+    ]
+}
+#: The ONLY callback data this webhook acts on. An allowlist, not a parse:
+#: Telegram clients can put arbitrary bytes in callback_data, so anything
+#: not literally one of these keys selects nothing.
+LANGUAGE_CALLBACKS = {"lang:km": "km", "lang:en": "en"}
+#: Confirmation in the language just chosen -- the first message that proves
+#: the choice took, which is why it is not bilingual.
+LANGUAGE_SET_REPLIES = {
+    "km": "សារនឹងផ្ញើជាភាសាខ្មែរ។",
+    "en": "You'll get your messages in English.",
+}
+
 def _secret_ok(supplied) -> bool:
     """Constant-time compare. A missing header rejects rather than skips."""
     if not supplied:
@@ -47,7 +78,23 @@ def _secret_ok(supplied) -> bool:
     return hmac.compare_digest(str(supplied), transport.webhook_secret())
 
 
+def _is_command(text: str, command: str) -> bool:
+    """Is `text` this command? Tolerates the /command@BotName form.
+
+    Telegram's command menu and some clients append the bot's username to a
+    tapped command; matching the raw string would make the menu's own entry
+    for /language a no-op in exactly those clients.
+    """
+    first = text.split(maxsplit=1)[0] if text else ""
+    return first.split("@", 1)[0].lower() == command
+
+
 def _handle(update: dict) -> None:
+    callback = (update or {}).get("callback_query")
+    if callback:
+        _handle_language_tap(callback)
+        return
+
     message = (update or {}).get("message") or {}
     chat = message.get("chat") or {}
 
@@ -60,6 +107,13 @@ def _handle(update: dict) -> None:
     chat_id = chat.get("id")
     telegram_user_id = (message.get("from") or {}).get("id")
     text = (message.get("text") or "").strip()
+
+    if _is_command(text, "/language"):
+        # Offered to anyone who asks, linked or not: the chooser leaks
+        # nothing, and a press from an unlinked account changes nothing
+        # (binding.set_language refuses without an enabled link).
+        transport.send_message(chat_id, LANGUAGE_PROMPT, reply_markup=LANGUAGE_KEYBOARD)
+        return
 
     if not text.startswith("/start"):
         return
@@ -99,15 +153,54 @@ def _handle(update: dict) -> None:
     _confirm_linked(chat_id)
 
 
-def _confirm_linked(chat_id) -> None:
-    """Tell them they're linked. Shared by both binding paths.
+def _handle_language_tap(callback: dict) -> None:
+    """A press on the language chooser's inline buttons.
 
-    No inline button any more. The bot's Main Mini App button and its chat
-    menu button are permanent and always in reach, where this one scrolled out
-    of the chat and never came back -- it was carrying the app's discoverability
-    at the exact moment it was least able to.
+    THE AUTHORISATION IS THE PRESSER'S OWN AUTHENTICATED TELEGRAM ID -- the
+    same identity every Mini App request rides on -- and the only row a press
+    can ever change is that account's own enabled link. The callback data
+    chooses WHICH language, never WHOSE: it is looked up in an allowlist, so
+    forged data (any Telegram client can send arbitrary callback bytes at the
+    bot) selects nothing and is dropped.
+    """
+    callback_id = callback.get("id")
+    if callback_id:
+        # Answered FIRST, whatever the data: an unacknowledged press leaves
+        # the button spinning client-side until Telegram times it out, and a
+        # refusal below must look like nothing, not like a hang.
+        transport.answer_callback_query(callback_id)
+
+    language = LANGUAGE_CALLBACKS.get(str(callback.get("data") or "").strip())
+    if not language:
+        return
+
+    telegram_user_id = (callback.get("from") or {}).get("id")
+    try:
+        chat_id = binding.set_language(str(telegram_user_id), language)
+    except Exception:
+        # No enabled link -- a revoked account pressing a button on an old
+        # chooser message, or an account that never linked. Deliberately
+        # silent and undistinguished, like the bare-/start refusals: the
+        # reasons would tell someone probing which accounts exist.
+        return
+    transport.send_message(chat_id, LANGUAGE_SET_REPLIES[language])
+
+
+def _confirm_linked(chat_id) -> None:
+    """Tell them they're linked, then ask which language. Both binding paths.
+
+    No inline button into the Mini App any more. The bot's Main Mini App
+    button and its chat menu button are permanent and always in reach, where
+    this one scrolled out of the chat and never came back -- it was carrying
+    the app's discoverability at the exact moment it was least able to.
+
+    The language chooser rides here because linking is the one moment every
+    employee is certainly looking at the chat. It scrolling away later is
+    fine: Khmer is the default, and /language reopens it from the command
+    menu for the minority who want English.
     """
     transport.send_message(chat_id, LINKED_REPLY)
+    transport.send_message(chat_id, LANGUAGE_PROMPT, reply_markup=LANGUAGE_KEYBOARD)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

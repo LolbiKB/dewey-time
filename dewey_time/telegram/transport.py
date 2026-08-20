@@ -98,12 +98,19 @@ def webhook_secret() -> str:
     return secret
 
 
-def send_message(chat_id: str, text: str) -> str:
+def send_message(chat_id: str, text: str, reply_markup: dict | None = None) -> str:
     """Send one message. Returns SENT, BLOCKED or FAILED -- never raises.
 
     Callers are background jobs whose failure must not surface anywhere near a
     checkin write, so transport errors are reported as values.
+
+    `reply_markup` is passed through verbatim when given (the language chooser
+    sends an inline keyboard); omitted entirely otherwise, so the ordinary
+    check-in message stays the plain-text shape it has always been on the wire.
     """
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     try:
         # bot_token() is INSIDE the try. It throws when the token is unset, and
         # that is reachable in production: enabling Telegram before filling the
@@ -112,7 +119,7 @@ def send_message(chat_id: str, text: str) -> str:
         # filling the Error Log with tracebacks instead of one clear FAILED.
         response = requests.post(
             f"{API_BASE}/bot{bot_token()}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
+            json=payload,
             timeout=TIMEOUT_SECONDS,
         )
     except Exception:
@@ -126,6 +133,42 @@ def send_message(chat_id: str, text: str) -> str:
     if response.status_code != 200:
         frappe.log_error(
             title="Telegram send rejected",
+            message=scrub_token(f"status={response.status_code} body={response.text[:500]}"),
+        )
+        return FAILED
+    return SENT
+
+
+def answer_callback_query(callback_query_id: str) -> str:
+    """Acknowledge a button press. Returns SENT or FAILED -- never raises.
+
+    Telegram clients show a spinner on a pressed inline button until the bot
+    answers the callback query; without this call the press LOOKS ignored for
+    up to a minute even when it was acted on instantly. The acknowledgement is
+    silent (no toast text) -- whatever the press means is said in the chat by
+    the caller, where it persists.
+
+    A stale press (Telegram expires callback ids after a while, and redelivers
+    old updates after webhook downtime) answers 400 here; that is logged like
+    any rejection but the caller treats it as noise, because the press it
+    acknowledges no longer has a spinner to clear.
+    """
+    try:
+        response = requests.post(
+            f"{API_BASE}/bot{bot_token()}/answerCallbackQuery",
+            json={"callback_query_id": callback_query_id},
+            timeout=TIMEOUT_SECONDS,
+        )
+    except Exception:
+        frappe.log_error(
+            title="Telegram callback answer failed",
+            message=scrub_token(frappe.get_traceback()),
+        )
+        return FAILED
+
+    if response.status_code != 200:
+        frappe.log_error(
+            title="Telegram callback answer rejected",
             message=scrub_token(f"status={response.status_code} body={response.text[:500]}"),
         )
         return FAILED
@@ -241,10 +284,12 @@ def set_webhook(url: str, secret: str) -> str:
     therefore "unlinked" -- which the notifier reports as a normal rollout
     state rather than as a fault, so nothing looked broken anywhere.
 
-    `allowed_updates` is narrowed to messages: `_handle` reads
-    `update["message"]` and deliberately ignores edited_message and
-    callback_query, so asking for them is asking Telegram to spend deliveries
-    on updates we drop.
+    `allowed_updates` is narrowed to exactly the two shapes `_handle` reads:
+    messages, and callback_query for the language chooser's buttons.
+    edited_message and the rest stay unrequested -- asking for them is asking
+    Telegram to spend deliveries on updates we drop. NOTE the flip side: this
+    list lives on Telegram's servers, so adding a shape here does nothing for
+    a deployed bot until `setup_telegram` is re-run against it.
     """
     try:
         response = requests.post(
@@ -252,7 +297,7 @@ def set_webhook(url: str, secret: str) -> str:
             json={
                 "url": url,
                 "secret_token": secret,
-                "allowed_updates": ["message"],
+                "allowed_updates": ["message", "callback_query"],
             },
             timeout=TIMEOUT_SECONDS,
         )
@@ -271,15 +316,49 @@ def set_webhook(url: str, secret: str) -> str:
     return SENT
 
 
+#: The bot's command menu. /language is here because the chooser message it
+#: reopens scrolls out of the chat like any other -- the command menu is the
+#: only persistent route back to it. /start is deliberately unlisted: it is
+#: the deep-link carrier, and the people who should send it arrive holding a
+#: link that sends it for them.
+BOT_COMMANDS = [{"command": "language", "description": "ភាសា · Language"}]
+
+
+def set_bot_commands() -> str:
+    """Register the bot's command menu with Telegram. Idempotent."""
+    try:
+        response = requests.post(
+            f"{API_BASE}/bot{bot_token()}/setMyCommands",
+            json={"commands": BOT_COMMANDS},
+            timeout=TIMEOUT_SECONDS,
+        )
+    except Exception:
+        frappe.log_error(
+            title="Telegram commands failed", message=scrub_token(frappe.get_traceback())
+        )
+        return FAILED
+
+    if response.status_code != 200:
+        frappe.log_error(
+            title="Telegram commands rejected",
+            message=scrub_token(f"status={response.status_code} body={response.text[:500]}"),
+        )
+        return FAILED
+    return SENT
+
+
 @frappe.whitelist()
 def setup_telegram() -> dict:
     """Everything that has to be told to Telegram once, in one call.
 
-    Two separate pieces of state live on Telegram's servers rather than in
-    this site, and no deploy can touch either: where to deliver updates, and
-    what the chat menu button opens. Both were one-time manual steps, one of
-    which was never written at all -- so this is the call that makes a fresh
-    bot work, and re-running it is harmless.
+    Three separate pieces of state live on Telegram's servers rather than in
+    this site, and no deploy can touch any of them: where to deliver updates
+    (and WHICH update shapes -- callback_query included, or the language
+    chooser's buttons spin forever), what the chat menu button opens, and the
+    command menu. Each was once a one-time manual step, one of which was never
+    written at all -- so this is the call that makes a fresh bot work, and
+    re-running it is harmless. Re-run it after any deploy that changes what
+    the webhook handles.
 
     Not in `after_migrate`: it needs a bot token and a webhook secret, and a
     site that has neither would either fail the migrate or log a confusing
@@ -293,6 +372,7 @@ def setup_telegram() -> dict:
     return {
         "webhook": {"status": set_webhook(hook, webhook_secret()), "url": hook},
         "menu_button": {"status": set_default_menu_button(app), "url": app},
+        "commands": {"status": set_bot_commands()},
     }
 
 
@@ -393,7 +473,9 @@ def diagnostics(employee: str | None = None) -> dict:
     if configured and actual and configured.lower() != actual.lower():
         report["invite_username_mismatch"] = actual
 
-    hook = _get("getWebhookInfo").get("result") or {}
+    hook_answer = _get("getWebhookInfo")
+    hook = hook_answer.get("result") or {}
+    allowed = hook.get("allowed_updates")
     report["webhook"] = {
         "url": hook.get("url") or None,
         "pending": hook.get("pending_update_count"),
@@ -401,6 +483,22 @@ def diagnostics(employee: str | None = None) -> dict:
         # records the last delivery failure here and nowhere else.
         "last_error": hook.get("last_error_message"),
         "last_error_date": hook.get("last_error_date"),
+        # The field that explains dead chooser buttons and NOTHING else does.
+        # allowed_updates lives on Telegram's servers: a deploy that taught
+        # the webhook callback_query changes nothing until setup_telegram is
+        # re-run, and Telegram DISCARDS filtered updates -- no pending count,
+        # no last_error, employees tapping a spinner that times out while
+        # every other line of this report reads healthy. Absent means
+        # Telegram's default (everything but chat_member), so presses arrive.
+        "allowed_updates": allowed,
+        # True/False only when Telegram actually answered; None when the call
+        # itself failed. An unreachable API must read as UNKNOWN on the one
+        # field the runbook tells operators to trust, never as healthy.
+        "delivers_button_presses": (
+            (allowed is None or "callback_query" in allowed)
+            if hook_answer.get("ok")
+            else None
+        ),
     }
 
     menu = _get("getChatMenuButton").get("result") or {}
@@ -412,5 +510,25 @@ def diagnostics(employee: str | None = None) -> dict:
         # configure_menu_button has never been run against this bot, which is
         # the difference between "no persistent way in" and "one tap".
         "is_miniapp": menu.get("type") == "web_app",
+    }
+
+    # The registered command menu -- Telegram-side state again, so it is
+    # ASKED rather than assumed. "language" missing here means
+    # set_bot_commands has never run against this bot and /language is
+    # undiscoverable for everyone already linked. `listed: None` means the
+    # call failed, which must stay distinguishable from an empty menu -- the
+    # runbook maps [] to "set_bot_commands never ran", and a transport blip
+    # must not read as that diagnosis.
+    commands_answer = _get("getMyCommands")
+    report["commands"] = {
+        "listed": (
+            [
+                c.get("command")
+                for c in (commands_answer.get("result") or [])
+                if isinstance(c, dict)
+            ]
+            if commands_answer.get("ok")
+            else None
+        ),
     }
     return report

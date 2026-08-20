@@ -426,6 +426,53 @@ def claim_by_recorded_id(telegram_user_id: str, chat_id: str) -> str:
     return employee
 
 
+#: The two languages notify.compose can render. An allowlist rather than a
+#: passthrough: the value written here is interpolated into nothing, but a
+#: junk value would silently read as Khmer forever (compose treats anything
+#: that is not "en" as "km"), which is a misconfiguration wearing the default.
+MESSAGE_LANGUAGES = ("km", "en")
+
+
+def set_language(telegram_user_id: str, language: str) -> str:
+    """Record which language this account's messages arrive in.
+
+    Returns the link's chat_id -- the caller wants to confirm the change in
+    the language just chosen, and the bound chat is where that goes -- or
+    raises. Fails closed like everything in this module: only an ENABLED link
+    can change its language, so a revoked account pressing a button on an old
+    chooser message changes nothing.
+
+    `telegram_user_id` comes off the authenticated Telegram update, never
+    from the callback data -- the data picks WHICH language, the identity
+    picks WHOSE, and the only row this can ever touch is the presser's own.
+
+    Document API rather than `db.set_value`, for the reason `revoke_link`
+    records: the doctype tracks changes, and the Version row is the only
+    thing that can answer "when did this person's messages switch to
+    English" later.
+    """
+    telegram_user_id = str(telegram_user_id or "").strip()
+    if language not in MESSAGE_LANGUAGES or not telegram_user_id:
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    existing = _existing_link(telegram_user_id)
+    if not existing or not existing.get("enabled"):
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    if not frappe.db.has_column(LINK_DT, "language"):
+        # Deploy without Migrate. Saving now would silently DROP the value
+        # (no DocField, so get_valid_dict discards it) and the bot would then
+        # confirm a change that never persisted. Refusing means the press
+        # visibly does nothing instead of lying; delivery_gates names the
+        # missing column for whoever investigates.
+        frappe.throw("Telegram Link has no language column yet -- run Migrate")
+
+    doc = frappe.get_doc(LINK_DT, telegram_user_id)
+    doc.language = language
+    doc.save(ignore_permissions=True)
+    return str(doc.chat_id)
+
+
 def employee_for_telegram_user(telegram_user_id: str) -> str:
     """The Employee bound to this Telegram account, or raise.
 
