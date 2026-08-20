@@ -243,8 +243,16 @@ test("the shell reserves the row while loading and renders nothing on error", ()
   // A source read: `identity` is a react-query result this file cannot
   // construct, and the defect was in the CONDITION, which no render reaches.
   const shell = readFileSync(new URL("./MiniAppShell.tsx", import.meta.url), "utf8");
-  assert.match(shell, /identity\.isError \? null : \(/);
-  assert.match(shell, /pending=\{identity\.isLoading\}/);
+  assert.match(shell, /\{!identity\.data && identity\.isError \? null : \(/);
+  // `!identity.data`, never `isLoading`: react-query reports isLoading only
+  // while a fetch is in flight, so a pending-but-idle query takes the resolved
+  // branch — over an empty payload, where the name falls back to the landmark
+  // string and the header makes exactly the claim it exists to refuse.
+  assert.match(shell, /pending=\{!identity\.data\}/);
+  assert.ok(
+    !/pending=\{identity\.isLoading\}/.test(shell),
+    "isLoading is false for a pending query that is not fetching",
+  );
   assert.ok(
     !/\{identity\.data \? \(/.test(shell),
     "waiting for the whole answer is what dropped the page 54px",
