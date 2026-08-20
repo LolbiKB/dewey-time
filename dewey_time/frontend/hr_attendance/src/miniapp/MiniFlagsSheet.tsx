@@ -14,6 +14,7 @@
 import { TriangleAlertIcon } from "lucide-react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { MiniSheetClose } from "@/miniapp/MiniSheetClose";
 import { useDismissibleLayer } from "@/miniapp/miniBackStack";
 import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import { flagStatusKey, flagText, visibleFlags } from "@/miniapp/miniFlags";
@@ -35,6 +36,9 @@ export function MiniFlagsSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent
         side="bottom"
+        // Ours, not the design system's: its close button carries a hardcoded
+        // English "Close" that no prop can translate. See MiniSheetClose.
+        showCloseButton={false}
         className="gap-0 rounded-t-xl px-4 pb-8"
         style={{
           paddingBottom: `calc(2rem + ${insets.bottom}px)`,
@@ -82,6 +86,10 @@ export function MiniFlagsSheet(props: {
             })}
           </ul>
         )}
+
+        {/* LAST, because the design system appends its own close after
+            children — anywhere else and this sheet's tab order changes. */}
+        <MiniSheetClose />
       </SheetContent>
     </Sheet>
   );

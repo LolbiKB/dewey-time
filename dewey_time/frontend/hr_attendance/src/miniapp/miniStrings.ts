@@ -71,6 +71,18 @@ const EN = {
   // marks are the reason the grid exists. Each says what the RECORD is, never
   // what the day was worth.
   chooseDate: "Choose a date",
+  // The month arrows' accessible names, and the grid's own. react-day-picker
+  // supplies all three itself — "Go to the Previous Month" — as bare English
+  // literals with no locale behind them (a date-fns locale carries no labels),
+  // so the two controls that page a Khmer month grid announced in English.
+  // Lowercase-matched by the e2e paging test's locator; renaming them breaks a
+  // bounds test whose easiest wrong repair is to loosen the locator.
+  previousMonth: "Previous month",
+  nextMonth: "Next month",
+  // The <nav> the two arrows sit in. Its default is "Navigation bar" — found
+  // by the sweep below, not by the audit, which is the argument for sweeping
+  // rather than listing.
+  monthNavigation: "Month navigation",
   workedInMonth: "Worked this month, net of lunch",
   markComplete: "complete record",
   // CLAIMS ABOUT A PUNCH, NEVER ABOUT THE DAY. "No clock-out recorded" was
@@ -111,6 +123,14 @@ const EN = {
   dayAriaWorkedOfRostered: "Worked {worked} of {rostered} rostered",
   dayAriaWorkedOnly: "Worked {worked}",
   dayAriaRosteredOnly: "Rostered {rostered}, nothing worked yet",
+  // AN EM DASH IS NOT A ZERO. A day whose punches never paired — a clock-in
+  // nobody closed, two arrivals in a row, a punch from a device with no branch
+  // mapped — has no total to give, and the visible row prints "—" to say
+  // exactly that. Spoken as "nothing worked yet" it became a claim about the
+  // PERSON on a day they were plainly there. These two say whose gap it is:
+  // the figure's, not theirs.
+  dayAriaRosteredNoTotal: "Rostered {rostered}, and the hours worked could not be added up",
+  dayAriaNoTotal: "The hours worked could not be added up",
 
   flagLateStart: "Late start",
   flagLateStartBody: "Your first check-in was after your shift started.",
@@ -146,6 +166,11 @@ const EN = {
 
   // Chrome
   yourRecord: "Your record",
+  // The sheets' dismiss control. The design system renders one with a
+  // hardcoded English `sr-only` "Close" and no prop to translate it, so both
+  // bottom sheets are dismissed by a button that announces in English under
+  // Khmer. See MiniSheetClose for the local replacement.
+  closeSheet: "Close",
   openFromTelegram: "Open this from Telegram",
   openFromTelegramBody: "Your attendance is only available through the Dewey Time bot.",
 
@@ -290,6 +315,13 @@ const KM: Record<StringKey, string> = {
   noShiftsThisWeek: "សប្តាហ៍នេះ អ្នកមិនមានវេនការងារទេ។",
 
   chooseDate: "ជ្រើសរើសថ្ងៃ",
+  // Corroborated against react-day-picker's own km locale, which words the
+  // same two controls "ទៅខែមុន" / "ទៅខែក្រោយ". Not imported from there: it is
+  // a transitive dependency this app does not declare, and every Khmer word an
+  // employee reads belongs in this table where it can be reviewed.
+  previousMonth: "ទៅខែមុន",
+  nextMonth: "ទៅខែក្រោយ",
+  monthNavigation: "ការរុករកខែ",
   workedInMonth: "ម៉ោងធ្វើការខែនេះ (ដកម៉ោងសម្រាក)",
   markComplete: "កំណត់ត្រាពេញលេញ",
   markIncomplete: "កំណត់ត្រាចូលមិនមានគូ",
@@ -309,6 +341,11 @@ const KM: Record<StringKey, string> = {
   dayAriaWorkedOfRostered: "ធ្វើការ {worked} ក្នុងចំណោម {rostered} តាមកាលវិភាគ",
   dayAriaWorkedOnly: "ធ្វើការ {worked}",
   dayAriaRosteredOnly: "តាមកាលវិភាគ {rostered} មិនទាន់មានម៉ោងធ្វើការ",
+  // MACHINE-DRAFTED. Must read as "the total could not be worked out", never
+  // as "your check-ins are wrong" — the point of both lines is that nobody is
+  // being blamed for a figure the app could not compute.
+  dayAriaRosteredNoTotal: "តាមកាលវិភាគ {rostered} ហើយម៉ោងធ្វើការមិនអាចបូកសរុបបានទេ",
+  dayAriaNoTotal: "ម៉ោងធ្វើការមិនអាចបូកសរុបបានទេ",
 
   flagLateStart: "ចាប់ផ្តើមយឺត",
   flagLateStartBody: "ការស្កេនចូលដំបូងរបស់អ្នកគឺក្រោយពេលវេនចាប់ផ្តើម។",
@@ -342,6 +379,7 @@ const KM: Record<StringKey, string> = {
   flagStatusRereview: "រង់ចាំការពិនិត្យឡើងវិញ — ថ្ងៃនេះមានការផ្លាស់ប្តូរក្រោយពេលពិនិត្យ។",
 
   yourRecord: "កំណត់ត្រារបស់អ្នក",
+  closeSheet: "បិទ",
   openFromTelegram: "សូមបើកពី Telegram",
   openFromTelegramBody: "កំណត់ត្រាវត្តមានរបស់អ្នកអាចមើលបានតែតាម Dewey Time bot ប៉ុណ្ណោះ។",
 

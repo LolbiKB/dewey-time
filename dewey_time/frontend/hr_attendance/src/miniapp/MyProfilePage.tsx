@@ -93,6 +93,14 @@ export function MyProfilePage(props: {
 
   return (
     <div className="flex flex-col gap-4 p-3">
+      {/* sr-only, and that is the whole design. This tab has no visible title
+          — the tab bar already says "Profile", and a heading repeating it is
+          chrome on the shortest axis this app has (the same objection that
+          removed the summary block and the add-to-home-screen row). But the
+          page still needs a level-1 heading, or its outline opens at h2 and a
+          reader navigating by heading has nothing to land on. Same key as the
+          tab, so the two cannot drift apart. */}
+      <h1 className="sr-only">{t("tabProfile")}</h1>
       <ProfileSection
         title={t("sectionRecord")}
         rows={[

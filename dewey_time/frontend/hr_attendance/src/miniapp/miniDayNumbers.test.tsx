@@ -85,6 +85,61 @@ test("a live day marks its total as still running", () => {
   assert.ok(!/so far/.test(render(WORKED)), "a closed day must not say 'so far'");
 });
 
+// A day somebody plainly worked, whose punches cannot be added up: neither
+// carries a device branch, and `deriveSegments` drops a run whose first punch
+// has none. The visible row prints "—"; the question is what it SAYS.
+const UNADDABLE = {
+  date: "2026-08-10",
+  shift: {
+    shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00",
+    lunch_start: "12:00:00", lunch_end: "13:00:00",
+  },
+  checkins: [
+    { time: "2026-08-10 08:00:00", log_type: "IN" },
+    { time: "2026-08-10 17:05:00", log_type: "OUT" },
+  ],
+} as unknown as Day;
+
+test("a record that will not add up is not spoken as an empty day", () => {
+  // "Rostered 8h, nothing worked yet" is an accusation on a day with two
+  // punches on it. The em dash means "no figure", never "no work", and the
+  // sentence has to mean the same thing the dash does.
+  const html = render(UNADDABLE);
+  assert.match(html, /—/);
+  assert.match(html, /could not be added up/);
+  assert.ok(
+    !/nothing worked yet/.test(html),
+    "a day with punches must not be announced as one with none",
+  );
+});
+
+test("a rostered day with NO punches keeps the old sentence", () => {
+  // The inversion. If both arms said the same thing the fix would be a
+  // rewording, not a distinction — and this is the day where "nothing worked
+  // yet" is the honest reading.
+  const bare = {
+    date: "2026-08-10",
+    shift: { shift_assigned: true, start_time: "08:00:00", end_time: "17:00:00" },
+    checkins: [],
+  } as unknown as Day;
+  assert.match(render(bare), /nothing worked yet/);
+});
+
+test("a clock-based day with punches is no longer silent", () => {
+  // No roster, so `rostered` is null and every arm above fell through to
+  // null — a screen reader got NOTHING on a day carrying punches and a flag.
+  const clockDay = {
+    date: "2026-08-10",
+    shift: { shift_assigned: false },
+    checkins: [
+      { time: "2026-08-10 09:00:00", log_type: "IN" },
+      { time: "2026-08-10 18:00:00", log_type: "OUT" },
+    ],
+  } as unknown as Day;
+  const html = render(clockDay, 1);
+  assert.match(html, /could not be added up/);
+});
+
 test("nothing on the Day tab is positioned fixed", () => {
   // THE defect this row exists to retire: a fixed pill cannot be laid out
   // against a tab bar it cannot measure, and it overlapped it by 35px on

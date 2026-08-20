@@ -111,6 +111,42 @@ test("the mark's words go through the primitive's own label API", () => {
   );
 });
 
+test("every control in the sheet takes its words from the table", () => {
+  // react-day-picker names the two month arrows itself — "Go to the Previous
+  // Month" — and those are bare English literals: it reads labels off the
+  // LOCALE object, and a date-fns locale carries none. So the Khmer grid this
+  // file works so hard on was paged by two English buttons, and the Khmer e2e
+  // sweep could not see it because it reads innerText, which excludes
+  // aria-labels.
+  const src = SRC("MiniCalendarSheet.tsx");
+  assert.match(src, /labelPrevious: \(\) => t\("previousMonth"\)/);
+  assert.match(src, /labelNext: \(\) => t\("nextMonth"\)/);
+  // And the grid's own name, which was the caption again in Latin digits.
+  assert.match(src, /labelGrid: \(date\) => caption\(date\)/);
+});
+
+test("the caption the eye reads and the name the ear hears are one expression", () => {
+  // Written twice, they drift: the visible half already goes through
+  // fmt.digits and the spoken half did not exist at all. One local, two
+  // consumers, and this counts them.
+  const code = CODE("MiniCalendarSheet.tsx");
+  assert.equal(
+    (code.match(/getFullYear\(\)/g) ?? []).length, 1,
+    "one caption expression, used by both",
+  );
+});
+
+test("the sheet's close button is this app's, not the design system's", () => {
+  // dewey-ui renders its own with a hardcoded `sr-only` "Close" and no prop to
+  // translate it — the last English word on a Khmer screen, and on the only
+  // visible way out of the sheet.
+  const src = SRC("MiniCalendarSheet.tsx");
+  assert.match(src, /showCloseButton=\{false\}/);
+  // LAST child: the design system appends its own close AFTER children, so
+  // anywhere else changes the tab order this sheet already had.
+  assert.match(src, /<MiniSheetClose \/>\s*<\/SheetContent>/);
+});
+
 test("no mark is a spacer, not an absent element", () => {
   // Without it the days that carry a mark are taller than the ones that do
   // not, and every row of the grid sits at a different height.

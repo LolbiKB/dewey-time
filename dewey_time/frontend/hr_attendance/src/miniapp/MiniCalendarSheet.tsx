@@ -24,6 +24,7 @@ import { enUS, km } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { Calendar, CalendarDayButton } from "@/components/ui/calendar";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { MiniSheetClose } from "@/miniapp/MiniSheetClose";
 import { daysByDate, useMiniAppCalendar } from "@/miniapp/useMiniAppSession";
 import { useDismissibleLayer } from "@/miniapp/miniBackStack";
 import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
@@ -160,10 +161,20 @@ export function MiniCalendarSheet(props: {
     [byDate, fmt],
   );
 
+  // ONE EXPRESSION, TWO CONSUMERS: the caption the eye reads and the name the
+  // grid announces. They were the same words written once, and the announced
+  // half did not exist — react-day-picker names the grid itself, in English
+  // with Latin digits, on a screen where every visible number is Khmer.
+  const caption = (date: Date) =>
+    `${fmt.date(date, "LLLL")} ${fmt.digits(String(date.getFullYear()))}`;
+
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent
         side="bottom"
+        // Ours, not the design system's: its close button carries a hardcoded
+        // English "Close" that no prop can translate. See MiniSheetClose.
+        showCloseButton={false}
         className="gap-0 rounded-t-xl px-2 pb-6"
         // ADDED to the floor, never chosen between: the sheet renders through a
         // portal outside the shell's padded container, so without this the
@@ -196,11 +207,9 @@ export function MiniCalendarSheet(props: {
           //
           // Merged, not replaced: the wrapper spreads `formatters` over its
           // own, so this overrides the caption and leaves its month dropdown
-          // alone.
-          formatters={{
-            formatCaption: (date) =>
-              `${fmt.date(date, "LLLL")} ${fmt.digits(String(date.getFullYear()))}`,
-          }}
+          // alone. The same words are also the grid's accessible name now —
+          // see `labelGrid` below, which is where the Latin year survived.
+          formatters={{ formatCaption: caption }}
           // THE PRIMITIVE ALREADY SETS aria-label ON EVERY DAY — "Monday,
           // August 3rd, 2026". An aria-label beats name-from-content
           // unconditionally, so the visually-hidden span this file used to
@@ -218,6 +227,18 @@ export function MiniCalendarSheet(props: {
               const label = marks.get(format(date, "yyyy-MM-dd"))?.label ?? null;
               return label === null ? base : `${base}, ${t(label)}`;
             },
+            // The two arrows and the grid itself. Every one of these has a
+            // default the primitive supplies as a bare English literal —
+            // "Go to the Previous Month", and the caption again in Latin
+            // digits — because react-day-picker reads labels off the LOCALE
+            // object and a date-fns locale carries none. So the Khmer grid
+            // this file works so hard on was paged by two English buttons and
+            // announced itself as "August 2026".
+            labelPrevious: () => t("previousMonth"),
+            labelNext: () => t("nextMonth"),
+            // And the <nav> holding them, whose default is "Navigation bar".
+            labelNav: () => t("monthNavigation"),
+            labelGrid: (date) => caption(date),
           }}
           weekStartsOn={1}
           // Nothing from the neighbouring months. They are disabled and
@@ -271,6 +292,10 @@ export function MiniCalendarSheet(props: {
             </span>
           </div>
         )}
+
+        {/* LAST, because the design system appends its own close after
+            children — anywhere else and this sheet's tab order changes. */}
+        <MiniSheetClose />
       </SheetContent>
     </Sheet>
   );

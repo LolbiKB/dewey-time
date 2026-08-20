@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MiniIdentity, initialsOf, subtitleOf } from "@/miniapp/MiniIdentity";
+import { MiniLocaleProvider } from "@/miniapp/MiniLocale";
 
 import {
   isMiniTab, MiniTabBar, OutsideTelegramNotice, TAB_BAR_FLOOR_PX,
@@ -159,4 +160,93 @@ test("the shell's todayKey follows the ticking clock, not the render's", () => {
   assert.match(source, /const tick = useMinuteTick\(\);/);
   assert.match(source, /const todayKey = format\(tick, "yyyy-MM-dd"\)/);
   assert.doesNotMatch(source, /format\(new Date\(\), "yyyy-MM-dd"\)/);
+});
+
+test("under Khmer the header's landmark announces in Khmer", () => {
+  // The banner exists to catch a mis-binding, and it named itself "Your
+  // record" in English on a Khmer phone — with the translation sitting in the
+  // table, written, with no call site. This is the assertion that failed.
+  const html = renderToStaticMarkup(
+    <MiniLocaleProvider locale="km">
+      <MiniIdentity
+        employee="HR-EMP-00042" employeeName={null} khmerName="សុខ ដារា"
+        designation={null} branch={null} photoUrl={null}
+      />
+    </MiniLocaleProvider>,
+  );
+  assert.match(html, /aria-label="កំណត់ត្រារបស់អ្នក"/);
+  assert.ok(!/Your record/.test(html), "no English name on a Khmer screen");
+});
+
+test("the English literal cannot come back", () => {
+  // A source guard, because the render above only proves the Khmer path: a
+  // future edit could reintroduce the literal on the fallback branch and every
+  // rendered assertion here would stay green.
+  const code = readFileSync(new URL("./MiniIdentity.tsx", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(!/"Your record"/.test(code), "the header's words come from the table");
+});
+
+test("the two values that verify a binding are the last to give, not the first", () => {
+  // A STRUCTURAL pin, not a layout claim — the widths were measured in a
+  // browser at 320px and that measurement cannot live in node:test. What is
+  // pinned here is the arrangement that made it true: the Latin name is the
+  // element that truncates, and the employee id is the one that refuses to
+  // shrink. Both were the other way round, inside a single truncating line.
+  const html = renderToStaticMarkup(
+    <MiniIdentity
+      employee="HR-EMP-00042" employeeName="Sok Dara Sophaline Chanthavy"
+      khmerName="សុខ ដារា" designation="Cashier" branch="DIS Iconic"
+      photoUrl={null}
+    />,
+  );
+  const idSpan = html.match(/<span[^>]*>HR-EMP-00042<\/span>/)?.[0] ?? "";
+  assert.match(idSpan, /shrink-0/, "the employee id must not be the first thing lost");
+  const khmerSpan = html.match(/<span[^>]*>សុខ ដារា<\/span>/)?.[0] ?? "";
+  assert.match(khmerSpan, /shrink-0/, "nor the Khmer name");
+  // And the Khmer name is no longer a tail on the Latin name's line, where a
+  // long transliteration pushed it off the edge before it could be read.
+  assert.ok(
+    !/Sok Dara Sophaline Chanthavy[^<]*<span[^>]*>សុខ ដារា/.test(html),
+    "the Khmer name has its own line",
+  );
+});
+
+test("a pending header reserves its row and claims nothing", () => {
+  const pending = renderToStaticMarkup(
+    <MiniIdentity
+      pending employee={undefined} employeeName={undefined} khmerName={undefined}
+      designation={undefined} branch={undefined} photoUrl={null}
+    />,
+  );
+  // The landmark is still honestly named — it IS your record, whatever it
+  // turns out to say — and aria-busy is what reports the rest is unknown.
+  assert.match(pending, /aria-busy="true"/);
+  // "Your record" ONCE, as the landmark's name — never as content. Printed
+  // over an empty name it is a confirmation of nothing, which is the objection
+  // that kept this row hidden entirely; as a landmark name it is just true.
+  assert.match(pending, /aria-label="Your record"/);
+  assert.equal(
+    (pending.match(/Your record/g) ?? []).length, 1,
+    "the placeholder names the landmark, not the person",
+  );
+  // And no initials: two letters guessed from nothing are a claim as well.
+  assert.ok(!/\?\?/.test(pending), "nor invent initials");
+  // Same skeleton, same two lines — the reserved height comes from the real
+  // markup rather than a magic number that drifts the moment the header is
+  // edited.
+  assert.equal((pending.match(/<p /g) ?? []).length, 2);
+});
+
+test("the shell reserves the row while loading and renders nothing on error", () => {
+  // A source read: `identity` is a react-query result this file cannot
+  // construct, and the defect was in the CONDITION, which no render reaches.
+  const shell = readFileSync(new URL("./MiniAppShell.tsx", import.meta.url), "utf8");
+  assert.match(shell, /identity\.isError \? null : \(/);
+  assert.match(shell, /pending=\{identity\.isLoading\}/);
+  assert.ok(
+    !/\{identity\.data \? \(/.test(shell),
+    "waiting for the whole answer is what dropped the page 54px",
+  );
 });

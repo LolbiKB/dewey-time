@@ -50,6 +50,17 @@ export function MiniDayNumbers(props: {
   // disagreed on one screen: sighted and assistive-tech users got different
   // accounts of the same day.
   const uncertain = showsFeedNotice(props.day, props.date, props.now) && !worked;
+  // A RECORD THAT DOES NOT ADD UP IS NOT AN EMPTY DAY, and the row already
+  // knows the difference: it prints "—", which means "no figure", not "zero".
+  // Only the spoken sentence collapsed the two. `worked` is null whenever the
+  // punches produced no usable pair — a clock-in nobody closed, two arrivals
+  // in a row, a punch whose device had no branch mapped — and every one of
+  // those is somebody who WAS here, being told they worked nothing.
+  //
+  // Distinct from `uncertain` above, which is about OUR feed: this one is
+  // about the punches themselves, and it applies whether or not the device
+  // ever went quiet.
+  const hasRecord = (props.day?.checkins?.length ?? 0) > 0;
   const spoken = uncertain
     ? t("feedUncertain")
     : worked && rostered
@@ -57,8 +68,15 @@ export function MiniDayNumbers(props: {
       : worked
         ? t("dayAriaWorkedOnly").replace("{worked}", worked)
         : rostered
-          ? t("dayAriaRosteredOnly").replace("{rostered}", rostered)
-          : null;
+          ? hasRecord
+            ? t("dayAriaRosteredNoTotal").replace("{rostered}", rostered)
+            : t("dayAriaRosteredOnly").replace("{rostered}", rostered)
+          : // No roster and no total: the clock-based cohort, whose day this
+            // row was silent about entirely — a screen reader got nothing at
+            // all on a day with punches and a flag on it.
+            hasRecord
+            ? t("dayAriaNoTotal")
+            : null;
 
   return (
     // justify-between with an empty span as the left item when there are no

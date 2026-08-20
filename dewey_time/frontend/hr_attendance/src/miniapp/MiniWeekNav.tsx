@@ -40,7 +40,12 @@ export function WeekNav(props: {
           <button
             type="button"
             onClick={() => props.onOffsetChange(0)}
-            className="text-[11px] font-medium text-primary"
+            // -my-2 py-2: an 11px line of text is a 16px tap target, and this
+            // is the only way back from week -6. The negative margin gives the
+            // padding away again, so the row is the same height whether this
+            // button or the "This week" line is showing — the alternative
+            // moves the roster under the reader's thumb as they page.
+            className="-my-2 inline-block rounded-md px-2 py-2 text-[11px] font-medium text-primary active:bg-muted"
           >
             {t("backToThisWeek")}
           </button>
