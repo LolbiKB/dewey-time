@@ -339,6 +339,68 @@ class TestDiagnostics(unittest.TestCase):
         self.assertEqual(report["webhook"]["pending"], 7)
         self.assertIn("403", report["webhook"]["last_error"])
 
+    def test_the_update_shapes_telegram_will_deliver_are_surfaced(self):
+        # The one state that explains dead chooser buttons. allowed_updates
+        # lives on Telegram's servers; after a deploy that taught the webhook
+        # callback_query, a bot still filtered to ["message"] DISCARDS every
+        # press -- no pending count, no last_error, every other line of this
+        # report healthy. Without this field the report is drawn from the
+        # exact HTTP response that contains the answer, and drops it.
+        def answer(method):
+            if method == "getWebhookInfo":
+                return {"ok": True, "result": {
+                    "url": "https://site/api/method/x",
+                    "allowed_updates": ["message"],
+                }}
+            return {"ok": True, "result": {}}
+
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", side_effect=answer):
+            report = transport.diagnostics()
+
+        self.assertEqual(report["webhook"]["allowed_updates"], ["message"])
+        self.assertFalse(report["webhook"]["delivers_button_presses"])
+
+    def test_an_absent_allowed_updates_list_means_presses_arrive(self):
+        # Telegram omits the field when the bot is on the default (everything
+        # but chat_member) -- absence is the healthy state, not an unknown.
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get",
+                          return_value={"ok": True, "result": {}}):
+            report = transport.diagnostics()
+
+        self.assertIsNone(report["webhook"]["allowed_updates"])
+        self.assertTrue(report["webhook"]["delivers_button_presses"])
+
+    def test_the_registered_command_menu_is_surfaced(self):
+        # "language" missing from this list means set_bot_commands never ran
+        # against this bot: /language is then undiscoverable for everyone
+        # already linked, which makes the whole feature a no-op for them.
+        def answer(method):
+            if method == "getMyCommands":
+                return {"ok": True, "result": [
+                    {"command": "language", "description": "ភាសា · Language"},
+                ]}
+            return {"ok": True, "result": {}}
+
+        with self._hr(), \
+             patch.object(transport, "_secret", return_value="123:ABC"), \
+             patch.object(transport, "telegram_enabled", return_value=True), \
+             patch.object(transport.frappe, "get_cached_value", return_value=""), \
+             patch.object(transport, "get_url", return_value="https://site/hr-me"), \
+             patch.object(transport, "_get", side_effect=answer):
+            report = transport.diagnostics()
+
+        self.assertEqual(report["commands"]["listed"], ["language"])
+
 
 class TestNotificationGates(unittest.TestCase):
     """"No notification arrived" has four causes and none of them surfaces.

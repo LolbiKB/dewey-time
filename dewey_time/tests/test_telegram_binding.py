@@ -739,6 +739,7 @@ class TestSetLanguage(unittest.TestCase):
         import frappe
 
         with patch.object(binding, "_existing_link", return_value=self._link()), \
+             patch.object(frappe.db, "has_column", return_value=True), \
              patch.object(frappe, "get_doc") as get_doc:
             doc = get_doc.return_value
             doc.chat_id = "77702"
@@ -758,10 +759,25 @@ class TestSetLanguage(unittest.TestCase):
         import frappe
 
         with patch.object(binding, "_existing_link", return_value=self._link()), \
+             patch.object(frappe.db, "has_column", return_value=True), \
              patch.object(frappe.db, "set_value") as set_value, \
              patch.object(frappe, "get_doc"):
             binding.set_language("55501", "km")
         set_value.assert_not_called()
+
+    def test_a_missing_language_column_refuses_rather_than_lying(self):
+        # Deploy without Migrate: with no DocField, doc.save() silently drops
+        # the value and the bot would then confirm a change that never
+        # persisted. Refusing keeps the press visibly inert instead -- and
+        # notify.delivery_gates names the missing column for the investigator.
+        import frappe
+
+        with patch.object(binding, "_existing_link", return_value=self._link()), \
+             patch.object(frappe.db, "has_column", return_value=False), \
+             patch.object(frappe, "get_doc") as get_doc:
+            with self.assertRaises(Exception):
+                binding.set_language("55501", "en")
+        get_doc.assert_not_called()
 
     def test_a_revoked_link_keeps_its_revocation(self):
         # A revoked account pressing a button on an old chooser message must

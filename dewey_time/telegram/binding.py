@@ -459,6 +459,14 @@ def set_language(telegram_user_id: str, language: str) -> str:
     if not existing or not existing.get("enabled"):
         frappe.throw("Not permitted", frappe.PermissionError)
 
+    if not frappe.db.has_column(LINK_DT, "language"):
+        # Deploy without Migrate. Saving now would silently DROP the value
+        # (no DocField, so get_valid_dict discards it) and the bot would then
+        # confirm a change that never persisted. Refusing means the press
+        # visibly does nothing instead of lying; delivery_gates names the
+        # missing column for whoever investigates.
+        frappe.throw("Telegram Link has no language column yet -- run Migrate")
+
     doc = frappe.get_doc(LINK_DT, telegram_user_id)
     doc.language = language
     doc.save(ignore_permissions=True)

@@ -366,10 +366,22 @@ def _roster_opined_around(employee: str, day: str) -> bool:
 
 
 def _link_for(employee: str):
+    # `language` is asked for only when the column exists. Deploy and Migrate
+    # are separate actions on Frappe Cloud and this site has shipped one
+    # without the other before (see docs on the finger_ids outage) -- an
+    # unguarded select would turn that known mistake into a dead job on every
+    # punch, a total notification outage, where the guard turns it into the
+    # documented default: no language key, so `.get("language")` is None and
+    # the message is Khmer. The missed Migrate stays VISIBLE rather than
+    # hidden by the guard: delivery_gates reports the column, and
+    # binding.set_language refuses to pretend a choice was stored.
+    fields = ["name", "chat_id"]
+    if frappe.db.has_column(LINK_DT, "language"):
+        fields.append("language")
     return frappe.db.get_value(
         LINK_DT,
         {"employee": employee, "enabled": 1},
-        ["name", "chat_id", "language"],
+        fields,
         as_dict=True,
     )
 
@@ -466,6 +478,11 @@ def delivery_gates(employee: str | None = None) -> dict:
         # it explains what the ENGINE is doing for these employees, which is
         # the next question after "did the message arrive".
         "rollout_configured": rollout.phases_configured(),
+        # False = code deployed, Migrate not run. Messages still send (the
+        # column is guarded out of _link_for's select) but everyone reads
+        # Khmer and language taps refuse -- this line is what keeps that
+        # state findable instead of silently absorbed by the default.
+        "language_column": bool(frappe.db.has_column(LINK_DT, "language")),
     }
     if employee:
         gates["employee"] = employee

@@ -474,6 +474,7 @@ def diagnostics(employee: str | None = None) -> dict:
         report["invite_username_mismatch"] = actual
 
     hook = _get("getWebhookInfo").get("result") or {}
+    allowed = hook.get("allowed_updates")
     report["webhook"] = {
         "url": hook.get("url") or None,
         "pending": hook.get("pending_update_count"),
@@ -481,6 +482,15 @@ def diagnostics(employee: str | None = None) -> dict:
         # records the last delivery failure here and nowhere else.
         "last_error": hook.get("last_error_message"),
         "last_error_date": hook.get("last_error_date"),
+        # The field that explains dead chooser buttons and NOTHING else does.
+        # allowed_updates lives on Telegram's servers: a deploy that taught
+        # the webhook callback_query changes nothing until setup_telegram is
+        # re-run, and Telegram DISCARDS filtered updates -- no pending count,
+        # no last_error, employees tapping a spinner that times out while
+        # every other line of this report reads healthy. Absent means
+        # Telegram's default (everything but chat_member), so presses arrive.
+        "allowed_updates": allowed,
+        "delivers_button_presses": allowed is None or "callback_query" in allowed,
     }
 
     menu = _get("getChatMenuButton").get("result") or {}
@@ -492,5 +502,14 @@ def diagnostics(employee: str | None = None) -> dict:
         # configure_menu_button has never been run against this bot, which is
         # the difference between "no persistent way in" and "one tap".
         "is_miniapp": menu.get("type") == "web_app",
+    }
+
+    # The registered command menu -- Telegram-side state again, so it is
+    # ASKED rather than assumed. "language" missing here means
+    # set_bot_commands has never run against this bot and /language is
+    # undiscoverable for everyone already linked.
+    listed = _get("getMyCommands").get("result") or []
+    report["commands"] = {
+        "listed": [c.get("command") for c in listed if isinstance(c, dict)],
     }
     return report

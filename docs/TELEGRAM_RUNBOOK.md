@@ -28,32 +28,36 @@ rostered week.
    **Telegram Webhook Secret**, and **Telegram Bot Username** (the `@`, and a
    pasted `https://t.me/…` profile URL, are both stripped — the deep link is
    built from the bare name, which is the one place Telegram rejects the `@`).
-   Leave **Enable Telegram** OFF until step 5.
-4. Register the webhook with Telegram:
+   Leave **Enable Telegram** OFF until step 6.
+4. Set **Telegram Mini App URL** to `https://<site>/hr-me` if the site is
+   reached at a different hostname than it reports for itself (a proxy, a
+   vanity domain). Otherwise leave it blank — the URL is derived. Https is
+   required either way; Telegram refuses a web_app button on plain http.
+5. Tell Telegram everything it has to be told, in one call:
 
-   ```bash
-   curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-     -d "url=https://<site>/api/method/dewey_time.telegram.webhook.telegram_webhook" \
-     -d "secret_token=<WEBHOOK SECRET>"
+   ```
+   bench --site <site> execute dewey_time.telegram.transport.setup_telegram
    ```
 
-   Verify: `curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"` — `url`
-   correct, `last_error_message` empty, `pending_update_count` low.
-5. Set **Telegram Mini App URL** to `https://<site>/hr-me` (https is required —
-   Telegram refuses a web_app button on plain http).
+   This registers three pieces of state that live on **Telegram's servers**,
+   not in this site: the webhook (with the update shapes the bot reads —
+   messages AND `callback_query`, the button presses on the language
+   chooser), the chat menu button beside the message box (the permanent way
+   into the Mini App), and the command menu (`/language`). Idempotent.
+
+   **Re-run it after any deploy that changes what the webhook handles.**
+   Telegram keeps its previous settings until told otherwise — in particular
+   a webhook registered without `callback_query` silently DISCARDS every
+   button press: no error, no pending count, just a spinner that times out
+   under the employee's thumb. Do not register the webhook with a raw
+   `setWebhook` curl for the same reason; a curl that omits `allowed_updates`
+   leaves the previous list in place.
+
+   Verify: `bench --site <site> execute dewey_time.telegram.transport.diagnostics`
+   — `webhook.url` correct, `webhook.last_error` empty,
+   `webhook.delivers_button_presses` true, `commands.listed` includes
+   `language`, `menu_button.is_miniapp` true.
 6. Turn **Enable Telegram** on.
-7. Give the bot a permanent way back in — run
-   `dewey_time.telegram.transport.configure_menu_button` once:
-
-   ```
-   bench --site <site> execute dewey_time.telegram.transport.configure_menu_button
-   ```
-
-   This points every user's chat menu button (beside the message box) at the
-   Mini App. **Without it the only way into the app is the inline button on
-   the link-confirmation message**, which scrolls out of the chat and never
-   comes back — an employee who closes the app has no route back to it.
-   Idempotent; re-run it after changing the URL.
 
 The token and secret are `Password` fields — encrypted at rest, and they never
 appear in the SPA, in logs, or in an error message. If the token is unset the
@@ -95,7 +99,8 @@ For everyone else: press **Issue link** on their row, or run
 `dewey_time.telegram.binding.create_link_invite` with the employee id. It
 returns a `https://t.me/<bot>?start=<token>` URL. Send that link to the
 employee, or print it as a QR on their onboarding slip. It is **single-use and
-expires in 7 days**.
+expires in 24 hours**. Issuing a new link revokes every outstanding one for
+that employee first, so a Regenerate never leaves two live credentials.
 
 The link is live while it is on screen: whoever opens it first is bound to that
 employee's record. Send it to the person directly, never to a group.
@@ -123,13 +128,26 @@ proves the account themselves.
 
 ## Opening the app
 
-Two ways in, and the second is the one that matters day to day:
-
-- the **Open my attendance** button on the message sent when they link, and
-- the **menu button** beside the chat's message box, set up in step 7.
+Two ways in, both permanent: the **menu button** beside the chat's message box
+(set up in step 5) and the **Main Mini App button** on the bot's profile. The
+link-confirmation message deliberately carries no button — it scrolls out of
+the chat and never comes back, so nothing that matters rides on it.
 
 The app matches Telegram's light or dark theme automatically and will not
 close when scrolled.
+
+## Message language
+
+Every message the bot sends an employee arrives in **one language: Khmer by
+default, English if they chose it**. Right after linking, the bot asks with
+two buttons (ខ្មែរ / English); the `/language` command — listed in the bot's
+command menu — reopens the chooser at any time. The choice is stored on the
+employee's **Telegram Link** row (**Language**, `km`/`en`; blank also means
+Khmer), so HR can read or change it in Desk, and the change history shows on
+the row's versions.
+
+The only bilingual messages left are the ones that can arrive **before** a
+choice can exist: the linking replies and the chooser itself.
 
 ## Who is linked
 
@@ -146,10 +164,13 @@ before investigating, not after.
 
 ## Rollout
 
-Notifications only fire for employees whose branch is **LIVE** in
-Dewey Time Branch Rollout. To pilot, set one branch live and link a handful of
-people there. Everyone else receives nothing regardless of link state, so
-coverage grows with adoption rather than switching on all at once.
+**The link is the whole permission.** A linked employee gets check-in messages
+whatever their branch's phase in Dewey Time Branch Rollout — the message
+carries punch facts and roster facts, no engine determination, and the
+employee opted in personally by linking. The rollout phase still governs what
+the **engine** concludes (flags, absences) for that branch; it just no longer
+silences a person who asked to be messaged. To pilot, link a handful of
+people: coverage grows with adoption because linking IS the switch.
 
 ## When someone blocks the bot
 
@@ -158,10 +179,12 @@ job retrying forever. Re-linking needs a fresh invite.
 
 ## What employees can and cannot do
 
-The bot's only command is `/start`. With a token it redeems that token; bare,
-it tries the Telegram id recorded on the Employee record. It does not answer
-`/today`, `/week` or anything else, and that is deliberate: reading your own
-attendance is the Mini App's job, so the bot stays a notifier and a door.
+The bot answers two commands. `/start` with a token redeems that token; bare,
+it tries the Telegram id recorded on the Employee record. `/language` opens
+the message-language chooser (see **Message language** above). It does not
+answer `/today`, `/week` or anything else, and that is deliberate: reading
+your own attendance is the Mini App's job, so the bot stays a notifier and a
+door.
 
 The Mini App is READ-ONLY. There is nothing in it an employee can submit,
 change or delete — not their contact details, not an explanation of a flag.
@@ -207,6 +230,9 @@ from Frappe, so losing Telegram loses a convenience and not data.
 | Coverage shows "—" for the whole Telegram column | The backend lookup failed. Check the error log; the register reports silence rather than guessing everyone is unlinked. |
 | Linked, but no notifications | **Enable Telegram** is off, or the link's **Enabled** is 0. The branch's rollout phase is NOT a factor — a link is the whole permission, because the employee opted in by sending `/start` and the message carries no engine determination. Run `transport.diagnostics(employee="DI-1234")` to see every gate at once. |
 | Notifications stopped for one person | They blocked the bot — the link auto-disabled. |
+| Language buttons spin, then nothing | Telegram is not delivering button presses: the webhook's `allowed_updates` predates the chooser. `diagnostics()` → `webhook.delivers_button_presses` false. Re-run `setup_telegram`. |
+| `/language` not in the bot's command menu | `set_bot_commands` never ran against this bot — `diagnostics()` → `commands.listed`. Re-run `setup_telegram`. The command still works typed by hand. |
+| Everyone gets Khmer; a tap on English does nothing visible | Code deployed, **Migrate not run** — the `language` column does not exist yet. Messages keep sending (the read degrades to the Khmer default) and taps refuse rather than confirm a change that cannot persist. `delivery_gates()` / `diagnostics()` → `language_column` false. Run Migrate. |
 | `Telegram bot token is not configured` | Expected when the field is blank. The feature fails closed instead of running with an empty key. |
 | `setWebhook` → "secret token contains unallowed characters" | The secret is outside `A-Za-z0-9_-`. Usually a trailing newline from copying it, or `openssl rand -base64`. Regenerate with `secrets.token_urlsafe` and update BOTH Settings and the curl. |
 | `Telegram webhook secret must be 1-256 characters...` | Same cause, caught earlier — the value in Settings is one Telegram would never send. |

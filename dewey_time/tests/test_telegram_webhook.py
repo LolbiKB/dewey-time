@@ -308,12 +308,19 @@ class TestLanguageTap(unittest.TestCase):
         self.assertIn("ខ្មែរ", send.call_args[0][1])
 
     def test_the_identity_comes_off_the_update_never_the_data(self):
+        # set_language returns "88801" while the callback's own message sits
+        # in chat 77702: the confirmation must follow the BINDING's answer,
+        # not the untrusted payload. Resolving the destination from the
+        # callback message would confirm into whatever chat the pressed
+        # chooser happened to be in -- and without this assertion that
+        # regression passed, because the happy-path test's two ids coincide.
         with patch.object(webhook.binding, "set_language",
                           return_value="88801") as set_language, \
              patch.object(webhook.transport, "answer_callback_query"), \
-             patch.object(webhook.transport, "send_message"):
+             patch.object(webhook.transport, "send_message") as send:
             webhook._handle(_tap(data="lang:km", user_id=99999))
         set_language.assert_called_once_with("99999", "km")
+        self.assertEqual(send.call_args[0][0], "88801")
 
     def test_forged_callback_data_selects_nothing(self):
         # Any Telegram client can send arbitrary bytes as callback_data; the
@@ -321,13 +328,14 @@ class TestLanguageTap(unittest.TestCase):
         # refusal must look like nothing, not like a hang.
         for data in ("lang:both", "lang:xx", "", None, "employee=HR-EMP-1",
                      "LANG:EN", "lang:en junk"):
-            with patch.object(webhook.binding, "set_language") as set_language, \
-                 patch.object(webhook.transport, "answer_callback_query") as answer, \
-                 patch.object(webhook.transport, "send_message") as send:
-                webhook._handle(_tap(data=data))
-            set_language.assert_not_called(), f"data={data!r}"
-            send.assert_not_called()
-            answer.assert_called_once_with("cbq-1")
+            with self.subTest(data=data):
+                with patch.object(webhook.binding, "set_language") as set_language, \
+                     patch.object(webhook.transport, "answer_callback_query") as answer, \
+                     patch.object(webhook.transport, "send_message") as send:
+                    webhook._handle(_tap(data=data))
+                set_language.assert_not_called()
+                send.assert_not_called()
+                answer.assert_called_once_with("cbq-1")
 
     def test_lang_en_with_surrounding_whitespace_still_counts(self):
         # .strip() on the data is a nicety, not a hole: the stripped value

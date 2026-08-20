@@ -951,3 +951,53 @@ class TestSendTestNotification(unittest.TestCase):
                    return_value=None):
             with self.assertRaises(Exception):
                 notify.send_test_notification()
+
+
+class TestLinkQueryShape(unittest.TestCase):
+    """The one query where the stored preference enters the message path.
+
+    Every send-path test patches _link_for with a hand-built dict, so none of
+    them can notice the real select dropping the language column -- that
+    mutant left the whole suite green until this class existed. The feature
+    would be 100% inert in production (everyone Khmer forever) with CI green.
+    """
+
+    def test_the_link_query_asks_for_the_language_column(self):
+        with patch.object(notify.frappe.db, "has_column", return_value=True) as has_column, \
+             patch.object(notify.frappe.db, "get_value", return_value=None) as get_value:
+            notify._link_for("HR-EMP-00042")
+        has_column.assert_called_once_with(notify.LINK_DT, "language")
+        args, kwargs = get_value.call_args
+        self.assertEqual(args[0], notify.LINK_DT)
+        self.assertEqual(args[1], {"employee": "HR-EMP-00042", "enabled": 1})
+        self.assertEqual(args[2], ["name", "chat_id", "language"])
+        self.assertTrue(kwargs["as_dict"])
+
+    def test_a_missing_column_is_left_out_of_the_select_not_crashed_into(self):
+        # Deploy without Migrate. Unguarded, this query dies with "Unknown
+        # column" inside the enqueued job -- one dead job per punch, a total
+        # notification outage from a mistake this site has actually made.
+        # Guarded, the dict simply has no language key and .get() reads None,
+        # which _language_index already folds to Khmer: the documented default.
+        with patch.object(notify.frappe.db, "has_column", return_value=False), \
+             patch.object(notify.frappe.db, "get_value", return_value=None) as get_value:
+            notify._link_for("HR-EMP-00042")
+        self.assertEqual(get_value.call_args[0][2], ["name", "chat_id"])
+
+    def test_delivery_gates_names_the_missing_column(self):
+        # The guard must not HIDE the missed Migrate -- that is the recorded
+        # failure mode of has_column guards on this site. The gates report is
+        # where "everyone gets Khmer and taps refuse" becomes one glance.
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=3), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "has_column", return_value=False):
+            gates = notify.delivery_gates()
+        self.assertFalse(gates["language_column"])
+
+        with patch.object(notify.transport, "telegram_enabled", return_value=True), \
+             patch.object(notify.frappe.db, "count", return_value=3), \
+             patch.object(notify.rollout, "phases_configured", return_value=True), \
+             patch.object(notify.frappe.db, "has_column", return_value=True):
+            gates = notify.delivery_gates()
+        self.assertTrue(gates["language_column"])
