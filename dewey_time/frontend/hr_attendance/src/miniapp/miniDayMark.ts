@@ -22,6 +22,7 @@
  */
 import { isSameDay } from "date-fns";
 
+import { groupCheckinsByBranchRuns, pairRun } from "@/lib/attendancePunches";
 import { parseTimeToMinutes } from "@/lib/attendanceTime";
 import type { Day } from "@/types/calendar";
 import type { DayFacts } from "@/miniapp/miniDay";
@@ -45,8 +46,14 @@ export type DayMark =
    */
   | "uncertain";
 
-/** The accessible wording for each mark. Colour alone cannot carry a grid. */
-export const MARK_LABEL: Record<Exclude<DayMark, "none">, StringKey> = {
+/**
+ * The accessible wording for each mark. Colour alone cannot carry a grid.
+ *
+ * Not exported: `incomplete` has three possible wordings and only
+ * `dayMarkLabel` below knows which is honest, so every consumer goes
+ * through it.
+ */
+const MARK_LABEL: Record<Exclude<DayMark, "none">, StringKey> = {
   off: "markOff",
   complete: "markComplete",
   incomplete: "markIncomplete",
@@ -82,31 +89,59 @@ function isFinished(day: Day | undefined, date: Date, now: Date): boolean {
   return now.getHours() * 60 + now.getMinutes() >= end;
 }
 
-/**
- * Are the day's punches paired?
- *
- * PARITY, not `classifyUnpairedPresentations`. That function draws the finer
- * distinction — an open session today versus a genuinely unpaired punch — but
- * it reads device-sync state this payload deliberately drops, so here it would
- * run degraded and could classify a day differently from the same function in
- * the HR console.
- *
- * Parity is the rule `miniStatus.stillInside` still uses. The notifier's
- * `direction_of` has LEFT it — it now replays the day under the timeline's
- * branch-run pairing (dewey_time/telegram/receipt.py) because whole-day
- * parity is blind to campus and to double taps, and it sends a neutral
- * receipt where direction is not honestly callable. So the surfaces no
- * longer all agree: on a cross-campus or bounced-tap day the chat may
- * decline the claim this mark and the chip still make. Aligning these two to
- * the same replay is deliberate follow-up work; until then, do not add a
- * NEW rule here — reuse pairRun or the replay, nothing else.
- */
 function punchCount(day: Day | undefined): number {
   return day?.checkins?.length ?? 0;
 }
 
+/** Sorted rather than trusted: the payload's order is the query's order. */
+function inOrder(day: Day | undefined) {
+  return [...(day?.checkins ?? [])].sort((a, b) => String(a.time).localeCompare(String(b.time)));
+}
+
+/**
+ * Every punch that never found its pair, under THE SAME pairing that draws
+ * the timeline, totals the day, and words the Telegram receipt: branch runs,
+ * then `pairRun` within each (dewey_time/telegram/receipt.py is the Python
+ * twin). Whole-day parity lived here before, and it was blind to campus and
+ * to double taps — a cover shift's nine punches read "incomplete" as one
+ * undifferentiated oddness, and two bounced taps could cancel into a
+ * "complete" record the timeline drew as two strays.
+ *
+ * Still not `classifyUnpairedPresentations`: that draws the finer
+ * open-today-versus-unpaired distinction but reads device-sync state this
+ * payload deliberately drops, so here it would run degraded and could
+ * classify a day differently from the HR console.
+ */
+function unmatchedPunches(day: Day | undefined) {
+  return groupCheckinsByBranchRuns(inOrder(day)).flatMap((run) => pairRun(run).unmatched);
+}
+
 function isPaired(day: Day | undefined): boolean {
-  return punchCount(day) % 2 === 0;
+  return unmatchedPunches(day).length === 0;
+}
+
+/**
+ * The words for a mark.
+ *
+ * Static for every mark but `incomplete`, whose one string — "no clock-out
+ * recorded" — used to be the wording of EVERY deficient day. A day whose
+ * only punch is an explicit OUT has the opposite problem: the clock-out is
+ * the punch that exists, and naming the wrong end sends the worker to argue
+ * about the wrong thing.
+ *
+ * Direction is claimed from a punch's OWN label and nothing else — position
+ * pairs, it never names (the #192 rule). All unmatched punches explicitly IN
+ * means an arrival never closed; all explicitly OUT means a departure with
+ * no recorded arrival; anything unlabelled or mixed gets the neutral
+ * wording, the same refusal the receipt makes when direction is not
+ * honestly callable.
+ */
+export function dayMarkLabel(mark: Exclude<DayMark, "none">, day: Day | undefined): StringKey {
+  if (mark !== "incomplete") return MARK_LABEL[mark];
+  const labels = unmatchedPunches(day).map((p) => String(p.log_type || "").trim().toUpperCase());
+  if (labels.length && labels.every((l) => l === "IN")) return "markIncomplete";
+  if (labels.length && labels.every((l) => l === "OUT")) return "markIncompleteNoIn";
+  return "markUnpaired";
 }
 
 export function dayMark(

@@ -57,36 +57,6 @@ function inOrder(day: Day | undefined) {
 }
 
 /**
- * Is the last punch an arrival that has not been closed?
- *
- * NOT "the last punch is not an OUT". That was the rule here, and it claims
- * someone is at work on any evidence short of an explicit departure —
- * including a blank `log_type`, which is a legitimate state: Employee
- * Checkin's `log_type` is an optional Select, and a device that reports only
- * a timestamp leaves it empty on every row. Every punch then reads as an
- * arrival and the chip says "In" for the rest of the person's life.
- *
- * An explicit label is believed. Without one, the punches are PAIRED — the
- * same thing `deriveSegments` does to draw the timeline directly below this
- * chip, so an odd count is an open run in both places and the two surfaces
- * cannot disagree about the same day.
- *
- * KNOWN GAP: whole-day parity is blind to campus and to double taps, which
- * is why the Telegram notifier abandoned it for a branch-run replay
- * (dewey_time/telegram/receipt.py) that degrades to a neutral receipt when
- * direction is not honestly callable. On exactly those days this chip can
- * still make the confident claim the chat just declined. Aligning the chip
- * (and miniDayMark) to the same replay is deliberate follow-up work, left
- * out of the receipt change on purpose.
- */
-function stillInside(punches: { log_type?: string | null }[]): boolean {
-  const last = String(punches[punches.length - 1]?.log_type || "").toUpperCase();
-  if (last === "IN") return true;
-  if (last === "OUT") return false;
-  return punches.length % 2 === 1;
-}
-
-/**
  * The unclosed arrival on this day, as the API's own datetime string.
  *
  * Reads `pairRun` -- the SAME matching `deriveSegments` uses to draw the
@@ -160,8 +130,16 @@ export function miniStatus(day: Day | undefined, date: Date, now: Date): MiniSta
 
   if (!punches.length) return { kind: "notIn" };
 
-  const last = punches[punches.length - 1]!;
-  if (stillInside(punches)) {
+  // ONE derivation for "am I clocked in": the same evidenced open run that
+  // puts the live marker on the canvas and keeps the "so far" figure counting.
+  // The rule that lived here before — last punch's label, else whole-day
+  // parity — was blind to campus and to double taps, so on a cover shift or a
+  // bounced tap this chip made the confident claim the timeline below it and
+  // the Telegram receipt (dewey_time/telegram/receipt.py) had both declined.
+  // The last punch is in the open run when one exists, so its branch is where
+  // the person is now.
+  if (openRunStartedAt(day) !== null) {
+    const last = punches[punches.length - 1]!;
     return { kind: "in", branch: (last.custom_device_branch || "").trim() || null };
   }
 

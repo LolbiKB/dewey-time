@@ -74,6 +74,14 @@ const EN = {
   workedInMonth: "Worked this month, net of lunch",
   markComplete: "complete record",
   markIncomplete: "no clock-out recorded",
+  // The twin of markIncomplete for a day whose unmatched punches all say OUT:
+  // the clock-out is the punch that EXISTS, and naming the wrong end sends the
+  // worker to argue about the wrong thing.
+  markIncompleteNoIn: "no clock-in recorded",
+  // When the unmatched punches carry no labels (or disagree), direction is not
+  // honestly callable and the mark refuses to name an end — the same refusal
+  // the Telegram receipt makes.
+  markUnpaired: "a check-in without its pair",
   markMissing: "no record",
   markOff: "not a working day",
 
@@ -282,6 +290,8 @@ const KM: Record<StringKey, string> = {
   workedInMonth: "ម៉ោងធ្វើការខែនេះ (ដកម៉ោងសម្រាក)",
   markComplete: "កំណត់ត្រាពេញលេញ",
   markIncomplete: "មិនមានកំណត់ត្រាចេញ",
+  markIncompleteNoIn: "មិនមានកំណត់ត្រាចូល",
+  markUnpaired: "កំណត់ត្រាមួយមិនមានគូ",
   markMissing: "មិនមានកំណត់ត្រា",
   markOff: "មិនមែនថ្ងៃធ្វើការ",
 

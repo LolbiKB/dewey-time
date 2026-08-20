@@ -100,7 +100,10 @@ test("the mark's words go through the primitive's own label API", () => {
   const src = SRC("MiniCalendarSheet.tsx");
   assert.match(src, /aria-hidden="true"/, "the dot itself stays out of the name");
   assert.match(src, /labelDayButton/);
-  assert.match(src, /MARK_LABEL\[mark\]/);
+  // Through dayMarkLabel, never a static table: an `incomplete` dot has three
+  // possible wordings and only the day's own unmatched punches say which.
+  assert.match(src, /dayMarkLabel\(mark, day\)/);
+  assert.doesNotMatch(CODE("MiniCalendarSheet.tsx"), /MARK_LABEL/);
   assert.doesNotMatch(
     CODE("MiniCalendarSheet.tsx"),
     /className="sr-only"/,

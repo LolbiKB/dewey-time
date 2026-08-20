@@ -90,12 +90,41 @@ test("an unlabelled punch stream is paired, not assumed to be an arrival", () =>
   // directly below this chip, so the two surfaces cannot disagree.
   const blank = (time: string): Punch => [time, "" as never];
   const home = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00"), blank("17:06:00")]);
-  assert.notEqual(miniStatus(home, DAY, at(17, 30)).kind, "in", "four punches is two closed runs");
-
-  const working = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00")]);
-  assert.equal(miniStatus(working, DAY, at(14)).kind, "in", "three punches leaves one open");
+  assert.notEqual(miniStatus(home, DAY, at(17, 30)).kind, "in", "four punches is two closed pairs");
 
   assert.equal(miniStatus(day([blank("07:58:00")]), DAY, at(9)).kind, "in");
+});
+
+test("the chip never out-claims the canvas on an unlabelled odd day", () => {
+  // 07:58 / 12:01 / 12:58, no labels. Whole-day parity read this as "still
+  // inside" -- the old rule here -- while `pairRun` directly below drew a
+  // closed pair and a stray, no live marker, "so far" frozen. Two answers to
+  // one question, stacked on one screen. The chip now follows the same
+  // evidenced open run as the canvas: no run is open, so it reports the
+  // clock's observation instead of a claim the timeline just declined.
+  const blank = (time: string): Punch => [time, "" as never];
+  const working = day([blank("07:58:00"), blank("12:01:00"), blank("12:58:00")]);
+  assert.equal(miniStatus(working, DAY, at(14)).kind, "outDuringShift");
+});
+
+test("a cover shift's closing punch at a second branch reads checked out", () => {
+  // THE AUDIT'S BLOCKER 3, at chip level. The departure is alone in its own
+  // branch run; inferred by position it was an arrival, and the chip said
+  // "In" at 19:00 while `openRunStartedAt` beside it said nothing was open.
+  const punches: Punch[] = [
+    ["08:00:00", "" as never, "DIS Iconic"],
+    ["17:00:00", "" as never, "DIS Toul Kork"],
+  ];
+  assert.equal(miniStatus(day(punches), DAY, at(19)).kind, "out");
+});
+
+test("a duplicated arrival does not read as having left", () => {
+  // Two INs, no OUT: the second is a bounced tap, not a departure. The open
+  // run is evidenced by the punch's own label, so the chip stays "in" even
+  // though the count is even.
+  const punches: Punch[] = [["08:00:00", "IN"], ["08:00:30", "IN"]];
+  const status = miniStatus(day(punches), DAY, at(10));
+  assert.equal(status.kind, "in");
 });
 
 test("an explicit label always wins over the pairing", () => {

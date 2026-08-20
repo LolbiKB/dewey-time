@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { dayFacts } from "@/miniapp/miniDay";
-import { dayMark, type DayMark } from "@/miniapp/miniDayMark";
+import { dayMark, dayMarkLabel, type DayMark } from "@/miniapp/miniDayMark";
 import type { Day } from "@/types/calendar";
 
 /**
@@ -24,14 +24,20 @@ const SHIFT = {
   lunch_end: "13:00:00",
 };
 
-/** `count` punches out of a normal 4-punch day. 3 is the forgotten clock-out. */
+/**
+ * `count` punches out of a normal 4-punch day. 3 is the forgotten clock-out.
+ *
+ * The punches carry a branch because real mapped-device punches do, and the
+ * pairing is branch-run based: a branchless punch is its own run, which is
+ * the UNMAPPED-DEVICE shape and gets its own test below.
+ */
 function day(dayNum: number, count: number, extra: Partial<Day> = {}): Day {
   const k = KEY(dayNum);
   const all = [
-    { time: `${k} 07:58:00`, log_type: "IN" },
-    { time: `${k} 12:01:00`, log_type: "OUT" },
-    { time: `${k} 12:58:00`, log_type: "IN" },
-    { time: `${k} 17:06:00`, log_type: "OUT" },
+    { time: `${k} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    { time: `${k} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+    { time: `${k} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+    { time: `${k} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
   ].slice(0, count);
   const outs = all.filter((c) => c.log_type === "OUT");
   return {
@@ -98,11 +104,97 @@ test("nothing is marked in the future — not even a day off", () => {
 // Past days
 // ---------------------------------------------------------------------------
 
-test("pairing is by parity, the same rule the timeline and the bot use", () => {
+test("pairing is the branch-run replay, the same rule the timeline and the bot use", () => {
+  // Not whole-day parity any more: the day is grouped into branch runs and
+  // each run paired by `pairRun`, exactly as `deriveSegments` draws it and
+  // as the Telegram receipt replays it. Complete means NOTHING went unmatched.
   assert.equal(mark(day(10, 4), AUG(10), AUG(17, 12, 0)), "complete");
   assert.equal(mark(day(10, 2), AUG(10), AUG(17, 12, 0)), "complete");
   assert.equal(mark(day(10, 3), AUG(10), AUG(17, 12, 0)), "incomplete");
   assert.equal(mark(day(10, 1), AUG(10), AUG(17, 12, 0)), "incomplete");
+});
+
+test("a cover shift's lone closing punch is not one undifferentiated oddness", () => {
+  // Four paired punches at the home branch, then the day's departure recorded
+  // at a second site. Whole-day parity saw "five, odd" and the single string
+  // said "no clock-out recorded" -- the clock-out is the punch that EXISTS.
+  const k = KEY(10);
+  const cover = day(10, 4, {
+    checkins: [
+      { time: `${k} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 12:01:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 12:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 16:00:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 19:00:00`, log_type: "OUT", custom_device_branch: "DIS Toul Kork" },
+    ],
+  } as Partial<Day>);
+  assert.equal(mark(cover, AUG(10), AUG(17, 12, 0)), "incomplete");
+  assert.equal(dayMarkLabel("incomplete", cover), "markIncompleteNoIn");
+});
+
+test("a lone OUT names the clock-in as missing, never the clock-out", () => {
+  // THE AUDIT'S EXACT CASE: a day whose only punch is an explicit OUT was
+  // announced as "no clock-out recorded" -- the opposite of what happened --
+  // and sent the worker to argue about the wrong end of their day.
+  const k = KEY(10);
+  const loneOut = day(10, 0, {
+    checkins: [{ time: `${k} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Iconic" }],
+  } as Partial<Day>);
+  assert.equal(mark(loneOut, AUG(10), AUG(17, 12, 0)), "incomplete");
+  assert.equal(dayMarkLabel("incomplete", loneOut), "markIncompleteNoIn");
+});
+
+test("a lone IN keeps the wording that was always right for it", () => {
+  assert.equal(dayMarkLabel("incomplete", day(10, 1)), "markIncomplete");
+  assert.equal(dayMarkLabel("incomplete", day(10, 3)), "markIncomplete");
+});
+
+test("unlabelled or mixed strays refuse to name an end", () => {
+  // Direction comes from a punch's own label and nothing else -- position
+  // pairs, it never names. An unlabelled stray gets the neutral wording, the
+  // same refusal the Telegram receipt makes when it cannot honestly call it.
+  const k = KEY(10);
+  const blankStray = day(10, 0, {
+    checkins: [
+      { time: `${k} 07:58:00`, log_type: null, custom_device_branch: "DIS Iconic" },
+      { time: `${k} 12:01:00`, log_type: null, custom_device_branch: "DIS Iconic" },
+      { time: `${k} 12:58:00`, log_type: null, custom_device_branch: "DIS Iconic" },
+    ],
+  } as Partial<Day>);
+  assert.equal(mark(blankStray, AUG(10), AUG(17, 12, 0)), "incomplete");
+  assert.equal(dayMarkLabel("incomplete", blankStray), "markUnpaired");
+
+  const mixed = day(10, 0, {
+    checkins: [
+      { time: `${k} 07:58:00`, log_type: "IN", custom_device_branch: "DIS Iconic" },
+      { time: `${k} 17:06:00`, log_type: "OUT", custom_device_branch: "DIS Toul Kork" },
+    ],
+  } as Partial<Day>);
+  assert.equal(dayMarkLabel("incomplete", mixed), "markUnpaired");
+});
+
+test("an unmapped device's day cannot masquerade as a complete record", () => {
+  // No branch means every punch is its own run -- the timeline draws two
+  // strays and totals zero. Whole-day parity called this even count
+  // "complete record" while the canvas below showed nothing paired: the mark
+  // now agrees with the picture, and the wording stays neutral because the
+  // punches carry no labels to name an end with.
+  const k = KEY(10);
+  const unmapped = day(10, 0, {
+    checkins: [
+      { time: `${k} 07:58:00`, log_type: null },
+      { time: `${k} 17:06:00`, log_type: null },
+    ],
+  } as Partial<Day>);
+  assert.equal(mark(unmapped, AUG(10), AUG(17, 12, 0)), "incomplete");
+  assert.equal(dayMarkLabel("incomplete", unmapped), "markUnpaired");
+});
+
+test("the label passthrough for the other marks is the static table", () => {
+  assert.equal(dayMarkLabel("complete", day(10, 4)), "markComplete");
+  assert.equal(dayMarkLabel("missing", day(10, 0)), "markMissing");
+  assert.equal(dayMarkLabel("off", undefined), "markOff");
+  assert.equal(dayMarkLabel("uncertain", day(10, 0)), "markUncertain");
 });
 
 test("one lone punch is incomplete, not missing", () => {
