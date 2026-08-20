@@ -204,5 +204,60 @@ class TestAnnounce(unittest.TestCase):
         self.assertIsNone(labelled["so_far_minutes"])
 
 
+class TestMeaningLineFormatting(unittest.TestCase):
+    """The line pair under the verb: both languages, one meaning.
+
+    Whether a line may be said at all is notify.py's job; these pin that a
+    said line is well-formed in both languages at once -- a wrong Khmer half
+    is invisible to every reviewer who reads only the English.
+    """
+
+    def test_the_ordinary_shift_window(self):
+        khmer, english = receipt.format_shift_window_lines(7 * 60, 17 * 60)
+        self.assertEqual(english, "Shift 7:00 AM – 5:00 PM")
+        self.assertEqual(khmer, "វេន 7:00 AM – 5:00 PM")
+
+    def test_twelve_hour_edges(self):
+        # Midnight and noon are where hand-rolled 12-hour math goes wrong.
+        khmer, english = receipt.format_shift_window_lines(0, 12 * 60)
+        self.assertEqual(english, "Shift 12:00 AM – 12:00 PM")
+        self.assertTrue(khmer.startswith("វេន "))
+
+    def test_durations_in_both_languages(self):
+        # ថ្ងៃនេះ is the Khmer half's "today": without it the line read as
+        # a running total to anyone scrolling back through the chat.
+        khmer, english = receipt.format_so_far_lines(4 * 60 + 56)
+        self.assertEqual(english, "So far today 4h 56m")
+        self.assertEqual(khmer, "ថ្ងៃនេះ គិតត្រឹមពេលនេះ 4 ម៉ោង 56 នាទី")
+
+    def test_the_no_roster_lines_are_pinned_khmer_first(self):
+        # The only line pair stored as a constant rather than built by a
+        # formatter -- so nothing structural kept Khmer first or the words
+        # themselves from drifting in a wording pass.
+        self.assertEqual(receipt.NO_ROSTER_LINES[0], "មិនមានវេនក្នុងកាលវិភាគថ្ងៃនេះ")
+        self.assertEqual(receipt.NO_ROSTER_LINES[1], "No shift on your roster today")
+
+    def test_whole_hours_and_minutes_only_read_naturally(self):
+        # "4h 0m" and "0h 20m" are how a formatter says nobody proofread it.
+        self.assertEqual(receipt.format_so_far_lines(4 * 60)[1], "So far today 4h")
+        self.assertEqual(receipt.format_so_far_lines(20)[1], "So far today 20m")
+        self.assertEqual(receipt.format_so_far_lines(0)[1], "So far today 0m")
+        self.assertNotIn("នាទី", receipt.format_so_far_lines(4 * 60)[0])
+        self.assertNotIn("ម៉ោង", receipt.format_so_far_lines(20)[0])
+
+    def test_no_line_carries_a_verdict_word(self):
+        # The design's hardest rule: facts, never determinations. These are
+        # the only sentences this module can produce; none may drift toward
+        # judgment vocabulary in a refactor.
+        lines = [
+            *receipt.format_shift_window_lines(7 * 60, 17 * 60),
+            *receipt.format_so_far_lines(123),
+            *receipt.NO_ROSTER_LINES,
+        ]
+        for line in lines:
+            for word in ("late", "early", "absent", "missed", "complete", "total"):
+                self.assertNotIn(word, line.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

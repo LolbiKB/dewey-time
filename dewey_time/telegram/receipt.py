@@ -244,3 +244,76 @@ def _pair_minutes(start: datetime, end: datetime) -> int:
     """
     seconds = max(0.0, (end - start).total_seconds())
     return int(seconds / 60 + 0.5)
+
+
+# ---------------------------------------------------------------------------
+# The meaning line. Formatting only -- every gate that decides WHETHER one of
+# these lines may be said lives with the queries in notify.py; what lives
+# here is the guarantee that when a line is said, both languages say it the
+# same way. Khmer first, English second, matching the verb lines above them.
+# ASCII digits and AM/PM in both languages for now, matching the verb line's
+# stamp -- Khmer numerals mean porting the Mini App's formatter and are a
+# recorded open question, not an oversight.
+
+#: The roster holds nothing for this day, said only when the roster has
+#: actually opined about the day (see notify's horizon gate) and only to
+#: employees whose employment type promises a roster at all.
+NO_ROSTER_LINES = (
+    "មិនមានវេនក្នុងកាលវិភាគថ្ងៃនេះ",
+    "No shift on your roster today",
+)
+
+
+def _ampm(minutes: int) -> str:
+    hours24, mins = divmod(minutes % (24 * 60), 60)
+    suffix = "AM" if hours24 < 12 else "PM"
+    hours12 = hours24 % 12 or 12
+    return f"{hours12}:{mins:02d} {suffix}"
+
+
+def format_shift_window_lines(start_minutes: int, end_minutes: int) -> tuple[str, str]:
+    """The roster stated as a fact: the window, no comparison to the punch.
+
+    Reads identically for the person who arrived early and the one who
+    arrived late -- that is the point. Lateness is a closeout verdict this
+    message must never anticipate.
+    """
+    window = f"{_ampm(start_minutes)} – {_ampm(end_minutes)}"
+    return (f"វេន {window}", f"Shift {window}")
+
+
+def _duration_en(minutes: int) -> str:
+    hours, mins = divmod(minutes, 60)
+    if hours and mins:
+        return f"{hours}h {mins}m"
+    if hours:
+        return f"{hours}h"
+    return f"{mins}m"
+
+
+def _duration_km(minutes: int) -> str:
+    hours, mins = divmod(minutes, 60)
+    if hours and mins:
+        return f"{hours} ម៉ោង {mins} នាទី"
+    if hours:
+        return f"{hours} ម៉ោង"
+    return f"{mins} នាទី"
+
+
+def format_so_far_lines(minutes: int) -> tuple[str, str]:
+    """Accumulated paired time, phrased as a running figure, never a total.
+
+    "So far" is load-bearing: nothing on this path knows a punch is the last
+    one, so the wording must stay true if the person comes back after
+    dinner. The figure itself is announce()'s so_far_minutes, which is only
+    ever present when every punch so far pairs cleanly and therefore always
+    equals the timeline's own sum.
+    """
+    # ថ្ងៃនេះ scopes the Khmer half to the day the way "today" scopes the
+    # English -- without it the line read as a running total to anyone
+    # scrolling back through the chat on Thursday. (Khmer strings across
+    # this module still await native review.)
+    return (
+        f"ថ្ងៃនេះ គិតត្រឹមពេលនេះ {_duration_km(minutes)}",
+        f"So far today {_duration_en(minutes)}",
+    )
