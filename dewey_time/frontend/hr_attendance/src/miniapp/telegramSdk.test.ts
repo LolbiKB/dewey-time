@@ -104,11 +104,23 @@ test("a script that lands after the timeout redraws the real app", async () => {
 });
 
 test("a late script that STILL does not define the SDK redraws nothing", () => {
+  // AWAITED PAST THE TIMEOUT, not fired at timeoutMs: 0. The timer is a
+  // macrotask, so a synchronous onload after a zero timeout still finds
+  // `settled === false` and takes the not-yet-settled path — the late branch
+  // this test names is never entered, and it passes with `if (present())`
+  // deleted. Found by a re-reviewer timing it: 0.6ms against its sibling's
+  // 23ms.
   const { doc, scripts } = fakeDoc();
   let redrawn = 0;
-  void loadTelegramSdk({} as unknown as Window, doc, { timeoutMs: 0, onLate: () => { redrawn += 1; } });
-  scripts[0]!.onload!();
-  assert.equal(redrawn, 0);
+  return loadTelegramSdk({} as unknown as Window, doc, {
+    timeoutMs: 10,
+    onLate: () => { redrawn += 1; },
+  }).then(() => {
+    // Now genuinely late, and still not an SDK: a captive portal's login page
+    // answering 200 with a body that defines nothing.
+    scripts[0]!.onload!();
+    assert.equal(redrawn, 0);
+  });
 });
 
 test("the timeout is long enough for a slow link and short enough to explain itself", () => {
@@ -124,8 +136,21 @@ test("the entry point never renders before the question is settled", () => {
   // app's light theme at a dark client — and, worse, take Telegram's own
   // placeholder down before there is anything behind it.
   const code = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-  assert.match(code, /loadTelegramSdk\(window, document, \{ onLate: draw \}\)\.then/);
-  assert.match(code, /initTelegramChrome\(window, document\);\s*\n\s*draw\(\);\s*\n/);
+  assert.match(code, /loadTelegramSdk\(window, document/);
+  assert.match(code, /\.then\(start\)/, "render is what the settle triggers");
+  // initTelegramChrome BEFORE draw, inside the same start(): the theme has to
+  // be on the document for the first paint or a dark client gets a light
+  // flash.
+  assert.match(
+    code,
+    /function start\(\)[\s\S]{0,400}?initTelegramChrome\(window, document\);[\s\S]{0,200}?draw\(\);/,
+  );
+  // And the late path runs the SAME start, not a bare redraw. A redraw alone
+  // leaves the self-healed app un-expanded, un-themed, and reconciled rather
+  // than remounted — so it keeps the language it picked when there was no SDK
+  // to ask.
+  assert.match(code, /onLate: \(\) => \{\s*generation \+= 1;\s*start\(\);/);
+  assert.match(code, /key=\{generation\}/, "a remount, not a reconcile");
 
   // And the tag stays gone. A `<script defer>` here is not a stylistic
   // preference: it shares an execution list with the module script, so a

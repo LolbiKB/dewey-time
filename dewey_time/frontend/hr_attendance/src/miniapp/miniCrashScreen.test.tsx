@@ -105,7 +105,7 @@ test("the Mini App entry point wires its own screen in", () => {
   // node:test can drive. The wiring is the whole fix — the component alone
   // changes nothing.
   const src = SRC("./main.tsx");
-  assert.match(src, /<ErrorBoundary fallback=\{[^}]*MiniCrashScreen/s);
+  assert.match(src, /<ErrorBoundary[\s\S]{0,200}?fallback=\{[\s\S]{0,120}?MiniCrashScreen/);
 });
 
 test("the boundary renders a fallback in place of its own card", () => {

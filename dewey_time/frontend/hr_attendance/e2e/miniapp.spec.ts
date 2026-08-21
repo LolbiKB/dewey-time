@@ -1119,3 +1119,45 @@ test("a telegram.org request that HANGS still explains itself", async ({ page })
   await expect(page.getByText(/finish loading/)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("button", { name: /Try again/ })).toBeVisible();
 });
+
+test("an SDK that arrives late turns the notice into the real, fully-configured app", async ({ page }) => {
+  // THE SELF-HEAL PATH, and the half that a redraw alone got wrong: expand(),
+  // disableVerticalSwipes() and the theme all belong to initTelegramChrome, so
+  // a bare re-render produced a light-themed app inside a dark client with
+  // swipe-to-close live — the exact things waiting for the SDK exists to
+  // prevent. Measured here rather than asserted in a comment.
+  await page.route("https://telegram.org/**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 7500));
+    await route.fulfill({
+      contentType: "application/javascript",
+      body: `window.Telegram = { WebApp: {
+        initData: "user=%7B%22id%22%3A55501%7D&auth_date=1&hash=deadbeef",
+        initDataUnsafe: { user: { id: 55501 } },
+        colorScheme: "dark", themeParams: {}, isActive: true,
+        safeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        contentSafeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        BackButton: { isVisible: false, show(){}, hide(){}, onClick(){}, offClick(){} },
+        HapticFeedback: { selectionChanged(){}, impactOccurred(){}, notificationOccurred(){} },
+        ready(){}, expand(){}, disableVerticalSwipes(){},
+        setHeaderColor(){}, setBackgroundColor(){}, setBottomBarColor(){},
+        onEvent(){}, offEvent(){}, isVersionAtLeast: () => true,
+      } };`,
+    });
+  });
+  await page.route("**/api/method/dewey_time.telegram.miniapp_api.get_my_calendar", (route) =>
+    route.fulfill({ json: { message: { employee: "HR-EMP-00042", employee_name: "Sok Dara", days: [] } } }),
+  );
+  await page.goto(MINIAPP + LAUNCH_HASH, { waitUntil: "commit" });
+
+  // First the honest interim answer...
+  await expect(page.getByText(/finish loading/)).toBeVisible({ timeout: 15_000 });
+  // ...then the real app, without anybody pressing anything.
+  await expect(page.getByRole("banner")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/finish loading/)).toHaveCount(0);
+
+  // And CONFIGURED: the dark class is initTelegramChrome's work, so its
+  // presence is the proof that the late path did more than re-render.
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+    .toBe(true);
+});
