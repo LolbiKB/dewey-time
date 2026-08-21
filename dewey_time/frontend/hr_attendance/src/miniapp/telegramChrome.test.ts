@@ -595,6 +595,11 @@ test("a native client is recognised by the proxy it injects", () => {
 
   const oldDesktop = { location: { hash: "" }, external: { notify() {} } } as unknown as Window;
   assert.equal(launchedFromTelegram(oldDesktop, NO_DOC), true);
+
+  // The proto variant, injected by some Android builds. Untested it is a
+  // branch that only ever runs on somebody else's phone.
+  const proto = { location: { hash: "" }, TelegramWebviewProxyProto: {} } as unknown as Window;
+  assert.equal(launchedFromTelegram(proto, NO_DOC), true);
 });
 
 test("a web client is recognised by the origin framing us", () => {
@@ -641,6 +646,16 @@ test("with no SDK, ready is spoken over the client's own transport", () => {
   assert.deepEqual(sent, [["web_app_ready", '""']]);
 });
 
+test("an old desktop client gets the notify form", () => {
+  // window.external.notify is Telegram Desktop's older transport, and it is
+  // the branch a native-client user on an old build takes. Untested, it is one
+  // typo away from leaving Telegram's placeholder up on exactly those phones.
+  const sent: string[] = [];
+  const w = { external: { notify: (m: string) => sent.push(m) } } as unknown as Window;
+  signalReady(w);
+  assert.deepEqual(sent, ['{"eventType":"web_app_ready","eventData":""}']);
+});
+
 test("an iframe client gets the message form, and only when it is framed", () => {
   const posted: string[] = [];
   const framed = {
@@ -649,8 +664,15 @@ test("an iframe client gets the message form, and only when it is framed", () =>
   signalReady(framed);
   assert.deepEqual(posted, ['{"eventType":"web_app_ready","eventData":""}']);
 
-  const top = {} as unknown as Window;
-  assert.doesNotThrow(() => signalReady(top), "a top-level page has nobody to tell");
+  // A TOP-LEVEL PAGE IS ITS OWN PARENT, and posting to yourself is a message
+  // nobody is listening for. Asserted with a spy rather than doesNotThrow:
+  // removing the `parent !== w` guard throws nothing, so the old form of this
+  // test passed either way.
+  const posted2: string[] = [];
+  const top = { postMessage: (m: string) => posted2.push(m) } as unknown as Window;
+  (top as unknown as { parent: unknown }).parent = top;
+  signalReady(top);
+  assert.deepEqual(posted2, [], "a top-level page has nobody to tell");
 });
 
 test("the SDK is still preferred when it is there", () => {
@@ -663,4 +685,42 @@ test("the SDK is still preferred when it is there", () => {
   } as unknown as Window;
   signalReady(w);
   assert.deepEqual(calls, ["sdk"]);
+});
+
+test("a shared phone does not serve one account's preference to another", () => {
+  // CloudStorage is per-USER; localStorage is per-ORIGIN. Mirroring one into
+  // the other without scoping hands the second Telegram account on a shared
+  // device the first one's language and last tab — nothing from anybody's
+  // record, but still an answer about somebody else.
+  const local = fakeStorage();
+  const asUser = (id: number) => ({
+    localStorage: local.api,
+    Telegram: { WebApp: {
+      initDataUnsafe: { user: { id } },
+      isVersionAtLeast: () => false,
+    } },
+  } as unknown as Window);
+
+  saveLocale(asUser(111), "km");
+  assert.equal(localeHint(asUser(111)), "km");
+  assert.equal(localeHint(asUser(222)), null, "a different account gets no answer");
+
+  saveLocale(asUser(222), "en");
+  assert.equal(localeHint(asUser(111)), "km", "and the first one is not overwritten");
+});
+
+test("before the SDK names anybody, the device-wide copy is still readable", () => {
+  // The first paint has no user id — that is what the SDK reports, and on the
+  // stalled path it never arrives. The unscoped key is what makes the
+  // remembered language usable at all on that first frame; the scoped one
+  // overrules it the moment we know who is asking.
+  const local = fakeStorage();
+  const named = {
+    localStorage: local.api,
+    Telegram: { WebApp: { initDataUnsafe: { user: { id: 111 } }, isVersionAtLeast: () => false } },
+  } as unknown as Window;
+  saveLocale(named, "km");
+
+  const anonymous = { localStorage: local.api } as unknown as Window;
+  assert.equal(localeHint(anonymous), "km");
 });

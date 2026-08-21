@@ -7,7 +7,11 @@ declare global {
         initData?: string;
         /** Client-supplied and explicitly untrusted. Decoration only — the
          *  server's answer is what identifies anyone. */
-        initDataUnsafe?: { user?: { photo_url?: string; language_code?: string } };
+        // `id` scopes the localStorage mirror of CloudStorage, which is
+        // per-user where localStorage is per-origin. Untrusted like everything
+        // else here, and correctly so: it picks a storage key, and the server
+        // decides everything that matters.
+        initDataUnsafe?: { user?: { id?: number; photo_url?: string; language_code?: string } };
         colorScheme?: "light" | "dark";
         /** Partial by contract: every field is optional in the Bot API, and
          *  older clients send only the first handful. */

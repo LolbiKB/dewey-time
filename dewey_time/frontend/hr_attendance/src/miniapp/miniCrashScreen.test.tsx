@@ -86,13 +86,18 @@ test("it is sized to Telegram's sheet, not to the viewport", () => {
 });
 
 test("the shared boundary still draws its own card when nobody passes a fallback", () => {
-  // The HR console is the other consumer and must be untouched: its branch is
-  // now simply the one nobody overrode.
-  const src = SRC("../components/error-boundary.tsx");
-  assert.match(src, /fallback\?: \(error: Error, reload: \(\) => void\) => ReactNode/);
-  assert.match(src, /if \(this\.props\.fallback\) return this\.props\.fallback\(/);
-  assert.match(src, /Something went wrong/, "the HR card is still there");
-  assert.match(src, /\{this\.state\.error\.message\}/, "and still shows the error, for HR");
+  // RENDERED, not grepped. The first version of this test was four regexes
+  // over the source — including one that pinned a type annotation, which is
+  // formatting rather than behaviour — for a component the test right below
+  // it demonstrably CAN render. What matters is that the HR console's card is
+  // untouched, and that is a render or it is nothing.
+  const boundary = new ErrorBoundary({ children: null });
+  boundary.state = { error: new Error("a payload nobody expected") };
+  const html = renderToStaticMarkup(<>{boundary.render()}</>);
+
+  assert.match(html, /Something went wrong/, "the HR card is still there");
+  assert.match(html, /a payload nobody expected/, "and still shows the error, for HR");
+  assert.match(html, /h-screen/, "sized for a desktop, which is who it is for");
 });
 
 test("the Mini App entry point wires its own screen in", () => {

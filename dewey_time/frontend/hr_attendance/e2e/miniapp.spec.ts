@@ -1095,3 +1095,27 @@ test("a render crash shows a translated screen and never the JavaScript error", 
     /TypeError|undefined|not a function|\.tsx?:/,
   );
 });
+
+test("a telegram.org request that HANGS still explains itself", async ({ page }) => {
+  // THE SHAPE route.abort() CANNOT PRODUCE, and the one the "didn't finish
+  // loading" screen was written for. An aborted request settles: the deferred
+  // script list moves on and the app renders. A request that neither succeeds
+  // nor fails — a captive portal, a dying cell — used to leave main.tsx
+  // fetched and never executed, because a deferred classic script and a module
+  // script share one in-order execution list. No React, no boundary, no
+  // notice, for as long as the socket stayed open.
+  //
+  // The SDK is loaded by the app now, with a clock on it. This waits out that
+  // clock.
+  await page.route("https://telegram.org/**", async () => {
+    // Never fulfil, never abort.
+    await new Promise(() => {});
+  });
+  // `waitUntil: "commit"`, because the page's own load event never fires while
+  // that request is outstanding — which is itself the point: the app has to
+  // render without it.
+  await page.goto(MINIAPP + LAUNCH_HASH, { waitUntil: "commit" });
+
+  await expect(page.getByText(/finish loading/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: /Try again/ })).toBeVisible();
+});

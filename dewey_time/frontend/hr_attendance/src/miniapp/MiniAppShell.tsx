@@ -79,7 +79,14 @@ function BilingualNotice(props: { title: StringKey; body: StringKey; action?: ()
   const body = inBothLanguages(props.body);
   const retry = inBothLanguages("actionRetry");
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+    <div
+      className="flex flex-col items-center justify-center gap-2 p-8 text-center"
+      // Telegram's own stable height, the same as the shell and the crash
+      // screen. `h-full` was `height: 100%` against an auto-height #root, which
+      // does not resolve at all — so the box took its content height and
+      // neither notice was actually centred on anything.
+      style={{ height: "var(--tg-viewport-stable-height, 100dvh)" }}
+    >
       <p className="text-sm font-medium text-foreground">{title.km}</p>
       <p className="text-sm font-medium text-foreground">{title.en}</p>
       <p className="text-xs leading-normal text-muted-foreground">{body.km}</p>

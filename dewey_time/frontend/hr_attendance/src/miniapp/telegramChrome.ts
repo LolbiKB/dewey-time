@@ -433,9 +433,37 @@ export function saveLocale(w: Window, locale: string): void {
  */
 const LOCAL_PREFIX = "dewey_miniapp:";
 
+/**
+ * The local key, scoped to the Telegram account when we can name one.
+ *
+ * CloudStorage is per-USER; localStorage is per-ORIGIN. Mirroring one into the
+ * other without this makes a shared phone hand the second account the first
+ * account's language and last tab — nothing from anybody's record, but still
+ * an answer about somebody else. The id comes from `initDataUnsafe`, which is
+ * untrusted and correctly so: it picks a storage key, and the server decides
+ * everything that matters.
+ *
+ * Unscoped when the SDK cannot name a user, which is exactly the pre-SDK first
+ * paint. On a shared device that can show the previous reader's language for
+ * one frame before CloudStorage answers — a far smaller thing than keeping it
+ * for the whole session, which is what the unscoped key did.
+ */
+function localKey(w: Window, key: string): string | null {
+  const id = w?.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+  return typeof id === "number" ? `${LOCAL_PREFIX}${id}:${key}` : null;
+}
+
 function localGet(w: Window, key: string): string | null {
   try {
-    return w?.localStorage?.getItem(LOCAL_PREFIX + key) ?? null;
+    const store = w?.localStorage;
+    if (!store) return null;
+    const scoped = localKey(w, key);
+    // EITHER the account's own answer OR the device-wide one — never one
+    // falling back to the other. A reader the SDK has named gets their own
+    // value or nothing; falling through to the shared copy would hand them
+    // the previous account's language, which is the whole thing the scoping
+    // exists to stop.
+    return store.getItem(scoped ?? LOCAL_PREFIX + key) ?? null;
   } catch {
     // Private mode, storage disabled, an embedded webview with site data off.
     return null;
@@ -444,7 +472,14 @@ function localGet(w: Window, key: string): string | null {
 
 function localSet(w: Window, key: string, value: string): void {
   try {
-    w?.localStorage?.setItem(LOCAL_PREFIX + key, value);
+    const store = w?.localStorage;
+    if (!store) return;
+    const scoped = localKey(w, key);
+    if (scoped) store.setItem(scoped, value);
+    // AND the shared key, which is the only one the first paint can read
+    // before the SDK exists. It is the "last reader on this device" copy, and
+    // the scoped one above overrules it the moment we know who is asking.
+    store.setItem(LOCAL_PREFIX + key, value);
   } catch {
     /* as above — a courtesy that must never be fatal */
   }
