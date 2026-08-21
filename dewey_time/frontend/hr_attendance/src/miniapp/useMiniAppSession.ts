@@ -180,10 +180,20 @@ export function useMiniAppCalendar(
     // And never against a verdict. A 403 re-polled every minute is the shape
     // this app shipped: the message said "try again in a moment", and it did,
     // for as long as the app was open.
-    refetchInterval: (query) =>
-      active && (opts?.poll ?? true) && !isPermanentRejection(query.state.error)
-        ? 60_000
-        : false,
+    //
+    // BUT `poll: false` MEANS "A GOOD ANSWER DOES NOT GO STALE", NOT "NEVER ASK
+    // AGAIN". A query that has never answered at all is the other case, and it
+    // is the one the opt-out quietly broke: the shell's identity header is the
+    // only observer of today's key while the reader sits on Profile, so three
+    // failed attempts on a dropped signal took the name, the photo AND the
+    // language toggle off the screen for the rest of the session — no request
+    // was ever issued again. A retry is not a poll; it is the app keeping the
+    // promise its own error text makes.
+    refetchInterval: (query) => {
+      if (!active || isPermanentRejection(query.state.error)) return false;
+      const unanswered = query.state.data === undefined && query.state.error != null;
+      return (opts?.poll ?? true) || unanswered ? 60_000 : false;
+    },
   });
 }
 

@@ -56,6 +56,32 @@ export function latestMonth(today: Date): Date {
 }
 
 /**
+ * The month the grid is ACTUALLY showing.
+ *
+ * react-day-picker clamps its own displayed month into `[startMonth, endMonth]`
+ * and does it silently — no `onMonthChange`, no warning — so a component that
+ * keeps its own copy of the month can end up paging one month while the grid
+ * draws another. That is not hypothetical here: the month is seeded once, at
+ * mount, from a clock the server has not corrected yet, and both bounds move
+ * when it does. A phone one day fast on the 31st fetched September and drew
+ * August; a phone whose date had reset to 2020 fetched January 2020 and drew
+ * June. Every mark lookup then missed and the grid rendered forty clean,
+ * dotless days under a total belonging to some other month — the one screen
+ * an employee opens precisely to find the days that are not clean.
+ *
+ * So clamp on the same two bounds the picker does, and derive the fetched
+ * range from the result. The grid and its data cannot name different months.
+ */
+export function visibleMonth(month: Date, today: Date): Date {
+  const first = earliestMonth(today);
+  const last = latestMonth(today);
+  const asked = startOfMonth(month);
+  if (asked < first) return first;
+  if (asked > last) return last;
+  return asked;
+}
+
+/**
  * The dot under a day number.
  *
  * `aria-hidden`, always. The words that carry it live in the button's own
@@ -121,7 +147,12 @@ export function MiniCalendarSheet(props: {
   // unselectable — or offers a day that has not happened.
   const today = props.today ?? siteNow();
   const now = props.now ?? today;
-  const [month, setMonth] = useState(() => startOfMonth(props.selected));
+  // Seeded once, from a clock that may still be the device's — so read it back
+  // through the same clamp react-day-picker applies to what it draws. See
+  // `visibleMonth`: without this the sheet fetched one month and rendered
+  // another, silently, and only ever for the people whose clock was wrong.
+  const [pagedMonth, setPagedMonth] = useState(() => startOfMonth(props.selected));
+  const month = visibleMonth(pagedMonth, today);
 
   // The visible month only. A month grid shows at most 42 cells, inside the
   // API's 62-day cap, and the query key is the same shape the Day and Schedule
@@ -208,7 +239,7 @@ export function MiniCalendarSheet(props: {
           mode="single"
           selected={props.selected}
           month={month}
-          onMonthChange={setMonth}
+          onMonthChange={setPagedMonth}
           // The reader's own script, from the same date-fns locale the rest of
           // the app formats with — so the month name and the weekday headers
           // are Khmer without this file knowing a word of it.

@@ -182,6 +182,29 @@ class TestProjection(unittest.TestCase):
              "server_now"},
         )
 
+    def test_the_site_clock_goes_out_in_the_shape_the_client_parses(self):
+        # THE KEY'S PRESENCE IS NOT THE CONTRACT; the shape is. The client
+        # feeds this string to the same parser it feeds punch times to, which
+        # reads a naive "YYYY-MM-DD HH:MM:SS" as the DEVICE's local time. Add a
+        # "+07:00" or a "Z" and it becomes an instant instead of a wall clock:
+        # the offset then silently equals the device's timezone delta and the
+        # phone is confidently seven hours out. Emit something unparseable and
+        # the whole feature degrades back to the device clock in silence.
+        #
+        # Invisible in development either way -- a developer sitting in the
+        # site's own timezone measures an offset of zero and sees a perfectly
+        # correct app. The only person who sees the error is the traveller,
+        # who is the exact reader this was built for. So it is pinned here.
+        #
+        # `now_datetime` is patched on THIS module rather than trusted from the
+        # shared frappe mock, which returns a bare date and would let a
+        # midnight-shaped answer pass for a formatted one.
+        import datetime
+
+        with patch.object(miniapp_api, "now_datetime",
+                          return_value=datetime.datetime(2026, 8, 21, 9, 30, 5)):
+            self.assertEqual(miniapp_api._server_now(), "2026-08-21 09:30:05")
+
     def test_the_projection_itself_exposes_no_identity(self):
         # narrow() is a pure projection of what it is handed, and the identity
         # is a separate lookup merged after it. Pinned because a future edit

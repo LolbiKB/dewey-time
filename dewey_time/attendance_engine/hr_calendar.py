@@ -783,9 +783,19 @@ def build_employee_calendar(employee: str, start_date: str, end_date: str):
     meta_by_shift: dict = {}
 
     def _meta(shift_type):
-        if shift_type not in meta_by_shift:
-            meta_by_shift[shift_type] = _get_shift_meta(shift_type)
-        return meta_by_shift[shift_type]
+        cached = meta_by_shift.get(shift_type)
+        if cached is not None:
+            return cached
+        meta = _get_shift_meta(shift_type)
+        # SUCCESSES ONLY. `_get_shift_meta` swallows every exception and returns
+        # None, so caching that answer would promote a fault that lasted one
+        # query into an unrostered MONTH — no shift bar, no times, no grace, on
+        # the HR console and on the phone, for a range that resolves fine on the
+        # very next day. A retry costs one get_doc in a case that is already
+        # degraded; the memo exists to spare the healthy path, not that one.
+        if meta:
+            meta_by_shift[shift_type] = meta
+        return meta
 
     days = []
     cur = start

@@ -21,6 +21,20 @@ import {
 /** A fixed device clock, so the arithmetic is checkable rather than racy. */
 const DEVICE_NOW = new Date(2026, 7, 21, 9, 0, 0).getTime();
 
+/**
+ * A naive site-local string, the shape the payload carries.
+ *
+ * Built from LOCAL components, never toISOString(): the wire format has no
+ * zone, and formatting it in UTC would hand these tests a fake offset equal to
+ * whatever zone the runner happens to sit in.
+ */
+function wallClock(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 test("with nothing from the server the clock is the device's, exactly as before", () => {
   __resetSiteClock();
   assert.equal(siteClockKnown(), false);
@@ -107,6 +121,38 @@ test("jitter does not repaint the app; a real change does", () => {
   stop();
   noteServerNow("2026-08-21 12:00:00", DEVICE_NOW);
   assert.equal(repaints, 2, "and an unsubscribed listener hears nothing more");
+});
+
+test("a slow first response does not lock its own latency in for the session", () => {
+  __resetSiteClock();
+  // Every offset carries the response's one-way latency, and the FIRST one is
+  // measured over whatever the link was doing at launch. Gating the stored
+  // value on RESYNC_MS made that first sample permanent: each later, cleaner
+  // one landed inside the band and was thrown away rather than merely not
+  // announced. The threshold is about repainting, not about the truth.
+  noteServerNow("2026-08-21 09:00:00", DEVICE_NOW + 20_000); // 20s of transit
+  assert.equal(siteClockOffsetMs(), -20_000);
+
+  for (let i = 1; i <= 20; i += 1) {
+    // A healthy poll a minute later: 300ms of transit against a perfect device.
+    noteServerNow(wallClock(DEVICE_NOW + i * 60_000), DEVICE_NOW + i * 60_000 + 300);
+  }
+  assert.equal(siteClockOffsetMs(), -300, "a better sample must replace a worse one");
+});
+
+test("a sub-threshold correction is applied silently, not discarded", () => {
+  __resetSiteClock();
+  let repaints = 0;
+  const stop = subscribeSiteClock(() => { repaints += 1; });
+
+  noteServerNow("2026-08-21 09:00:05", DEVICE_NOW);
+  assert.equal(siteClockOffsetMs(), 5_000);
+  assert.equal(repaints, 1);
+
+  noteServerNow("2026-08-21 09:00:00", DEVICE_NOW);
+  assert.equal(siteClockOffsetMs(), 0, "the newer measurement wins");
+  assert.equal(repaints, 1, "but five seconds is not worth a re-render");
+  stop();
 });
 
 test("siteNow reads as a WALL CLOCK, which is the space the payload lives in", () => {

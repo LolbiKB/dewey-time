@@ -37,20 +37,22 @@ test("the poll is gated on Telegram's activity, not on document visibility", () 
   // Source read rather than a rendered query: this suite has no react-query
   // harness, so the option object is only inspectable here.
   //
-  // `active` must be a CONJUNCT of the interval, not merely mentioned nearby.
-  // A caller opt-out was added for the Profile tab's month range, and the
-  // interval later became a function so it could also see the query's own
-  // error — so this is no longer the bare ternary it once pinned. What must
-  // survive: a caller cannot opt back IN while minimised, and `false` stays the
-  // else branch rather than some smaller interval.
+  // `active` must gate the WHOLE body, not merely be mentioned near it. This
+  // has grown twice — a caller opt-out for the Profile tab, then a retry for a
+  // query that has never answered — so it is a guard clause now rather than
+  // the conjunct this once pinned. What must survive both rewrites: nothing a
+  // caller passes can opt back IN while the app is minimised or against a
+  // verdict, and `false` stays the alternative rather than a smaller interval.
   const src = readFileSync(new URL("./useMiniAppSession.ts", import.meta.url), "utf8");
-  const interval = /refetchInterval:[^;]*?\bactive\s*&&[^;]*?\?\s*60_000\s*:\s*false/.exec(src);
-  assert.ok(interval, "the 60s poll must still be gated on `active` and fall back to false");
+  const body = /refetchInterval: \(query\) => \{([\s\S]*?)\n    \},/.exec(src)?.[1] ?? "";
+  assert.ok(body, "refetchInterval must still be a function of the query");
+  // Both gates in one statement, ahead of everything a caller can influence.
+  // A 403 is not a blip: re-polling it every minute is what this app did to a
+  // revoked link for as long as it was open.
+  assert.match(body, /^\s*if \(!active \|\| isPermanentRejection\(query\.state\.error\)\) return false;/);
+  assert.match(body, /\?\s*60_000\s*:\s*false/, "one interval, and false as the alternative");
+  assert.equal((body.match(/60_000/g) ?? []).length, 1, "no second, smaller interval");
   assert.match(src, /isAppActive|onActiveChange/);
-
-  // And never against a verdict. A 403 is not a blip: re-polling it every
-  // minute is what this app did to a revoked link for as long as it was open.
-  assert.match(src, /isPermanentRejection\(query\.state\.error\)/);
 });
 
 test("the SDK's version stamp survived the move out of the HTML", () => {
@@ -86,10 +88,15 @@ test("the site clock is learned at FETCH time, never from cached query data", ()
   assert.match(src, /noteServerNow\(payload\?\.server_now\)/);
   // Inside fetchCalendar, above its return — not in a hook.
   assert.match(src, /noteServerNow\(payload\?\.server_now\);\s*\n\s*return payload;/);
-  assert.ok(
-    !/useEffect\([^)]*noteServerNow/.test(src),
-    "reading it from query.data is the cache-age bug",
-  );
+  // EXACTLY ONE, which is the assertion that survives a rewrite. The guard
+  // here was a negative regex naming `useEffect`, and it could not fire: the
+  // one string it matched does not typecheck, while every form somebody would
+  // actually write slipped past it. What matters is not the syntax of a second
+  // reader but that there is no second reader — a call anywhere else in this
+  // file necessarily reads react-query's cached payload rather than the
+  // response, which is the cache-age bug spelled out above.
+  const calls = src.match(/noteServerNow\(/g) ?? [];
+  assert.equal(calls.length, 1, "the clock is noted once, at receipt, and nowhere else");
 });
 
 test("every present-tense surface takes its clock from the site, not the device", () => {
@@ -124,11 +131,18 @@ test("the queries that make no claim about the present are not polled", () => {
   // data. Only the Day tab's TODAY makes a live claim; the identity header,
   // the roster, the month grid and a drilled-in day are all answers that
   // changed hours ago, if at all. A resume invalidates them regardless.
+  // COMMENTS STRIPPED. Each of these files argues in prose about the option it
+  // passes, so the literal being asserted appears twice — once as the code and
+  // once as the sentence explaining it. Read raw, the roster's assertion was
+  // satisfied by MySchedulePage's own comment: deleting the argument left the
+  // week polling every sixty seconds with the test still green.
   const read = (file: string) =>
-    readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+    readFileSync(new URL(`./${file}`, import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
 
   assert.match(read("MiniAppShell.tsx"), /useMiniAppCalendar\(todayKey, todayKey, \{ poll: false \}\)/);
-  assert.match(read("MySchedulePage.tsx"), /\{ poll: false \}/);
+  assert.match(read("MySchedulePage.tsx"), /useMiniAppCalendar\([\s\S]*?\{ poll: false \}/);
   assert.match(read("MiniCalendarSheet.tsx"), /\{ enabled: props\.open, poll: false \}/);
   // The Day tab keeps its poll, but only for today.
   assert.match(read("MyDayPage.tsx"), /\{ poll: isSameDay\(date, today\) \}/);
@@ -138,6 +152,18 @@ test("the timeline is given the same ticking clock the row beside it uses", () =
   // DayCell falls back to its own `new Date()` when `now` is absent, computed
   // once at mount — so the canvas's now-line froze where it was when the page
   // opened, beside a numbers row that ticks. Two clocks, one screen.
-  const src = readFileSync(new URL("./MyDayPage.tsx", import.meta.url), "utf8");
-  assert.match(src, /now=\{now\}/);
+  //
+  // THE ELEMENT FIRST, then the prop. `/now=\{now\}/` over the whole file was
+  // already true before the fix — MiniDayNumbers, further down and untouched,
+  // has carried that exact prop for months — so the guard passed on main and
+  // could not have failed if somebody dropped it from DayCell tomorrow. A lazy
+  // `[\s\S]*?` between the two does not help either: it walks straight past
+  // DayCell's own `/>` into the next element. Cutting the element out is what
+  // makes the assertion about the element.
+  const src = readFileSync(new URL("./MyDayPage.tsx", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  const dayCell = /<DayCell\b[\s\S]*?\/>/.exec(src)?.[0] ?? "";
+  assert.ok(dayCell, "MyDayPage must render a DayCell");
+  assert.match(dayCell, /now=\{now\}/, "the timeline needs the ticking clock, not its own");
 });

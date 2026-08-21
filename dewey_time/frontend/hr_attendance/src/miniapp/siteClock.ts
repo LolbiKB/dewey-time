@@ -27,6 +27,19 @@
  * to Intl for one. All three would ask a projected wall clock what instant it
  * is, and it does not know.
  *
+ * WHERE THE PROJECTION IS EXACT, stated because the paragraph above reads like
+ * an unconditional promise and is not one: it holds while the DEVICE's UTC
+ * offset is the same at receipt and at the moment being read. The site's zone
+ * has no DST, so the only way to break that is a device parked in a zone that
+ * does — and then, for the one hour the site's clock spends inside that zone's
+ * spring-forward gap, the wall reading being resolved does not exist locally,
+ * V8 normalises it forward, and `siteNow()` reads an hour fast. Re-fetching
+ * does not help: every sample in that hour parses through the same gap. It
+ * costs a night-shift status chip an hour, twice a year, on a phone that is
+ * already in the wrong country; ending it properly means carrying the site's
+ * IANA zone on the wire and projecting through it, which is a bigger change
+ * than this one and is not pretended to be done here.
+ *
  * ANCHORED TO RECEIPT, NOT TO THE PAYLOAD'S AGE. react-query hands back a
  * cached payload instantly, and taking its `server_now` as "now" would drag the
  * clock backwards by the cache age. Because the offset is a CONSTANT rather
@@ -62,9 +75,16 @@ export function noteServerNow(
   if (!Number.isFinite(parsed)) return;
 
   const next = parsed - receivedAt;
-  if (known && Math.abs(next - offsetMs) < RESYNC_MS) return;
+  // ALWAYS STORE, sometimes announce. The threshold below is about repainting,
+  // and gating the stored value on it too made the FIRST sample permanent:
+  // every offset carries that response's one-way latency, so a launch on a
+  // congested link measured the offset over seconds and no later, cleaner
+  // sample could correct it — each one landed inside the band and was dropped.
+  // The guard suppresses re-renders; it was never meant to suppress the truth.
+  const moved = !known || Math.abs(next - offsetMs) >= RESYNC_MS;
   offsetMs = next;
   known = true;
+  if (!moved) return;
   for (const listener of listeners) listener();
 }
 
