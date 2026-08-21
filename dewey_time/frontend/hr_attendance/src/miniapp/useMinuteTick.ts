@@ -16,11 +16,16 @@
 import { useEffect, useState } from "react";
 
 import { isAppActive, onActiveChange } from "@/miniapp/telegramChrome";
+import { siteNow, subscribeSiteClock } from "@/miniapp/siteClock";
 
 export const TICK_MS = 60_000;
 
 export function useMinuteTick(): Date {
-  const [now, setNow] = useState(() => new Date());
+  // `siteNow`, never `new Date()`. This hook is the near-choke point for every
+  // present-tense claim on the two tabs, and until the server said otherwise
+  // all of them were the DEVICE's opinion of the time — see siteClock.ts for
+  // what that cost somebody whose phone was an hour out.
+  const [now, setNow] = useState(() => siteNow());
   const [active, setActive] = useState(() => isAppActive(window));
 
   useEffect(() => {
@@ -28,13 +33,19 @@ export function useMinuteTick(): Date {
     return onActiveChange(window, setActive);
   }, []);
 
+  // Repaint the moment the offset is learned, rather than at the next tick.
+  // The first screen after launch is the one somebody opened to check whether
+  // their punch registered; drawing it from the device's wrong clock for up to
+  // a minute is the same defect as never correcting it, just shorter.
+  useEffect(() => subscribeSiteClock(() => setNow(siteNow())), []);
+
   useEffect(() => {
     if (!active) return;
     // Catch up immediately on resume: the figure is stale by however long the
     // app was away, and waiting a further minute to correct it is the defect
     // this hook exists to fix, just shorter.
-    setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), TICK_MS);
+    setNow(siteNow());
+    const id = setInterval(() => setNow(siteNow()), TICK_MS);
     return () => clearInterval(id);
   }, [active]);
 

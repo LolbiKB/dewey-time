@@ -126,7 +126,12 @@ export function MyDayPage(props: {
   const now = props.now ?? tick;
   const date = props.date ?? today;
   const key = format(date, "yyyy-MM-dd");
-  const query = useMiniAppCalendar(key, key);
+  // POLLED ONLY FOR TODAY. The 60s interval exists for this page's claim about
+  // the present — "In" goes false while somebody walks to the terminal — and a
+  // drilled-in day is by construction never today (MiniAppShell.openDayFrom
+  // clears the drill-in when the picked date is today). Re-asking a finished
+  // day every minute buys a record that changed hours ago, if at all.
+  const query = useMiniAppCalendar(key, key, { poll: isSameDay(date, today) });
 
   if (query.isLoading) return <MiniState>{t("loadingDay")}</MiniState>;
   if (query.isError) return <MiniErrorState error={query.error} fallback="errorDay" />;
@@ -209,6 +214,13 @@ export function MyDayPage(props: {
           date={date}
           outside={false}
           today={isSameDay(date, today)}
+          // THE TIMELINE'S CLOCK WAS FROZEN AT MOUNT. DayCell defaults `now`
+          // to its own `new Date()` when the prop is absent, computed once —
+          // so the "now" line and every live band on the canvas stayed where
+          // they were when the page opened, beside a numbers row that ticks.
+          // Two clocks on one screen, disagreeing by however long the app had
+          // been open.
+          now={now}
           info={info}
           timelineStartMin={timelineWindow.startMin}
           timelineEndMin={timelineWindow.endMin}

@@ -73,3 +73,71 @@ test("the SDK's version stamp survived the move out of the HTML", () => {
   // The stamp moved with it, and telegramSdk.test.ts pins the URL's shape.
   assert.match(SDK_URL, /telegram-web-app\.js\?\d+$/);
 });
+
+test("the site clock is learned at FETCH time, never from cached query data", () => {
+  // react-query hands back a cached payload instantly, so noting server_now in
+  // a component would drag the clock backwards by the age of the cache — the
+  // arithmetic for which is pinned in siteClock.test.ts. Anchoring at receipt
+  // makes a ten-minute-old cache harmless.
+  //
+  // A source read: fetchCalendar is module-private and the honest alternative
+  // is a fetch mock plus a query client, for one call.
+  const src = readFileSync(new URL("./useMiniAppSession.ts", import.meta.url), "utf8");
+  assert.match(src, /noteServerNow\(payload\?\.server_now\)/);
+  // Inside fetchCalendar, above its return — not in a hook.
+  assert.match(src, /noteServerNow\(payload\?\.server_now\);\s*\n\s*return payload;/);
+  assert.ok(
+    !/useEffect\([^)]*noteServerNow/.test(src),
+    "reading it from query.data is the cache-age bug",
+  );
+});
+
+test("every present-tense surface takes its clock from the site, not the device", () => {
+  // The four that defaulted independently, plus the hook they all funnel
+  // through. One missed call site is a screen that disagrees with the rest of
+  // the app about what time it is — which is the state this whole change
+  // exists to end.
+  const read = (file: string) =>
+    readFileSync(new URL(`./${file}`, import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+  for (const file of [
+    "useMinuteTick.ts", "MiniCalendarSheet.tsx", "MyProfilePage.tsx", "MySchedulePage.tsx",
+  ]) {
+    assert.match(read(file), /siteNow\(\)/, `${file} must read the site clock`);
+    assert.ok(
+      !/new Date\(\)/.test(read(file)),
+      `${file} still reads the device clock directly`,
+    );
+  }
+
+  // The shell keeps one direct read — inside a callback, where subscribing
+  // would churn its identity every minute — and no bare `new Date()`.
+  const shell = read("MiniAppShell.tsx");
+  assert.match(shell, /isSameDay\(date, siteNow\(\)\)/);
+  assert.ok(!/new Date\(\)/.test(shell), "the shell must not read the device clock");
+});
+
+test("the queries that make no claim about the present are not polled", () => {
+  // Four observers, each with its own 60s interval, on an employee's mobile
+  // data. Only the Day tab's TODAY makes a live claim; the identity header,
+  // the roster, the month grid and a drilled-in day are all answers that
+  // changed hours ago, if at all. A resume invalidates them regardless.
+  const read = (file: string) =>
+    readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+
+  assert.match(read("MiniAppShell.tsx"), /useMiniAppCalendar\(todayKey, todayKey, \{ poll: false \}\)/);
+  assert.match(read("MySchedulePage.tsx"), /\{ poll: false \}/);
+  assert.match(read("MiniCalendarSheet.tsx"), /\{ enabled: props\.open, poll: false \}/);
+  // The Day tab keeps its poll, but only for today.
+  assert.match(read("MyDayPage.tsx"), /\{ poll: isSameDay\(date, today\) \}/);
+});
+
+test("the timeline is given the same ticking clock the row beside it uses", () => {
+  // DayCell falls back to its own `new Date()` when `now` is absent, computed
+  // once at mount — so the canvas's now-line froze where it was when the page
+  // opened, beside a numbers row that ticks. Two clocks, one screen.
+  const src = readFileSync(new URL("./MyDayPage.tsx", import.meta.url), "utf8");
+  assert.match(src, /now=\{now\}/);
+});

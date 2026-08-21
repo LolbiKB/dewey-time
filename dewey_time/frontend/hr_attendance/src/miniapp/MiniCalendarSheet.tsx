@@ -32,6 +32,7 @@ import { dayFacts, totalWorkedMinutes } from "@/miniapp/miniDay";
 import { dayMark, dayMarkLabel, type DayMark } from "@/miniapp/miniDayMark";
 import type { StringKey } from "@/miniapp/miniStrings";
 import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
+import { siteNow } from "@/miniapp/siteClock";
 
 /**
  * How far back the grid pages: THREE MONTHS IN TOTAL, this one included.
@@ -115,7 +116,10 @@ export function MiniCalendarSheet(props: {
   const t = useT();
   const fmt = useFormat();
   const locale = useLocale();
-  const today = props.today ?? new Date();
+  // siteNow, not new Date(): the month bounds and `disabled={{ after: today }}`
+  // are drawn from this, so a device clock a day out makes the real today
+  // unselectable — or offers a day that has not happened.
+  const today = props.today ?? siteNow();
   const now = props.now ?? today;
   const [month, setMonth] = useState(() => startOfMonth(props.selected));
 
@@ -132,7 +136,11 @@ export function MiniCalendarSheet(props: {
   const query = useMiniAppCalendar(
     format(from, "yyyy-MM-dd"),
     format(to, "yyyy-MM-dd"),
-    { enabled: props.open },
+    // And not polled while it IS open: this grid draws day VERDICTS — a dot
+    // per finished day — not a live figure, so re-fetching 42 days every
+    // minute buys a mark that changes at most twice a day. The `enabled` above
+    // stopped the closed sheet's traffic; this stops the open one's.
+    { enabled: props.open, poll: false },
   );
 
   // Telegram's back button closes this before it touches the day underneath.

@@ -5,6 +5,7 @@ import { FrappeCallError } from "@/lib/frappe";
 import type { Day } from "@/types/calendar";
 import type { Biometric } from "@/miniapp/miniProfile";
 import { isAppActive, onActiveChange } from "@/miniapp/telegramChrome";
+import { noteServerNow } from "@/miniapp/siteClock";
 
 /** Sentinel for "this page is not running inside Telegram". */
 export const MISSING_INIT_DATA = "";
@@ -30,6 +31,11 @@ export type MiniCalendar = {
   /** How far the roster has actually been published — the bound on forward
    *  paging, and the difference between "no shifts" and "not built yet". */
   schedule_max_date?: string | null;
+  /** The SITE's wall clock, in the same naive shape as every punch time here.
+   *  Optional because an old bundle can meet a new server and vice versa: with
+   *  it absent the offset stays zero, which is exactly the behaviour that
+   *  shipped before it existed. See siteClock.ts. */
+  server_now?: string | null;
   days: Day[];
 };
 
@@ -119,7 +125,13 @@ async function fetchCalendar(
       method: CALENDAR_METHOD,
     });
   }
-  return (await response.json()).message as MiniCalendar;
+  const payload = (await response.json()).message as MiniCalendar;
+  // HERE, and deliberately not from `query.data` in a component: react-query
+  // hands back a CACHED payload instantly, and its server_now would drag the
+  // clock backwards by the age of the cache. Anchored to the moment of
+  // receipt, the offset stays valid however old the cache gets.
+  noteServerNow(payload?.server_now);
+  return payload;
 }
 
 export function useMiniAppCalendar(

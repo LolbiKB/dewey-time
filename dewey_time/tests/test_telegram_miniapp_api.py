@@ -172,7 +172,14 @@ class TestProjection(unittest.TestCase):
              # Facts about the reader's own employment, not HR internals:
              # `is_clock_based` is already on their Profile tab, and
              # `schedule_max_date` is how far the roster has been published.
-             "is_clock_based", "schedule_max_date"},
+             "is_clock_based", "schedule_max_date",
+             # THE SITE'S WALL CLOCK, so the phone can stop trusting its own.
+             # Every present-tense claim the Mini App makes -- "In", "On
+             # lunch", the live "so far" total, even which day is today -- was
+             # device-clock arithmetic against naive site-local strings with
+             # nothing to check it against. Not a disclosure: the check-in
+             # notification already states this time back to them.
+             "server_now"},
         )
 
     def test_the_projection_itself_exposes_no_identity(self):

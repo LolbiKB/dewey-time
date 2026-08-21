@@ -8,6 +8,7 @@ import { weekForOffset, weekRangeLabel } from "@/miniapp/miniWeek";
 import { WeekNav } from "@/miniapp/MiniWeekNav";
 import { MiniErrorState, MiniState } from "@/miniapp/MiniState";
 import { useFormat, useLocale, useT } from "@/miniapp/MiniLocale";
+import { siteNow } from "@/miniapp/siteClock";
 
 /** Rostered hours net of the unpaid lunch, which is what a day is actually worth. */
 export function netRosteredMinutes(day: PlannedDay): number | null {
@@ -106,12 +107,20 @@ export function MySchedulePage(props: {
 }) {
   const t = useT();
   const fmt = useFormat();
-  const today = props.today ?? new Date();
+  // siteNow, not new Date(): this decides which week the roster opens on.
+  const today = props.today ?? siteNow();
   const offset = props.offset ?? 0;
   const week = weekForOffset(today, offset);
+  // NOT POLLED, and its sibling on the same tab already knew that: MyProfile's
+  // month query passes { poll: false } with a note saying nothing on this page
+  // makes a claim about the present. This one — mounted by that same page —
+  // took the default and re-fetched a WEEK of roster every sixty seconds, on
+  // an employee's mobile data, to maintain a schedule that changes when HR
+  // publishes one. A resume invalidates the key.
   const query = useMiniAppCalendar(
     format(week[0]!, "yyyy-MM-dd"),
     format(week[6]!, "yyyy-MM-dd"),
+    { poll: false },
   );
 
   // Extracted from the Week tab when the calendar sheet replaced it. It stays
