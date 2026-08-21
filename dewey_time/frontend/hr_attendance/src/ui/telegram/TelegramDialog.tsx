@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  TelegramErrorBody,
   TelegramInviteBody,
   TelegramLinkedBody,
   TelegramNotLinkedBody,
@@ -23,7 +24,7 @@ import {
 import type { TelegramLink } from "@/hooks/useTelegramLink";
 
 export function TelegramDialog(props: { link: TelegramLink }) {
-  const { target, invite, error, busy, close, issue, revoke } = props.link;
+  const { target, invite, error, busy, close, issue, revoke, dismissError } = props.link;
   const open = target !== null;
 
   const [confirmingUnlink, setConfirmingUnlink] = useState(false);
@@ -68,7 +69,9 @@ export function TelegramDialog(props: { link: TelegramLink }) {
   function body() {
     if (!target) return null;
     if (error) {
-      return <p className="py-6 text-center text-sm text-destructive">{error}</p>;
+      // A message, not a destination: Dismiss returns to the state
+      // underneath, from which Issue or Unlink can simply be pressed again.
+      return <TelegramErrorBody message={error} onDismiss={dismissError} />;
     }
     if (busy === "issuing") {
       return <p className="py-6 text-center text-sm text-muted-foreground">Issuing a link…</p>;

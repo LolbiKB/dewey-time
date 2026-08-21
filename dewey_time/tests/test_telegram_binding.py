@@ -823,3 +823,83 @@ class TestSetLanguage(unittest.TestCase):
             with self.assertRaises(Exception):
                 binding.set_language("  ", "km")
         get_doc.assert_not_called()
+
+
+class TestCredentialOpsAreSerialised(unittest.TestCase):
+    """Issue and revoke take the Employee row lock BEFORE their first read.
+
+    The invariant "at most one live credential per employee" is check-then-act
+    across three statements with no schema constraint behind it, so the lock's
+    POSITION is the guarantee: taken after the liveness read, it would
+    serialise nothing. A mock cannot exercise two racing transactions, so
+    these pin the two things a reviewer would otherwise have to re-derive --
+    that the lock is asked of the database as SELECT ... FOR UPDATE on the
+    Employee row, and that both endpoints take it before reading anything.
+    """
+
+    def test_the_lock_is_a_select_for_update_on_the_employee_row(self):
+        import frappe
+
+        with patch.object(frappe.db, "get_value") as get_value:
+            binding._serialize_credential_ops("HR-EMP-00001")
+        get_value.assert_called_once_with(
+            "Employee", "HR-EMP-00001", "name", for_update=True
+        )
+
+    def test_issuing_locks_before_the_liveness_check_reads(self):
+        calls = []
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_serialize_credential_ops",
+                          side_effect=lambda e: calls.append("lock")), \
+             patch.object(binding, "_live_link_names",
+                          side_effect=lambda e: calls.append("read") or []), \
+             patch.object(binding, "issue_link_token",
+                          return_value=binding.IssuedToken("tok123", "2026-08-19 09:00:00")), \
+             patch.object(binding, "_bot_username", return_value="dewey_time_bot"):
+            binding.create_link_invite("HR-EMP-00001")
+        self.assertEqual(calls, ["lock", "read"])
+
+    def test_revoking_takes_the_same_lock_before_reading(self):
+        calls = []
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_serialize_credential_ops",
+                          side_effect=lambda e: calls.append("lock")), \
+             patch.object(binding, "_live_link_names",
+                          side_effect=lambda e: calls.append("read") or []), \
+             patch.object(binding, "revoke_outstanding_tokens", return_value=0):
+            binding.revoke_link("HR-EMP-00001")
+        self.assertEqual(calls, ["lock", "read"])
+
+    def test_a_blank_employee_takes_no_lock(self):
+        # The refusal happens before the lock: locking on garbage input would
+        # hold a phantom row name open for the transaction for no reason.
+        with patch.object(binding, "_require_hr_role"), \
+             patch.object(binding, "_serialize_credential_ops") as lock:
+            with self.assertRaises(Exception):
+                binding.create_link_invite("  ")
+        lock.assert_not_called()
+
+
+class TestTheDecidingReadsAreLockingReads(unittest.TestCase):
+    """The reads the invariant depends on must be CURRENT reads.
+
+    Under REPEATABLE READ a plain SELECT can serve a read view pinned before
+    _serialize_credential_ops' lock was granted (any cache-miss SQL earlier in
+    the request pins it), and would then miss a token the lock's winner just
+    committed. for_update on the reads makes them current regardless of when
+    the snapshot formed -- so its PRESENCE is the guarantee, and these pin it.
+    """
+
+    def test_live_link_names_reads_for_update(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[]) as get_all:
+            binding._live_link_names("HR-EMP-00001")
+        self.assertTrue(get_all.call_args.kwargs.get("for_update"))
+
+    def test_outstanding_token_revocation_reads_for_update(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[]) as get_all:
+            binding.revoke_outstanding_tokens("HR-EMP-00001")
+        self.assertTrue(get_all.call_args.kwargs.get("for_update"))

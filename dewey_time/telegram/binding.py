@@ -146,6 +146,14 @@ def revoke_outstanding_tokens(employee: str) -> int:
                 "revoked_at": ["is", "not set"],
             },
             fields=["name"],
+            # A CURRENT read, not a snapshot read. Under REPEATABLE READ a
+            # plain SELECT here can serve a read view pinned before
+            # _serialize_credential_ops' lock was granted -- if any cache-miss
+            # SQL ran earlier in this request -- and would then miss a token
+            # the lock's winner just committed, leaving two live credentials.
+            # A locking read always sees committed state, so the invariant
+            # stops depending on statement ordering and cache warmth.
+            for_update=True,
         )
         or []
     )
@@ -532,16 +540,43 @@ def _bot_username() -> str:
 
 
 def _live_link_names(employee: str) -> list[str]:
-    """Names of this employee's ENABLED Telegram Link rows."""
+    """Names of this employee's ENABLED Telegram Link rows.
+
+    A locking read, for the same reason revoke_outstanding_tokens' is one:
+    this is the check half of a check-then-act that
+    _serialize_credential_ops serialises, and a snapshot read here could
+    predate the lock (see the comment there).
+    """
     return [
         row["name"]
         for row in frappe.get_all(
             LINK_DT,
             filters={"employee": employee, "enabled": 1},
             fields=["name"],
+            for_update=True,
         )
         or []
     ]
+
+
+def _serialize_credential_ops(employee: str) -> None:
+    """Row-lock the Employee, serialising issue/revoke for one person.
+
+    "At most one live credential per employee" is enforced by check-then-act
+    -- `_live_link_names`, then `revoke_outstanding_tokens`, then an insert --
+    with no unique constraint expressing it in the schema. Two HR tabs
+    pressing Issue in the same second both passed the check, and if B's
+    revocation SELECT ran before A's token INSERT committed, both tokens
+    stayed live.
+
+    The Employee row is the mutex: it exists for every legal call, and a
+    SELECT ... FOR UPDATE on it holds until this request's transaction
+    commits, so the loser waits and then re-reads committed state -- its own
+    mint revokes the winner's token, leaving one live. `revoke_link` takes
+    the same lock so an unlink cannot interleave with a mint and leave a
+    token alive behind a disabled link.
+    """
+    frappe.db.get_value("Employee", employee, "name", for_update=True)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -562,6 +597,11 @@ def create_link_invite(employee: str) -> dict:
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
+
+    # BEFORE the liveness check below reads anything. Everything from here to
+    # commit runs under the Employee row lock, so two tabs issuing in the same
+    # second serialise instead of both passing the check.
+    _serialize_credential_ops(employee)
 
     # The register hides its control for a linked employee; this is what makes
     # that true rather than cosmetic. A stale tab or a direct call would
@@ -607,6 +647,10 @@ def revoke_link(employee: str) -> dict:
     employee = (employee or "").strip()
     if not employee:
         frappe.throw("employee is required")
+
+    # The same lock the mint takes, so an unlink cannot interleave with an
+    # in-flight issue and leave a live token behind a disabled link.
+    _serialize_credential_ops(employee)
 
     names = _live_link_names(employee)
     for name in names:

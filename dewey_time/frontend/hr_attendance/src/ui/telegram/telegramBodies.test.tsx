@@ -3,6 +3,8 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  copyToClipboard,
+  TelegramErrorBody,
   TelegramInviteBody,
   TelegramLinkedBody,
   TelegramNotLinkedBody,
@@ -112,4 +114,43 @@ test("the unlink confirm names the employee and states what is lost", () => {
   );
   assert.match(html, /Aaron Wells/);
   assert.match(html, /Mini App/);
+});
+
+test("an error body carries the way back out of it", () => {
+  // The error used to be a bare paragraph rendered INSTEAD of everything
+  // else — no retry, no dismiss, a still-live link gone from view. The
+  // Dismiss button is what makes it a message rather than a destination.
+  const html = renderToStaticMarkup(
+    <TelegramErrorBody message="Could not issue a link" onDismiss={noop} />,
+  );
+  assert.match(html, /Could not issue a link/);
+  assert.match(html, /Dismiss/);
+  assert.match(html, /role="alert"/);
+});
+
+test("copy resolves false where the clipboard API does not exist, never throwing", async () => {
+  // Node has no `navigator`, which is exactly the shape of a bench reached
+  // over plain http (no secure context): the old handler surfaced this as an
+  // unhandled promise rejection and the button silently did nothing.
+  assert.equal(await copyToClipboard("https://t.me/x?start=y"), false);
+});
+
+test("copy resolves true and delivers the exact text when the clipboard works", async () => {
+  // The inversion pin: an implementation that always returns false — which
+  // satisfies the no-navigator test above — must fail here. Node ships a
+  // navigator global without clipboard, so it is stubbed property-wise and
+  // restored whatever happens.
+  const written: string[] = [];
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: async (t: string) => { written.push(t); } } },
+  });
+  try {
+    assert.equal(await copyToClipboard("https://t.me/x?start=y"), true);
+    assert.deepEqual(written, ["https://t.me/x?start=y"]);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "navigator", original);
+    else delete (globalThis as { navigator?: unknown }).navigator;
+  }
 });
