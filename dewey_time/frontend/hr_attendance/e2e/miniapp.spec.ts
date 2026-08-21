@@ -71,7 +71,7 @@ function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] =
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown> } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown>; delayCalendarMs?: number; identity?: Record<string, unknown> } = {}) {
   await page.addInitScript(
     ({ theme, themeParams, languageCode, fullscreen }) => {
       const handlers: Record<string, (() => void)[]> = {};
@@ -148,6 +148,12 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
       days.push(rosteredDay(key, opts.punched ?? "full", opts.flags ?? []));
       cursor.setDate(cursor.getDate() + 1);
     }
+    // The one thing a fast local fixture cannot show: what the page looks like
+    // while it is still waiting. The identity header's pending state is only
+    // reachable through a slow answer.
+    if (opts.delayCalendarMs) {
+      await new Promise((resolve) => setTimeout(resolve, opts.delayCalendarMs));
+    }
     await route.fulfill({
       json: {
         message: {
@@ -156,6 +162,12 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
           khmer_name: "សុខ ដារា",
           designation: "Cashier",
           employee_branch: "DIS Iconic",
+          // A COMPLETE record, which is the shape this fixture has always
+          // sent — and for one test that is exactly the wrong default. The
+          // header reserves a row whose height depends on which of these are
+          // null, so a fixture that always fills them in cannot fail. Only
+          // that test overrides them.
+          ...(opts.identity ?? {}),
           days,
         },
       },
@@ -547,6 +559,23 @@ test("a Khmer interface has no Latin digits left anywhere in it", async ({ page 
   const sheet = page.getByRole("dialog");
   await expect(sheet).toBeVisible();
   expect(await sheet.innerText(), "the calendar kept Latin numerals").not.toMatch(/[0-9]/);
+
+  // THE EAR AS WELL AS THE EYE, and this half was missing for as long as the
+  // sheet has shipped. innerText cannot see an aria-label, so react-day-picker's
+  // own English defaults — "Go to the Previous Month" on both arrows, and the
+  // caption again as the grid's name, in Latin digits — sat inside a sweep
+  // built to catch exactly this, invisibly. The design system's `sr-only`
+  // "Close" was in reach of innerText and still slipped past, because it looks
+  // for digits and that one is a word.
+  const spoken = await sheet.evaluate((el) => [
+    ...[...el.querySelectorAll("[aria-label]")].map((n) => n.getAttribute("aria-label") ?? ""),
+    ...[...el.querySelectorAll(".sr-only")].map((n) => n.textContent ?? ""),
+  ]);
+  expect(spoken.length, "nothing swept means nothing proved").toBeGreaterThan(5);
+  for (const name of spoken) {
+    expect(name, `"${name}" announces in English inside a Khmer sheet`).not.toMatch(/[A-Za-z]/);
+    expect(name, `"${name}" kept Latin numerals`).not.toMatch(/[0-9]/);
+  }
   await page.keyboard.press("Escape");
 
   // The whole Profile tab, not just its roster. It carries a joining date, a
@@ -684,6 +713,129 @@ test("the Profile tab shows the record, the devices and the roster", async ({ pa
   // and this is what every employee sees today.
   await expect(page.getByText("2 recorded")).toBeVisible();
   await expect(page.getByText("Your roster")).toBeVisible();
+});
+
+test("the Profile tab opens its outline at a level-1 heading", async ({ page }) => {
+  // Every section title on this tab is an h2, and there was no h1 above them —
+  // so a reader navigating by heading landed on a document whose outline starts
+  // in the middle. It is sr-only: the tab bar already says "Profile" visibly,
+  // and a second copy is chrome on the shortest axis this app has.
+  await openMiniApp(page);
+  await page.getByRole("button", { name: "Profile" }).click();
+
+  const heading = page.getByRole("heading", { level: 1 });
+  await expect(heading).toHaveText("Profile");
+  // One h1 per tab, and only one page mounts at a time — four other tests use
+  // `getByRole("heading", { level: 1 })` with no .first(), so a second one
+  // anywhere would fail them on a strict-mode violation rather than here.
+  await expect(heading).toHaveCount(1);
+});
+
+// The two axes this reservation actually varies on. LANGUAGE, because the
+// Khmer webfont is applied to the whole app — Latin glyphs included — and its
+// normal line-height is taller, so identical content measures 62.9px in Khmer
+// and 57.5px in English and any pixel constant is wrong in one of them.
+//
+// And PAYLOAD SHAPE, which is the axis the first version of this test missed
+// entirely: the second line's two values are both optional, and the fixture
+// filled both in, which is the one shape where the old markup happened to
+// match. A record with no Khmer name still moved 3px, and a record with
+// nothing but a name and an id moved 9.9px.
+const IDENTITY_SHAPES = [
+  { name: "a complete record", identity: {} },
+  { name: "no Khmer name", identity: { khmer_name: null } },
+  {
+    name: "a name and an id, nothing else",
+    identity: { khmer_name: null, designation: null, employee_branch: null },
+  },
+];
+
+for (const languageCode of ["km", "en"] as const) {
+  for (const shape of IDENTITY_SHAPES) {
+    test(`the header reserves the row it will actually need (${languageCode}, ${shape.name})`, async ({ page }) => {
+      // The whole page used to drop 54px when this query landed — the header
+      // was not rendered at all until it had an answer, on the app's first
+      // screen, under the eye of somebody already reading the timeline. The
+      // reservation is a real line of text rather than a pixel constant; this
+      // measures both states and requires them to agree.
+      await openMiniApp(page, {
+        languageCode,
+        delayCalendarMs: 2500,
+        identity: shape.identity,
+      });
+
+      const banner = page.getByRole("banner");
+      await expect(banner).toBeVisible();
+      await expect(banner).toHaveAttribute("aria-busy", "true");
+      const pending = (await banner.boundingBox())!.height;
+
+      await expect(banner).not.toHaveAttribute("aria-busy", "true", { timeout: 8000 });
+      const resolved = (await banner.boundingBox())!.height;
+      expect(
+        Math.abs(resolved - pending),
+        `the header moved ${resolved - pending}px when its answer arrived`,
+      ).toBeLessThanOrEqual(1);
+    });
+  }
+}
+
+test("a sheet on a phone with no side insets keeps its own padding", async ({ page }) => {
+  // The inline safe-area style REPLACED the className's px-4 rather than
+  // adding to it, so on every device without a side inset — most of them —
+  // the flags list ran flush into both screen edges. Measured rather than
+  // read: the class is still in the source either way, which is exactly why
+  // a source read would not have caught this.
+  await openMiniApp(page, { flags: [{ flag_code: "LATE_START", status: "Open", severity: "warning" }] });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.getByRole("button", { name: /to check/ }).click();
+
+  // BOTH EDGES, and both sheets: the bug was one property per side, so a test
+  // that measures one of the four proves a quarter of the fix.
+  const flags = page.getByRole("dialog");
+  await expect(flags).toBeVisible();
+  const flagsBox = (await flags.boundingBox())!;
+  const item = (await flags.getByRole("listitem").first().boundingBox())!;
+  expect(item.x - flagsBox.x, "the flags list sat flush against the left edge").toBeGreaterThanOrEqual(12);
+  expect(
+    flagsBox.x + flagsBox.width - (item.x + item.width),
+    "the flags list ran into the right edge",
+  ).toBeGreaterThanOrEqual(12);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
+  const calendar = page.getByRole("dialog");
+  await expect(calendar).toBeVisible();
+  const calBox = (await calendar.boundingBox())!;
+  const grid = (await calendar.getByRole("grid").boundingBox())!;
+  expect(grid.x - calBox.x, "the month grid sat flush against the left edge").toBeGreaterThanOrEqual(6);
+  expect(
+    calBox.x + calBox.width - (grid.x + grid.width),
+    "the month grid ran into the right edge",
+  ).toBeGreaterThanOrEqual(6);
+});
+
+test("the controls on these screens are big enough to hit", async ({ page }) => {
+  // WCAG 2.2 target size (minimum) is 24x24 CSS px. Three of these were AT or
+  // UNDER it — a line of text in a heading is as tall as the text — on a
+  // surface that is only ever used with a thumb.
+  //
+  // MEASURED, not read off the class strings: `-my-2 py-2` on the week-nav
+  // link is layout-neutral by design, and the only way to know the padding is
+  // really there (and not clipped by an overflow-hidden ancestor, which would
+  // leave it measurable but untappable) is to ask the browser.
+  await openMiniApp(page, { punched: "full" });
+  await page.setViewportSize({ width: 320, height: 700 });
+
+  const datePicker = (await page.getByRole("button", { name: /Choose a date/ }).first().boundingBox())!;
+  expect(datePicker.height, "the only way into the calendar").toBeGreaterThanOrEqual(44);
+
+  const toggle = (await page.getByRole("button", { name: "ភាសាខ្មែរ" }).boundingBox())!;
+  expect(toggle.height, "the way out of a language you cannot read").toBeGreaterThanOrEqual(36);
+
+  await page.getByRole("button", { name: "Profile" }).click();
+  await page.getByRole("button", { name: "Previous week" }).click();
+  const back = (await page.getByRole("button", { name: "Back to this week" }).boundingBox())!;
+  expect(back.height, "the only way back from week -6").toBeGreaterThanOrEqual(24);
 });
 
 test("the roster inside Profile still pages forward past today", async ({ page }) => {

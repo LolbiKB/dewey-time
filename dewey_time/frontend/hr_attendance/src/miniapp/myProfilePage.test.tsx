@@ -97,3 +97,16 @@ test("a heading is a heading, so the page has structure for a screen reader", ()
   const html = renderToStaticMarkup(<ProfileHeading>Your roster</ProfileHeading>);
   assert.match(html, /<h2[^>]*>Your roster<\/h2>/);
 });
+
+test("the sections sit under a level-1 heading, not on their own", () => {
+  // Every title on this tab goes through ProfileHeading above, which is an h2 —
+  // and there was nothing above THEM, so the tab's outline started in the
+  // middle and a reader navigating by heading had nothing to land on.
+  //
+  // sr-only and keyed to the tab's own string: the tab bar already says
+  // "Profile" visibly, and the two must not be able to drift apart. A source
+  // read because this page returns early on a query it cannot resolve here;
+  // the e2e "opens its outline at a level-1 heading" is the rendered proof.
+  const src = source("./MyProfilePage.tsx");
+  assert.match(src, /<h1 className="sr-only">\{t\("tabProfile"\)\}<\/h1>/);
+});

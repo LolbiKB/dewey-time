@@ -163,7 +163,18 @@ export function MyDayPage(props: {
           <button
             type="button"
             onClick={() => props.onPickDate?.()}
-            className="inline-flex max-w-full items-baseline gap-1 truncate rounded-md text-left transition-colors active:text-primary"
+            // py-2.5 and nothing horizontal. This is the only way into the
+            // calendar and it was a 24px-tall target — the bare WCAG 2.2
+            // minimum — because a line of text in a heading is as tall as the
+            // text. The row grows 20px, which is real estate this file guards
+            // jealously; the horizontal axis is the contested one, though, and
+            // the target is already the width of the whole date.
+            //
+            // NOT the layout-neutral `-my-2.5 py-2.5`: the h1 above carries
+            // `truncate`, and overflow:hidden clips HIT-TESTING as well as
+            // painting — the padding would measure correctly in a boundingBox
+            // and receive no taps at all.
+            className="inline-flex max-w-full items-baseline gap-1 truncate rounded-md py-2.5 text-left transition-colors active:text-primary"
           >
             <span className="truncate">
               {isSameDay(date, today) ? t("tabToday") : fmt.date(date, "EEEE")}

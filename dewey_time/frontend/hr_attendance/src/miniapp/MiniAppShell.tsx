@@ -289,17 +289,35 @@ export function MiniAppShell() {
         paddingRight: insets.right,
       }}
     >
-      {/* Rendered only once there is a real answer. A placeholder row saying
-          "Your record" over an empty name is a confirmation of nothing, and
-          this header's whole job is to be trustworthy at a glance. */}
-      {identity.data ? (
+      {/* NEVER A FALSE NAME, BUT NO LONGER A JUMP EITHER. This row used to
+          wait for its answer entirely — the objection being that a header
+          saying "Your record" over an empty name is a confirmation of
+          nothing — and the cost was 54px of the page dropping under the
+          reader's eye the moment the query landed, on the app's first screen.
+          A pending row makes no claim: bars where the values go, aria-busy on
+          the landmark, and the same markup, so the reserved height cannot
+          drift from the real one.
+
+          A FAILED query with nothing to show still renders nothing: there is
+          no answer coming, and a skeleton that never resolves is worse than an
+          absent row. A failure with data already in hand keeps the data —
+          blanking the header on a background refetch would be the same
+          disappearing act, arriving later.
+
+          `!identity.data`, not `isLoading`: react-query reports isLoading only
+          while actually fetching, so a pending-but-idle query would have
+          rendered the resolved branch over an empty payload — and the name
+          there falls back to "Your record", which is the false claim this row
+          has always refused to make. */}
+      {!identity.data && identity.isError ? null : (
         <MiniIdentity
-          employee={identity.data.employee}
-          employeeName={identity.data.employee_name}
-          khmerName={identity.data.khmer_name}
-          designation={identity.data.designation}
-          branch={identity.data.employee_branch}
-          imageUrl={identity.data.image}
+          pending={!identity.data}
+          employee={identity.data?.employee}
+          employeeName={identity.data?.employee_name}
+          khmerName={identity.data?.khmer_name}
+          designation={identity.data?.designation}
+          branch={identity.data?.employee_branch}
+          imageUrl={identity.data?.image}
           photoUrl={telegramPhotoUrl(window)}
           // Labelled in the language it switches TO, never in the current
           // one: someone stuck in a language they cannot read needs the way
@@ -307,7 +325,7 @@ export function MiniAppShell() {
           localeLabel={LOCALE_LABEL[otherLocale(locale)]}
           onToggleLocale={toggleLocale}
         />
-      ) : null}
+      )}
 
       {/* pb-6 on the SCROLL CONTAINER, not on the pages inside it. A Telegram
           sheet is frequently half the screen, and at that height the last row
