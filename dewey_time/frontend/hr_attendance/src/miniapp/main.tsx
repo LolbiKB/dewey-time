@@ -6,6 +6,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "@/lib/queryClient";
 import { MiniAppShell } from "@/miniapp/MiniAppShell";
+import { MiniCrashScreen } from "@/miniapp/MiniCrashScreen";
 import { initTelegramChrome, signalReady } from "@/miniapp/telegramChrome";
 import "@/index.css";
 
@@ -16,7 +17,11 @@ initTelegramChrome(window, document);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ErrorBoundary>
+    {/* The Mini App's own crash screen. The shared card below it is written
+        for an HR user at a desk: English, and with the JavaScript error
+        printed on it. Constructed HERE, at the boundary's own level, so it is
+        outside the subtree that threw by construction. */}
+    <ErrorBoundary fallback={(_error, reload) => <MiniCrashScreen onRetry={reload} />}>
       <QueryClientProvider client={queryClient}>
         {/* Required, not optional chrome: the planned-week columns render
             tooltips, and Radix throws "`Tooltip` must be used within

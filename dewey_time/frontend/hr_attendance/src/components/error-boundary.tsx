@@ -4,6 +4,20 @@ import { Button } from "@/components/ui/button";
 
 interface Props {
   children: ReactNode;
+  /**
+   * What to draw instead of the default English card.
+   *
+   * Given the error and the reload handler, because a fallback that cannot
+   * offer the way out is a dead end. It is rendered WHERE THE CRASHED SUBTREE
+   * WAS, so it has no providers above it: it must not read context, and must
+   * not import anything that could have been what threw.
+   *
+   * The Mini App passes one (see MiniCrashScreen) because this card is wrong
+   * on a phone in Khmer — and because it prints the raw error message, which
+   * is diagnostics addressed to the wrong reader. The HR console passes
+   * nothing and keeps the card exactly as it was.
+   */
+  fallback?: (error: Error, reload: () => void) => ReactNode;
 }
 
 interface State {
@@ -37,6 +51,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.error) {
+      if (this.props.fallback) return this.props.fallback(this.state.error, this.handleReload);
       return (
         <div className="flex h-screen items-center justify-center p-4">
           <div className="max-w-md space-y-4 text-center">

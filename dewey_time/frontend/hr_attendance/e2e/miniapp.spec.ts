@@ -999,3 +999,99 @@ test("a revoked link is asked once, and says who can fix it", async ({ page }) =
   await page.waitForTimeout(1500);
   expect(calendarRequests).toBe(1);
 });
+
+// ---------------------------------------------------------------------------
+// The app with no SDK at all
+//
+// NONE OF THESE CALL openMiniApp, and that omission is the test. Every other
+// case in this file aborts the telegram.org script AND injects a complete
+// window.Telegram stub, which proves only that an unused <script> can fail —
+// the branch where the SDK genuinely never arrives has never been exercised,
+// and it is the branch that told somebody inside Telegram to open the app
+// from Telegram.
+// ---------------------------------------------------------------------------
+
+/** The hash Telegram itself writes onto the URL before the script is fetched. */
+const LAUNCH_HASH =
+  "#tgWebAppData=user%3D%257B%2522id%2522%253A55501%257D" +
+  "&tgWebAppVersion=8.0&tgWebAppPlatform=android&tgWebAppThemeParams=%7B%7D";
+
+test("inside Telegram with no SDK, the app offers a retry instead of sending you where you already are", async ({ page }) => {
+  await page.route("https://telegram.org/**", (route) => route.abort());
+  await page.goto(MINIAPP + LAUNCH_HASH);
+
+  await expect(page.getByText(/finish loading/)).toBeVisible();
+  await expect(page.getByText(/មិនទាន់ផ្ទុក/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Try again/ })).toBeVisible();
+  // THE ASSERTION THAT IS THE BUG.
+  await expect(page.getByText("Open this from Telegram")).toHaveCount(0);
+});
+
+test("a native client is recognised by its injected proxy, with no hash and no SDK", async ({ page }) => {
+  // The commonest real shape: iOS and Android inject TelegramWebviewProxy and
+  // the launch parameters arrive over it. Hash-only detection would miss this
+  // one and show the wrong screen to most of the roster.
+  await page.route("https://telegram.org/**", (route) => route.abort());
+  await page.addInitScript(() => {
+    (window as unknown as { TelegramWebviewProxy: unknown }).TelegramWebviewProxy = {
+      postEvent() {},
+    };
+  });
+  await page.goto(MINIAPP);
+
+  await expect(page.getByText(/finish loading/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Try again/ })).toBeVisible();
+});
+
+test("a plain browser is still told to open it from Telegram, in both languages", async ({ page }) => {
+  // The positive control for the two above: no hash, no proxy, no SDK. This
+  // reader really is outside Telegram, and there is nothing here to retry.
+  await page.route("https://telegram.org/**", (route) => route.abort());
+  await page.goto(MINIAPP);
+
+  await expect(page.getByText("Open this from Telegram")).toBeVisible();
+  await expect(page.getByText("សូមបើកពី Telegram")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Try again/ })).toHaveCount(0);
+});
+
+test("a render crash shows a translated screen and never the JavaScript error", async ({ page }) => {
+  // The crash screen is only reachable through a real throw, which is why it
+  // shipped English-only with the error message printed on it for as long as
+  // it did. Forced here by answering the calendar with a shape the app cannot
+  // read: `days` as an OBJECT, which daysByDate's `for…of` cannot iterate.
+  // (A string would be iterable and would not throw — the first version of
+  // this test used one and the app rendered perfectly well.)
+  await page.route("https://telegram.org/**", (route) => route.abort());
+  await page.route("**/api/method/dewey_time.telegram.miniapp_api.get_my_calendar", (route) =>
+    route.fulfill({ json: { message: { employee: "HR-EMP-00042", days: { nope: 1 } } } }),
+  );
+  await page.addInitScript(() => {
+    (window as unknown as { Telegram: unknown }).Telegram = {
+      WebApp: {
+        initData: "user=%7B%22id%22%3A55501%7D&auth_date=1&hash=deadbeef",
+        initDataUnsafe: { user: { id: 55501 } },
+        colorScheme: "light", themeParams: {}, isActive: true,
+        safeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        contentSafeAreaInset: { top: 0, bottom: 0, left: 0, right: 0 },
+        BackButton: { isVisible: false, show() {}, hide() {}, onClick() {}, offClick() {} },
+        HapticFeedback: { selectionChanged() {}, impactOccurred() {}, notificationOccurred() {} },
+        ready() {}, expand() {}, disableVerticalSwipes() {},
+        setHeaderColor() {}, setBackgroundColor() {}, setBottomBarColor() {},
+        onEvent() {}, offEvent() {}, isVersionAtLeast: () => true,
+      },
+    };
+  });
+  await page.goto(MINIAPP);
+
+  const crash = page.getByText(/could not be shown/);
+  await expect(crash).toBeVisible();
+  await expect(page.getByText(/មិនអាចបង្ហាញបានទេ/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Try again/ })).toBeVisible();
+
+  // Nothing technical anywhere on the screen: no stack, no exception class,
+  // no "is not a function". This is what the old card printed verbatim.
+  const text = await page.locator("body").innerText();
+  expect(text, "the crash screen leaked the JavaScript error").not.toMatch(
+    /TypeError|undefined|not a function|\.tsx?:/,
+  );
+});

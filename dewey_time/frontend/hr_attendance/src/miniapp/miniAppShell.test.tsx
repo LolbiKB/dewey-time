@@ -6,8 +6,9 @@ import { MiniIdentity, initialsOf, subtitleOf } from "@/miniapp/MiniIdentity";
 import { MiniLocaleProvider } from "@/miniapp/MiniLocale";
 
 import {
-  isMiniTab, MiniTabBar, OutsideTelegramNotice, TAB_BAR_FLOOR_PX,
+  isMiniTab, MiniTabBar, OutsideTelegramNotice, SdkStalledNotice, TAB_BAR_FLOOR_PX,
 } from "@/miniapp/MiniAppShell";
+import { inBothLanguages } from "@/miniapp/miniStrings";
 
 test("outside Telegram the app explains itself instead of erroring", () => {
   const html = renderToStaticMarkup(<OutsideTelegramNotice />);
@@ -257,4 +258,63 @@ test("the shell reserves the row while loading and renders nothing on error", ()
     !/\{identity\.data \? \(/.test(shell),
     "waiting for the whole answer is what dropped the page 54px",
   );
+});
+
+// ---------------------------------------------------------------------------
+// The two screens shown when the app cannot start
+// ---------------------------------------------------------------------------
+
+test("the outside-Telegram notice finally reaches its Khmer", () => {
+  // Its Khmer has existed since the notice shipped and was unreachable: the
+  // only path to a language ran through the SDK, and this screen renders when
+  // the SDK told us nothing. Both languages, Khmer first.
+  const html = renderToStaticMarkup(<OutsideTelegramNotice />);
+  assert.match(html, /សូមបើកពី Telegram/);
+  assert.match(html, /Open this from Telegram/);
+  // NO RETRY: the page is in a browser and reloading changes nothing. Offering
+  // one would be a button that cannot work.
+  assert.ok(!/<button/.test(html), "there is nothing to retry in a browser");
+});
+
+test("inside Telegram with no SDK, the app says so and offers a way forward", () => {
+  // THE SCREEN THAT DID NOT EXIST. isInsideTelegram() is false both in a
+  // browser and here, so somebody sitting in the Telegram app was told to open
+  // it from Telegram — no explanation, nothing to press.
+  const html = renderToStaticMarkup(<SdkStalledNotice />);
+  assert.match(html, /កម្មវិធីមិនទាន់ផ្ទុករួចរាល់ទេ/);
+  // Not the apostrophe: renderToStaticMarkup escapes it to &#x27;, which is
+  // correct HTML and the reason the first version of this line failed.
+  assert.match(html, /finish loading/);
+  assert.match(html, /<button/, "and a retry, which is the whole point");
+  assert.ok(
+    !/Open this from Telegram/.test(html),
+    "never send somebody where they already are",
+  );
+  // The reassurance both failure screens carry, in both languages.
+  assert.match(html, /attendance record is not affected/);
+  assert.match(html, /កំណត់ត្រាវត្តមានរបស់អ្នកមិនរងផលប៉ះពាល់ទេ/);
+});
+
+test("the shell picks between the two by asking Telegram, not the SDK", () => {
+  // A source pin: the branch is chosen during the shell's render from globals
+  // node:test cannot install, and the defect was in the CONDITION.
+  const shell = readFileSync(new URL("./MiniAppShell.tsx", import.meta.url), "utf8");
+  assert.match(shell, /launchedFromTelegram\(window, document\) \? \(\s*<SdkStalledNotice \/>/);
+  // And the first paint reads the local mirror, so a returning Khmer reader
+  // does not get a frame of English while CloudStorage answers.
+  assert.match(shell, /resolveLocale\(localeHint\(window\), telegramLanguageCode\(window\)\)/);
+});
+
+test("every new failure string is really two languages, not one pasted twice", () => {
+  // The table is exhaustive by TYPE — a missing Khmer key is a compile error —
+  // but nothing stops an English sentence being pasted into the Khmer column,
+  // which is the failure mode that looks translated in review.
+  for (const key of [
+    "sdkStalledTitle", "sdkStalledBody", "crashTitle", "crashBody", "actionRetry",
+  ] as const) {
+    const pair = inBothLanguages(key);
+    assert.ok(pair.km.length > 0 && pair.en.length > 0, `${key} is empty somewhere`);
+    assert.notEqual(pair.km, pair.en, `${key} is the same string twice`);
+    assert.match(pair.km, /[ក-៿]/, `${key} has no Khmer in its Khmer`);
+  }
 });
