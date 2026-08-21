@@ -178,9 +178,18 @@ def announce(punches: list[dict]) -> dict:
             if open_time is not None and when is not None:
                 pairs += 1
                 total_minutes += _pair_minutes(open_time, when)
-                open_time = None
+            # The label decides, even when the timestamp will not parse: an
+            # explicit OUT closes whatever was open. The minutes are
+            # unknowable then -- no pair is counted, so `clean` stays false
+            # and the figure is withheld -- but leaving the arrival open had
+            # this walk saying "Checked out" while its own state said
+            # still-at-work, and the NEXT blank punch then closed against a
+            # departure that already happened. punchLiveVerbs.ts always
+            # cleared here; this is the Python side coming back in line.
+            #
             # A stray OUT (nothing open) matches nothing; kept != 2*pairs
             # keeps the hours figure off for the rest of the day.
+            open_time = None
             verbs.append(OUT)
         elif label == IN:
             # First arrival stays open; a labelled repeat is noise (pairRun's

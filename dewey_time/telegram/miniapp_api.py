@@ -321,9 +321,44 @@ def _uncertain_dates(payload: dict) -> set:
     }
 
 
-def narrow(payload: dict) -> dict:
+def _residue_dates(branch, start: str, end: str) -> set:
+    """Dates the bridge itself said it had not fully delivered.
+
+    #196 defined feed-uncertainty for the phone as "an unresolved Device
+    Closeout Alert". #199 then introduced a second untrustable state that
+    RESOLVES the alert: a close carrying undelivered residue stamps
+    `resolved_at`, so it vanishes from the unresolved query -- while the
+    engine's own `feed_attested_complete` refuses to base LATE_START on
+    exactly those rows. The phone must refuse them the same way, or a day the
+    bridge said it under-delivered reads as a bare no-show.
+
+    `undelivered_recorded = 1` is the positive-claim gate, read the same way
+    the attestation predicate reads it: a row that never claimed a count is
+    not residue, and a recorded zero is a clean close. DB-touching, so it
+    lives OUTSIDE `narrow` -- the caller merges it in, keeping narrow a pure
+    projection the allowlist tests can feed fabricated payloads.
+    """
+    if not branch or not frappe.db.table_exists("Device Closeout Alert"):
+        return set()
+    rows = (
+        frappe.get_all(
+            "Device Closeout Alert",
+            filters={
+                "branch": branch,
+                "local_date": ["between", [start, end]],
+                "undelivered_recorded": 1,
+                "undelivered_count": [">", 0],
+            },
+            fields=["local_date"],
+        )
+        or []
+    )
+    return {str(row.get("local_date")) for row in rows if row.get("local_date")}
+
+
+def narrow(payload: dict, extra_uncertain: set | None = None) -> dict:
     """Project the HR calendar payload down to what an employee may see."""
-    uncertain = _uncertain_dates(payload)
+    uncertain = _uncertain_dates(payload) | (extra_uncertain or set())
     days = []
     for day in payload.get("days") or []:
         narrowed = _pick(day, DAY_KEYS)
@@ -435,7 +470,13 @@ def get_my_calendar(init_data: str, start_date: str, end_date: str) -> dict:
     if date_diff(end, start) > MAX_RANGE_DAYS:
         frappe.throw(f"Range is limited to {MAX_RANGE_DAYS} days")
 
-    payload = narrow(hr_calendar.build_employee_calendar(employee, str(start), str(end)))
+    built = hr_calendar.build_employee_calendar(employee, str(start), str(end))
+    payload = narrow(
+        built,
+        # Closed-with-residue days -- see _residue_dates. Looked up here, not
+        # inside narrow, for the same purity reason as _identity below.
+        extra_uncertain=_residue_dates(built.get("employee_branch"), str(start), str(end)),
+    )
     # Merged here rather than inside narrow(): narrow is a pure projection of
     # what it is handed, and identity is a separate lookup. Keeping it pure is
     # what lets the allowlist tests feed it a fabricated HR payload.

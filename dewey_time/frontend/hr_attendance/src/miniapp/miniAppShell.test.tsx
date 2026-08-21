@@ -144,3 +144,19 @@ test("the subtitle composes only what exists", () => {
   assert.equal(subtitleOf(null, null), null);
   assert.equal(subtitleOf("  ", ""), null);
 });
+
+test("the shell's todayKey follows the ticking clock, not the render's", () => {
+  // #200 gave MyDayPage a minute tick precisely because a poll returning
+  // identical data never re-renders — so a render-time `new Date()` froze the
+  // date past midnight. The shell's identity query had the same defect: after
+  // midnight it kept polling yesterday's one-day range while the Day tab had
+  // moved on, doubling the calendar traffic until the app was reopened. A
+  // source pin, because the shell's clock cannot be driven from node:test.
+  const source = readFileSync(
+    new URL("./MiniAppShell.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /const tick = useMinuteTick\(\);/);
+  assert.match(source, /const todayKey = format\(tick, "yyyy-MM-dd"\)/);
+  assert.doesNotMatch(source, /format\(new Date\(\), "yyyy-MM-dd"\)/);
+});

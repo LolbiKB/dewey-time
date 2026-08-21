@@ -103,6 +103,9 @@ def _install_frappe_mock():
     ).days
     utils_mod.nowdate = lambda: str(date.today())
     utils_mod.cint = _mock_cint
+    # Added for the /hr-me page module (www/hr-me.py), whose boot carries the
+    # site timezone for the Mini App's clock arithmetic.
+    utils_mod.get_system_timezone = lambda: "Asia/Phnom_Penh"
     # An https site by default, because that is what production is and what
     # the Telegram Mini App URL fallback needs to produce a usable button.
     # Tests that care about the value patch `transport.get_url` directly.
@@ -667,6 +670,13 @@ class TestAttestedSinglePunchLateStart(unittest.TestCase):
             ),
             "open_alert": patch(
                 "dewey_time.attendance_engine.closeout.has_open_device_closeout_alert",
+                return_value=False,
+            ),
+            # Pinned like open_alert and for the same discover-order reason:
+            # the raw mock's frappe.db.exists returns a truthy Mock, which
+            # would read as "residue everywhere" and gag the attested path.
+            "residue_alert": patch(
+                "dewey_time.attendance_engine.closeout.has_residue_closeout_alert",
                 return_value=False,
             ),
             "phase_for": patch(
@@ -1941,4 +1951,66 @@ class TestInsertFlagStampsPhase(unittest.TestCase):
             )
         phase_for_employee.assert_called_once_with(
             employee="EMP-1", attendance_date=date(2026, 8, 20)
+        )
+
+
+class TestClosedWithResidueSilencesTheAbsencePath(unittest.TestCase):
+    """A residue close must gag UNNOTIFIED_ABSENCE, not just LATE_START.
+
+    upsert_device_closeout_alert stamps resolved_at on ANY closed status, so a
+    closed-with-residue day is invisible to has_open_device_closeout_alert --
+    and the absence path then accused a zero-checkin employee on a day whose
+    punches may sit in exactly the residue the stored count records. The Mini
+    App showed "no data came from the device" directly above "no record for
+    this day" for the same date. feed_attested_complete already refuses these
+    rows; this pins that the absence path now refuses them too.
+    """
+
+    def test_residue_is_asked_for_without_a_resolution_filter(self):
+        # The load-bearing detail: filtering on resolved_at here would re-open
+        # the hole, because a residue close IS resolved.
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe.db, "exists", return_value=True) as exists:
+            self.assertTrue(
+                closeout.has_residue_closeout_alert(branch="BRANCH-A", local_date=date(2026, 8, 19))
+            )
+        filters = exists.call_args[0][1]
+        self.assertEqual(filters["undelivered_recorded"], 1)
+        self.assertEqual(filters["undelivered_count"], [">", 0])
+        self.assertNotIn("resolved_at", filters)
+
+    def test_no_branch_makes_no_claim(self):
+        from dewey_time.attendance_engine import closeout
+
+        with patch.object(closeout.frappe.db, "exists") as exists:
+            self.assertFalse(
+                closeout.has_residue_closeout_alert(branch=None, local_date=date(2026, 8, 19))
+            )
+        exists.assert_not_called()
+
+    @patch("dewey_time.attendance_engine.closeout.has_delivery_or_record_failure_today", return_value=False)
+    @patch("dewey_time.attendance_engine.closeout.has_residue_closeout_alert", return_value=True)
+    @patch("dewey_time.attendance_engine.closeout.has_open_device_closeout_alert", return_value=False)
+    def test_residue_alone_skips_absence_flags(self, _open, residue, _delivery):
+        from dewey_time.attendance_engine.closeout import should_skip_absence_flags
+
+        self.assertTrue(
+            should_skip_absence_flags(
+                employee="EMP-1", employee_branch="BRANCH-A", attendance_date=date(2026, 8, 19)
+            )
+        )
+        residue.assert_called_once()
+
+    @patch("dewey_time.attendance_engine.closeout.has_delivery_or_record_failure_today", return_value=False)
+    @patch("dewey_time.attendance_engine.closeout.has_residue_closeout_alert", return_value=False)
+    @patch("dewey_time.attendance_engine.closeout.has_open_device_closeout_alert", return_value=False)
+    def test_a_clean_close_still_allows_the_absence_flag(self, _open, _residue, _delivery):
+        # The inversion: the new check must not gag every absence everywhere.
+        from dewey_time.attendance_engine.closeout import should_skip_absence_flags
+
+        self.assertFalse(
+            should_skip_absence_flags(
+                employee="EMP-1", employee_branch="BRANCH-A", attendance_date=date(2026, 8, 19)
+            )
         )

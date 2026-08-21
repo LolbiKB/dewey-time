@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { dayFacts } from "@/miniapp/miniDay";
-import { dayMark, dayMarkLabel, type DayMark } from "@/miniapp/miniDayMark";
+import { dayMark, dayMarkLabel, showsFeedNotice, type DayMark } from "@/miniapp/miniDayMark";
 import type { Day } from "@/types/calendar";
 
 /**
@@ -363,4 +366,113 @@ test("an uncertain feed does not rewrite a record that arrived intact", () => {
     dayMark(dayFacts(day, date, date), day, date, new Date(2026, 7, 19, 18, 0)),
     "complete",
   );
+});
+
+// ---------------------------------------------------------------------------
+// The Day tab's feed notice — the SAME predicate as the mark, by construction.
+// It used to key on `feed_uncertain` alone, which is branch-level: any
+// unresolved alert at the branch put "no data came from the device" under a
+// day whose own record was complete and fully paired, flatly contradicting
+// the timeline drawn right above it.
+// ---------------------------------------------------------------------------
+
+test("a complete day shows no feed notice even while its branch has an alert", () => {
+  const d = day(18, 4, { feed_uncertain: true } as Partial<Day>);
+  assert.equal(showsFeedNotice(d, AUG(18), AUG(19)), false);
+});
+
+test("a deficient day under an uncertain feed shows the notice", () => {
+  // Zero punches on a finished rostered day — the shape the notice exists
+  // for: pixel-identical to a no-show without it.
+  const missing = day(18, 0, { feed_uncertain: true } as Partial<Day>);
+  assert.equal(showsFeedNotice(missing, AUG(18), AUG(19)), true);
+
+  const incomplete = day(18, 3, { feed_uncertain: true } as Partial<Day>);
+  assert.equal(showsFeedNotice(incomplete, AUG(18), AUG(19)), true);
+});
+
+test("a deficient day with a VOUCHED feed shows no notice", () => {
+  // The inversion: without feed_uncertain the deficiency is the employee's
+  // own record, and excusing it would excuse real absences.
+  const missing = day(18, 0);
+  assert.equal(showsFeedNotice(missing, AUG(18), AUG(19)), false);
+});
+
+test("the Day tab is wired through showsFeedNotice, not the bare boolean", () => {
+  // A source pin on the seam: the predicate above stays green even if
+  // MyDayPage quietly goes back to `info?.feed_uncertain`.
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "MyDayPage.tsx"),
+    "utf8",
+  );
+  assert.match(source, /showsFeedNotice\(info, date, now\)/);
+  assert.doesNotMatch(source, /info\?\.feed_uncertain \?/);
+});
+
+test("a clock-based employee keeps the notice on their unrostered days", () => {
+  // The review's cohort finding: routing the notice through dayMark silenced
+  // it wherever the mark refuses judgment — and a clock-based employee has no
+  // roster, so their EVERY day is "off". A day the device lost their punches
+  // read "Day off" with no explanation at all.
+  const noShift = { shift: { shift_assigned: false }, feed_uncertain: true } as Partial<Day>;
+
+  const zeroDelivered = day(18, 0, noShift);
+  assert.equal(showsFeedNotice(zeroDelivered, AUG(18), AUG(19)), true);
+
+  // Arrival delivered, departure lost in the residue: one unpaired punch.
+  const halfDelivered = day(18, 1, noShift);
+  assert.equal(showsFeedNotice(halfDelivered, AUG(18), AUG(19)), true);
+});
+
+test("a clock-based day whose record arrived intact needs no excuse", () => {
+  const paired = day(18, 2, { shift: { shift_assigned: false }, feed_uncertain: true } as Partial<Day>);
+  assert.equal(showsFeedNotice(paired, AUG(18), AUG(19)), false);
+});
+
+test("the notice reaches a running day too", () => {
+  // Mid-shift with nothing delivered under a dead feed: the mark rightly says
+  // "none" (judging a running morning is an accusation), but the notice is an
+  // EXCUSE, not a judgment, and the row above it is already showing "— / 8h".
+  const running = day(18, 0, { feed_uncertain: true } as Partial<Day>);
+  assert.equal(showsFeedNotice(running, AUG(18), AUG(18, 11)), true);
+});
+
+test("the notice never fires into the future", () => {
+  const tomorrow = day(18, 0, { feed_uncertain: true } as Partial<Day>);
+  assert.equal(showsFeedNotice(tomorrow, AUG(18), AUG(17)), false);
+});
+
+test("the spoken numbers row keys on the same predicate as the banner", () => {
+  // Audio and visible disagreed on one screen: MiniDayNumbers' sr-only
+  // sentence still read the bare feed_uncertain after the banner moved to
+  // showsFeedNotice. A source pin on the seam.
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "MiniDayNumbers.tsx"),
+    "utf8",
+  );
+  assert.match(source, /showsFeedNotice\(props\.day, props\.date, props\.now\)/);
+  assert.doesNotMatch(source, /props\.day\?\.feed_uncertain === true/);
+});
+
+test("a zero-punch holiday or leave day gets no excuse it does not owe", () => {
+  // Nothing on a holiday screen accuses anyone, so "no data came from the
+  // device" under it is noise. Punches on the day change that — someone
+  // worked it, and a broken record of premium-paid work keeps the excuse.
+  const holidayOff = day(18, 0, {
+    holiday: { name: "HOL-1" },
+    feed_uncertain: true,
+  } as unknown as Partial<Day>);
+  assert.equal(showsFeedNotice(holidayOff, AUG(18), AUG(19)), false);
+
+  const leaveOff = day(18, 0, {
+    leave: { on_leave: true },
+    feed_uncertain: true,
+  } as unknown as Partial<Day>);
+  assert.equal(showsFeedNotice(leaveOff, AUG(18), AUG(19)), false);
+
+  const workedHolidayBroken = day(18, 1, {
+    holiday: { name: "HOL-1" },
+    feed_uncertain: true,
+  } as unknown as Partial<Day>);
+  assert.equal(showsFeedNotice(workedHolidayBroken, AUG(18), AUG(19)), true);
 });

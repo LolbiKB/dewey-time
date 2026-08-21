@@ -373,6 +373,41 @@ def has_open_device_closeout_alert(*, branch: str, local_date) -> bool:
     )
 
 
+def has_residue_closeout_alert(*, branch: str | None, local_date) -> bool:
+    """A device at this branch closed the day admitting undelivered rows.
+
+    `upsert_device_closeout_alert` stamps `resolved_at` on ANY closed status,
+    residue included -- so a closed-with-residue day is invisible to
+    `has_open_device_closeout_alert` while being exactly the state in which
+    the engine must not trust silence: the bridge itself said rows exist that
+    never arrived, and the pin-only residue (rows it could not attribute to
+    an Employee) is recorded nowhere but this count. `feed_attested_complete`
+    already refuses these rows for the lone-punch LATE_START path; without
+    this, the ABSENCE path still accused a zero-checkin employee on a day
+    their punches may sit in that residue -- and the Mini App then showed
+    "no data came from the device" directly above "no record for this day".
+
+    Resolved or not, deliberately: an unresolved residue row is already
+    caught by the open-alert check, and filtering on resolution here would
+    re-open the same hole one refactor later.
+    """
+    if not branch:
+        return False
+
+    local_date = getdate(local_date)
+    return bool(
+        frappe.db.exists(
+            "Device Closeout Alert",
+            {
+                "branch": branch,
+                "local_date": local_date,
+                "undelivered_recorded": 1,
+                "undelivered_count": [">", 0],
+            },
+        )
+    )
+
+
 def _employees_for_device_closeout(device_sn: str, local_date, undelivered_items):
     local_date = getdate(local_date)
     start = get_datetime(str(local_date) + " 00:00:00")
@@ -421,6 +456,12 @@ def _on_shift_zero_checkin_employees_at_branch(branch: str | None, local_date) -
 def should_skip_absence_flags(*, employee: str, employee_branch: str | None, attendance_date) -> bool:
     attendance_date = getdate(attendance_date)
     if employee_branch and has_open_device_closeout_alert(branch=employee_branch, local_date=attendance_date):
+        return True
+    # Closed-with-residue is untrustable silence too -- see
+    # has_residue_closeout_alert. A flag already written for such a day is
+    # retracted by the next rebuild, because this predicate re-derives from
+    # the stored rows on every regeneration.
+    if employee_branch and has_residue_closeout_alert(branch=employee_branch, local_date=attendance_date):
         return True
     return has_delivery_or_record_failure_today(employee, attendance_date)
 

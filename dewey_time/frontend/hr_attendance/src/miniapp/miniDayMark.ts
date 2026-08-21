@@ -189,3 +189,33 @@ export function dayMark(
   }
   return mark;
 }
+
+/**
+ * Whether the Day tab should show its "no data from the device" notice.
+ *
+ * The notice used to key on `feed_uncertain` alone, which is a branch-level
+ * fact — any troubled closeout at the employee's branch, from any device — so
+ * it appeared under days whose own record was complete and fully paired,
+ * flatly contradicting the timeline drawn right above it. That completeness
+ * check is the ONLY suppression: a record that arrived intact needs no
+ * excuse, and everything less than intact keeps one.
+ *
+ * Deliberately NOT `dayMark(...) === "uncertain"`, though a first version
+ * was. The mark judges a FINISHED, ROSTERED record and refuses judgment
+ * everywhere else — "off" for an unrostered day, "none" mid-shift — and a
+ * notice routed through it went silent for exactly the people least able to
+ * miss it: a clock-based employee has no roster, so their every day is
+ * "off", and a day the device lost their punches read "Day off" with no
+ * explanation at all. The banner is not a judgment; it is an excuse, and an
+ * excuse must reach any day whose record might be missing something.
+ */
+export function showsFeedNotice(day: Day | undefined, date: Date, now: Date): boolean {
+  if (!day?.feed_uncertain) return false;
+  // Never in the future — same rule as the mark.
+  if (date > now && !isSameDay(date, now)) return false;
+  // A zero-punch holiday or leave day owes no record, so it needs no excuse
+  // — and nothing on its screen accuses anyone. Punches on such a day change
+  // that: someone worked it, and a broken record of it keeps the excuse.
+  if (punchCount(day) === 0 && (day.holiday || day.leave?.on_leave)) return false;
+  return !(punchCount(day) > 0 && isPaired(day));
+}
