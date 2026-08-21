@@ -51,7 +51,14 @@ test("the poll is gated on Telegram's activity, not on document visibility", () 
   // revoked link for as long as it was open.
   assert.match(body, /^\s*if \(!active \|\| isPermanentRejection\(query\.state\.error\)\) return false;/);
   assert.match(body, /\?\s*60_000\s*:\s*false/, "one interval, and false as the alternative");
-  assert.equal((body.match(/60_000/g) ?? []).length, 1, "no second, smaller interval");
+  // EVERY number in the body, not just the count of this one. Counting
+  // `60_000` said "no second, smaller interval" and did not check for one:
+  // slipping `if (unanswered) return 5_000;` in above the ternary left the
+  // whole file green. The set of intervals this can produce is the claim.
+  assert.deepEqual(
+    [...new Set(body.match(/\b\d[\d_]*\b/g) ?? [])], ["60_000"],
+    "one interval and no other, however it is reached",
+  );
   assert.match(src, /isAppActive|onActiveChange/);
 });
 
@@ -84,7 +91,13 @@ test("the site clock is learned at FETCH time, never from cached query data", ()
   //
   // A source read: fetchCalendar is module-private and the honest alternative
   // is a fetch mock plus a query client, for one call.
-  const src = readFileSync(new URL("./useMiniAppSession.ts", import.meta.url), "utf8");
+  // COMMENTS STRIPPED, like every other source guard in this file — and here
+  // the hazard runs the other way. The count below is a NEGATIVE claim, so a
+  // sentence naming `noteServerNow(` (in a file that argues at length about
+  // where it may be called) would fail this test rather than falsely pass it.
+  const src = readFileSync(new URL("./useMiniAppSession.ts", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
   assert.match(src, /noteServerNow\(payload\?\.server_now\)/);
   // Inside fetchCalendar, above its return — not in a hook.
   assert.match(src, /noteServerNow\(payload\?\.server_now\);\s*\n\s*return payload;/);
