@@ -789,11 +789,29 @@ test("a sheet on a phone with no side insets keeps its own padding", async ({ pa
   await page.setViewportSize({ width: 320, height: 700 });
   await page.getByRole("button", { name: /to check/ }).click();
 
-  const sheet = page.getByRole("dialog");
-  await expect(sheet).toBeVisible();
-  const box = (await sheet.boundingBox())!;
-  const item = (await sheet.getByRole("listitem").first().boundingBox())!;
-  expect(item.x - box.x, "the flags list sat flush against the screen edge").toBeGreaterThanOrEqual(12);
+  // BOTH EDGES, and both sheets: the bug was one property per side, so a test
+  // that measures one of the four proves a quarter of the fix.
+  const flags = page.getByRole("dialog");
+  await expect(flags).toBeVisible();
+  const flagsBox = (await flags.boundingBox())!;
+  const item = (await flags.getByRole("listitem").first().boundingBox())!;
+  expect(item.x - flagsBox.x, "the flags list sat flush against the left edge").toBeGreaterThanOrEqual(12);
+  expect(
+    flagsBox.x + flagsBox.width - (item.x + item.width),
+    "the flags list ran into the right edge",
+  ).toBeGreaterThanOrEqual(12);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
+  const calendar = page.getByRole("dialog");
+  await expect(calendar).toBeVisible();
+  const calBox = (await calendar.boundingBox())!;
+  const grid = (await calendar.getByRole("grid").boundingBox())!;
+  expect(grid.x - calBox.x, "the month grid sat flush against the left edge").toBeGreaterThanOrEqual(6);
+  expect(
+    calBox.x + calBox.width - (grid.x + grid.width),
+    "the month grid ran into the right edge",
+  ).toBeGreaterThanOrEqual(6);
 });
 
 test("the controls on these screens are big enough to hit", async ({ page }) => {
