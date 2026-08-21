@@ -39,11 +39,20 @@ export function MiniFlagsSheet(props: {
         // Ours, not the design system's: its close button carries a hardcoded
         // English "Close" that no prop can translate. See MiniSheetClose.
         showCloseButton={false}
+        // A dangling aria-describedby otherwise: Radix generates the id from
+        // context whether or not a SheetDescription exists, so this sheet
+        // pointed at an element that was never rendered. Undefined is the
+        // primitive's own documented way to say "there is no description".
+        aria-describedby={undefined}
         className="gap-0 rounded-t-xl px-4 pb-8"
         style={{
+          // ADDED to the class's padding, exactly as paddingBottom is — a bare
+          // `insets.left` OVERRIDES px-4 with 0px on every device without a
+          // side inset, which is most of them, and the list then sat flush
+          // against both screen edges.
           paddingBottom: `calc(2rem + ${insets.bottom}px)`,
-          paddingLeft: insets.left,
-          paddingRight: insets.right,
+          paddingLeft: `calc(1rem + ${insets.left}px)`,
+          paddingRight: `calc(1rem + ${insets.right}px)`,
         }}
       >
         <SheetHeader className="px-0 pb-2">

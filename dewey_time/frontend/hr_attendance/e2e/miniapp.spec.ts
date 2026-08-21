@@ -71,7 +71,7 @@ function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] =
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown>; delayCalendarMs?: number } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown>; delayCalendarMs?: number; identity?: Record<string, unknown> } = {}) {
   await page.addInitScript(
     ({ theme, themeParams, languageCode, fullscreen }) => {
       const handlers: Record<string, (() => void)[]> = {};
@@ -162,6 +162,12 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
           khmer_name: "សុខ ដារា",
           designation: "Cashier",
           employee_branch: "DIS Iconic",
+          // A COMPLETE record, which is the shape this fixture has always
+          // sent — and for one test that is exactly the wrong default. The
+          // header reserves a row whose height depends on which of these are
+          // null, so a fixture that always fills them in cannot fail. Only
+          // that test overrides them.
+          ...(opts.identity ?? {}),
           days,
         },
       },
@@ -725,32 +731,70 @@ test("the Profile tab opens its outline at a level-1 heading", async ({ page }) 
   await expect(heading).toHaveCount(1);
 });
 
+// The two axes this reservation actually varies on. LANGUAGE, because the
+// Khmer webfont is applied to the whole app — Latin glyphs included — and its
+// normal line-height is taller, so identical content measures 62.9px in Khmer
+// and 57.5px in English and any pixel constant is wrong in one of them.
+//
+// And PAYLOAD SHAPE, which is the axis the first version of this test missed
+// entirely: the second line's two values are both optional, and the fixture
+// filled both in, which is the one shape where the old markup happened to
+// match. A record with no Khmer name still moved 3px, and a record with
+// nothing but a name and an id moved 9.9px.
+const IDENTITY_SHAPES = [
+  { name: "a complete record", identity: {} },
+  { name: "no Khmer name", identity: { khmer_name: null } },
+  {
+    name: "a name and an id, nothing else",
+    identity: { khmer_name: null, designation: null, employee_branch: null },
+  },
+];
+
 for (const languageCode of ["km", "en"] as const) {
-  test(`the header reserves the row it will actually need (${languageCode})`, async ({ page }) => {
-    // The whole page used to drop 54px when this query landed — the header was
-    // not rendered at all until it had an answer, on the app's first screen,
-    // under the eye of somebody already reading the timeline.
-    //
-    // BOTH LANGUAGES, because a reservation in pixels is wrong in one of them:
-    // identical content measures 62.9px in Khmer and 57.5px in English, since
-    // the Khmer webfont is applied to the whole app — Latin glyphs included —
-    // and its normal line-height is taller. The skeleton reserves a real line
-    // of text instead of a number, and this measures that it worked.
-    await openMiniApp(page, { languageCode, delayCalendarMs: 2500 });
+  for (const shape of IDENTITY_SHAPES) {
+    test(`the header reserves the row it will actually need (${languageCode}, ${shape.name})`, async ({ page }) => {
+      // The whole page used to drop 54px when this query landed — the header
+      // was not rendered at all until it had an answer, on the app's first
+      // screen, under the eye of somebody already reading the timeline. The
+      // reservation is a real line of text rather than a pixel constant; this
+      // measures both states and requires them to agree.
+      await openMiniApp(page, {
+        languageCode,
+        delayCalendarMs: 2500,
+        identity: shape.identity,
+      });
 
-    const banner = page.getByRole("banner");
-    await expect(banner).toBeVisible();
-    await expect(banner).toHaveAttribute("aria-busy", "true");
-    const pending = (await banner.boundingBox())!.height;
+      const banner = page.getByRole("banner");
+      await expect(banner).toBeVisible();
+      await expect(banner).toHaveAttribute("aria-busy", "true");
+      const pending = (await banner.boundingBox())!.height;
 
-    await expect(banner).not.toHaveAttribute("aria-busy", "true", { timeout: 8000 });
-    const resolved = (await banner.boundingBox())!.height;
-    expect(
-      Math.abs(resolved - pending),
-      `the header moved ${resolved - pending}px when its answer arrived`,
-    ).toBeLessThanOrEqual(1);
-  });
+      await expect(banner).not.toHaveAttribute("aria-busy", "true", { timeout: 8000 });
+      const resolved = (await banner.boundingBox())!.height;
+      expect(
+        Math.abs(resolved - pending),
+        `the header moved ${resolved - pending}px when its answer arrived`,
+      ).toBeLessThanOrEqual(1);
+    });
+  }
 }
+
+test("a sheet on a phone with no side insets keeps its own padding", async ({ page }) => {
+  // The inline safe-area style REPLACED the className's px-4 rather than
+  // adding to it, so on every device without a side inset — most of them —
+  // the flags list ran flush into both screen edges. Measured rather than
+  // read: the class is still in the source either way, which is exactly why
+  // a source read would not have caught this.
+  await openMiniApp(page, { flags: [{ flag_code: "LATE_START", status: "Open", severity: "warning" }] });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.getByRole("button", { name: /to check/ }).click();
+
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  const box = (await sheet.boundingBox())!;
+  const item = (await sheet.getByRole("listitem").first().boundingBox())!;
+  expect(item.x - box.x, "the flags list sat flush against the screen edge").toBeGreaterThanOrEqual(12);
+});
 
 test("the controls on these screens are big enough to hit", async ({ page }) => {
   // WCAG 2.2 target size (minimum) is 24x24 CSS px. Three of these were AT or

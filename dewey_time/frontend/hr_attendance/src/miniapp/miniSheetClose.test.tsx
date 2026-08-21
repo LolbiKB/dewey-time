@@ -71,6 +71,30 @@ test("both sheets turn the design system's button off and render this one last",
   }
 });
 
+test("neither sheet points at a description that does not exist", () => {
+  // Radix generates an aria-describedby from context whether or not a
+  // SheetDescription was rendered, so both of these sheets shipped an
+  // attribute referencing an id no element has — a dangling reference a
+  // screen reader resolves to nothing, and a console warning from the
+  // primitive itself. Undefined is its documented way to say there is none.
+  for (const file of ["MiniCalendarSheet.tsx", "MiniFlagsSheet.tsx"]) {
+    assert.match(SRC(file), /aria-describedby=\{undefined\}/, `${file} still dangles`);
+  }
+});
+
+test("the safe-area insets are ADDED to each sheet's own padding", () => {
+  // `paddingLeft: insets.left` is an inline style, so it beat the px-4 / px-2
+  // in the className — with 0px, on every device without a side inset, which
+  // is most of them. The flags list then sat flush against both screen edges.
+  // The same file's paddingBottom always composed correctly; these two did
+  // not, and the difference is one calc().
+  for (const [file, base] of [["MiniCalendarSheet.tsx", "0.5rem"], ["MiniFlagsSheet.tsx", "1rem"]] as const) {
+    const src = SRC(file);
+    assert.match(src, new RegExp(`paddingLeft: \`calc\\(${base} \\+ \\$\\{insets\\.left\\}px\\)\``));
+    assert.match(src, new RegExp(`paddingRight: \`calc\\(${base} \\+ \\$\\{insets\\.right\\}px\\)\``));
+  }
+});
+
 test("the flags sheet has no other way out, which is why the button must exist", () => {
   // The calendar sheet at least has a grid to escape by. This one is a title
   // and a list: with showCloseButton={false} and no replacement, a reader

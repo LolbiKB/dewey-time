@@ -104,7 +104,7 @@ export function subtitleOf(designation: string | null | undefined, branch: strin
  */
 function SkeletonLine(props: { className: string; width: string }) {
   return (
-    <p aria-hidden="true" className={`grid leading-normal ${props.className}`}>
+    <p aria-hidden="true" className={`grid grid-cols-1 leading-normal ${props.className}`}>
       <span className="invisible col-start-1 row-start-1">&nbsp;</span>
       <span className={`col-start-1 row-start-1 h-2.5 self-center rounded bg-muted ${props.width}`} />
     </p>
@@ -186,18 +186,38 @@ export function MiniIdentity(props: MiniIdentityProps) {
                 {props.employee ?? ""}
               </span>
             </p>
-            <p className="flex items-baseline gap-1.5 text-[11px] leading-normal text-muted-foreground">
-              {/* The name many of these employees would actually recognise as
-                  their own. Bounded rather than free — the same max-w +
-                  shrink-0 pattern the Day header's status chip uses — so it
-                  can never take the whole row, but it yields width only after
-                  the role and site have. */}
-              {props.khmerName ? (
-                <span className="max-w-[60%] shrink-0 truncate text-[13px] text-foreground">
-                  {props.khmerName}
-                </span>
-              ) : null}
-              {subtitle ? <span className="min-w-0 truncate">{subtitle}</span> : null}
+            {/* ONE 13px LINE, WHATEVER IS IN IT. Both of this line's children
+                are optional — a great many employees have no branch, plenty
+                have no Khmer name, and with neither this was a flex container
+                with no children, which generates no line box and collapses to
+                nothing. The row was then SHORTER than the skeleton that
+                reserved it, so the page still moved when the answer landed:
+                3px for an ordinary record, 9.9px in Khmer for a sparse one.
+                Measured, after the first version of this fix claimed zero.
+
+                The same invisible strut the skeleton uses, so the two are one
+                construction rather than two guesses about each other. It costs
+                a Khmer-name-less employee 3px of header they did not have
+                before, which is the trade: a row that is always the same
+                height, on the app's first screen, under a timeline somebody is
+                already reading. */}
+            <p className="grid grid-cols-1 text-[13px] leading-normal">
+              <span aria-hidden="true" className="invisible col-start-1 row-start-1">
+                &nbsp;
+              </span>
+              <span className="col-start-1 row-start-1 flex min-w-0 items-baseline gap-1.5 text-[11px] text-muted-foreground">
+                {/* The name many of these employees would actually recognise as
+                    their own. Bounded rather than free — the same max-w +
+                    shrink-0 pattern the Day header's status chip uses — so it
+                    can never take the whole row, but it yields width only after
+                    the role and site have. */}
+                {props.khmerName ? (
+                  <span className="max-w-[60%] shrink-0 truncate text-[13px] text-foreground">
+                    {props.khmerName}
+                  </span>
+                ) : null}
+                {subtitle ? <span className="min-w-0 truncate">{subtitle}</span> : null}
+              </span>
             </p>
           </>
         )}

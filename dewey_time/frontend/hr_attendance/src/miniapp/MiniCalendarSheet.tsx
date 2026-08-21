@@ -175,14 +175,21 @@ export function MiniCalendarSheet(props: {
         // Ours, not the design system's: its close button carries a hardcoded
         // English "Close" that no prop can translate. See MiniSheetClose.
         showCloseButton={false}
+        // A dangling aria-describedby otherwise: Radix generates the id from
+        // context whether or not a SheetDescription exists, so this sheet
+        // pointed at an element that was never rendered. Undefined is the
+        // primitive's own documented way to say "there is no description".
+        aria-describedby={undefined}
         className="gap-0 rounded-t-xl px-2 pb-6"
         // ADDED to the floor, never chosen between: the sheet renders through a
         // portal outside the shell's padded container, so without this the
-        // month total sits in the home-indicator swipe zone.
+        // month total sits in the home-indicator swipe zone. The side edges
+        // work the same way — a bare `insets.left` OVERRODE px-2 with 0px on
+        // every device without a side inset, which is most of them.
         style={{
           paddingBottom: `calc(1.5rem + ${insets.bottom}px)`,
-          paddingLeft: insets.left,
-          paddingRight: insets.right,
+          paddingLeft: `calc(0.5rem + ${insets.left}px)`,
+          paddingRight: `calc(0.5rem + ${insets.right}px)`,
         }}
       >
         <SheetHeader className="pb-0">
