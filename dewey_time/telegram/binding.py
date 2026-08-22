@@ -76,8 +76,11 @@ def _load_token(token_hash: str, *, for_update: bool = False):
     asked for. That call is a PLAIN select, and it decides whether the locking
     one runs at all -- so the answer that gates the write, None, was still
     coming from the pinned snapshot no matter what flag the second statement
-    carried. `get_value` on a docname returns None by itself; the pre-check
-    only ever saved a query on the miss.
+    carried. `get_value` on a docname returns None by itself (verified against
+    frappe version-16), so the pre-check only ever saved a query on the miss --
+    at the cost, now, of a gap lock taken by a FOR UPDATE against a primary key
+    that is not there. That lock lives until the transaction ends, which on the
+    webhook path is now a few statements away rather than the whole request.
     """
     if not for_update and not frappe.db.exists(TOKEN_DT, token_hash):
         return None
@@ -504,9 +507,14 @@ def claim_by_recorded_id(telegram_user_id: str, chat_id: str) -> str:
     current = frappe.db.get_value(
         "Employee", employee, [TELEGRAM_ID_FIELD, "status"], as_dict=True, for_update=True
     ) if frappe.db.has_column("Employee", TELEGRAM_ID_FIELD) else None
+    # `.strip()`, because this comparison must not be STRICTER than the scan
+    # that selected the row. MySQL's default PAD SPACE collation ignores
+    # trailing spaces on a VARCHAR `=`, so an id recorded as "55501 " matches
+    # `_employees_with_recorded_id` and would then be refused here -- a person
+    # locked out by a space, on the path that exists so they need no link.
     if (
         not current
-        or str(current.get(TELEGRAM_ID_FIELD) or "") != telegram_user_id
+        or str(current.get(TELEGRAM_ID_FIELD) or "").strip() != telegram_user_id
         or current.get("status") != "Active"
     ):
         frappe.throw("This account cannot be linked automatically.")

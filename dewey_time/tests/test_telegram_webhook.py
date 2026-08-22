@@ -501,13 +501,43 @@ class TestTheSecretCheckRefusesRatherThanRaising(unittest.TestCase):
         # Even a secret that cannot be READ -- an unconfigured site, where
         # transport.webhook_secret() throws -- must answer PermissionError.
         # It was reachable before anything else in this function ran.
+        #
+        # ASSERTED ON THE TYPE THAT COMES OUT, not on assertRaises alone: the
+        # shared frappe mock sets `frappe.PermissionError = Exception`, so
+        # `assertRaises(frappe.PermissionError)` is satisfied by the very
+        # RuntimeError this guard exists to convert. Deleting the try/except
+        # left the whole suite green while that was the only assertion.
         import frappe
 
         with patch.object(webhook.transport, "webhook_secret",
                           side_effect=RuntimeError("not configured")), \
+             patch.object(frappe, "log_error"), \
+             patch.object(frappe.db, "commit"), \
              patch.object(frappe, "get_request_header", return_value="anything"):
-            with self.assertRaises(frappe.PermissionError):
+            with self.assertRaises(Exception) as caught:
                 webhook.telegram_webhook()
+        self.assertNotIsInstance(
+            caught.exception, RuntimeError,
+            "the lookup's own error must be converted, not re-raised",
+        )
+
+    def test_a_secret_that_cannot_be_read_leaves_a_record(self):
+        # A permanent 403 to every Telegram delivery is a deployment fault, and
+        # silence is the worst way to report one. COMMITTED, because the
+        # PermissionError ends the request and would otherwise take the entry
+        # with it -- the trap the redemption path fell into.
+        import frappe
+
+        calls = []
+        with patch.object(webhook.transport, "webhook_secret",
+                          side_effect=RuntimeError("not configured")), \
+             patch.object(frappe, "log_error",
+                          side_effect=lambda **kw: calls.append("log")), \
+             patch.object(frappe.db, "commit", side_effect=lambda: calls.append("commit")), \
+             patch.object(frappe, "get_request_header", return_value="anything"):
+            with self.assertRaises(Exception):
+                webhook.telegram_webhook()
+        self.assertEqual(calls, ["log", "commit"])
 
 
 class TestTheBindingIsCommittedBeforeTelegramIsCalled(unittest.TestCase):
@@ -534,7 +564,7 @@ class TestTheBindingIsCommittedBeforeTelegramIsCalled(unittest.TestCase):
              patch.object(frappe.db, "rollback", side_effect=lambda: calls.append("rollback")), \
              patch.object(webhook.transport, "send_message",
                           side_effect=lambda *a, **kw: calls.append("send")), \
-             patch.object(frappe, "log_error"), \
+             patch.object(frappe, "log_error", side_effect=lambda **kw: calls.append("log")), \
              patch.object(webhook.binding, "redeem_link_token", side_effect=bind), \
              patch.object(webhook.binding, "claim_by_recorded_id", side_effect=bind):
             webhook._handle(update)
@@ -548,17 +578,67 @@ class TestTheBindingIsCommittedBeforeTelegramIsCalled(unittest.TestCase):
             self._order(_update(text="/start"))[:3], ["bind", "commit", "send"],
         )
 
-    def test_a_refusal_releases_before_it_sends_too(self):
-        # THE EASY ONE TO FORGET. The refusal wrote nothing -- but both paths
-        # can reach their refusal AFTER taking the Employee lock, so "nothing
-        # was written" is not "nothing is held". Rolled back, not committed:
-        # a commit here would claim something happened.
+    def test_a_refusal_rolls_back_BEFORE_it_records_why(self):
+        # THE EASY ONE TO FORGET, twice over. The refusal wrote nothing -- but
+        # both paths can reach their refusal AFTER taking the Employee lock, so
+        # "nothing was written" is not "nothing is held". Rolled back, not
+        # committed: a commit here would claim something happened.
+        #
+        # AND THE ROLLBACK GOES FIRST. `log_error` inserts an Error Log row in
+        # this transaction, so rolling back after it destroys the entry -- and
+        # the reply on this path is deliberately non-descriptive, which makes
+        # that row the only record anywhere of why a link failed. The first
+        # version of this fix had them the other way round and no test could
+        # tell, because this helper patched log_error out entirely.
         self.assertEqual(
-            self._order(_update(), bind_raises=True), ["bind", "rollback", "send"],
+            self._order(_update(), bind_raises=True),
+            ["bind", "rollback", "log", "send"],
         )
 
     def test_the_no_token_refusal_releases_too(self):
+        # No log on this one, and that is deliberate upstream: most bare
+        # /start messages are from people with no recorded id, which is the
+        # ordinary case and not a fault.
         self.assertEqual(
             self._order(_update(text="/start"), bind_raises=True),
             ["bind", "rollback", "send"],
         )
+
+
+class TestTheLanguageTapReleasesToo(unittest.TestCase):
+    """`set_language` writes through the document API, so the press holds row
+    locks on that link until the request ends — and the confirmation that
+    follows is another 20-second `requests.post`.
+
+    Smaller blast radius than the bind paths (the row is the presser's own
+    link, not an Employee row HR contends for), which is exactly why it was
+    the one call site the first fix left unpinned.
+    """
+
+    def _order(self, *, raises=False):
+        import frappe
+
+        calls = []
+
+        def set_language(*_a):
+            calls.append("save")
+            if raises:
+                raise RuntimeError("no enabled link")
+            return "77702"
+
+        with patch.object(frappe.db, "commit", side_effect=lambda: calls.append("commit")), \
+             patch.object(frappe.db, "rollback", side_effect=lambda: calls.append("rollback")), \
+             patch.object(webhook.transport, "answer_callback_query"), \
+             patch.object(webhook.transport, "send_message",
+                          side_effect=lambda *a, **kw: calls.append("send")), \
+             patch.object(webhook.binding, "set_language", side_effect=set_language):
+            webhook._handle({"callback_query": {
+                "id": "cbq-1", "data": "lang:en", "from": {"id": 55501},
+            }})
+        return calls
+
+    def test_a_successful_press_commits_before_confirming(self):
+        self.assertEqual(self._order(), ["save", "commit", "send"])
+
+    def test_a_refused_press_rolls_back_and_says_nothing(self):
+        self.assertEqual(self._order(raises=True), ["save", "rollback"])

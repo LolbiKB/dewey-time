@@ -168,12 +168,20 @@ def _handle(update: dict) -> None:
     try:
         binding.redeem_link_token(payload, str(telegram_user_id), str(chat_id))
     except Exception:
+        # ROLLBACK FIRST, THEN LOG. `log_error` inserts an Error Log row in
+        # this transaction, so rolling back after it destroys the entry —
+        # and on this path the reply is deliberately non-descriptive, which
+        # makes that row the ONLY record anywhere of why a link failed. HR
+        # hears a complaint and the server has nothing.
+        #
+        # `get_traceback` reads sys.exc_info(), so it does not care that the
+        # transaction ended underneath it.
+        _release_locks(keep=False)
         # Never echo the reason: it distinguishes "expired" from "never
         # existed" for someone probing tokens.
         frappe.log_error(
             title="Telegram link redemption failed", message=frappe.get_traceback()
         )
-        _release_locks(keep=False)
         transport.send_message(chat_id, LINK_FAILED_REPLY)
         return
 
@@ -236,6 +244,10 @@ def _handle_language_tap(callback: dict) -> None:
     try:
         chat_id = binding.set_language(str(telegram_user_id), language)
     except Exception:
+        # Rolled back for the same reason the bind refusals are: `set_language`
+        # writes through the document API, so a failure part-way through a save
+        # leaves writes this request would otherwise commit on its way out.
+        _release_locks(keep=False)
         # No enabled link -- a revoked account pressing a button on an old
         # chooser message, or an account that never linked. Deliberately
         # silent and undistinguished, like the bare-/start refusals: the
@@ -278,6 +290,17 @@ def telegram_webhook():
     try:
         ok = _secret_ok(frappe.get_request_header(SECRET_HEADER))
     except Exception:
+        # After the byte compare above, the ONLY thing left in here that can
+        # raise is reading the secret at all -- an unconfigured or malformed
+        # `telegram_webhook_secret`. That is a deployment fault, and left
+        # silent it is a permanent 403 to every Telegram delivery with nothing
+        # anywhere to say why. Logged and COMMITTED, because the
+        # PermissionError below ends this request and would otherwise take the
+        # entry with it, which is the trap the redemption path fell into.
+        frappe.log_error(
+            title="Telegram webhook secret unavailable", message=frappe.get_traceback()
+        )
+        frappe.db.commit()
         ok = False
     if not ok:
         raise frappe.PermissionError
