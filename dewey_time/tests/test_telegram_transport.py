@@ -714,3 +714,45 @@ class TestTheBotTokenNeverLeavesThisModule(unittest.TestCase):
             self.assertEqual(transport.set_webhook("https://s/hook", "sec"), transport.FAILED)
 
         self.assertNotIn(FAKE_TOKEN, logged["m"])
+
+
+class TestStateChangingEndpointsArePostOnly(unittest.TestCase):
+    """Frappe validates its CSRF token only for POST/PUT/DELETE.
+
+    A bare `@frappe.whitelist()` therefore leaves an endpoint reachable by GET
+    with no CSRF token at all -- and a top-level navigation an HR user can be
+    induced to make (a link, a window.open) does carry their session cookie
+    under SameSite=Lax. `create_link_invite`, `revoke_link` and both Mini App
+    endpoints were pinned to POST deliberately, each with a comment saying
+    why; these three change state and were not brought in line.
+
+    A source read, because `frappe.whitelist` is a passthrough under the test
+    mock and the registration cannot be introspected.
+    """
+
+    @staticmethod
+    def _src(module: str) -> str:
+        import pathlib
+
+        return (
+            pathlib.Path(__file__).resolve().parents[1] / "telegram" / module
+        ).read_text()
+
+    def test_the_two_setup_endpoints_are_post_only(self):
+        src = self._src("transport.py")
+        for name in ("configure_menu_button", "setup_telegram"):
+            head = src[: src.index(f"def {name}")]
+            self.assertTrue(
+                head.rstrip().endswith('@frappe.whitelist(methods=["POST"])'),
+                f"{name} must be POST-only",
+            )
+
+    def test_the_test_notification_endpoint_is_post_only(self):
+        # The one with a visible side effect on somebody else's phone: it
+        # sends a real check-in message to an employee named by the caller.
+        src = self._src("notify.py")
+        head = src[: src.index("def send_test_notification")]
+        self.assertTrue(
+            head.rstrip().endswith('@frappe.whitelist(methods=["POST"])'),
+            "send_test_notification must be POST-only",
+        )

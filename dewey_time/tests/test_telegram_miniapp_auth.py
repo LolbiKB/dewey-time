@@ -202,3 +202,96 @@ class TestUserField(unittest.TestCase):
             # patched here, because the binding itself is the thing refusing.
             with self.assertRaises(Exception):
                 miniapp_auth.employee_from_init_data(sign(valid_fields()))
+
+
+class TestMalleability(unittest.TestCase):
+    """The credential must be ONE string, not a family of equivalent ones.
+
+    A signature that keeps holding while the message changes is a signature
+    over a different message than the one being acted on. Nothing downstream
+    reads a field beyond `user` and `auth_date` today, so neither case here is
+    exploitable as it stands -- which is precisely why they are worth pinning
+    before somebody reads a `start_param` out of these pairs and inherits a
+    value that survived validation.
+    """
+
+    def test_an_appended_empty_field_does_not_keep_the_signature(self):
+        # `parse_qsl` drops empty-valued fields by default, so the check string
+        # was built from a SHORTER message than the one that arrived: an
+        # attacker could staple arbitrary keys onto a captured launch and the
+        # hash still matched. Measured before the fix: it validated.
+        signed = sign(valid_fields())
+        tampered = signed.replace("&hash=", "&injected=&hash=")
+        with only_the_guard_can_raise():
+            with self.assertRaises(Rejected):
+                miniapp_auth.employee_from_init_data(tampered)
+
+    def test_a_field_telegram_signed_as_empty_still_validates(self):
+        # The same change, in the direction that matters for availability.
+        # Telegram excludes exactly one field from its check string -- `hash` --
+        # so a field it sends empty is a field it SIGNED empty. Dropping it
+        # here built a different string and rejected a legitimate launch.
+        fields = valid_fields()
+        fields["start_param"] = ""
+        with only_the_guard_can_raise() as resolve:
+            self.assertEqual(
+                miniapp_auth.employee_from_init_data(sign(fields)), "HR-EMP-00001"
+            )
+        self.assertEqual(resolve.call_args[0][0], "55501")
+
+
+class TestDuplicateKeys(unittest.TestCase):
+    """One signature must certify one pair set, not a family of them.
+
+    `dict(parse_qsl(...))` is last-wins, so a duplicate key is silently
+    discarded before the check string is built: prefixing a captured launch
+    with a second copy of any field leaves the check string byte-identical and
+    the signature valid. This function's own last-wins read lands on the
+    genuine value, so nothing here is fooled -- but anything that re-parses
+    the same string with FIRST-wins semantics sees the attacker's copy, and
+    first-wins is the common default (`new URLSearchParams(s).get("user")`).
+    """
+
+    def test_a_prepended_duplicate_field_is_rejected(self):
+        signed = sign(valid_fields(user_id=55501))
+        forged = "user=%7B%22id%22%3A+99999%7D&" + signed
+        with only_the_guard_can_raise():
+            with self.assertRaises(Rejected):
+                miniapp_auth.employee_from_init_data(forged)
+
+    def test_a_prepended_duplicate_hash_is_rejected(self):
+        # `pairs.pop("hash")` collapses these too, so a junk hash in front of a
+        # genuine one validated -- the shape most likely to confuse whoever is
+        # reading a log of a rejected launch.
+        signed = sign(valid_fields())
+        with only_the_guard_can_raise():
+            with self.assertRaises(Rejected):
+                miniapp_auth.employee_from_init_data("hash=deadbeef&" + signed)
+
+    def test_the_genuine_launch_still_validates(self):
+        # The inversion: a duplicate check that rejected everything would pass
+        # both tests above.
+        with only_the_guard_can_raise() as resolve:
+            self.assertEqual(
+                miniapp_auth.employee_from_init_data(sign(valid_fields())),
+                "HR-EMP-00001",
+            )
+        self.assertEqual(resolve.call_args[0][0], "55501")
+
+
+class TestANonAsciiHashIsRefusedNotRaised(unittest.TestCase):
+    """`hmac.compare_digest` REFUSES two str arguments unless both are ASCII.
+
+    It raises TypeError rather than returning False, so `hash=%C3%A9` made
+    this boundary -- whose whole contract is "an Employee id or
+    PermissionError" -- answer with a TypeError instead. It never granted
+    anything. It stopped being the refusal it is written as, which is a
+    different failure from the one every other test here pins.
+    """
+
+    def test_a_non_ascii_hash_rejects_rather_than_blowing_up(self):
+        fields = valid_fields()
+        forged = urlencode({**fields, "hash": "é" * 64})
+        with only_the_guard_can_raise():
+            with self.assertRaises(Rejected):
+                miniapp_auth.employee_from_init_data(forged)

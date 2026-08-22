@@ -373,10 +373,27 @@ class TestClaimByRecordedId(unittest.TestCase):
     write one. Only the write tells the two apart.
     """
 
-    def _claim(self, *, existing=None, matches=(), bound_elsewhere=False):
+    def _claim(self, *, existing=None, matches=(), bound_elsewhere=False,
+               employee_row=("55501", "Active")):
+        """Drive the no-token path.
+
+        `employee_row` is the Employee row as re-read under the lock: the
+        recorded id and the status. It defaults to the consistent case -- the
+        id still recorded against the employee the pre-lock scan matched --
+        because that is what every test here except the two about the re-read
+        is actually about.
+        """
+        import frappe
+
+        recorded, status = employee_row
+        row = None if recorded is None else {
+            binding.TELEGRAM_ID_FIELD: recorded, "status": status,
+        }
         with patch.object(binding, "_existing_link", return_value=existing), \
              patch.object(binding, "_employees_with_recorded_id", return_value=list(matches)), \
              patch.object(binding, "_employee_bound_elsewhere", return_value=bound_elsewhere), \
+             patch.object(frappe.db, "has_column", return_value=True), \
+             patch.object(frappe.db, "get_value", return_value=row), \
              patch.object(binding, "_create_link") as create:
             try:
                 employee = binding.claim_by_recorded_id("55501", "77702")
@@ -903,3 +920,300 @@ class TestTheDecidingReadsAreLockingReads(unittest.TestCase):
         with patch.object(frappe, "get_all", return_value=[]) as get_all:
             binding.revoke_outstanding_tokens("HR-EMP-00001")
         self.assertTrue(get_all.call_args.kwargs.get("for_update"))
+
+
+class TestRedemptionIsSerialisedToo(unittest.TestCase):
+    """Redemption was the one credential operation with no mutex.
+
+    It is a check-then-act like the other two: read `redeemed_at`, decide,
+    write a link. Two taps on one link in the same instant both read NULL,
+    both bind, and the second's `TelegramLink.validate` -- a plain read --
+    cannot see the first's uncommitted insert. A single-use token then leaves
+    TWO enabled links on one employee, each able to read that employee's
+    attendance, with no unique index anywhere to refuse the pair afterwards.
+
+    A mock cannot run two racing transactions, so what these pin is what a
+    reviewer would otherwise have to re-derive: that the lock is taken, that
+    it is taken before the checks are BELIEVED, and that the values believed
+    were read after it was granted.
+    """
+
+    def _token_doc(self, **overrides):
+        doc = {
+            "name": "hash",
+            "employee": "HR-EMP-00001",
+            "expires_at": "2099-01-01 00:00:00",
+            "redeemed_at": None,
+            "revoked_at": None,
+        }
+        doc.update(overrides)
+        return doc
+
+    def test_redeeming_locks_before_it_believes_anything_it_read(self):
+        # THE POSITION IS THE GUARANTEE, not the call. A lock taken after the
+        # checks it guards serialises nothing, and `assert_called_once_with`
+        # cannot tell the two apart -- moving this call to just above
+        # `_create_link` left the whole suite green while it was the only
+        # assertion here. So the sequence is what is pinned: the unlocked look
+        # at the token, the lock, then every deciding read again under it.
+        calls = []
+
+        def load(_hash, **kw):
+            calls.append(("load", kw.get("for_update", False)))
+            return self._token_doc()
+
+        def existing(_uid, **kw):
+            calls.append(("existing", kw.get("for_update", False)))
+            return None
+
+        with patch.object(binding, "_load_token", side_effect=load), \
+             patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(binding, "_existing_link", side_effect=existing), \
+             patch.object(binding, "_create_link"), \
+             patch.object(binding, "_mark_redeemed"), \
+             patch.object(binding, "_serialize_credential_ops",
+                          side_effect=lambda e: calls.append(("lock", e))):
+            binding.redeem_link_token("tok", "55501", "77702")
+
+        self.assertEqual(
+            calls,
+            [("load", False), ("lock", "HR-EMP-00001"), ("load", True), ("existing", True)],
+            "lock first, then re-read every value the write depends on",
+        )
+
+    def test_the_checks_are_made_on_a_row_read_AFTER_the_lock(self):
+        # Taking a mutex and then trusting values read before it was granted
+        # protects nothing -- the loser has to see the winner's committed row,
+        # which is the entire reason to wait. So the row is loaded twice, and
+        # the SECOND load is the one whose verdict counts: here it comes back
+        # already redeemed by somebody else, and redemption must refuse.
+        loads = []
+
+        def load(_hash, **kw):
+            loads.append(kw.get("for_update", False))
+            if len(loads) == 1:
+                return self._token_doc()
+            return self._token_doc(
+                redeemed_at="2026-08-21 09:00:00",
+                redeemed_by_telegram_user_id="99999",
+            )
+
+        with patch.object(binding, "_load_token", side_effect=load), \
+             patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_serialize_credential_ops"), \
+             patch.object(binding, "_create_link") as create:
+            with self.assertRaises(Exception):
+                binding.redeem_link_token("tok", "55501", "77702")
+        self.assertEqual(len(loads), 2, "the row must be re-read under the lock")
+        self.assertTrue(loads[1], "and the re-read must be a locking read")
+        create.assert_not_called()
+
+    def test_the_no_token_path_locks_before_it_believes_its_idempotency_check(self):
+        # Telegram redelivers an update when it does not get a timely 200, so
+        # two copies of one bare /start arriving together is the ORDINARY case
+        # here. Without the lock the loser's insert collides on the autoname
+        # and the webhook answers "use the link HR gave you" to somebody who
+        # was linked a millisecond earlier.
+        calls = []
+
+        def existing(_uid, **kw):
+            calls.append(("read", kw.get("for_update", False)))
+            return None
+
+        import frappe
+
+        def employee_row(_dt, _name, _fields, **kw):
+            calls.append(("identity", kw.get("for_update", False)))
+            return {binding.TELEGRAM_ID_FIELD: "55501", "status": "Active"}
+
+        with patch.object(binding, "_existing_link", side_effect=existing), \
+             patch.object(binding, "_employees_with_recorded_id",
+                          return_value=["HR-EMP-00001"]), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(frappe.db, "has_column", return_value=True), \
+             patch.object(frappe.db, "get_value", side_effect=employee_row), \
+             patch.object(binding, "_create_link"), \
+             patch.object(binding, "_serialize_credential_ops",
+                          side_effect=lambda e: calls.append(("lock", e))):
+            binding.claim_by_recorded_id("55501", "77702")
+
+        self.assertIn(("lock", "HR-EMP-00001"), calls)
+        after = calls[calls.index(("lock", "HR-EMP-00001")) + 1:]
+        self.assertEqual(
+            after, [("identity", True), ("read", True)],
+            "after the lock: the identity itself, then the link, both locking",
+        )
+
+    def test_the_reads_that_gate_the_write_are_locking_reads(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[]) as get_all:
+            binding._employee_bound_elsewhere("HR-EMP-00001", "55501")
+        self.assertTrue(get_all.call_args.kwargs.get("for_update"))
+
+        with patch.object(frappe.db, "exists", return_value=True), \
+             patch.object(frappe.db, "get_value", return_value={}) as get_value:
+            binding._existing_link("55501", for_update=True)
+        self.assertTrue(get_value.call_args.kwargs.get("for_update"))
+
+        with patch.object(frappe.db, "exists", return_value=True), \
+             patch.object(frappe.db, "get_value", return_value={}) as get_value:
+            binding._load_token("hash", for_update=True)
+        self.assertTrue(get_value.call_args.kwargs.get("for_update"))
+
+
+class TestTheTokenRowCarriesWhatTheCodeReadsFromIt(unittest.TestCase):
+    """A projection that omits a column the caller reads is invisible.
+
+    `_load_token` selects a field list. The redelivery-idempotency branch asks
+    the returned row for `redeemed_by_telegram_user_id`, and that column was
+    not in the list -- so `.get()` was None, the comparison was False, and a
+    Telegram redelivery of a SUCCESSFUL /start told the employee "This link
+    has already been used. Ask HR for a new one." while their link sat there
+    working. HR then could not re-issue without first unlinking it.
+
+    The two tests that covered that branch handed `_load_token` a fabricated
+    row containing the column, so they were green against a shape the real
+    function could not produce. This one reads the field list itself.
+    """
+
+    def test_every_field_the_redemption_path_reads_is_selected(self):
+        import frappe
+
+        captured = {}
+
+        def get_value(_dt, _name, fields, **kw):
+            captured["fields"] = fields
+            return {f: None for f in fields}
+
+        with patch.object(frappe.db, "exists", return_value=True), \
+             patch.object(frappe.db, "get_value", side_effect=get_value):
+            binding._load_token("hash")
+
+        for field in ("employee", "expires_at", "redeemed_at",
+                      "redeemed_by_telegram_user_id", "revoked_at"):
+            self.assertIn(field, captured["fields"], f"{field} is read but not selected")
+
+    def test_a_redelivery_is_idempotent_through_the_REAL_projection(self):
+        # End to end through `_load_token` rather than around it, which is the
+        # only way this branch can be proved reachable.
+        import frappe
+
+        row = {
+            "name": "hash",
+            "employee": "HR-EMP-00001",
+            "expires_at": "2099-01-01 00:00:00",
+            "redeemed_at": "2026-08-22 09:00:00",
+            "redeemed_by_telegram_user_id": "55501",
+            "revoked_at": None,
+        }
+
+        with patch.object(frappe.db, "exists", return_value=True), \
+             patch.object(frappe.db, "get_value",
+                          side_effect=lambda _dt, _n, fields, **kw: {
+                              f: row.get(f) for f in fields
+                          }), \
+             patch.object(binding, "_serialize_credential_ops"), \
+             patch.object(binding, "_create_link") as create:
+            employee = binding.redeem_link_token("tok", "55501", "77702")
+
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_not_called()
+
+
+class TestTheNoTokenPathReVerifiesTheIdentity(unittest.TestCase):
+    """`matches` is the read that decides WHOSE record is handed over.
+
+    Every other read in this path was made locking; that one was not, and it
+    is the only one where believing a stale answer does not cost a confusing
+    message but binds a Telegram account to the wrong person's attendance,
+    permanently -- `employee_for_telegram_user` re-checks status on every
+    request and never re-checks the recorded id.
+
+    HR moving a mis-recorded id from one employee to another is exactly the
+    concurrent write in question, and it is the correction this path exists to
+    be corrected BY.
+    """
+
+    def _claim(self, *, recorded, status="Active"):
+        import frappe
+
+        row = None if recorded is None else {
+            binding.TELEGRAM_ID_FIELD: recorded, "status": status,
+        }
+        with patch.object(binding, "_existing_link", return_value=None), \
+             patch.object(binding, "_employees_with_recorded_id",
+                          return_value=["HR-EMP-00001"]), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(binding, "_serialize_credential_ops"), \
+             patch.object(frappe.db, "has_column", return_value=True), \
+             patch.object(frappe.db, "get_value", return_value=row), \
+             patch.object(binding, "_create_link") as create:
+            try:
+                return binding.claim_by_recorded_id("55501", "77702"), create
+            except Exception:
+                return None, create
+
+    def test_an_id_moved_to_another_employee_under_the_lock_refuses(self):
+        employee, create = self._claim(recorded="99999")
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_an_id_cleared_under_the_lock_refuses(self):
+        employee, create = self._claim(recorded="")
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_an_employee_who_left_under_the_lock_refuses(self):
+        employee, create = self._claim(recorded="55501", status="Left")
+        self.assertIsNone(employee)
+        create.assert_not_called()
+
+    def test_the_consistent_case_still_binds(self):
+        # The inversion. Without this the three above would also pass if the
+        # re-read refused everything.
+        employee, create = self._claim(recorded="55501")
+        self.assertEqual(employee, "HR-EMP-00001")
+        create.assert_called_once()
+
+
+class TestTheLockingReadIsNotVetoedByAPlainOne(unittest.TestCase):
+    """`exists()` is a PLAIN select, and it decided whether the locking one ran.
+
+    Both helpers opened with `frappe.db.exists(...)` and only then issued the
+    `get_value` carrying `for_update`. So the answer that gates the write --
+    None -- still came from the request's pinned snapshot however the second
+    statement was flagged: the winner's freshly committed row was invisible,
+    the caller fell through to `_create_link`, and the insert collided on the
+    autoname. The webhook then told a linked employee their link did not work.
+
+    Stubbed as a stale snapshot: `exists` says no, the row is really there.
+    """
+
+    def _stale(self):
+        import frappe
+
+        return (
+            patch.object(frappe.db, "exists", return_value=False),
+            patch.object(frappe.db, "get_value", return_value={"name": "row"}),
+        )
+
+    def test_a_locking_token_read_is_issued_even_when_exists_says_no(self):
+        exists, get_value = self._stale()
+        with exists, get_value:
+            self.assertEqual(binding._load_token("hash", for_update=True), {"name": "row"})
+
+    def test_a_locking_link_read_is_issued_even_when_exists_says_no(self):
+        exists, get_value = self._stale()
+        with exists, get_value:
+            self.assertEqual(binding._existing_link("55501", for_update=True), {"name": "row"})
+
+    def test_the_plain_read_still_short_circuits(self):
+        # The inversion, and the reason the pre-check is kept at all: without
+        # a lock there is nothing to be stale about, and skipping the query on
+        # a miss is free.
+        exists, get_value = self._stale()
+        with exists, get_value:
+            self.assertIsNone(binding._load_token("hash"))
+            self.assertIsNone(binding._existing_link("55501"))

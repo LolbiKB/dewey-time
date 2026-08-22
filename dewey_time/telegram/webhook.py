@@ -72,10 +72,22 @@ LANGUAGE_SET_REPLIES = {
 }
 
 def _secret_ok(supplied) -> bool:
-    """Constant-time compare. A missing header rejects rather than skips."""
+    """Constant-time compare. A missing header rejects rather than skips.
+
+    Compared as BYTES. `hmac.compare_digest` refuses two str arguments unless
+    both are ASCII -- it raises TypeError rather than returning False -- and a
+    WSGI header value is latin-1 decoded, so any byte in 0x80-0xFF put in this
+    header made the comparison raise instead of reject. The endpoint answered
+    500 with a traceback rather than 403, to an unauthenticated caller, at
+    whatever rate they cared to send. It never granted anything; it just
+    stopped being the refusal it was written as.
+    """
     if not supplied:
         return False
-    return hmac.compare_digest(str(supplied), transport.webhook_secret())
+    return hmac.compare_digest(
+        str(supplied).encode("utf-8", "surrogateescape"),
+        transport.webhook_secret().encode("utf-8"),
+    )
 
 
 def _is_command(text: str, command: str) -> bool:
@@ -108,6 +120,18 @@ def _handle(update: dict) -> None:
     telegram_user_id = (message.get("from") or {}).get("id")
     text = (message.get("text") or "").strip()
 
+    # NO SENDER, NO BINDING. Every guard in binding.py is written as
+    # `if not telegram_user_id`, and `str(None)` is the five-character string
+    # "None" -- truthy, and therefore past all of them. An update with no
+    # `from` would reach redeem_link_token as a real-looking account id, spend
+    # a single-use token, and leave an enabled link keyed to "None" that no
+    # Telegram launch can ever match: the credential burned and the employee
+    # told the link did not work. Telegram always sends `from` on a private
+    # message, so this is a latent trap rather than a live hole -- and the
+    # stringification is in THIS file, so the guard belongs here too.
+    if telegram_user_id is None:
+        return
+
     if _is_command(text, "/language"):
         # Offered to anyone who asks, linked or not: the chooser leaks
         # nothing, and a press from an unlinked account changes nothing
@@ -134,14 +158,25 @@ def _handle(update: dict) -> None:
             # people with no recorded id, which is the ordinary case and not a
             # fault; and the refusal reasons -- no match, duplicate id, revoked
             # link -- would tell someone probing ids which ones exist.
+            _release_locks(keep=False)
             transport.send_message(chat_id, NEEDS_TOKEN_REPLY)
             return
+        _release_locks(keep=True)
         _confirm_linked(chat_id)
         return
 
     try:
         binding.redeem_link_token(payload, str(telegram_user_id), str(chat_id))
     except Exception:
+        # ROLLBACK FIRST, THEN LOG. `log_error` inserts an Error Log row in
+        # this transaction, so rolling back after it destroys the entry —
+        # and on this path the reply is deliberately non-descriptive, which
+        # makes that row the ONLY record anywhere of why a link failed. HR
+        # hears a complaint and the server has nothing.
+        #
+        # `get_traceback` reads sys.exc_info(), so it does not care that the
+        # transaction ended underneath it.
+        _release_locks(keep=False)
         # Never echo the reason: it distinguishes "expired" from "never
         # existed" for someone probing tokens.
         frappe.log_error(
@@ -150,7 +185,33 @@ def _handle(update: dict) -> None:
         transport.send_message(chat_id, LINK_FAILED_REPLY)
         return
 
+    _release_locks(keep=True)
     _confirm_linked(chat_id)
+
+
+def _release_locks(*, keep: bool) -> None:
+    """End the transaction before a single byte goes to api.telegram.org.
+
+    Both bind paths now take a SELECT ... FOR UPDATE on the Employee row, and
+    Frappe holds a transaction -- and therefore that lock -- until the request
+    ends. The reply that follows is a `requests.post` at a 20-second timeout,
+    twice over on the success path, so without this the Employee row is locked
+    across up to forty seconds of somebody else's network: HR saving that
+    employee, an Issue, an Unlink, and Telegram's own redelivery all queue
+    behind a third party being slow.
+
+    `keep=True` commits a binding that succeeded, which is also the truthful
+    order: the binding is DONE at that point, the message is a notification
+    about it, and a notification that fails must not take the binding with it.
+
+    `keep=False` is the REFUSAL path, and it is the one easy to forget. It
+    wrote nothing -- but both paths can reach their refusal AFTER taking the
+    lock, so "nothing was written" is not the same as "nothing is held".
+    """
+    if keep:
+        frappe.db.commit()
+    else:
+        frappe.db.rollback()
 
 
 def _handle_language_tap(callback: dict) -> None:
@@ -175,14 +236,26 @@ def _handle_language_tap(callback: dict) -> None:
         return
 
     telegram_user_id = (callback.get("from") or {}).get("id")
+    # The same "None" trap as the message path above. Harmless here -- no link
+    # is keyed to that string, so set_language would refuse -- but a guard that
+    # only holds because the lookup happens to miss is not a guard.
+    if telegram_user_id is None:
+        return
     try:
         chat_id = binding.set_language(str(telegram_user_id), language)
     except Exception:
+        # Rolled back for the same reason the bind refusals are: `set_language`
+        # writes through the document API, so a failure part-way through a save
+        # leaves writes this request would otherwise commit on its way out.
+        _release_locks(keep=False)
         # No enabled link -- a revoked account pressing a button on an old
         # chooser message, or an account that never linked. Deliberately
         # silent and undistinguished, like the bare-/start refusals: the
         # reasons would tell someone probing which accounts exist.
         return
+    # set_language SAVED, so this request holds row locks on that link until
+    # it ends. Same reasoning as the bind paths, smaller blast radius.
+    _release_locks(keep=True)
     transport.send_message(chat_id, LANGUAGE_SET_REPLIES[language])
 
 
@@ -210,7 +283,26 @@ def telegram_webhook():
     Telegram retries non-200 responses, so a handler error must not become a
     retry storm -- failures are logged and swallowed.
     """
-    if not _secret_ok(frappe.get_request_header(SECRET_HEADER)):
+    # Wrapped, so that nothing the secret check itself can raise leaves here as
+    # a 500. It is the one statement in this function outside the try below,
+    # and it reads an attacker-supplied header: `PermissionError` is the answer
+    # to a bad secret AND to a secret check that could not run.
+    try:
+        ok = _secret_ok(frappe.get_request_header(SECRET_HEADER))
+    except Exception:
+        # After the byte compare above, the ONLY thing left in here that can
+        # raise is reading the secret at all -- an unconfigured or malformed
+        # `telegram_webhook_secret`. That is a deployment fault, and left
+        # silent it is a permanent 403 to every Telegram delivery with nothing
+        # anywhere to say why. Logged and COMMITTED, because the
+        # PermissionError below ends this request and would otherwise take the
+        # entry with it, which is the trap the redemption path fell into.
+        frappe.log_error(
+            title="Telegram webhook secret unavailable", message=frappe.get_traceback()
+        )
+        frappe.db.commit()
+        ok = False
+    if not ok:
         raise frappe.PermissionError
 
     try:

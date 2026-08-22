@@ -250,7 +250,7 @@ def set_default_menu_button(url: str) -> str:
     return SENT
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def configure_menu_button() -> dict:
     """HR-run, once, after the Mini App URL is set. Idempotent."""
     from dewey_time.attendance_engine.hr_calendar import _require_hr_role
@@ -347,7 +347,7 @@ def set_bot_commands() -> str:
     return SENT
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def setup_telegram() -> dict:
     """Everything that has to be told to Telegram once, in one call.
 
