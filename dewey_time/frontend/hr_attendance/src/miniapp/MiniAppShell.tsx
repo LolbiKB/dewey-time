@@ -21,6 +21,7 @@ import {
 import { dismissTopLayer, useLayerDepth } from "@/miniapp/miniBackStack";
 import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import { useMinuteTick } from "@/miniapp/useMinuteTick";
+import { siteNow } from "@/miniapp/siteClock";
 import {
   bindBackButton,
   launchedFromTelegram,
@@ -292,7 +293,10 @@ export function MiniAppShell() {
     // Today clears the drill-in rather than setting it, so the heading reads
     // "Today" and not the date — picking today from the calendar and tapping
     // the Today tab must land in the same place.
-    setOpenDay(isSameDay(date, new Date()) ? null : date);
+    // A direct read rather than `tick`: putting the tick in this callback's
+    // deps churns its identity every minute for no gain, and the site clock is
+    // readable without a subscription.
+    setOpenDay(isSameDay(date, siteNow()) ? null : date);
     setTab("day");
     setPickerOpen(false);
   }, []);
@@ -310,7 +314,13 @@ export function MiniAppShell() {
   // MyDayPage; the shell needed the same clock.
   const tick = useMinuteTick();
   const todayKey = format(tick, "yyyy-MM-dd");
-  const identity = useMiniAppCalendar(todayKey, todayKey);
+  // NOT POLLED. Nothing in this payload is time-sensitive — it is a name, a
+  // photo, a designation and a branch — and on the Day tab with no drill-in it
+  // is a SECOND react-query observer on the same key as MyDayPage's, each
+  // running its own 60s interval against the same range. A header that has
+  // been correct since launch does not need re-asking every minute; a resume
+  // invalidates the key anyway.
+  const identity = useMiniAppCalendar(todayKey, todayKey, { poll: false });
 
   // Not a security check -- the server re-verifies every request. This is so a
   // page opened in a plain browser explains itself instead of firing an
@@ -418,14 +428,20 @@ export function MiniAppShell() {
             }}
           />
         ) : (
-          <MyProfilePage offset={weekOffset} onOffsetChange={setWeekOffset} />
+          <MyProfilePage today={tick} offset={weekOffset} onOffsetChange={setWeekOffset} />
         )}
       </main>
 
+      {/* `tick`, not `new Date()`: the sheet's selected day, its month bounds
+          and its "no future days" rule all come from here, so a device clock a
+          day out made the real today unselectable. Passing the same clock the
+          rest of the shell uses also means the two cannot disagree. */}
       <MiniCalendarSheet
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        selected={openDay ?? new Date()}
+        selected={openDay ?? tick}
+        today={tick}
+        now={tick}
         onSelect={openDayFrom}
       />
       {/* NO "add to home screen" ROW. There was one, sitting between the

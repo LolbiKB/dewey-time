@@ -21,6 +21,7 @@ import {
 import { ProfileHeading, ProfileSection } from "@/miniapp/MiniProfileRow";
 import { MySchedulePage } from "@/miniapp/MySchedulePage";
 import { useMiniAppCalendar, useMyProfile } from "@/miniapp/useMiniAppSession";
+import { siteNow } from "@/miniapp/siteClock";
 
 function Stat(props: { value: string; label: string; amber?: boolean }) {
   return (
@@ -48,7 +49,9 @@ export function MyProfilePage(props: {
 }) {
   const t = useT();
   const fmt = useFormat();
-  const today = props.today ?? new Date();
+  // siteNow, not new Date(): see siteClock.ts. This one picks the month the
+  // "so far" statistics are counted over.
+  const today = props.today ?? siteNow();
   const profile = useMyProfile();
   // The SAME key MiniCalendarSheet uses for the current month, so on a launch
   // where the calendar has already been opened this costs nothing.

@@ -32,7 +32,7 @@ import json
 from datetime import datetime
 
 import frappe
-from frappe.utils import date_diff, getdate
+from frappe.utils import date_diff, getdate, now_datetime
 
 from dewey_time.attendance_engine import enrollment_api, finger_slots, hr_calendar
 from dewey_time.telegram import miniapp_auth
@@ -381,6 +381,28 @@ def narrow(payload: dict, extra_uncertain: set | None = None) -> dict:
     return {**_pick(payload, PAYLOAD_KEYS), "days": days}
 
 
+def _server_now() -> str:
+    """The site's own wall clock, so the phone can stop trusting its own.
+
+    EVERY PRESENT-TENSE CLAIM THE MINI APP MAKES was device-clock arithmetic
+    against these naive site-local strings, with nothing to check it against.
+    "In" / "On lunch" / "Checked out" compares the device's minute-of-day to
+    the shift's; the live "so far" total subtracts a punch from a device
+    `now` and CLAMPS A NEGATIVE TO ZERO, so a phone running behind the site
+    showed 0m worked to somebody standing at the machine; and which day is
+    "today" is the device's answer too, so a traveller's phone opened on a day
+    they were not in.
+
+    Same shape as every other datetime here (`hr_calendar._format_datetime`),
+    because the client parses it with the same parser it parses punches with —
+    a different shape would silently become a different space.
+
+    Not a disclosure: it is the wall clock the check-in notification already
+    states back to them.
+    """
+    return now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _identity(employee: str) -> dict:
     """Who the server resolved this launch to.
 
@@ -478,9 +500,10 @@ def get_my_calendar(init_data: str, start_date: str, end_date: str) -> dict:
         extra_uncertain=_residue_dates(built.get("employee_branch"), str(start), str(end)),
     )
     # Merged here rather than inside narrow(): narrow is a pure projection of
-    # what it is handed, and identity is a separate lookup. Keeping it pure is
-    # what lets the allowlist tests feed it a fabricated HR payload.
-    return {**payload, **_identity(employee)}
+    # what it is handed, and identity and the clock are separate lookups.
+    # Keeping it pure is what lets the allowlist tests feed it a fabricated HR
+    # payload.
+    return {**payload, **_identity(employee), "server_now": _server_now()}
 
 
 def _employee_row(employee: str, fields: tuple) -> dict:

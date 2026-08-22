@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { earliestMonth, latestMonth, MONTHS_BACK } from "@/miniapp/MiniCalendarSheet";
+import {
+  earliestMonth, latestMonth, MONTHS_BACK, visibleMonth,
+} from "@/miniapp/MiniCalendarSheet";
 
 const SRC = (name: string) =>
   readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
@@ -55,6 +57,50 @@ test("MONTHS_BACK is two, and the name says back rather than total", () => {
   // BACK from August is June, which is three months of reach. Pinned so a
   // future edit that "fixes" the name to 3 has to face this test.
   assert.equal(MONTHS_BACK, 2);
+});
+
+// ---------------------------------------------------------------------------
+// The month drawn and the month fetched are the same month
+// ---------------------------------------------------------------------------
+
+test("a month past the forward bound is pulled back to this one", () => {
+  // The device is a day fast on the 31st, so the sheet was seeded with
+  // September while the corrected `today` is still August. react-day-picker
+  // clamps what it DRAWS to August and says nothing — no onMonthChange — so
+  // without this the component went on fetching September behind an August
+  // grid, and every day's mark lookup missed.
+  const today = new Date(2026, 7, 31, 23, 0);
+  const clamped = visibleMonth(new Date(2026, 8, 1), today);
+  assert.equal(clamped.getMonth(), 7, "August");
+  assert.equal(clamped.getFullYear(), 2026);
+});
+
+test("a month behind the back bound is pushed forward to it", () => {
+  // The other direction, and the commoner phone: one whose clock reset to a
+  // firmware date. The picker clamps up to `startMonth`; this follows it.
+  const today = new Date(2026, 7, 21, 9, 0);
+  const clamped = visibleMonth(new Date(2020, 0, 15), today);
+  assert.equal(clamped.getFullYear(), 2026);
+  assert.equal(clamped.getMonth(), 5, "June — the earliest reachable month");
+});
+
+test("a month inside the bounds is left alone, to the first of it", () => {
+  const today = new Date(2026, 7, 21, 9, 0);
+  const clamped = visibleMonth(new Date(2026, 6, 14, 16, 30), today);
+  assert.equal(clamped.getMonth(), 6, "July");
+  assert.equal(clamped.getDate(), 1, "normalised, so the fetched range starts on the 1st");
+  assert.equal(clamped.getHours(), 0);
+});
+
+test("the fetched range is derived from the CLAMPED month, not the paged one", () => {
+  // The whole point. If `from`/`to` were computed from the raw state, the
+  // clamp would fix the caption and leave the query fetching a month the grid
+  // is not showing — which is the bug, wearing a correct-looking grid.
+  const code = CODE("MiniCalendarSheet.tsx");
+  assert.match(code, /const month = visibleMonth\(pagedMonth, today\)/);
+  assert.match(code, /const from = startOfMonth\(month\)/);
+  assert.match(code, /const to = endOfMonth\(month\)/);
+  assert.match(code, /month=\{month\}/, "and the grid draws the same one");
 });
 
 // ---------------------------------------------------------------------------

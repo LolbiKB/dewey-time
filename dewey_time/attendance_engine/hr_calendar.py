@@ -238,14 +238,28 @@ def _leave_by_date_for_range(*, employee: str, start, end) -> dict[str, dict]:
     return by_date
 
 
-def _shift_context_for_day(*, employee: str, attendance_date):
+def _shift_day_context(*, employee: str, attendance_date, meta_resolver=None):
+    """(context, assignment, meta) for one day, resolved ONCE.
+
+    The day loop needs all three -- the context for the payload, the meta for
+    observed-lunch detection -- and used to re-derive the last two by calling
+    the same two lookups a SECOND time for the same date, immediately after
+    this function had already done it. On a month range that is ~60 wasted
+    queries per request, for answers already in hand.
+
+    `meta_resolver` lets a caller memoise the Shift Type read across the range
+    (see build_employee_calendar): `_get_shift_meta` is an uncached
+    `frappe.get_doc`, and a 31-day month loads the same one or two documents
+    thirty-one times.
+    """
+    resolve_meta = meta_resolver or _get_shift_meta
     assignment = _get_shift_assignment(employee=employee, attendance_date=attendance_date)
     if not assignment or not assignment.get("shift_type"):
-        return {"shift_assigned": False}
+        return {"shift_assigned": False}, None, None
 
-    meta = _get_shift_meta(assignment["shift_type"])
+    meta = resolve_meta(assignment["shift_type"])
     if not meta:
-        return {"shift_assigned": False}
+        return {"shift_assigned": False}, assignment, None
 
     ctx = {
         "shift_assigned": True,
@@ -260,7 +274,12 @@ def _shift_context_for_day(*, employee: str, attendance_date):
         ctx["schedule_superseded"] = True
     if assignment.get("assignment_status"):
         ctx["assignment_status"] = assignment["assignment_status"]
-    return ctx
+    return ctx, assignment, meta
+
+
+def _shift_context_for_day(*, employee: str, attendance_date):
+    """Just the context. The name three tests and any future caller use."""
+    return _shift_day_context(employee=employee, attendance_date=attendance_date)[0]
 
 
 def first_checkin_date_by_employee(employee_ids: list[str]) -> dict[str, dict]:
@@ -752,6 +771,32 @@ def build_employee_calendar(employee: str, start_date: str, end_date: str):
 
     leave_by_date = _leave_by_date_for_range(employee=employee, start=start, end=end)
 
+    # REQUEST-SCOPED, by construction: this dict dies with the call, so there
+    # is no cross-request staleness to reason about and no test pollution.
+    # `_get_shift_meta` is an uncached frappe.get_doc("Shift Type"), and a
+    # month range loads the same one or two documents once per day.
+    #
+    # Deliberately NOT get_cached_doc in _get_shift_meta itself: that function
+    # is on the flag-WRITING path too (intraday, closeout), where a stale Shift
+    # Type means a wrong LATE_START threshold. That is its own change, with its
+    # own reasoning about invalidation.
+    meta_by_shift: dict = {}
+
+    def _meta(shift_type):
+        cached = meta_by_shift.get(shift_type)
+        if cached is not None:
+            return cached
+        meta = _get_shift_meta(shift_type)
+        # SUCCESSES ONLY. `_get_shift_meta` swallows every exception and returns
+        # None, so caching that answer would promote a fault that lasted one
+        # query into an unrostered MONTH — no shift bar, no times, no grace, on
+        # the HR console and on the phone, for a range that resolves fine on the
+        # very next day. A retry costs one get_doc in a case that is already
+        # degraded; the memo exists to spare the healthy path, not that one.
+        if meta:
+            meta_by_shift[shift_type] = meta
+        return meta
+
     days = []
     cur = start
     while cur <= end:
@@ -768,18 +813,19 @@ def build_employee_calendar(employee: str, start_date: str, end_date: str):
                 gross_minutes = int((last_dt - first_dt).total_seconds() / 60)
 
         observed_lunch = None
-        shift = _shift_context_for_day(employee=employee, attendance_date=cur)
-        if shift.get("shift_assigned") and day_checkins:
-            assignment = _get_shift_assignment(employee=employee, attendance_date=cur)
-            if assignment and assignment.get("shift_type"):
-                meta = _get_shift_meta(assignment["shift_type"])
-                if meta:
-                    observed_lunch = detect_observed_lunch(
-                        checkins=day_checkins,
-                        shift_meta=meta,
-                        attendance_date=cur,
-                        grace_minutes=effective_lunch_return_grace(meta),
-                    )
+        # ONE resolution per day, not two. `meta` is non-None only when the
+        # assignment resolved AND its Shift Type loaded, which is exactly the
+        # old three-part guard (`shift_assigned` implies both).
+        shift, _assignment, meta = _shift_day_context(
+            employee=employee, attendance_date=cur, meta_resolver=_meta,
+        )
+        if meta and day_checkins:
+            observed_lunch = detect_observed_lunch(
+                checkins=day_checkins,
+                shift_meta=meta,
+                attendance_date=cur,
+                grace_minutes=effective_lunch_return_grace(meta),
+            )
 
         days.append(
             {

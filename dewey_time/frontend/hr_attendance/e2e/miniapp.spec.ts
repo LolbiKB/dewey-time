@@ -71,7 +71,7 @@ function rosteredDay(date: string, punches: Punches = "full", flags: unknown[] =
  * installed after load would be too late and the app would render its
  * "open this from Telegram" notice instead.
  */
-async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown>; delayCalendarMs?: number; identity?: Record<string, unknown> } = {}) {
+async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themeParams?: Record<string, string>; languageCode?: string; punched?: Punches; fullscreen?: boolean; flags?: unknown[]; profile?: Record<string, unknown>; delayCalendarMs?: number; identity?: Record<string, unknown>; serverNow?: Date } = {}) {
   await page.addInitScript(
     ({ theme, themeParams, languageCode, fullscreen }) => {
       const handlers: Record<string, (() => void)[]> = {};
@@ -162,6 +162,16 @@ async function openMiniApp(page: Page, opts: { theme?: "light" | "dark"; themePa
           khmer_name: "សុខ ដារា",
           designation: "Cashier",
           employee_branch: "DIS Iconic",
+          // THE SITE'S WALL CLOCK, which is what the app corrects its own
+          // against. Taken from the runner's real clock rather than a literal:
+          // these tests assert on "today", so a frozen server time would make
+          // them pass or fail depending on the date they run.
+          server_now: (() => {
+            const d = opts.serverNow ?? new Date();
+            const p2 = (n: number) => String(n).padStart(2, "0");
+            return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} `
+              + `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+          })(),
           // A COMPLETE record, which is the shape this fixture has always
           // sent — and for one test that is exactly the wrong default. The
           // header reserves a row whose height depends on which of these are
@@ -1160,4 +1170,162 @@ test("an SDK that arrives late turns the notice into the real, fully-configured 
   await expect
     .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
     .toBe(true);
+});
+
+test("a phone whose clock is a day out still opens on the site's today", async ({ page }) => {
+  // THE FAILURE THIS WHOLE CHANGE EXISTS FOR, driven with a real wrong clock
+  // rather than argued about. Every present-tense claim the app makes was
+  // device-clock arithmetic against naive site-local strings: which date is
+  // "today", whether you are "In" or "On lunch", and a live total that clamps
+  // a negative to zero — so a phone running behind showed 0m worked to
+  // somebody standing at the machine.
+  //
+  // A traveller's phone, one that lost NTP, one set by hand: all the same
+  // shape. Here it believes it is tomorrow.
+  const site = new Date();
+  const deviceBelieves = new Date(site.getTime() + 24 * 60 * 60 * 1000);
+  await page.clock.install({ time: deviceBelieves });
+
+  // A request LISTENER, not a route: routes are matched last-registered-first,
+  // so a handler installed here is shadowed by openMiniApp's own and never
+  // runs. The event fires for every request whoever fulfils it.
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().includes("get_my_calendar")) return;
+    const body = request.postData();
+    if (body) asked.push((JSON.parse(body) as { start_date: string }).start_date);
+  });
+  await openMiniApp(page, { punched: "full", serverNow: site });
+
+  const key = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  // The heading names the site's day, not the device's.
+  const heading = page.getByRole("heading", { level: 1 });
+  await expect(heading).toBeVisible();
+  await expect(heading).toContainText("Today");
+
+  // And it SETTLES on the site's day. The very first request is necessarily
+  // the device's — nothing has told the app the time yet, because the answer
+  // arrives in the reply to that request — so the honest assertion is about
+  // where it ends up, not about never having asked. That first range is the
+  // whole residual: one extra query, corrected within the round trip.
+  await expect.poll(() => asked.at(-1)).toBe(key(site));
+  expect(
+    asked.filter((d) => d === key(deviceBelieves)).length,
+    "the device's day should be asked for at most once, on the launch request",
+  ).toBeLessThanOrEqual(1);
+
+  // The rendered day is the site's, which is what the employee actually reads.
+  await expect(heading).toContainText(
+    site.toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
+  );
+});
+
+test("a wrong clock cannot make the month grid and its data disagree", async ({ page }) => {
+  // THE SECOND HALF OF THE SAME FAILURE, and the one that renders as a lie
+  // rather than as an error. The calendar sheet seeds its month once, at
+  // mount, from a clock the server has not corrected yet. react-day-picker
+  // then clamps what it DRAWS into `[startMonth, endMonth]` — both of which
+  // move when the correction lands — and does it silently: no onMonthChange,
+  // no warning. So the component went on fetching one month behind a grid
+  // showing another, every mark lookup missed, and an employee opened the
+  // picker to find the days that were not clean and was shown forty days with
+  // nothing on them at all.
+  //
+  // Fixed dates on both sides, not "now plus a day": the divergence only
+  // exists across a month boundary, so a relative offset would exercise it on
+  // four days a year and pass silently on the other 361.
+  const site = new Date(2026, 7, 31, 23, 0, 0);
+  const deviceBelieves = new Date(2026, 8, 1, 0, 30, 0);
+  await page.clock.install({ time: deviceBelieves });
+
+  const ranges: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().includes("get_my_calendar")) return;
+    const body = request.postData();
+    if (!body) return;
+    const { start_date, end_date } = JSON.parse(body) as Record<string, string>;
+    ranges.push(`${start_date}..${end_date}`);
+  });
+
+  await openMiniApp(page, { punched: "full", serverNow: site });
+  await page.getByRole("button", { name: /Choose a date/ }).first().click();
+
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+
+  // The grid names the site's month — it always did, because the clamp is the
+  // picker's own. The question is what was fetched behind it.
+  await expect(sheet.getByRole("grid", { name: /August 2026/ })).toBeVisible();
+
+  // The MULTI-DAY ranges only: the single-day ones belong to the Day tab and
+  // the identity header, and the first of those is necessarily the device's
+  // own guess — nothing has told the app the time yet, because the answer
+  // arrives in the reply to that very request. The sheet's range is the one
+  // under test, and there is exactly one shape it may take.
+  const monthRanges = () => ranges.filter((r) => r.split("..")[0] !== r.split("..")[1]);
+  await expect.poll(() => monthRanges().length).toBeGreaterThan(0);
+  expect(
+    [...new Set(monthRanges())],
+    "the grid draws August, so August is the only month it may fetch",
+  ).toEqual(["2026-08-01..2026-08-31"]);
+
+  // And the proof that it lines up: every day in an August grid fed August
+  // data carries a verdict. Keyed on the wrong month they were all silently
+  // "none" — a clean month, on the surface built to show an unclean one.
+  const marked = sheet.getByRole("button", { name: /\d+ August, complete record$/ });
+  await expect.poll(async () => await marked.count()).toBeGreaterThan(20);
+});
+
+test("a header that never loaded keeps trying, instead of vanishing for the session", async ({ page }) => {
+  // `poll: false` MEANS "A GOOD ANSWER DOES NOT GO STALE", NOT "NEVER ASK
+  // AGAIN". Switching the identity header off the poll left it as the only
+  // observer of today's key while the reader sits on Profile — so three failed
+  // attempts on a dropped signal took the name, the photo AND the language
+  // toggle off the screen with no request ever issued again. The toggle is the
+  // only way out of a language you cannot read, which is what makes a blank
+  // header worse than a wrong one.
+  await page.clock.install();
+
+  let failing = true;
+  const asked: string[] = [];
+  await openMiniApp(page);
+  // Registered AFTER openMiniApp so it WINS: routes are matched
+  // last-registered-first. Only the single-day range — the identity header's
+  // and the Day tab's — so the Profile tab's own month query still answers and
+  // the tab renders.
+  await page.route("**/api/method/dewey_time.telegram.miniapp_api.get_my_calendar", async (route) => {
+    const body = route.request().postDataJSON() as { start_date: string; end_date: string };
+    if (body.start_date !== body.end_date) return route.fallback();
+    asked.push(body.start_date);
+    if (!failing) return route.fallback();
+    await route.fulfill({ status: 500, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto(MINIAPP);
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+
+  const header = page.getByRole("banner", { name: "Your record" });
+  await expect(header, "nothing honest can be drawn over an empty payload").toHaveCount(0);
+
+  await expect.poll(() => asked.length).toBeGreaterThanOrEqual(1);
+
+  // THE RECOVERY IS THE ASSERTION, not a request count. Counting is a race
+  // here: the clock is INSTALLED, so nothing timer-driven moves until it is
+  // told to — retry backoff included — while the responses themselves are
+  // ordinary asynchronous ones that land whenever they land. A count sampled
+  // between the two reads as "no poll" on a slow run and passes on a fast one.
+  // Whether the header comes back does not care about ordering.
+  //
+  // A minute of simulated time per attempt, on the tab the reader never left:
+  // no relaunch, no tab switch, nothing remounted. The only thing that can
+  // bring this header back is the query asking again by itself.
+  failing = false;
+  await expect
+    .poll(async () => {
+      await page.clock.fastForward("01:00");
+      return await header.count();
+    }, { timeout: 30_000 })
+    .toBe(1);
 });

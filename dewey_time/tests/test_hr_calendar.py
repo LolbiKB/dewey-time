@@ -2,6 +2,7 @@ import contextlib
 import json
 import unittest
 from datetime import date as _date
+from datetime import datetime as _datetime
 from unittest.mock import patch
 
 from dewey_time.tests.test_closeout import _install_frappe_mock
@@ -746,3 +747,132 @@ class TestBuilderExtractionIsBehaviourPreserving(unittest.TestCase):
             hc.build_employee_calendar("EMP-001", "2026-08-10", "2026-08-11")
 
         gate.assert_not_called()
+
+
+class TestCalendarDayLoopShiftMeta(unittest.TestCase):
+    """The one loop HR's calendar and the employee's phone both run.
+
+    It resolves a shift per day and, since the site clock change, memoises the
+    Shift Type document across the range. Four mutations of it survived the
+    whole suite when this class was written -- wrong memo key, meta always
+    None, the observed-lunch guard forced false, the guard dropping meta -- and
+    two of those are a month of unrostered days on both surfaces. There was no
+    net beneath it; this is the net.
+    """
+
+    def _run(self, hc, *, shift_by_day, meta_for, checkin_days=()):
+        """Drive build_employee_calendar over 2026-08-01..2026-08-04."""
+        checkins = [
+            {"name": f"CI-{d}", "time": f"2026-08-0{d} 08:00:00", "log_type": "IN",
+             "device_id": "D1", "custom_device_branch": None}
+            for d in checkin_days
+        ]
+
+        def _get_all(doctype, *a, **kw):
+            return checkins if doctype == "Employee Checkin" else []
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                patch.object(hc, "getdate", lambda v: _date.fromisoformat(str(v)[:10])),
+                # A REAL parse, not the shared mock's passthrough. The loop
+                # subtracts two of these to get gross minutes, and a mock that
+                # hands back the string it was given makes that a TypeError --
+                # which is the only reason no existing test drives this branch.
+                patch.object(hc, "get_datetime",
+                             lambda v: _datetime.fromisoformat(str(v))),
+                patch.object(hc.frappe.db, "get_value", return_value=None),
+                patch.object(hc.frappe, "get_all", side_effect=_get_all),
+                patch.object(hc.frappe.db, "table_exists", return_value=False),
+                patch.object(hc, "_get_shift_assignment",
+                             side_effect=lambda **kw: shift_by_day(kw["attendance_date"])),
+                patch.object(hc, "_get_shift_meta", side_effect=meta_for),
+            ]:
+                stack.enter_context(p)
+            lunch = stack.enter_context(
+                patch.object(hc, "detect_observed_lunch", return_value=None)
+            )
+            payload = hc.build_employee_calendar("EMP-001", "2026-08-01", "2026-08-04")
+        return payload, lunch
+
+    @staticmethod
+    def _meta(name):
+        return {
+            "name": name,
+            "start_time": "08:00:00" if name == "FT" else "13:00:00",
+            "end_time": "17:00:00" if name == "FT" else "21:00:00",
+        }
+
+    def test_each_day_gets_its_own_shift_types_times(self):
+        # THE CLASSIC MEMO BUG: one slot for the whole range instead of one per
+        # shift type, so the first Shift Type loaded answers for every later
+        # one. An employee whose month mixes a full-time and an evening shift
+        # then reads their evening days as 08:00-17:00 -- on HR's console and
+        # on their own phone -- and every existing test stays green.
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        calls = []
+
+        def meta_for(shift_type):
+            calls.append(shift_type)
+            return self._meta(shift_type)
+
+        payload, _ = self._run(
+            hc,
+            shift_by_day=lambda d: {"shift_type": "FT" if d.day % 2 else "PT"},
+            meta_for=meta_for,
+        )
+
+        by_date = {d["date"]: d["shift"] for d in payload["days"]}
+        self.assertEqual(by_date["2026-08-01"]["shift_type"], "FT")
+        self.assertEqual(by_date["2026-08-01"]["start_time"], "08:00:00")
+        self.assertEqual(by_date["2026-08-02"]["shift_type"], "PT")
+        self.assertEqual(
+            by_date["2026-08-02"]["start_time"], "13:00:00",
+            "the evening day must carry the evening shift's own times",
+        )
+        # And the memo's whole point, stated: once per distinct type, not once
+        # per day. Four days, two types.
+        self.assertEqual(sorted(calls), ["FT", "PT"])
+
+    def test_a_transient_shift_type_failure_costs_one_day_not_the_range(self):
+        # `_get_shift_meta` swallows every exception and returns None, so
+        # memoising that answer promotes a fault lasting one query into an
+        # unrostered MONTH: no shift bar, no times, no grace, for a range that
+        # resolves perfectly on the very next day.
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        seen = []
+
+        def meta_for(shift_type):
+            seen.append(shift_type)
+            return None if len(seen) == 1 else self._meta(shift_type)
+
+        payload, _ = self._run(
+            hc,
+            shift_by_day=lambda d: {"shift_type": "FT"},
+            meta_for=meta_for,
+        )
+
+        assigned = [d["date"] for d in payload["days"] if d["shift"]["shift_assigned"]]
+        self.assertEqual(
+            assigned, ["2026-08-02", "2026-08-03", "2026-08-04"],
+            "only the day that actually failed may be blank",
+        )
+
+    def test_observed_lunch_is_computed_where_there_is_both_a_shift_and_punches(self):
+        # The guard the refactor rewrote. Forced false it silently removes the
+        # lunch band and the LATE_FROM_LUNCH context from every calendar; left
+        # ungated it calls the detector for days with nothing to detect.
+        from dewey_time.attendance_engine import hr_calendar as hc
+
+        _, lunch = self._run(
+            hc,
+            shift_by_day=lambda d: {"shift_type": "FT"} if d.day <= 2 else None,
+            meta_for=self._meta,
+            checkin_days=(2, 3),
+        )
+
+        self.assertEqual(
+            [c.kwargs["attendance_date"].day for c in lunch.call_args_list], [2],
+            "the 2nd has both; the 1st has no punches and the 3rd has no shift",
+        )

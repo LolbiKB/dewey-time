@@ -5,6 +5,7 @@ import { FrappeCallError } from "@/lib/frappe";
 import type { Day } from "@/types/calendar";
 import type { Biometric } from "@/miniapp/miniProfile";
 import { isAppActive, onActiveChange } from "@/miniapp/telegramChrome";
+import { noteServerNow } from "@/miniapp/siteClock";
 
 /** Sentinel for "this page is not running inside Telegram". */
 export const MISSING_INIT_DATA = "";
@@ -30,6 +31,11 @@ export type MiniCalendar = {
   /** How far the roster has actually been published — the bound on forward
    *  paging, and the difference between "no shifts" and "not built yet". */
   schedule_max_date?: string | null;
+  /** The SITE's wall clock, in the same naive shape as every punch time here.
+   *  Optional because an old bundle can meet a new server and vice versa: with
+   *  it absent the offset stays zero, which is exactly the behaviour that
+   *  shipped before it existed. See siteClock.ts. */
+  server_now?: string | null;
   days: Day[];
 };
 
@@ -119,7 +125,13 @@ async function fetchCalendar(
       method: CALENDAR_METHOD,
     });
   }
-  return (await response.json()).message as MiniCalendar;
+  const payload = (await response.json()).message as MiniCalendar;
+  // HERE, and deliberately not from `query.data` in a component: react-query
+  // hands back a CACHED payload instantly, and its server_now would drag the
+  // clock backwards by the age of the cache. Anchored to the moment of
+  // receipt, the offset stays valid however old the cache gets.
+  noteServerNow(payload?.server_now);
+  return payload;
 }
 
 export function useMiniAppCalendar(
@@ -168,10 +180,20 @@ export function useMiniAppCalendar(
     // And never against a verdict. A 403 re-polled every minute is the shape
     // this app shipped: the message said "try again in a moment", and it did,
     // for as long as the app was open.
-    refetchInterval: (query) =>
-      active && (opts?.poll ?? true) && !isPermanentRejection(query.state.error)
-        ? 60_000
-        : false,
+    //
+    // BUT `poll: false` MEANS "A GOOD ANSWER DOES NOT GO STALE", NOT "NEVER ASK
+    // AGAIN". A query that has never answered at all is the other case, and it
+    // is the one the opt-out quietly broke: the shell's identity header is the
+    // only observer of today's key while the reader sits on Profile, so three
+    // failed attempts on a dropped signal took the name, the photo AND the
+    // language toggle off the screen for the rest of the session — no request
+    // was ever issued again. A retry is not a poll; it is the app keeping the
+    // promise its own error text makes.
+    refetchInterval: (query) => {
+      if (!active || isPermanentRejection(query.state.error)) return false;
+      const unanswered = query.state.data === undefined && query.state.error != null;
+      return (opts?.poll ?? true) || unanswered ? 60_000 : false;
+    },
   });
 }
 
