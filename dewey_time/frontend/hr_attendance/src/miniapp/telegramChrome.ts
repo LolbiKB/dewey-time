@@ -2,12 +2,19 @@
  * Making the Mini App behave like part of Telegram rather than a webview
  * someone embedded.
  *
- * Every call here is optional-chained on purpose. The SDK object exists on
- * every client, but individual methods appear at different Bot API versions
- * (disableVerticalSwipes 7.7, safeAreaInset 8.0), and an older client simply
- * does not have them. Feature-detecting each one costs nothing; calling them
- * unguarded would throw on the very devices most likely to be in use on a
- * factory floor.
+ * Every call here is optional-chained on purpose, and for most of them that
+ * is the whole story: `disableVerticalSwipes` (7.7) and `safeAreaInset` (8.0)
+ * are genuinely absent on an older client, so a missing method means "not
+ * supported" and the optional chain is the feature test.
+ *
+ * PRESENCE IS NOT SUPPORT FOR ALL OF THEM, and that distinction cost us the
+ * remembered language. `telegram-web-app.js` installs `CloudStorage` on EVERY
+ * client and throws `Error('WebAppMethodUnsupported')` from inside `getItem`
+ * below Bot API 6.9 — the method is there, it just refuses. A presence check
+ * is never false, so the guard never fired, the throw was swallowed by the
+ * surrounding try/catch, and a Khmer reader on an old client had to switch the
+ * app back on every launch with nothing to show why. Anything that THROWS
+ * rather than vanishes is gated on `atLeast` below.
  */
 
 export type ThemeName = "light" | "dark";
@@ -187,9 +194,117 @@ export function bindBackButton(w: Window, visible: boolean, onBack: () => void):
  * fires either way.
  */
 export function signalReady(w: Window): void {
-  const fire = () => w?.Telegram?.WebApp?.ready?.();
+  const fire = () => {
+    const app = w?.Telegram?.WebApp;
+    if (app?.ready) {
+      app.ready();
+      return;
+    }
+    postReadyWithoutSdk(w);
+  };
   if (typeof w?.requestAnimationFrame === "function") w.requestAnimationFrame(fire);
   else fire();
+}
+
+/**
+ * `web_app_ready`, said without the SDK.
+ *
+ * The SDK's whole implementation of `ready()` is one line —
+ * `WebView.postEvent('web_app_ready')` — over a transport the CLIENT provides,
+ * not the script. So when telegram-web-app.js never arrives we can still say
+ * it, and it matters more there than anywhere else: `ready()` is what takes
+ * Telegram's branded loading placeholder down, and without it the placeholder
+ * sits on top of the very screen explaining why the app could not start.
+ *
+ * The three transports and the wire format are copied from the SDK's own
+ * `postEvent`, `eventData: ""` included — it defaults to an empty string, not
+ * an empty object, and a client that gets the wrong shape simply ignores it.
+ * Every failure is swallowed: a placeholder we could not dismiss must not also
+ * break the page underneath it.
+ */
+function postReadyWithoutSdk(w: Window): void {
+  const anyW = w as unknown as Record<string, { postEvent?: unknown; notify?: unknown }>;
+  try {
+    const proxy = anyW?.TelegramWebviewProxy;
+    if (typeof proxy?.postEvent === "function") {
+      (proxy.postEvent as (t: string, d: string) => void)("web_app_ready", JSON.stringify(""));
+      return;
+    }
+    const external = anyW?.external;
+    if (external && typeof external.notify === "function") {
+      (external.notify as (m: string) => void)(
+        JSON.stringify({ eventType: "web_app_ready", eventData: "" }),
+      );
+      return;
+    }
+    if (w?.parent && w.parent !== w) {
+      // "*" matches the SDK exactly. The event is fixed and carries nothing,
+      // so a wide target costs nothing.
+      w.parent.postMessage(JSON.stringify({ eventType: "web_app_ready", eventData: "" }), "*");
+    }
+  } catch {
+    /* see above: never fatal */
+  }
+}
+
+/**
+ * Did TELEGRAM open this page, whether or not its SDK arrived?
+ *
+ * NOT ONE OF THESE SIGNALS COMES FROM THE SDK, which is the entire point.
+ * `isInsideTelegram()` reads `Telegram.WebApp.initData`, so it answers "no" in
+ * two situations that need opposite screens: a plain browser, and a Telegram
+ * client whose telegram.org script never loaded. The second one was being told
+ * to open the app from Telegram — which is where they already were, with no
+ * way forward and nothing to retry.
+ *
+ * The signals, each read out of the SDK's own source rather than guessed:
+ *   - the launch hash. Telegram writes `#tgWebAppData=…&tgWebAppVersion=…`
+ *     onto the URL at launch, on every platform, BEFORE the script is even
+ *     requested; the SDK only reads it and never rewrites it, so it survives a
+ *     reload.
+ *   - `TelegramWebviewProxy` / `external.notify`, injected by the native iOS,
+ *     Android and Desktop clients. The SDK only reads these too.
+ *   - being framed by one of Telegram's four web-client origins — the same
+ *     list `www/hr-me.py` declares in its frame-ancestors header, which is the
+ *     server half of this same fact.
+ *
+ * IT AUTHORISES NOTHING. It decides which of two sentences to show. The server
+ * re-verifies the initData HMAC on every request, so a hash somebody pasted by
+ * hand buys them a retry button and a slightly wrong message.
+ */
+const TELEGRAM_WEB_ORIGINS = [
+  "https://web.telegram.org",
+  "https://webk.telegram.org",
+  "https://webz.telegram.org",
+  "https://weba.telegram.org",
+];
+
+export function launchedFromTelegram(w: Window, doc: Document): boolean {
+  try {
+    if (/[#&?]tgWebApp[A-Za-z]+=/.test(String(w?.location?.hash ?? ""))) return true;
+  } catch {
+    /* an opaque origin can throw on location access */
+  }
+
+  const anyW = w as unknown as Record<string, unknown>;
+  if (anyW?.TelegramWebviewProxy !== undefined) return true;
+  if (anyW?.TelegramWebviewProxyProto !== undefined) return true;
+  try {
+    const external = anyW?.external as Record<string, unknown> | undefined;
+    if (external && typeof external.notify === "function") return true;
+  } catch {
+    /* older desktop clients throw on property access */
+  }
+
+  try {
+    const referrer = String(doc?.referrer ?? "");
+    if (w?.parent && w.parent !== w) {
+      return TELEGRAM_WEB_ORIGINS.some((origin) => referrer.startsWith(origin));
+    }
+  } catch {
+    /* likewise */
+  }
+  return false;
 }
 
 /**
@@ -199,10 +314,11 @@ export function signalReady(w: Window): void {
  * safe answer: a client too old to answer the question is too old to have
  * whatever is being asked about.
  *
- * Nothing calls this. Kept because it is the correct way to ask the question
- * and the alternative — a caller inventing its own version parse — is the
- * mistake it exists to prevent. Every other helper here feature-detects the
- * method it needs instead, which is better still.
+ * CloudStorage calls this, and it is the only honest way to ask about it: the
+ * method is installed on every client and THROWS below 6.9 rather than being
+ * absent, so the feature detection every other helper here uses reports
+ * support that is not there. The rule: a method that vanishes is
+ * optional-chained, a method that throws is gated here.
  */
 export function atLeast(w: Window, version: string): boolean {
   return Boolean(w?.Telegram?.WebApp?.isVersionAtLeast?.(version));
@@ -306,27 +422,122 @@ export function saveLocale(w: Window, locale: string): void {
   cloudSet(w, LOCALE_KEY, locale);
 }
 
+/**
+ * The same-origin copy.
+ *
+ * PREFIXED: /hr-me shares an origin with the HR SPA at /hr-attendance, so an
+ * unprefixed "dewey_locale" would be a key in that app's namespace too. The
+ * CloudStorage keys keep their existing names — Telegram allows only
+ * [A-Za-z0-9_-] there, and renaming them would orphan every preference
+ * already remembered.
+ */
+const LOCAL_PREFIX = "dewey_miniapp:";
+
+/**
+ * The local key, scoped to the Telegram account when we can name one.
+ *
+ * CloudStorage is per-USER; localStorage is per-ORIGIN. Mirroring one into the
+ * other without this makes a shared phone hand the second account the first
+ * account's language and last tab — nothing from anybody's record, but still
+ * an answer about somebody else. The id comes from `initDataUnsafe`, which is
+ * untrusted and correctly so: it picks a storage key, and the server decides
+ * everything that matters.
+ *
+ * Unscoped when the SDK cannot name a user, which is exactly the pre-SDK first
+ * paint. On a shared device that can show the previous reader's language for
+ * one frame before CloudStorage answers — a far smaller thing than keeping it
+ * for the whole session, which is what the unscoped key did.
+ */
+function localKey(w: Window, key: string): string | null {
+  const id = w?.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+  return typeof id === "number" ? `${LOCAL_PREFIX}${id}:${key}` : null;
+}
+
+function localGet(w: Window, key: string): string | null {
+  try {
+    const store = w?.localStorage;
+    if (!store) return null;
+    const scoped = localKey(w, key);
+    // EITHER the account's own answer OR the device-wide one — never one
+    // falling back to the other. A reader the SDK has named gets their own
+    // value or nothing; falling through to the shared copy would hand them
+    // the previous account's language, which is the whole thing the scoping
+    // exists to stop.
+    return store.getItem(scoped ?? LOCAL_PREFIX + key) ?? null;
+  } catch {
+    // Private mode, storage disabled, an embedded webview with site data off.
+    return null;
+  }
+}
+
+function localSet(w: Window, key: string, value: string): void {
+  try {
+    const store = w?.localStorage;
+    if (!store) return;
+    const scoped = localKey(w, key);
+    if (scoped) store.setItem(scoped, value);
+    // AND the shared key, which is the only one the first paint can read
+    // before the SDK exists. It is the "last reader on this device" copy, and
+    // the scoped one above overrules it the moment we know who is asking.
+    store.setItem(LOCAL_PREFIX + key, value);
+  } catch {
+    /* as above — a courtesy that must never be fatal */
+  }
+}
+
+/**
+ * The remembered language, synchronously, for a screen that cannot await.
+ *
+ * `loadLocale` is a promise because CloudStorage is a callback API, and the
+ * shell's first paint happens long before it settles. This is the local
+ * mirror, readable during render, so a returning reader opens in their own
+ * language instead of flashing English at them.
+ */
+export function localeHint(w: Window): string | null {
+  return localGet(w, LOCALE_KEY);
+}
+
 function cloudGet(
   w: Window,
   key: string,
   accept: (value: string) => boolean,
 ): Promise<string | null> {
+  const local = localGet(w, key);
+  const fallback = local !== null && accept(local) ? local : null;
   return new Promise((resolve) => {
     const storage = w?.Telegram?.WebApp?.CloudStorage;
-    if (!storage?.getItem) return resolve(null);
+    // THE VERSION, NOT THE METHOD. CloudStorage is installed on every client
+    // and throws WebAppMethodUnsupported from inside getItem below 6.9, so
+    // `storage?.getItem` is never false and the guard it looked like never
+    // guarded anything.
+    if (!storage?.getItem || !atLeast(w, "6.9")) return resolve(fallback);
     try {
-      storage.getItem(key, (err, value) =>
-        resolve(!err && typeof value === "string" && accept(value) ? value : null),
-      );
+      storage.getItem(key, (err, value) => {
+        if (!err && typeof value === "string" && accept(value)) {
+          // Mirrored down, so the answer survives an offline launch.
+          localSet(w, key, value);
+          return resolve(value);
+        }
+        resolve(fallback);
+      });
     } catch {
-      resolve(null);
+      resolve(fallback);
     }
   });
 }
 
 function cloudSet(w: Window, key: string, value: string): void {
+  // Local ALWAYS, cloud when the client can. Local is the only copy that
+  // survives a client that refuses the call, and it costs nothing.
+  //
+  // Precedence on the way back is the other way round: CloudStorage wins when
+  // it answers, because it is the copy that follows the reader to another
+  // device.
+  localSet(w, key, value);
+  const storage = w?.Telegram?.WebApp?.CloudStorage;
+  if (!storage?.setItem || !atLeast(w, "6.9")) return;
   try {
-    w?.Telegram?.WebApp?.CloudStorage?.setItem?.(key, value, () => {});
+    storage.setItem(key, value, () => {});
   } catch {
     // Deliberately silent: persistence here is a courtesy, and a courtesy
     // must never be able to stop the app working.

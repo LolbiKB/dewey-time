@@ -5,34 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/assets/dewey_time/images/dewey-time.svg" />
     <title>My Attendance</title>
-    <!-- Telegram's SDK, which is what puts initData on window.Telegram.WebApp.
-         It has to be a plain script tag from telegram.org: Telegram does not
-         inject it, and vendoring a copy is unsupported.
+    <!-- NO TELEGRAM SDK TAG HERE, and its absence is load-bearing.
 
-         `defer` is load-bearing, not tidiness. Without it this is a blocking
-         classic script in <head>, so the parser stops here until it resolves —
-         measured, a request that never completes leaves <body> unparsed and
-         the app renders NOTHING, with no error to explain it. That is a
-         third-party CDN on the critical path to first paint, over whatever
-         connection a phone on a factory floor happens to have.
+         It was `<script defer src="https://telegram.org/js/telegram-web-app.js?63">`,
+         and the comment that lived here argued `defer` had solved the
+         third-party-CDN-on-the-critical-path problem. It solved half of it.
+         `defer` unblocks the PARSER — <body> is parsed, #root exists — but a
+         deferred classic script and a module script share ONE "execute when
+         parsing has finished" list, in document order. So while the request
+         for telegram.org hung, main.tsx was fetched and never executed: no
+         React, no error boundary, no notice, nothing to press, for as long as
+         the socket stayed open. Measured against the deployed bundle.
 
-         Ordering still holds: deferred classic scripts and module scripts both
-         run after parsing, in document order, so the SDK is on `window` before
-         main.tsx reads it. -->
-    <!--
-         `?63` is the SDK's own version stamp, and it is the cache key. Without
-         it a phone that loaded this app once keeps whatever copy of
-         telegram-web-app.js it cached then — and an older copy simply does not
-         define the newer surface. `safeAreaInset`, `contentSafeAreaInset` and
-         the `activated` event are all Bot API 8.0; on a stale SDK they are
-         `undefined`, every guard in telegramChrome.ts reads that as "old
-         client", and the app quietly renders with zero insets on a phone whose
-         Telegram is perfectly current. Telegram's own docs ship the number in
-         the snippet for exactly this reason. Bump it when they do.
-    -->
-    <script defer src="https://telegram.org/js/telegram-web-app.js?63"></script>
-    <script type="module" crossorigin src="/assets/dewey_time/miniapp/assets/index.js?v=1787278088941"></script>
-    <link rel="stylesheet" crossorigin href="/assets/dewey_time/miniapp/assets/index.css?v=1787278088941">
+         A request that FAILS was always fine — it settles and the list moves
+         on. Only a hang produced nothing at all, and a hang is what a captive
+         portal or a dying cell does.
+
+         src/miniapp/telegramSdk.ts loads it instead, with a timeout, so the
+         app can say what happened. See that file for the ?63 cache key, which
+         moved there with it. -->
+    <link rel="preconnect" href="https://telegram.org" />
+    <script type="module" crossorigin src="/assets/dewey_time/miniapp/assets/index.js?v=1787283093394"></script>
+    <link rel="stylesheet" crossorigin href="/assets/dewey_time/miniapp/assets/index.css?v=1787283093394">
       <script>window.csrf_token = "{{ frappe.session.csrf_token }}";</script>
   </head>
   <body>

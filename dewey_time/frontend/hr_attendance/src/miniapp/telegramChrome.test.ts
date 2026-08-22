@@ -4,7 +4,11 @@ import test from "node:test";
 import {
   applyTelegramPalette,
   atLeast,
+  launchedFromTelegram,
   loadLastTab,
+  loadLocale,
+  localeHint,
+  saveLocale,
   onResume,
   openHaptic,
   saveLastTab,
@@ -20,6 +24,7 @@ import {
   tabHaptic,
   themeFrom,
 } from "@/miniapp/telegramChrome";
+import { isLocale } from "@/miniapp/miniStrings";
 
 function fakeDoc() {
   const classes = new Set<string>();
@@ -286,7 +291,12 @@ test("every event that can resize the sheet is subscribed, and all are released"
 // Deeper Telegram API use — all of it optional on older clients
 // ---------------------------------------------------------------------------
 
-test("none of the newer APIs throw on a client that has none of them", () => {
+test("none of the newer APIs throw on a client that cannot perform them", () => {
+  // "cannot perform", not "does not have" — the title used to say the latter
+  // and it is the false premise this file was built on. CloudStorage is
+  // installed on every client and throws below Bot API 6.9; only the version
+  // answers honestly.
+  //
   // These span Bot API 6.9 to 8.0 and run on every launch. A factory-floor
   // phone on an old Telegram must degrade, not white-screen.
   const bare = {} as Window;
@@ -347,9 +357,16 @@ test("a remembered tab is validated before it is trusted", async () => {
   // CloudStorage holds whatever was last written, including by an older build
   // with different tab names. It is data, not a promise.
   const store: Record<string, string> = { dewey_last_tab: "week" };
-  const w = { Telegram: { WebApp: { CloudStorage: {
-    getItem: (k: string, cb: (e: unknown, v?: string) => void) => cb(null, store[k]),
-  } } } } as unknown as Window;
+  // isVersionAtLeast, because CloudStorage is now gated on the VERSION rather
+  // than on the method's presence — the method is installed on every client
+  // and throws below 6.9, so presence was never the question. A stub without
+  // it is a client too old to use CloudStorage at all.
+  const w = { Telegram: { WebApp: {
+    isVersionAtLeast: () => true,
+    CloudStorage: {
+      getItem: (k: string, cb: (e: unknown, v?: string) => void) => cb(null, store[k]),
+    },
+  } } } as unknown as Window;
   const accept = (v: string) => v === "day" || v === "week" || v === "schedule";
 
   assert.equal(await loadLastTab(w, accept), "week");
@@ -361,14 +378,16 @@ test("a remembered tab is validated before it is trusted", async () => {
 test("a CloudStorage failure opens the app anyway", async () => {
   // Remembering a tab is a courtesy, and a courtesy must never be able to
   // stop the app opening.
-  const w = { Telegram: { WebApp: { CloudStorage: {
-    getItem: (_k: string, cb: (e: unknown) => void) => cb(new Error("nope")),
-  } } } } as unknown as Window;
+  const w = { Telegram: { WebApp: {
+    isVersionAtLeast: () => true,
+    CloudStorage: { getItem: (_k: string, cb: (e: unknown) => void) => cb(new Error("nope")) },
+  } } } as unknown as Window;
   assert.equal(await loadLastTab(w, () => true), null);
 
-  const throwing = { Telegram: { WebApp: { CloudStorage: {
-    getItem: () => { throw new Error("boom"); },
-  } } } } as unknown as Window;
+  const throwing = { Telegram: { WebApp: {
+    isVersionAtLeast: () => true,
+    CloudStorage: { getItem: () => { throw new Error("boom"); } },
+  } } } as unknown as Window;
   assert.equal(await loadLastTab(throwing, () => true), null);
 });
 
@@ -455,4 +474,253 @@ test("initTelegramChrome does not call ready", () => {
   initTelegramChrome(w, doc)();
   assert.ok(calls.includes("expand"), "the rest of the launch setup still runs");
   assert.ok(!calls.includes("ready"), "ready belongs after the first frame");
+});
+
+// ---------------------------------------------------------------------------
+// Presence is not support: CloudStorage, and the copy that survives it
+// ---------------------------------------------------------------------------
+
+/** A localStorage that behaves, per test, so nothing leaks between them. */
+function fakeStorage() {
+  const rows: Record<string, string> = {};
+  return {
+    rows,
+    api: {
+      getItem: (k: string) => (k in rows ? rows[k]! : null),
+      setItem: (k: string, v: string) => { rows[k] = v; },
+    },
+  };
+}
+
+test("an old client is refused CloudStorage by its VERSION, not by a method it has", () => {
+  // THE DEFECT THIS FILE SHIPPED WITH. telegram-web-app.js installs
+  // CloudStorage on every client and throws WebAppMethodUnsupported from
+  // inside getItem below 6.9 — so `storage?.getItem` was never false, the
+  // guard never guarded, the throw was swallowed, and the remembered language
+  // silently never came back on exactly the old phones this app targets.
+  const local = fakeStorage();
+  let called = 0;
+  const oldClient = {
+    localStorage: local.api,
+    Telegram: { WebApp: {
+      // 6.8: present, and would throw if called.
+      isVersionAtLeast: (v: string) => v <= "6.8",
+      CloudStorage: {
+        getItem: () => { called += 1; throw new Error("WebAppMethodUnsupported"); },
+        setItem: () => { called += 1; throw new Error("WebAppMethodUnsupported"); },
+      },
+    } },
+  } as unknown as Window;
+
+  saveLocale(oldClient, "km");
+  assert.equal(called, 0, "the method must not be called on a client that would throw");
+  assert.equal(local.rows["dewey_miniapp:dewey_locale"], "km", "and the local copy is written");
+});
+
+test("the remembered language survives a client that cannot store it in the cloud", async () => {
+  // The whole point of the local mirror: on an old client this used to be
+  // unanswerable, so a Khmer reader whose phone is set to English switched the
+  // app back on every single launch.
+  const local = fakeStorage();
+  const oldClient = {
+    localStorage: local.api,
+    Telegram: { WebApp: { isVersionAtLeast: () => false, CloudStorage: {
+      getItem: () => { throw new Error("WebAppMethodUnsupported"); },
+      setItem: () => { throw new Error("WebAppMethodUnsupported"); },
+    } } },
+  } as unknown as Window;
+
+  saveLocale(oldClient, "km");
+  assert.equal(await loadLocale(oldClient, isLocale), "km");
+  assert.equal(localeHint(oldClient), "km", "and synchronously, for the first paint");
+});
+
+test("the cloud copy wins when it answers, because it is the one that travels", async () => {
+  // A reader who switched to Khmer on their phone must see Khmer on their
+  // tablet. Local is the fallback, never the authority.
+  const local = fakeStorage();
+  local.rows["dewey_miniapp:dewey_locale"] = "en";
+  const w = {
+    localStorage: local.api,
+    Telegram: { WebApp: { isVersionAtLeast: () => true, CloudStorage: {
+      getItem: (_k: string, cb: (e: unknown, v?: string) => void) => cb(null, "km"),
+      setItem: () => {},
+    } } },
+  } as unknown as Window;
+
+  assert.equal(await loadLocale(w, isLocale), "km");
+  assert.equal(local.rows["dewey_miniapp:dewey_locale"], "km", "and is mirrored back down");
+});
+
+test("a client with neither store behaves exactly as it did before", async () => {
+  // The degradation floor. localStorage throwing (private mode, site data
+  // off) plus a client too old for CloudStorage must return null and let the
+  // shell fall back to Telegram's reported language — which is today's
+  // behaviour, so this change can only improve on it.
+  const hostile = {
+    get localStorage(): Storage { throw new Error("denied"); },
+    Telegram: { WebApp: { isVersionAtLeast: () => false } },
+  } as unknown as Window;
+  assert.doesNotThrow(() => saveLocale(hostile, "km"));
+  assert.equal(localeHint(hostile), null);
+  assert.equal(await loadLocale(hostile, isLocale), null);
+});
+
+test("the local key is namespaced, because /hr-me shares an origin with the HR app", () => {
+  const local = fakeStorage();
+  const w = { localStorage: local.api } as unknown as Window;
+  saveLocale(w, "km");
+  assert.deepEqual(Object.keys(local.rows), ["dewey_miniapp:dewey_locale"]);
+});
+
+// ---------------------------------------------------------------------------
+// Did Telegram open this page, when the SDK cannot be asked?
+// ---------------------------------------------------------------------------
+
+const NO_DOC = { referrer: "" } as unknown as Document;
+
+test("the launch hash alone is enough, because Telegram writes it before the script loads", () => {
+  // This is the case the SDK cannot answer: telegram-web-app.js reads
+  // location.hash and never rewrites it, so the hash is there on every
+  // platform BEFORE the script is requested — and still there if it 404s.
+  const w = { location: { hash: "#tgWebAppData=user%3D%7B%7D&tgWebAppVersion=8.0" } } as unknown as Window;
+  assert.equal(launchedFromTelegram(w, NO_DOC), true);
+});
+
+test("a native client is recognised by the proxy it injects", () => {
+  // The commonest real case: iOS/Android/Desktop inject TelegramWebviewProxy
+  // themselves. The SDK only READS it, which is why it survives the SDK.
+  const proxied = { location: { hash: "" }, TelegramWebviewProxy: { postEvent() {} } } as unknown as Window;
+  assert.equal(launchedFromTelegram(proxied, NO_DOC), true);
+
+  const oldDesktop = { location: { hash: "" }, external: { notify() {} } } as unknown as Window;
+  assert.equal(launchedFromTelegram(oldDesktop, NO_DOC), true);
+
+  // The proto variant, injected by some Android builds. Untested it is a
+  // branch that only ever runs on somebody else's phone.
+  const proto = { location: { hash: "" }, TelegramWebviewProxyProto: {} } as unknown as Window;
+  assert.equal(launchedFromTelegram(proto, NO_DOC), true);
+});
+
+test("a web client is recognised by the origin framing us", () => {
+  const framed = { location: { hash: "" }, parent: {} } as unknown as Window;
+  assert.equal(
+    launchedFromTelegram(framed, { referrer: "https://webk.telegram.org/" } as unknown as Document),
+    true,
+    "the sibling origins count too -- webk serves Web K with no redirect at all",
+  );
+  assert.equal(
+    launchedFromTelegram(framed, { referrer: "https://example.com/" } as unknown as Document),
+    false,
+    "and nobody else's frame does",
+  );
+});
+
+test("a plain browser is not mistaken for Telegram", () => {
+  // The inversion, and the reason this predicate is allowed to be generous:
+  // it decides which of two sentences to show and authorises nothing. If it
+  // said yes to everything, somebody in a browser would be offered a retry
+  // that can never work.
+  const browser = { location: { hash: "" } } as unknown as Window;
+  assert.equal(launchedFromTelegram(browser, NO_DOC), false);
+  assert.equal(launchedFromTelegram({} as Window, NO_DOC), false);
+  const hashButNotOurs = { location: { hash: "#section=pay" } } as unknown as Window;
+  assert.equal(launchedFromTelegram(hashButNotOurs, NO_DOC), false);
+});
+
+// ---------------------------------------------------------------------------
+// ready(), without the script that normally says it
+// ---------------------------------------------------------------------------
+
+test("with no SDK, ready is spoken over the client's own transport", () => {
+  // ready() is what takes Telegram's branded loading placeholder down. With no
+  // SDK it was never said, so on the one screen that explains why the app
+  // could not start, the placeholder sat on top of it.
+  const sent: Array<[string, string]> = [];
+  const w = {
+    TelegramWebviewProxy: { postEvent: (t: string, d: string) => sent.push([t, d]) },
+  } as unknown as Window;
+  signalReady(w);
+  // The argument shape is the half that rots silently: eventData is an empty
+  // STRING in the SDK's own postEvent, not an empty object.
+  assert.deepEqual(sent, [["web_app_ready", '""']]);
+});
+
+test("an old desktop client gets the notify form", () => {
+  // window.external.notify is Telegram Desktop's older transport, and it is
+  // the branch a native-client user on an old build takes. Untested, it is one
+  // typo away from leaving Telegram's placeholder up on exactly those phones.
+  const sent: string[] = [];
+  const w = { external: { notify: (m: string) => sent.push(m) } } as unknown as Window;
+  signalReady(w);
+  assert.deepEqual(sent, ['{"eventType":"web_app_ready","eventData":""}']);
+});
+
+test("an iframe client gets the message form, and only when it is framed", () => {
+  const posted: string[] = [];
+  const framed = {
+    parent: { postMessage: (m: string) => posted.push(m) },
+  } as unknown as Window;
+  signalReady(framed);
+  assert.deepEqual(posted, ['{"eventType":"web_app_ready","eventData":""}']);
+
+  // A TOP-LEVEL PAGE IS ITS OWN PARENT, and posting to yourself is a message
+  // nobody is listening for. Asserted with a spy rather than doesNotThrow:
+  // removing the `parent !== w` guard throws nothing, so the old form of this
+  // test passed either way.
+  const posted2: string[] = [];
+  const top = { postMessage: (m: string) => posted2.push(m) } as unknown as Window;
+  (top as unknown as { parent: unknown }).parent = top;
+  signalReady(top);
+  assert.deepEqual(posted2, [], "a top-level page has nobody to tell");
+});
+
+test("the SDK is still preferred when it is there", () => {
+  // The fallback must never double up: two ready signals is not harmful, but a
+  // fallback that fires alongside the real one is a fallback nobody is testing.
+  const calls: string[] = [];
+  const w = {
+    TelegramWebviewProxy: { postEvent: () => calls.push("shim") },
+    Telegram: { WebApp: { ready: () => calls.push("sdk") } },
+  } as unknown as Window;
+  signalReady(w);
+  assert.deepEqual(calls, ["sdk"]);
+});
+
+test("a shared phone does not serve one account's preference to another", () => {
+  // CloudStorage is per-USER; localStorage is per-ORIGIN. Mirroring one into
+  // the other without scoping hands the second Telegram account on a shared
+  // device the first one's language and last tab — nothing from anybody's
+  // record, but still an answer about somebody else.
+  const local = fakeStorage();
+  const asUser = (id: number) => ({
+    localStorage: local.api,
+    Telegram: { WebApp: {
+      initDataUnsafe: { user: { id } },
+      isVersionAtLeast: () => false,
+    } },
+  } as unknown as Window);
+
+  saveLocale(asUser(111), "km");
+  assert.equal(localeHint(asUser(111)), "km");
+  assert.equal(localeHint(asUser(222)), null, "a different account gets no answer");
+
+  saveLocale(asUser(222), "en");
+  assert.equal(localeHint(asUser(111)), "km", "and the first one is not overwritten");
+});
+
+test("before the SDK names anybody, the device-wide copy is still readable", () => {
+  // The first paint has no user id — that is what the SDK reports, and on the
+  // stalled path it never arrives. The unscoped key is what makes the
+  // remembered language usable at all on that first frame; the scoped one
+  // overrules it the moment we know who is asking.
+  const local = fakeStorage();
+  const named = {
+    localStorage: local.api,
+    Telegram: { WebApp: { initDataUnsafe: { user: { id: 111 } }, isVersionAtLeast: () => false } },
+  } as unknown as Window;
+  saveLocale(named, "km");
+
+  const anonymous = { localStorage: local.api } as unknown as Window;
+  assert.equal(localeHint(anonymous), "km");
 });

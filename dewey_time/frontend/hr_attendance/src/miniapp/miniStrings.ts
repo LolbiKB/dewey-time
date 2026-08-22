@@ -164,6 +164,30 @@ const EN = {
   flagStatusRereview:
     "Awaiting HR review again — this day changed after it was reviewed",
 
+  // ── The screens shown when the app cannot run ──
+  //
+  // ALL THREE ARE RENDERED IN BOTH LANGUAGES, and that is a decision about
+  // what is knowable rather than a translation shortcut. The language comes
+  // from Telegram's SDK or from a remembered choice, and on exactly these
+  // screens there may be neither: the SDK is the thing that failed to load,
+  // or React threw before the provider mounted. #203 settled the same
+  // question for the bot ("the only bilingual messages left are the ones that
+  // can arrive BEFORE a choice can exist"); these are the app's version of
+  // that category.
+  //
+  // "Your attendance record is not affected" carries both bodies. These
+  // screens are read by people worried about being marked absent — the
+  // biometric copy already makes that link explicit — so a broken screen with
+  // no reassurance is read as a broken RECORD. None of these words may call
+  // anything about the employee's data an error.
+  sdkStalledTitle: "The app didn't finish loading",
+  sdkStalledBody:
+    "Check your connection and try again. Your attendance record is not affected.",
+  crashTitle: "This screen could not be shown",
+  crashBody:
+    "Try again. If it keeps happening, tell HR — your attendance record is not affected.",
+  actionRetry: "Try again",
+
   // Chrome
   yourRecord: "Your record",
   // The sheets' dismiss control. The design system renders one with a
@@ -378,6 +402,19 @@ const KM: Record<StringKey, string> = {
   flagStatusUpheld: "បានបញ្ជាក់ដោយ HR",
   flagStatusRereview: "រង់ចាំការពិនិត្យឡើងវិញ — ថ្ងៃនេះមានការផ្លាស់ប្តូរក្រោយពេលពិនិត្យ។",
 
+  // MACHINE-DRAFTED. The reassurance clause — "កំណត់ត្រាវត្តមានរបស់អ្នកមិនរង
+  // ផលប៉ះពាល់ទេ" — is the load-bearing half of both bodies and the half most
+  // worth a native speaker's eye: it has to read as "nothing has happened to
+  // your record", never as "your record is unaffected BY THE PROBLEM WE ARE
+  // NOT TELLING YOU ABOUT".
+  sdkStalledTitle: "កម្មវិធីមិនទាន់ផ្ទុករួចរាល់ទេ",
+  sdkStalledBody:
+    "សូមពិនិត្យអ៊ីនធឺណិតរបស់អ្នក រួចព្យាយាមម្តងទៀត។ កំណត់ត្រាវត្តមានរបស់អ្នកមិនរងផលប៉ះពាល់ទេ។",
+  crashTitle: "អេក្រង់នេះមិនអាចបង្ហាញបានទេ",
+  crashBody:
+    "សូមព្យាយាមម្តងទៀត។ បើវានៅតែកើតឡើង សូមប្រាប់ HR — កំណត់ត្រាវត្តមានរបស់អ្នកមិនរងផលប៉ះពាល់ទេ។",
+  actionRetry: "ព្យាយាមម្តងទៀត",
+
   yourRecord: "កំណត់ត្រារបស់អ្នក",
   closeSheet: "បិទ",
   openFromTelegram: "សូមបើកពី Telegram",
@@ -472,6 +509,23 @@ const KM: Record<StringKey, string> = {
 const TABLES: Record<Locale, Record<StringKey, string>> = { en: EN, km: KM };
 
 /** A lookup bound to one locale. */
+/**
+ * One string in both languages, for the screens that render before a language
+ * can be known.
+ *
+ * There are exactly three: the two failure notices and the crash screen. Each
+ * of them is reachable in a state where the usual answer does not exist — the
+ * SDK that reports the reader's language is the thing that did not load, or
+ * React threw before `MiniLocaleProvider` mounted — and defaulting to English
+ * there hands an unreadable screen to the people least able to report it.
+ *
+ * Khmer first, deliberately: it is the roster's language, and on a screen
+ * showing both, the first line is the one that gets read.
+ */
+export function inBothLanguages(key: StringKey): { km: string; en: string } {
+  return { km: KM[key], en: EN[key] };
+}
+
 export type Translate = (key: StringKey) => string;
 
 export function translator(locale: Locale): Translate {

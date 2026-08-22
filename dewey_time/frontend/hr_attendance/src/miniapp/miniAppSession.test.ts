@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { initDataFromTelegram, MISSING_INIT_DATA } from "@/miniapp/useMiniAppSession";
+import { SDK_URL } from "@/miniapp/telegramSdk";
 
 test("initData is read from the Telegram SDK, never from the URL", () => {
   // A URL-supplied value would be attacker-controllable: anyone could paste a
@@ -52,18 +53,23 @@ test("the poll is gated on Telegram's activity, not on document visibility", () 
   assert.match(src, /isPermanentRejection\(query\.state\.error\)/);
 });
 
-test("the Mini App HTML pins the SDK's version, and loads it before the bundle", () => {
+test("the SDK's version stamp survived the move out of the HTML", () => {
   // Without the ?NN stamp a phone keeps whatever telegram-web-app.js it cached
   // on its first visit. An older copy has no safeAreaInset and no `activated`
   // event, every feature guard reads that as "old client", and the app renders
   // with zero insets on a perfectly current Telegram.
-  const html = readFileSync(new URL("../../index.miniapp.html", import.meta.url), "utf8");
-  const sdk = html.indexOf("telegram-web-app.js?");
-  assert.ok(sdk > 0, "the SDK script must carry a version stamp");
-
-  // Order still matters: deferred classic scripts and module scripts both run
-  // after parsing, in document order, so the SDK must appear first or
-  // window.Telegram is undefined when main.tsx reads it.
-  const bundle = html.indexOf("<script type=\"module\"");
-  if (bundle > 0) assert.ok(sdk < bundle, "the SDK must precede the app bundle");
+  //
+  // THIS TEST USED TO ASSERT THE OPPOSITE ARRANGEMENT — that the HTML carried
+  // the script and that it preceded the module bundle — and it kept passing
+  // after the tag was deleted, because the note left in its place QUOTES the
+  // tag it removed. A guard that reads a file's prose is a guard that agrees
+  // with whatever the file says about itself.
+  const html = readFileSync(new URL("../../index.miniapp.html", import.meta.url), "utf8")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  assert.ok(
+    !/<script[^>]*telegram-web-app\.js/.test(html),
+    "the SDK is loaded by the app now — the tag's execution order was the bug",
+  );
+  // The stamp moved with it, and telegramSdk.test.ts pins the URL's shape.
+  assert.match(SDK_URL, /telegram-web-app\.js\?\d+$/);
 });

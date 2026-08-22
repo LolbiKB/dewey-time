@@ -9,7 +9,7 @@ import { MyProfilePage } from "@/miniapp/MyProfilePage";
 import { MiniIdentity } from "@/miniapp/MiniIdentity";
 import { MiniLocaleProvider, useT } from "@/miniapp/MiniLocale";
 import {
-  isLocale, LOCALE_LABEL, otherLocale, resolveLocale,
+  inBothLanguages, isLocale, LOCALE_LABEL, otherLocale, resolveLocale,
   type Locale, type StringKey,
 } from "@/miniapp/miniStrings";
 import {
@@ -23,8 +23,10 @@ import { useSafeAreaInsets } from "@/miniapp/useSafeAreaInsets";
 import { useMinuteTick } from "@/miniapp/useMinuteTick";
 import {
   bindBackButton,
+  launchedFromTelegram,
   loadLastTab,
   loadLocale,
+  localeHint,
   onResume,
   onViewportChange,
   safeAreaInsets,
@@ -62,15 +64,69 @@ const TABS = [
   { key: "profile", label: "tabProfile" },
 ] as const satisfies readonly { key: MiniTab; label: StringKey }[];
 
-export function OutsideTelegramNotice() {
-  const t = useT();
+/**
+ * A screen shown before the app can know what language to speak.
+ *
+ * BOTH LANGUAGES, and the reason is specific to these two notices: they are
+ * reachable exactly when the SDK — which is what reports the reader's language
+ * — did not load, or when the page was opened outside Telegram entirely. The
+ * Khmer half of `openFromTelegram` has been written since the notice shipped
+ * and was unreachable, because the only path to it ran through the thing that
+ * had failed. Khmer first: it is the roster's language.
+ */
+function BilingualNotice(props: { title: StringKey; body: StringKey; action?: () => void }) {
+  const title = inBothLanguages(props.title);
+  const body = inBothLanguages(props.body);
+  const retry = inBothLanguages("actionRetry");
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <p className="text-sm font-medium text-foreground">{t("openFromTelegram")}</p>
-      <p className="text-xs text-muted-foreground">
-        {t("openFromTelegramBody")}
-      </p>
+    <div
+      className="flex flex-col items-center justify-center gap-2 p-8 text-center"
+      // Telegram's own stable height, the same as the shell and the crash
+      // screen. `h-full` was `height: 100%` against an auto-height #root, which
+      // does not resolve at all — so the box took its content height and
+      // neither notice was actually centred on anything.
+      style={{ height: "var(--tg-viewport-stable-height, 100dvh)" }}
+    >
+      <p className="text-sm font-medium text-foreground">{title.km}</p>
+      <p className="text-sm font-medium text-foreground">{title.en}</p>
+      <p className="text-xs leading-normal text-muted-foreground">{body.km}</p>
+      <p className="text-xs leading-normal text-muted-foreground">{body.en}</p>
+      {props.action ? (
+        <button
+          type="button"
+          onClick={props.action}
+          className="mt-2 inline-flex min-h-11 items-center rounded-md border border-border px-4 text-sm font-medium text-foreground active:bg-muted"
+        >
+          {retry.km} · {retry.en}
+        </button>
+      ) : null}
     </div>
+  );
+}
+
+export function OutsideTelegramNotice() {
+  // NO RETRY. The page is in a browser and reloading it changes nothing; the
+  // way forward is Telegram, which is what this says.
+  return <BilingualNotice title="openFromTelegram" body="openFromTelegramBody" />;
+}
+
+/**
+ * Inside Telegram, but the SDK never arrived.
+ *
+ * THE SCREEN THAT DID NOT EXIST. `isInsideTelegram()` is false both in a plain
+ * browser and here — telegram-web-app.js is a third-party script on a CDN, and
+ * when it 404s or the connection drops there is no `initData` to read — so
+ * somebody sitting inside the Telegram app, on the factory floor, was told to
+ * open it from Telegram. There was no retry, no explanation, and nothing on
+ * the screen that could be true.
+ */
+export function SdkStalledNotice() {
+  return (
+    <BilingualNotice
+      title="sdkStalledTitle"
+      body="sdkStalledBody"
+      action={() => window.location.reload()}
+    />
   );
 }
 
@@ -162,8 +218,15 @@ export function MiniAppShell() {
   );
 
   // Opens in the client's language, unless they have chosen otherwise once.
+  //
+  // `localeHint` is the local mirror of that choice, and it is read HERE
+  // rather than only in the effect below because CloudStorage is a callback
+  // API: the first paint always happened before it answered, so a Khmer
+  // reader whose phone is set to English saw a frame of English on every
+  // launch. The effect still runs — the cloud copy is the one that follows
+  // them to another device — but it now confirms rather than corrects.
   const [locale, setLocale] = useState<Locale>(() =>
-    resolveLocale(null, telegramLanguageCode(window)),
+    resolveLocale(localeHint(window), telegramLanguageCode(window)),
   );
   const localeTouched = useRef(false);
   useEffect(() => {
@@ -252,10 +315,22 @@ export function MiniAppShell() {
   // Not a security check -- the server re-verifies every request. This is so a
   // page opened in a plain browser explains itself instead of firing an
   // unauthenticated call and rendering a permission error.
+  // Not a security check -- the server re-verifies every request. This decides
+  // which of two sentences a stuck reader gets, and until now there was only
+  // one for two situations: `isInsideTelegram()` is false both in a plain
+  // browser AND inside Telegram when the SDK script never loaded, so somebody
+  // already in Telegram was told to open it from Telegram. `launchedFromTelegram`
+  // answers the same question without the SDK — the launch hash, the native
+  // client's injected proxy, the framing origin — so the second case now gets
+  // the sentence that is true of it, and a way to try again.
   if (!isInsideTelegram()) {
     return (
       <MiniLocaleProvider locale={locale}>
-        <OutsideTelegramNotice />
+        {launchedFromTelegram(window, document) ? (
+          <SdkStalledNotice />
+        ) : (
+          <OutsideTelegramNotice />
+        )}
       </MiniLocaleProvider>
     );
   }
