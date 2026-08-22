@@ -428,3 +428,51 @@ class TestThePublicEntrypointRefusesBeforeItActs(unittest.TestCase):
              patch.object(webhook.frappe, "log_error"), \
              patch.object(webhook, "_handle", side_effect=RuntimeError("boom")):
             self.assertEqual(webhook.telegram_webhook(), {})
+
+
+class TestAnUpdateWithNoSenderBindsNothing(unittest.TestCase):
+    """`str(None)` is the five-character string "None", and it is truthy.
+
+    Every emptiness guard in binding.py is written `if not telegram_user_id`,
+    and the stringification happens HERE, in this file -- so an update with no
+    `from` arrives there looking like a real account id and walks past all of
+    them. It would spend a single-use token and leave an enabled link keyed to
+    "None" that no Telegram launch can ever match: the credential burned, and
+    the employee told the link did not work.
+
+    Telegram always sends `from` on a private message, so this is a latent
+    trap rather than a live hole. It is pinned because the thing that makes it
+    latent is a property of Telegram's payloads, not of this code.
+    """
+
+    @staticmethod
+    def _senderless(text="/start tok"):
+        return {"message": {"text": text, "chat": {"id": 77702, "type": "private"}}}
+
+    def test_a_token_is_not_spent_by_a_senderless_update(self):
+        with patch.object(webhook.binding, "redeem_link_token") as redeem, \
+             patch.object(webhook.transport, "send_message") as send:
+            webhook._handle(self._senderless())
+        redeem.assert_not_called()
+        send.assert_not_called()
+
+    def test_the_no_token_path_refuses_it_too(self):
+        with patch.object(webhook.binding, "claim_by_recorded_id") as claim, \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle(self._senderless(text="/start"))
+        claim.assert_not_called()
+
+    def test_a_senderless_language_tap_changes_nothing(self):
+        with patch.object(webhook.binding, "set_language") as set_language, \
+             patch.object(webhook.transport, "answer_callback_query"), \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle({"callback_query": {"id": "cbq-1", "data": "lang:en"}})
+        set_language.assert_not_called()
+
+    def test_an_ordinary_update_still_binds(self):
+        # The inversion: without this the two above would also pass if the
+        # guard refused everything.
+        with patch.object(webhook.binding, "redeem_link_token") as redeem, \
+             patch.object(webhook.transport, "send_message"):
+            webhook._handle(_update())
+        redeem.assert_called_once()

@@ -108,6 +108,18 @@ def _handle(update: dict) -> None:
     telegram_user_id = (message.get("from") or {}).get("id")
     text = (message.get("text") or "").strip()
 
+    # NO SENDER, NO BINDING. Every guard in binding.py is written as
+    # `if not telegram_user_id`, and `str(None)` is the five-character string
+    # "None" -- truthy, and therefore past all of them. An update with no
+    # `from` would reach redeem_link_token as a real-looking account id, spend
+    # a single-use token, and leave an enabled link keyed to "None" that no
+    # Telegram launch can ever match: the credential burned and the employee
+    # told the link did not work. Telegram always sends `from` on a private
+    # message, so this is a latent trap rather than a live hole -- and the
+    # stringification is in THIS file, so the guard belongs here too.
+    if telegram_user_id is None:
+        return
+
     if _is_command(text, "/language"):
         # Offered to anyone who asks, linked or not: the chooser leaks
         # nothing, and a press from an unlinked account changes nothing
@@ -175,6 +187,11 @@ def _handle_language_tap(callback: dict) -> None:
         return
 
     telegram_user_id = (callback.get("from") or {}).get("id")
+    # The same "None" trap as the message path above. Harmless here -- no link
+    # is keyed to that string, so set_language would refuse -- but a guard that
+    # only holds because the lookup happens to miss is not a guard.
+    if telegram_user_id is None:
+        return
     try:
         chat_id = binding.set_language(str(telegram_user_id), language)
     except Exception:

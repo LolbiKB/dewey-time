@@ -64,7 +64,14 @@ def _store_token(*, token_hash: str, employee: str, expires_at) -> None:
     doc.insert(ignore_permissions=True)
 
 
-def _load_token(token_hash: str):
+def _load_token(token_hash: str, *, for_update: bool = False):
+    """The token row, or None. `for_update` reads COMMITTED state.
+
+    The same reasoning `_live_link_names` records: a plain SELECT under
+    REPEATABLE READ can be served from a read view pinned before this
+    request's lock was granted, so the half of a check-then-act that gates the
+    act has to be a locking read or the mutex decides nothing.
+    """
     if not frappe.db.exists(TOKEN_DT, token_hash):
         return None
     return frappe.db.get_value(
@@ -72,6 +79,7 @@ def _load_token(token_hash: str):
         token_hash,
         ["name", "employee", "expires_at", "redeemed_at", "revoked_at"],
         as_dict=True,
+        for_update=for_update,
     )
 
 
@@ -265,9 +273,28 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
     if not token or not telegram_user_id:
         frappe.throw("Invalid link request")
 
-    row = _load_token(_hash_token(token))
+    token_hash = _hash_token(token)
+    row = _load_token(token_hash)
     if not row:
         frappe.throw("This link is not valid. Ask HR for a new one.")
+
+    # THE MUTEX, TAKEN BEFORE ANY OF THE CHECKS BELOW ARE BELIEVED. Redemption
+    # was the one credential operation that did not take it, and it is a
+    # check-then-act like the other two: read `redeemed_at`, decide, write. Two
+    # taps on one link in the same instant both read NULL, both bind, and the
+    # second's `TelegramLink.validate` -- a plain read -- cannot see the
+    # first's uncommitted insert. A single-use token then leaves TWO enabled
+    # links on one employee, each able to read that employee's attendance, and
+    # no unique index anywhere to refuse the pair afterwards.
+    #
+    # Then RE-READ under the lock. Taking a mutex and trusting the values read
+    # before it was granted protects nothing -- the loser has to see the
+    # winner's committed row, which is the whole reason to wait.
+    _serialize_credential_ops(row["employee"])
+    row = _load_token(token_hash, for_update=True)
+    if not row:
+        frappe.throw("This link is not valid. Ask HR for a new one.")
+
     if row.get("redeemed_at"):
         # Idempotent for the SAME Telegram account. Telegram redelivers an
         # update when it does not get a timely 200, so a slow response to
@@ -297,7 +324,7 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
     if _employee_bound_elsewhere(employee, telegram_user_id):
         frappe.throw("This employee is already linked to another Telegram account. Ask HR.")
 
-    existing = _existing_link(telegram_user_id)
+    existing = _existing_link(telegram_user_id, for_update=True)
     if existing:
         if existing.get("enabled"):
             if existing["employee"] == employee:
@@ -326,16 +353,23 @@ def redeem_link_token(token: str, telegram_user_id: str, chat_id: str) -> str:
 TELEGRAM_ID_FIELD = "custom_telegram_chat_id"
 
 
-def _existing_link(telegram_user_id: str):
+def _existing_link(telegram_user_id: str, *, for_update: bool = False):
     """The link row for this Telegram account, enabled or not, or None.
 
     `Telegram Link` autonames `field:telegram_user_id`, so the account id IS
     the document name -- one row per Telegram account, by construction.
+
+    `for_update` for the callers that go on to WRITE based on the answer; see
+    `_load_token` for why a plain read cannot gate an act taken under a lock.
     """
     if not frappe.db.exists(LINK_DT, telegram_user_id):
         return None
     return frappe.db.get_value(
-        LINK_DT, telegram_user_id, ["name", "employee", "enabled"], as_dict=True
+        LINK_DT,
+        telegram_user_id,
+        ["name", "employee", "enabled"],
+        as_dict=True,
+        for_update=for_update,
     )
 
 
@@ -371,6 +405,9 @@ def _employee_bound_elsewhere(employee: str, telegram_user_id: str) -> bool:
                 "telegram_user_id": ["!=", telegram_user_id],
             },
             fields=["name"],
+            # A locking read: both callers hold the Employee mutex by the time
+            # they ask, and both WRITE a link if the answer is no.
+            for_update=True,
             limit_page_length=1,
         )
     )
@@ -420,6 +457,21 @@ def claim_by_recorded_id(telegram_user_id: str, chat_id: str) -> str:
         frappe.throw("This account cannot be linked automatically.")
 
     employee = matches[0]
+
+    # The same mutex the token path now takes, for the same check-then-act.
+    # Telegram redelivers an update when it does not get a timely 200, so two
+    # copies of one bare /start arriving together is the ORDINARY case here,
+    # not a contrived one -- and the idempotency check above is a plain read
+    # that the redelivery races. Without the lock the loser's insert collides
+    # on the autoname and the webhook answers "use the link HR gave you" to
+    # somebody who was linked a millisecond earlier.
+    _serialize_credential_ops(employee)
+    existing = _existing_link(telegram_user_id, for_update=True)
+    if existing:
+        if not existing.get("enabled"):
+            frappe.throw("This account cannot be linked automatically.")
+        return existing["employee"]
+
     if _employee_bound_elsewhere(employee, telegram_user_id):
         # Someone is already bound to this employee. Either the recorded id is
         # stale, or two accounts are claiming one person; both want a human.

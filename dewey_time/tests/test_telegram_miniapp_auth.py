@@ -202,3 +202,39 @@ class TestUserField(unittest.TestCase):
             # patched here, because the binding itself is the thing refusing.
             with self.assertRaises(Exception):
                 miniapp_auth.employee_from_init_data(sign(valid_fields()))
+
+
+class TestMalleability(unittest.TestCase):
+    """The credential must be ONE string, not a family of equivalent ones.
+
+    A signature that keeps holding while the message changes is a signature
+    over a different message than the one being acted on. Nothing downstream
+    reads a field beyond `user` and `auth_date` today, so neither case here is
+    exploitable as it stands -- which is precisely why they are worth pinning
+    before somebody reads a `start_param` out of these pairs and inherits a
+    value that survived validation.
+    """
+
+    def test_an_appended_empty_field_does_not_keep_the_signature(self):
+        # `parse_qsl` drops empty-valued fields by default, so the check string
+        # was built from a SHORTER message than the one that arrived: an
+        # attacker could staple arbitrary keys onto a captured launch and the
+        # hash still matched. Measured before the fix: it validated.
+        signed = sign(valid_fields())
+        tampered = signed.replace("&hash=", "&injected=&hash=")
+        with only_the_guard_can_raise():
+            with self.assertRaises(Rejected):
+                miniapp_auth.employee_from_init_data(tampered)
+
+    def test_a_field_telegram_signed_as_empty_still_validates(self):
+        # The same change, in the direction that matters for availability.
+        # Telegram excludes exactly one field from its check string -- `hash` --
+        # so a field it sends empty is a field it SIGNED empty. Dropping it
+        # here built a different string and rejected a legitimate launch.
+        fields = valid_fields()
+        fields["start_param"] = ""
+        with only_the_guard_can_raise() as resolve:
+            self.assertEqual(
+                miniapp_auth.employee_from_init_data(sign(fields)), "HR-EMP-00001"
+            )
+        self.assertEqual(resolve.call_args[0][0], "55501")

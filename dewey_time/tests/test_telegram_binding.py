@@ -903,3 +903,114 @@ class TestTheDecidingReadsAreLockingReads(unittest.TestCase):
         with patch.object(frappe, "get_all", return_value=[]) as get_all:
             binding.revoke_outstanding_tokens("HR-EMP-00001")
         self.assertTrue(get_all.call_args.kwargs.get("for_update"))
+
+
+class TestRedemptionIsSerialisedToo(unittest.TestCase):
+    """Redemption was the one credential operation with no mutex.
+
+    It is a check-then-act like the other two: read `redeemed_at`, decide,
+    write a link. Two taps on one link in the same instant both read NULL,
+    both bind, and the second's `TelegramLink.validate` -- a plain read --
+    cannot see the first's uncommitted insert. A single-use token then leaves
+    TWO enabled links on one employee, each able to read that employee's
+    attendance, with no unique index anywhere to refuse the pair afterwards.
+
+    A mock cannot run two racing transactions, so what these pin is what a
+    reviewer would otherwise have to re-derive: that the lock is taken, that
+    it is taken before the checks are BELIEVED, and that the values believed
+    were read after it was granted.
+    """
+
+    def _token_doc(self, **overrides):
+        doc = {
+            "name": "hash",
+            "employee": "HR-EMP-00001",
+            "expires_at": "2099-01-01 00:00:00",
+            "redeemed_at": None,
+            "revoked_at": None,
+        }
+        doc.update(overrides)
+        return doc
+
+    def test_redeeming_locks_on_the_employee_the_token_names(self):
+        with patch.object(binding, "_load_token", return_value=self._token_doc()), \
+             patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(binding, "_existing_link", return_value=None), \
+             patch.object(binding, "_create_link"), \
+             patch.object(binding, "_mark_redeemed"), \
+             patch.object(binding, "_serialize_credential_ops") as lock:
+            binding.redeem_link_token("tok", "55501", "77702")
+        lock.assert_called_once_with("HR-EMP-00001")
+
+    def test_the_checks_are_made_on_a_row_read_AFTER_the_lock(self):
+        # Taking a mutex and then trusting values read before it was granted
+        # protects nothing -- the loser has to see the winner's committed row,
+        # which is the entire reason to wait. So the row is loaded twice, and
+        # the SECOND load is the one whose verdict counts: here it comes back
+        # already redeemed by somebody else, and redemption must refuse.
+        loads = []
+
+        def load(_hash, **kw):
+            loads.append(kw.get("for_update", False))
+            if len(loads) == 1:
+                return self._token_doc()
+            return self._token_doc(
+                redeemed_at="2026-08-21 09:00:00",
+                redeemed_by_telegram_user_id="99999",
+            )
+
+        with patch.object(binding, "_load_token", side_effect=load), \
+             patch.object(binding, "_is_expired", return_value=False), \
+             patch.object(binding, "_serialize_credential_ops"), \
+             patch.object(binding, "_create_link") as create:
+            with self.assertRaises(Exception):
+                binding.redeem_link_token("tok", "55501", "77702")
+        self.assertEqual(len(loads), 2, "the row must be re-read under the lock")
+        self.assertTrue(loads[1], "and the re-read must be a locking read")
+        create.assert_not_called()
+
+    def test_the_no_token_path_locks_before_it_believes_its_idempotency_check(self):
+        # Telegram redelivers an update when it does not get a timely 200, so
+        # two copies of one bare /start arriving together is the ORDINARY case
+        # here. Without the lock the loser's insert collides on the autoname
+        # and the webhook answers "use the link HR gave you" to somebody who
+        # was linked a millisecond earlier.
+        calls = []
+
+        def existing(_uid, **kw):
+            calls.append(("read", kw.get("for_update", False)))
+            return None
+
+        with patch.object(binding, "_existing_link", side_effect=existing), \
+             patch.object(binding, "_employees_with_recorded_id",
+                          return_value=["HR-EMP-00001"]), \
+             patch.object(binding, "_employee_bound_elsewhere", return_value=False), \
+             patch.object(binding, "_create_link"), \
+             patch.object(binding, "_serialize_credential_ops",
+                          side_effect=lambda e: calls.append(("lock", e))):
+            binding.claim_by_recorded_id("55501", "77702")
+
+        self.assertIn(("lock", "HR-EMP-00001"), calls)
+        after = calls[calls.index(("lock", "HR-EMP-00001")) + 1:]
+        self.assertEqual(
+            after, [("read", True)],
+            "the deciding read happens after the lock, and is a locking read",
+        )
+
+    def test_the_reads_that_gate_the_write_are_locking_reads(self):
+        import frappe
+
+        with patch.object(frappe, "get_all", return_value=[]) as get_all:
+            binding._employee_bound_elsewhere("HR-EMP-00001", "55501")
+        self.assertTrue(get_all.call_args.kwargs.get("for_update"))
+
+        with patch.object(frappe.db, "exists", return_value=True), \
+             patch.object(frappe.db, "get_value", return_value={}) as get_value:
+            binding._existing_link("55501", for_update=True)
+        self.assertTrue(get_value.call_args.kwargs.get("for_update"))
+
+        with patch.object(frappe.db, "exists", return_value=True), \
+             patch.object(frappe.db, "get_value", return_value={}) as get_value:
+            binding._load_token("hash", for_update=True)
+        self.assertTrue(get_value.call_args.kwargs.get("for_update"))
