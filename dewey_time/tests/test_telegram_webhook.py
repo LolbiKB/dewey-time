@@ -476,3 +476,89 @@ class TestAnUpdateWithNoSenderBindsNothing(unittest.TestCase):
              patch.object(webhook.transport, "send_message"):
             webhook._handle(_update())
         redeem.assert_called_once()
+
+
+class TestTheSecretCheckRefusesRatherThanRaising(unittest.TestCase):
+    """A header value is attacker-supplied, and this is the only statement in
+    the endpoint outside its try/except.
+
+    `hmac.compare_digest` refuses two str arguments unless both are ASCII --
+    TypeError, not False -- and a WSGI header is latin-1 decoded, so any byte
+    in 0x80-0xFF made the public webhook answer 500 with a logged traceback
+    instead of 403. Never a bypass; it just stopped being the refusal it was
+    written as, at whatever rate an unauthenticated caller cared to send.
+    """
+
+    def test_a_non_ascii_header_is_refused(self):
+        with patch.object(webhook.transport, "webhook_secret", return_value="right"):
+            self.assertFalse(webhook._secret_ok("wrongé"))
+
+    def test_the_matching_secret_still_matches_through_the_byte_compare(self):
+        with patch.object(webhook.transport, "webhook_secret", return_value="right"):
+            self.assertTrue(webhook._secret_ok("right"))
+
+    def test_nothing_the_check_raises_escapes_the_endpoint(self):
+        # Even a secret that cannot be READ -- an unconfigured site, where
+        # transport.webhook_secret() throws -- must answer PermissionError.
+        # It was reachable before anything else in this function ran.
+        import frappe
+
+        with patch.object(webhook.transport, "webhook_secret",
+                          side_effect=RuntimeError("not configured")), \
+             patch.object(frappe, "get_request_header", return_value="anything"):
+            with self.assertRaises(frappe.PermissionError):
+                webhook.telegram_webhook()
+
+
+class TestTheBindingIsCommittedBeforeTelegramIsCalled(unittest.TestCase):
+    """Both bind paths now hold a SELECT ... FOR UPDATE on the Employee row.
+
+    Frappe holds a transaction until the request ends, and the confirmation
+    that follows is two `requests.post` calls at a 20-second timeout each. So
+    without a commit between them, an Employee row -- shared with HR's own
+    saves, with Issue and with Unlink -- is locked across up to forty seconds
+    of a third party being slow.
+    """
+
+    def _order(self, update, *, bind_raises=False):
+        calls = []
+        import frappe
+
+        def bind(*_a):
+            calls.append("bind")
+            if bind_raises:
+                raise RuntimeError("nope")
+            return "HR-EMP-00001"
+
+        with patch.object(frappe.db, "commit", side_effect=lambda: calls.append("commit")), \
+             patch.object(frappe.db, "rollback", side_effect=lambda: calls.append("rollback")), \
+             patch.object(webhook.transport, "send_message",
+                          side_effect=lambda *a, **kw: calls.append("send")), \
+             patch.object(frappe, "log_error"), \
+             patch.object(webhook.binding, "redeem_link_token", side_effect=bind), \
+             patch.object(webhook.binding, "claim_by_recorded_id", side_effect=bind):
+            webhook._handle(update)
+        return calls
+
+    def test_the_token_path_commits_between_binding_and_sending(self):
+        self.assertEqual(self._order(_update())[:3], ["bind", "commit", "send"])
+
+    def test_the_no_token_path_commits_too(self):
+        self.assertEqual(
+            self._order(_update(text="/start"))[:3], ["bind", "commit", "send"],
+        )
+
+    def test_a_refusal_releases_before_it_sends_too(self):
+        # THE EASY ONE TO FORGET. The refusal wrote nothing -- but both paths
+        # can reach their refusal AFTER taking the Employee lock, so "nothing
+        # was written" is not "nothing is held". Rolled back, not committed:
+        # a commit here would claim something happened.
+        self.assertEqual(
+            self._order(_update(), bind_raises=True), ["bind", "rollback", "send"],
+        )
+
+    def test_the_no_token_refusal_releases_too(self):
+        self.assertEqual(
+            self._order(_update(text="/start"), bind_raises=True),
+            ["bind", "rollback", "send"],
+        )

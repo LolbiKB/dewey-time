@@ -71,13 +71,33 @@ def _load_token(token_hash: str, *, for_update: bool = False):
     REPEATABLE READ can be served from a read view pinned before this
     request's lock was granted, so the half of a check-then-act that gates the
     act has to be a locking read or the mutex decides nothing.
+
+    Which is why the `exists()` pre-check is skipped when a locking read is
+    asked for. That call is a PLAIN select, and it decides whether the locking
+    one runs at all -- so the answer that gates the write, None, was still
+    coming from the pinned snapshot no matter what flag the second statement
+    carried. `get_value` on a docname returns None by itself; the pre-check
+    only ever saved a query on the miss.
     """
-    if not frappe.db.exists(TOKEN_DT, token_hash):
+    if not for_update and not frappe.db.exists(TOKEN_DT, token_hash):
         return None
     return frappe.db.get_value(
         TOKEN_DT,
         token_hash,
-        ["name", "employee", "expires_at", "redeemed_at", "revoked_at"],
+        [
+            "name",
+            "employee",
+            "expires_at",
+            "redeemed_at",
+            # THE IDEMPOTENCY BRANCH READS THIS, and without it in the SELECT
+            # list `row.get(...)` was None, `"" == "55501"` was False, and a
+            # Telegram redelivery of a successful /start told the employee
+            # "This link has already been used" -- while their link sat there
+            # working. The two tests covering that branch passed `_load_token`
+            # a fabricated row containing a column the real one never fetched.
+            "redeemed_by_telegram_user_id",
+            "revoked_at",
+        ],
         as_dict=True,
         for_update=for_update,
     )
@@ -360,9 +380,10 @@ def _existing_link(telegram_user_id: str, *, for_update: bool = False):
     the document name -- one row per Telegram account, by construction.
 
     `for_update` for the callers that go on to WRITE based on the answer; see
-    `_load_token` for why a plain read cannot gate an act taken under a lock.
+    `_load_token` for why a plain read cannot gate an act taken under a lock,
+    and why the `exists()` pre-check has to step aside when it is asked for.
     """
-    if not frappe.db.exists(LINK_DT, telegram_user_id):
+    if not for_update and not frappe.db.exists(LINK_DT, telegram_user_id):
         return None
     return frappe.db.get_value(
         LINK_DT,
@@ -466,6 +487,30 @@ def claim_by_recorded_id(telegram_user_id: str, chat_id: str) -> str:
     # on the autoname and the webhook answers "use the link HR gave you" to
     # somebody who was linked a millisecond earlier.
     _serialize_credential_ops(employee)
+
+    # AND RE-READ THE IDENTITY ITSELF, not just the link. `matches` came from a
+    # scan taken before the lock existed, and it is the read that decides WHOSE
+    # record is handed over -- the one place where believing a stale answer
+    # does not cost a confusing message but binds a Telegram account to the
+    # wrong person's attendance, permanently, with nothing downstream that
+    # re-checks it. HR moving a mis-recorded id from one employee to another is
+    # exactly the concurrent write in question, and it is the correction that
+    # this path exists to be corrected BY.
+    #
+    # One already-locked row, read by name: not a re-run of the filtered scan,
+    # which is over an unindexed custom field and would take next-key locks
+    # across tabEmployee for the life of the transaction -- a webhook that
+    # locks the whole roster.
+    current = frappe.db.get_value(
+        "Employee", employee, [TELEGRAM_ID_FIELD, "status"], as_dict=True, for_update=True
+    ) if frappe.db.has_column("Employee", TELEGRAM_ID_FIELD) else None
+    if (
+        not current
+        or str(current.get(TELEGRAM_ID_FIELD) or "") != telegram_user_id
+        or current.get("status") != "Active"
+    ):
+        frappe.throw("This account cannot be linked automatically.")
+
     existing = _existing_link(telegram_user_id, for_update=True)
     if existing:
         if not existing.get("enabled"):

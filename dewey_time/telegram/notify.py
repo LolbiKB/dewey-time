@@ -512,7 +512,7 @@ def delivery_gates(employee: str | None = None) -> dict:
     return gates
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def send_test_notification(employee: str | None = None) -> dict:
     """The real check-in message, sent on demand.
 
